@@ -5,6 +5,13 @@ import type { Credential, RefreshModelsContext, ThinkingLevel } from "@earendil-
 const DEFAULT_CONTEXT_WINDOW = 256_000;
 const DEFAULT_MAX_TOKENS = 16_384;
 const CONTEXT_SUFFIX = /^([1-9][0-9]*)(k|m)$/i;
+/**
+ * Cursor reports oversized requests as usage-guideline blocks instead of
+ * recognizable overflow errors, so overflow recovery cannot rescue a session
+ * that already passed the real window. Advertise a reduced window so pi's
+ * native auto-compaction fires comfortably below the actual 256k limit.
+ */
+const CONTEXT_WINDOW_SAFETY = 0.8;
 const EFFORT_PARAMETER_IDS = new Set(["effort", "reasoning"]);
 const EFFORT_PREFERENCES: Record<ThinkingLevel, readonly string[]> = {
   minimal: ["minimal", "low", "none"],
@@ -56,9 +63,14 @@ function modelConfig(
     reasoning,
     input: ["text", "image"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow,
+    contextWindow: effectiveContextWindow(contextWindow),
     maxTokens: DEFAULT_MAX_TOKENS,
   };
+}
+
+/** Effective window pi plans against: a safety margin below the real one. */
+export function effectiveContextWindow(contextWindow: number): number {
+  return Math.floor(contextWindow * CONTEXT_WINDOW_SAFETY);
 }
 
 export const FALLBACK_CURSOR_MODELS: ProviderModelConfig[] = FALLBACK_MODELS.map(({ id, name }) =>

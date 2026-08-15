@@ -69,13 +69,13 @@ test("provides multiple useful fallback models", () => {
   ]);
 });
 
-test("converts the live Cursor catalog and context variants", () => {
+test("converts the live Cursor catalog and context variants with a safety margin", () => {
   expect(cursorCatalogToModels(CATALOG)).toMatchObject([
-    { id: "auto", name: "Auto", contextWindow: 256_000 },
+    { id: "auto", name: "Auto", contextWindow: 204_800 },
     {
       id: "gpt-5.6-sol",
       name: "GPT-5.6 Sol",
-      contextWindow: 1_000_000,
+      contextWindow: 800_000,
       reasoning: true,
     },
   ]);
