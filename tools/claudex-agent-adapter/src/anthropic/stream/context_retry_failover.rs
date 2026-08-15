@@ -18,10 +18,15 @@ impl Bridge {
             self.remove_session(&turn.session).await;
             return Err(error);
         };
-        let Some(failover) = self
-            .subagent_provider_failover_for(&exhausted_model)
-            .or_else(|| self.usage_limit_failover_for(&exhausted_model))
-        else {
+        if crate::anthropic::request_identity::authoritative_is_subagent(&retry.request)
+            != Some(true)
+        {
+            self.remove_session(&turn.session).await;
+            return Err(error.context(format!(
+                "requested model `{exhausted_model}` failed; failover is disabled"
+            )));
+        }
+        let Some(failover) = self.subagent_provider_failover_for(&exhausted_model) else {
             self.remove_session(&turn.session).await;
             return Err(error);
         };

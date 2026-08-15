@@ -1297,12 +1297,9 @@ fn apply_usage_limit_preflight_skips_subagent() {
     let bridge = cline_and_qwen_bridge();
     let mut request = dummy_request(CLINE_FLASH);
     let mut effort = None;
-    let route = bridge.apply_usage_limit_preflight(
-        &mut request,
-        RouteDecision::Provider,
-        &mut effort,
-        true,
-    );
+    let route = bridge
+        .apply_usage_limit_preflight(&mut request, RouteDecision::Provider, &mut effort, true)
+        .expect("subagent preflight");
     assert_eq!(request.model, CLINE_FLASH);
     assert_eq!(route, RouteDecision::Provider);
 }
@@ -1312,12 +1309,14 @@ fn apply_usage_limit_preflight_skips_non_provider_route() {
     let bridge = cline_and_qwen_bridge();
     let mut request = dummy_request(CLINE_FLASH);
     let mut effort = None;
-    let route = bridge.apply_usage_limit_preflight(
-        &mut request,
-        RouteDecision::Subscription,
-        &mut effort,
-        false,
-    );
+    let route = bridge
+        .apply_usage_limit_preflight(
+            &mut request,
+            RouteDecision::Subscription,
+            &mut effort,
+            false,
+        )
+        .expect("non-provider preflight");
     assert_eq!(request.model, CLINE_FLASH);
     assert_eq!(route, RouteDecision::Subscription);
 }
@@ -1332,14 +1331,13 @@ fn apply_usage_limit_preflight_activates_when_auth_cooling_down() {
     );
     let mut request = dummy_request(CLINE_FLASH);
     let mut effort = Some("xhigh".to_owned());
-    let route = bridge.apply_usage_limit_preflight(
-        &mut request,
-        RouteDecision::Provider,
-        &mut effort,
-        false,
-    );
-    assert_eq!(request.model, "claude-sonnet-5");
-    assert_eq!(route, RouteDecision::Subscription);
+    let error = bridge
+        .apply_usage_limit_preflight(&mut request, RouteDecision::Provider, &mut effort, false)
+        .expect_err("auth cooldown must not silently fail over");
+    assert_eq!(request.model, CLINE_FLASH);
+    assert!(error.to_string().contains(CLINE_FLASH));
+    assert!(error.to_string().contains("auth"));
+    assert!(error.to_string().contains("failover is disabled"));
 }
 
 #[test]
@@ -1352,15 +1350,12 @@ fn apply_usage_limit_preflight_rewrites_effort_from_configured_fallback() {
     );
     let mut request = dummy_request(CLINE_FLASH);
     let mut effort = Some("xhigh".to_owned());
-    let route = bridge.apply_usage_limit_preflight(
-        &mut request,
-        RouteDecision::Provider,
-        &mut effort,
-        false,
-    );
-    assert_eq!(request.model, "claude-sonnet-5");
-    assert_eq!(effort.as_deref(), Some("high"));
-    assert_eq!(route, RouteDecision::Subscription);
+    let error = bridge
+        .apply_usage_limit_preflight(&mut request, RouteDecision::Provider, &mut effort, false)
+        .expect_err("auth cooldown must keep the requested effort");
+    assert_eq!(request.model, CLINE_FLASH);
+    assert_eq!(effort.as_deref(), Some("xhigh"));
+    assert!(error.to_string().contains("failover is disabled"));
 }
 
 #[test]
@@ -1376,15 +1371,13 @@ fn apply_usage_limit_preflight_keeps_provider_when_cooling_down_without_failover
     );
     let mut request = dummy_request(CLINE_FLASH);
     let mut effort = Some("xhigh".to_owned());
-    let route = bridge.apply_usage_limit_preflight(
-        &mut request,
-        RouteDecision::Provider,
-        &mut effort,
-        false,
-    );
+    let error = bridge
+        .apply_usage_limit_preflight(&mut request, RouteDecision::Provider, &mut effort, false)
+        .expect_err("cooldown without a target must still fail closed");
     assert_eq!(request.model, CLINE_FLASH);
     assert_eq!(effort.as_deref(), Some("xhigh"));
-    assert_eq!(route, RouteDecision::Provider);
+    assert!(error.to_string().contains(CLINE_FLASH));
+    assert!(error.to_string().contains("failover is disabled"));
 }
 
 #[test]
@@ -1946,7 +1939,11 @@ done
     .await
     .expect("failover without target should not hang")
     .expect_err("usage-limit without failover target must stay failed");
-    assert!(error.to_string().contains("usage limit"), "{error:#}");
+    assert!(
+        error.to_string().contains("failover is disabled"),
+        "{error:#}"
+    );
+    assert!(format!("{error:#}").contains("usage limit"), "{error:#}");
 }
 
 #[tokio::test]
@@ -1965,10 +1962,10 @@ async fn provider_messages_failover_attempts_configured_subscription_target() {
     )
     .await
     .expect("subscription failover should not hang")
-    .expect_err("failing subscription program must fail closed after failover");
+    .expect_err("usage-limit must fail closed without switching models");
     assert!(
-        !error.to_string().is_empty(),
-        "failover attempt must surface the subscription failure"
+        error.to_string().contains("failover is disabled"),
+        "{error:#}"
     );
 }
 

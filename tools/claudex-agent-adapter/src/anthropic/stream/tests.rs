@@ -5806,7 +5806,7 @@ async fn failover_usage_limit_turn_returns_subscription_response() {
         .with_model_catalog(catalog)
         .with_usage_limit_cache_home(root.path());
     let dispatcher = ThreadEventDispatcher::default();
-    let outcome = bridge
+    let result = bridge
         .failover_usage_limit_turn(
             drive_turn(
                 session,
@@ -5822,15 +5822,13 @@ async fn failover_usage_limit_turn_returns_subscription_response() {
             .await,
             anyhow!("usage limit exceeded"),
         )
-        .await
-        .expect("subscription failover");
-    let super::context_retry::UsageLimitOutcome::Response(response) = outcome else {
-        panic!("Codex usage-limit must Response through subscription failover");
+        .await;
+    let Err(error) = result else {
+        panic!("outer usage-limit must not switch models");
     };
-    assert_eq!(
-        response.status(),
-        axum::http::StatusCode::OK,
-        "subscription mock should answer the failover"
+    assert!(
+        error.to_string().contains("failover is disabled"),
+        "{error:#}"
     );
 }
 
@@ -5854,7 +5852,7 @@ async fn non_streaming_response_failsover_usage_limit_to_subscription() {
         "method":"turn/completed",
         "params":{"threadId":"thread","turn":{"status":"completed"}}
     }));
-    let response = bridge
+    let error = bridge
         .non_streaming_response(
             drive_turn(
                 session,
@@ -5870,8 +5868,11 @@ async fn non_streaming_response_failsover_usage_limit_to_subscription() {
             .await,
         )
         .await
-        .expect("usage-limit subscription failover");
-    assert_eq!(response.status(), axum::http::StatusCode::OK);
+        .expect_err("outer usage-limit must not switch models");
+    assert!(
+        error.to_string().contains("failover is disabled"),
+        "{error:#}"
+    );
 }
 
 #[tokio::test]

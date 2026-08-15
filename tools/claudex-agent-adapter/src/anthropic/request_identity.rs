@@ -72,7 +72,7 @@ impl RequestIdentity {
     }
 }
 
-pub(super) fn authoritative_is_subagent(request: &MessagesRequest) -> Option<bool> {
+pub(in crate::anthropic) fn authoritative_is_subagent(request: &MessagesRequest) -> Option<bool> {
     let identity = request.metadata.get(METADATA_KEY)?.as_object()?;
     if identity.get("agent_id").is_some_and(nonempty_string)
         || identity.get("parent_agent_id").is_some_and(nonempty_string)

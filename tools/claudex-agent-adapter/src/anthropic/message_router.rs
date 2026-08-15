@@ -58,7 +58,7 @@ impl Bridge {
         effort: &mut Option<String>,
         is_subagent: bool,
     ) -> Result<request_routing::RouteDecision> {
-        let route = self.apply_usage_limit_preflight(request, route, effort, is_subagent);
+        let route = self.apply_usage_limit_preflight(request, route, effort, is_subagent)?;
         let route = self.rewrite_exhausted_subagent_request(request, route, effort, is_subagent)?;
         let route = self.apply_concurrency_preflight(request, route, effort, is_subagent);
         Ok(self.apply_subscription_auth_preflight(request, route, effort))

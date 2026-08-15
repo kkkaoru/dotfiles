@@ -430,22 +430,12 @@ fn exhausted_provider_then_expired_oauth_returns_to_a_sibling_provider() {
 
     let mut request = dummy_request("fugu");
     let mut effort = Some("high".to_owned());
-    let route = bridge.apply_usage_limit_preflight(
-        &mut request,
-        RouteDecision::Provider,
-        &mut effort,
-        false,
-    );
-    assert_eq!(request.model, "claude-sonnet-5");
-    assert_eq!(route, RouteDecision::Subscription);
-
-    let route = bridge.apply_subscription_auth_preflight(&mut request, route, &mut effort);
-    assert_eq!(
-        request.model, "gpt-5.6-luna",
-        "OAuth-dead subscription must not stay on sonnet; skip exhausted fugu"
-    );
-    assert_eq!(effort.as_deref(), Some("max"));
-    assert_eq!(route, RouteDecision::Provider);
+    let error = bridge
+        .apply_usage_limit_preflight(&mut request, RouteDecision::Provider, &mut effort, false)
+        .expect_err("exhausted provider must not fail over to subscription");
+    assert_eq!(request.model, "fugu");
+    assert!(error.to_string().contains("fugu"));
+    assert!(error.to_string().contains("failover is disabled"));
 }
 
 #[test]

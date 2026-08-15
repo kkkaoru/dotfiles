@@ -46,13 +46,13 @@ impl Bridge {
         &self,
         request: &mut MessagesRequest,
         route: RouteDecision,
-        effort: &mut Option<String>,
+        _effort: &mut Option<String>,
         is_subagent: bool,
-    ) -> RouteDecision {
-        // SubAgents keep their routed provider; the orchestrator re-routes from
-        // capacity context instead of burning Claude subscription quota.
+    ) -> anyhow::Result<RouteDecision> {
+        // SubAgents keep their routed provider. Outer turns also stay on the
+        // requested model: silent failover to another backend is disabled.
         if is_subagent || route != RouteDecision::Provider {
-            return route;
+            return Ok(route);
         }
         let reason = if self.codex_usage_limit_is_active(&request.model) {
             Some("usage-limit")
@@ -62,27 +62,11 @@ impl Bridge {
             None
         };
         let Some(reason) = reason else {
-            return route;
+            return Ok(route);
         };
-        let Some(failover) = self.usage_limit_failover_for(&request.model) else {
-            tracing::warn!(
-                model = %request.model,
-                reason,
-                "provider is cooling down but no failover target is configured"
-            );
-            return route;
-        };
-        tracing::warn!(
-            exhausted_model = %request.model,
-            failover_model = %failover.model,
-            failover_route = ?failover.route,
-            reason,
-            "preflight failover away from exhausted provider"
+        anyhow::bail!(
+            "requested model `{}` preflight failed ({reason}); failover is disabled",
+            request.model
         );
-        request.model = failover.model;
-        if let Some(failover_effort) = failover.effort {
-            *effort = Some(failover_effort);
-        }
-        failover.route
     }
 }

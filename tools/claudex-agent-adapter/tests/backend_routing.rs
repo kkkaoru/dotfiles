@@ -334,7 +334,7 @@ async fn spawn_subscription_failover_bridge(
     (url, server)
 }
 
-async fn post_fugu_message(url: &str, content: &str) -> Value {
+async fn post_fugu_message(url: &str, content: &str) -> reqwest::Response {
     Client::new()
         .post(url)
         .json(&json!({
@@ -342,11 +342,6 @@ async fn post_fugu_message(url: &str, content: &str) -> Value {
             "messages":[{"role":"user","content":content}]
         }))
         .send()
-        .await
-        .unwrap()
-        .error_for_status()
-        .unwrap()
-        .json::<Value>()
         .await
         .unwrap()
 }
@@ -358,19 +353,33 @@ async fn usage_limit_failsover_from_codex_app_server_to_subscription_route() {
         spawn_subscription_failover_bridge(root.path(), "SUBSCRIPTION_FAILOVER_OK").await;
 
     let response = post_fugu_message(&url, "USAGE_LIMIT_ALWAYS").await;
-    assert_eq!(response["model"], "claude-sonnet-5");
-    assert_eq!(response_text(&response), "SUBSCRIPTION_FAILOVER_OK");
+    let status = response.status();
+    let body = response.json::<Value>().await.unwrap();
+    assert_ne!(status.as_u16(), 200, "{body}");
+    assert_eq!(body["type"], "error");
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("failover is disabled"), "{message}");
+    assert!(!message.contains("claude-sonnet-5"), "{message}");
 
     let cooldown = root
         .path()
         .join(".cache/claudex/codex-app-server-usage-limit.json");
     assert!(
         cooldown.is_file(),
-        "usage-limit cooldown should be persisted for later preflight routing"
+        "usage-limit cooldown should be persisted without switching models"
     );
 
     let preflight = post_fugu_message(&url, "hello after cooldown").await;
-    assert_eq!(preflight["model"], "claude-sonnet-5");
+    let preflight_status = preflight.status();
+    let preflight_body = preflight.json::<Value>().await.unwrap();
+    assert_ne!(preflight_status.as_u16(), 200, "{preflight_body}");
+    let preflight_message = preflight_body["error"]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        preflight_message.contains("fugu") && preflight_message.contains("failover is disabled"),
+        "{preflight_message}"
+    );
 
     server.abort();
 }
@@ -381,19 +390,33 @@ async fn sakana_auth_failure_failsover_to_subscription_and_cools_down_fugu() {
     let (url, server) = spawn_subscription_failover_bridge(root.path(), "AUTH_FAILOVER_OK").await;
 
     let response = post_fugu_message(&url, "AUTH_FAIL_ALWAYS").await;
-    assert_eq!(response["model"], "claude-sonnet-5");
-    assert_eq!(response_text(&response), "AUTH_FAILOVER_OK");
+    let status = response.status();
+    let body = response.json::<Value>().await.unwrap();
+    assert_ne!(status.as_u16(), 200, "{body}");
+    assert_eq!(body["type"], "error");
+    let message = body["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("failover is disabled"), "{message}");
+    assert!(!message.contains("claude-sonnet-5"), "{message}");
 
     let cooldown = root
         .path()
         .join(".cache/claudex/provider-auth-cooldown.json");
     assert!(
         cooldown.is_file(),
-        "provider auth cooldown should be persisted for later preflight routing"
+        "provider auth cooldown should be persisted without switching models"
     );
 
     let preflight = post_fugu_message(&url, "hello after auth cooldown").await;
-    assert_eq!(preflight["model"], "claude-sonnet-5");
+    let preflight_status = preflight.status();
+    let preflight_body = preflight.json::<Value>().await.unwrap();
+    assert_ne!(preflight_status.as_u16(), 200, "{preflight_body}");
+    let preflight_message = preflight_body["error"]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        preflight_message.contains("fugu") && preflight_message.contains("failover is disabled"),
+        "{preflight_message}"
+    );
 
     server.abort();
 }
