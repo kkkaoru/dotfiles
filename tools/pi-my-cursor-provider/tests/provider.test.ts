@@ -333,6 +333,7 @@ test("streams thinking separately from text", async () => {
       const updates: InteractionUpdate[] = [
         { type: "thinking-delta", text: "consider" },
         { type: "thinking-delta", text: "ing" },
+        { type: "thinking-completed", thinkingDurationMs: 1 },
         { type: "text-delta", text: "answer" },
       ];
       for (const update of updates) await options?.onDelta?.({ update });
@@ -348,6 +349,7 @@ test("streams thinking separately from text", async () => {
     "thinking_start",
     "thinking_delta",
     "thinking_delta",
+    "thinking_end",
     "text_start",
     "text_delta",
     "done",

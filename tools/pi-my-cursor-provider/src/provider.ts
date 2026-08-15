@@ -165,6 +165,7 @@ class CursorSession {
   private handleDelta(update: InteractionUpdate): void {
     if (update.type === "text-delta") this.output?.appendText(update.text);
     if (update.type === "thinking-delta") this.output?.appendThinking(update.text);
+    if (update.type === "thinking-completed") this.output?.endThinking();
     if (update.type !== "turn-ended" || !update.usage || !this.output) return;
     const { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } = update.usage;
     updateUsage(this.output, {

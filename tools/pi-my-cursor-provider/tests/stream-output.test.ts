@@ -44,13 +44,14 @@ test("appends adjacent text and ignores empty or post-finish changes", async () 
   expect(output.partial.content).toStrictEqual([{ type: "text", text: "ab" }]);
 });
 
-test("appends adjacent thinking and reports non-Error failures", async () => {
+test("closes adjacent thinking before reporting non-Error failures", async () => {
   const output = createCursorOutput(MODEL);
   output.appendThinking("");
   output.appendThinking("a");
   output.appendThinking("b");
   output.fail("broken", false);
   output.appendThinking("ignored");
+  output.endThinking();
   output.fail("ignored", false);
 
   const events = await collect(output);
@@ -59,8 +60,11 @@ test("appends adjacent thinking and reports non-Error failures", async () => {
     "thinking_start",
     "thinking_delta",
     "thinking_delta",
+    "thinking_end",
     "error",
   ]);
+  const thinkingEnd = events.at(-2);
+  expect(thinkingEnd?.type === "thinking_end" ? thinkingEnd.content : "").toBe("ab");
   expect(output.partial.stopReason).toBe("error");
   expect(output.partial.errorMessage).toBe("broken");
 });
