@@ -115,6 +115,7 @@ beforeEach(() => {
 
 afterEach(async () => {
   const { cursorProviderTestApi } = await import("../src/provider.ts");
+  await cursorProviderTestApi.waitForIdle();
   expect(cursorProviderTestApi.pendingCount()).toBe(0);
 });
 
@@ -354,6 +355,87 @@ test("aborts the active Cursor run", async () => {
   expect(events.map((event) => event.type)).toStrictEqual(["start", "error"]);
   const error = events.at(-1);
   expect(error?.type === "error" ? error.reason : "").toBe("aborted");
+});
+
+test("waits for the previous agent to dispose before starting a follow-up request", async () => {
+  let finishFirst: ((value: RunResult) => void) | undefined;
+  const firstWait = new Promise<RunResult>((resolve) => {
+    finishFirst = resolve;
+  });
+  let releaseDispose: (() => void) | undefined;
+  const firstDispose = new Promise<void>((resolve) => {
+    releaseDispose = resolve;
+  });
+  let secondCreated = false;
+
+  createAgentMock
+    .mockResolvedValueOnce({
+      agentId: "agent-1",
+      model: { id: "auto" },
+      send: async () => ({
+        ...fakeRun(() => firstWait),
+        cancel: async () => {
+          finishFirst?.({ id: "run-1", status: "cancelled" });
+        },
+      }),
+      close: () => undefined,
+      reload: async () => undefined,
+      [Symbol.asyncDispose]: async () => firstDispose,
+      listArtifacts: async () => [],
+      downloadArtifact: async () => Buffer.alloc(0),
+      getUsage: async () => ({
+        usage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          totalTokens: 0,
+        },
+        runs: [],
+      }),
+    })
+    .mockImplementationOnce(async () => {
+      secondCreated = true;
+      return {
+        agentId: "agent-2",
+        model: { id: "auto" },
+        send: async () => fakeRun(async () => result("second")),
+        close: () => undefined,
+        reload: async () => undefined,
+        [Symbol.asyncDispose]: async () => undefined,
+        listArtifacts: async () => [],
+        downloadArtifact: async () => Buffer.alloc(0),
+        getUsage: async () => ({
+          usage: {
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+            totalTokens: 0,
+          },
+          runs: [],
+        }),
+      };
+    });
+
+  const { streamCursor } = await import("../src/provider.ts");
+  const firstController = new AbortController();
+  const firstStream = streamCursor(MODEL, baseContext(), { signal: firstController.signal });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  firstController.abort();
+  const secondPromise = collect(streamCursor(MODEL, baseContext()));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  expect(createAgentMock).toHaveBeenCalledTimes(1);
+  expect(secondCreated).toBe(false);
+
+  releaseDispose?.();
+  const [firstEvents, secondEvents] = await Promise.all([collect(firstStream), secondPromise]);
+
+  expect(createAgentMock).toHaveBeenCalledTimes(2);
+  expect(secondCreated).toBe(true);
+  expect(firstEvents.at(-1)?.type).toBe("error");
+  expect(secondEvents.at(-1)?.type).toBe("done");
 });
 
 test("uses the terminal status when Cursor provides no error detail", async () => {

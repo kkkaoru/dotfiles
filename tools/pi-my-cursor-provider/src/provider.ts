@@ -30,6 +30,8 @@ interface PendingInvocation {
 
 const pendingByToolCallId = new Map<string, PendingInvocation>();
 const TOOL_BATCH_DELAY_MS = 0;
+let activeIndependentSession: CursorSession | undefined;
+let claimQueue: Promise<void> = Promise.resolve();
 
 function schemaForTool(tool: Tool): Record<string, SDKJsonValue> {
   const schema = toSdkJsonValue(tool.parameters);
@@ -67,11 +69,25 @@ class CursorSession {
   private currentSignal: AbortSignal | undefined;
   private toolBatchTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
+  private settle!: Promise<void>;
+  private resolveSettle!: () => void;
 
   constructor(context: Context, model: Model<Api>, options: SimpleStreamOptions | undefined) {
     this.context = context;
     this.model = model;
     this.options = options;
+    this.settle = new Promise((resolve) => {
+      this.resolveSettle = resolve;
+    });
+  }
+
+  get settled(): Promise<void> {
+    return this.settle;
+  }
+
+  async shutdown(reason: Error): Promise<void> {
+    await this.run?.cancel().catch(() => undefined);
+    await this.fail(reason);
   }
 
   attach(output: CursorOutput, signal: AbortSignal | undefined): void {
@@ -88,6 +104,8 @@ class CursorSession {
   }
 
   async start(): Promise<void> {
+    await claimIndependentSession(this);
+    if (this.disposed) return;
     const customTools = Object.fromEntries(
       (this.context.tools ?? []).map((tool) => [tool.name, this.createCustomTool(tool)]),
     );
@@ -196,7 +214,7 @@ class CursorSession {
   }
 
   private async dispose(reason = new Error("Cursor session disposed")): Promise<void> {
-    if (this.disposed) return;
+    if (this.disposed) return this.settle;
     this.disposed = true;
     if (this.toolBatchTimer) clearTimeout(this.toolBatchTimer);
     this.invocations.forEach((invocation) => {
@@ -205,7 +223,28 @@ class CursorSession {
     });
     this.invocations.clear();
     this.detachOutput();
+    if (activeIndependentSession === this) activeIndependentSession = undefined;
     await this.agent?.[Symbol.asyncDispose]().catch(() => undefined);
+    this.resolveSettle();
+  }
+}
+
+async function claimIndependentSession(session: CursorSession): Promise<void> {
+  const previousClaim = claimQueue;
+  let releaseClaim = (): void => undefined;
+  claimQueue = new Promise<void>((resolve) => {
+    releaseClaim = resolve;
+  });
+  try {
+    await previousClaim;
+    const previous = activeIndependentSession;
+    activeIndependentSession = session;
+    if (previous && previous !== session) {
+      await previous.shutdown(new Error("Superseded by a new Cursor request"));
+      await previous.settled;
+    }
+  } finally {
+    releaseClaim();
   }
 }
 
@@ -229,4 +268,5 @@ export function streamCursor(
 
 export const cursorProviderTestApi = {
   pendingCount: (): number => pendingByToolCallId.size,
+  waitForIdle: (): Promise<void> => activeIndependentSession?.settled ?? Promise.resolve(),
 };
