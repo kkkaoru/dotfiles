@@ -136,6 +136,91 @@ describe("Anthropic to Pi context conversion", () => {
     ]);
   });
 
+  it("preserves production-scale prompt structure without real session data", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1500);
+    const tools = Array.from({ length: 61 }, (_unused, index) => ({
+      name: `tool-${index}`,
+      description: `Synthetic tool ${index}`,
+      input_schema: {
+        type: "object",
+        properties: {
+          request: {
+            type: "object",
+            properties: {
+              values: { type: "array", items: { type: "integer" } },
+            },
+            required: ["values"],
+          },
+        },
+        required: ["request"],
+        additionalProperties: false,
+      },
+    }));
+    const toolInput = { request: { values: [1, 2, 3] } };
+    const context = toPiContext(
+      gatewayRequest({
+        system: [
+          { type: "text", text: "top-level first" },
+          { type: "text", text: "top-level second" },
+        ],
+        messages: [
+          { role: "user", content: "initial request" },
+          {
+            role: "system",
+            content: [
+              { type: "text", text: "message-level first" },
+              { type: "text", text: "message-level second" },
+            ],
+          },
+          {
+            role: "assistant",
+            content: [{ type: "tool_use", id: "call-37", name: "tool-37", input: toolInput }],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "call-37",
+                content: [{ type: "text", text: "synthetic result" }],
+                is_error: true,
+              },
+            ],
+          },
+        ],
+        tools,
+      }),
+      MODEL,
+    );
+
+    expect(context.systemPrompt).toBe(
+      "top-level first\n\ntop-level second\n\nmessage-level first\n\nmessage-level second",
+    );
+    expect(context.tools).toHaveLength(61);
+    expect(context.tools).toStrictEqual(
+      tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.input_schema,
+      })),
+    );
+    expect(context.messages.map((message) => message.role)).toStrictEqual([
+      "user",
+      "assistant",
+      "toolResult",
+    ]);
+    expect(context.messages[1]?.content).toStrictEqual([
+      { type: "toolCall", id: "call-37", name: "tool-37", arguments: toolInput },
+    ]);
+    expect(context.messages[2]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call-37",
+      toolName: "tool-37",
+      content: [{ type: "text", text: "synthetic result" }],
+      isError: true,
+    });
+  });
+
   it("supports string content, redacted thinking, image tool results, and empty descriptions", () => {
     vi.spyOn(Date, "now").mockReturnValue(2000);
     const context = toPiContext(
