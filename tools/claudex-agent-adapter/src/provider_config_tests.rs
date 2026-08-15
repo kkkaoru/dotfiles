@@ -84,6 +84,24 @@ mod tests {
     }
 
     #[test]
+    fn rejects_claude_models_mapped_through_pi() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("providers.json");
+        std::fs::write(
+            &path,
+            config(
+                r#"{"id":"p","agent":"worker","defaultModel":"claude-haiku-4-5","effort":"high","piProvider":"anthropic","piModel":"claude-haiku-4-5","backend":"pi-gateway"}"#,
+            ),
+        )
+        .unwrap();
+        let result = load(&path);
+        let Err(error) = result else {
+            panic!("Claude models must not become Pi routes");
+        };
+        assert!(error.to_string().contains("Claude model"), "{error:#}");
+    }
+
+    #[test]
     fn loads_enabled_routes_and_ignores_disabled_routes() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("providers.json");

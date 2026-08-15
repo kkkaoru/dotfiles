@@ -6,8 +6,8 @@ use super::{AgentChoice, BackendKind, Provider, WebSearchMode, WorkerRoute};
 #[path = "validation_fields.rs"]
 mod fields;
 use fields::{
-    validate_acp, validate_backend_fields, validate_effort, validate_identity, validate_limits,
-    validate_web_search_mode,
+    validate_acp, validate_backend_fields, validate_claude_models_are_not_pi_routes,
+    validate_effort, validate_identity, validate_limits, validate_web_search_mode,
 };
 
 pub(super) fn validate_worker_routes(workers: &[WorkerRoute]) -> Result<()> {
@@ -53,6 +53,7 @@ pub(super) fn validate_providers(providers: &[Provider]) -> Result<()> {
         validate_backend_fields(provider)?;
         validate_effort(provider)?;
         validate_web_search_mode(provider)?;
+        validate_claude_models_are_not_pi_routes(provider)?;
         if !provider
             .model_prefixes
             .iter()

@@ -98,6 +98,32 @@ pub(super) fn validate_acp(provider: &Provider) -> Result<()> {
     }
 }
 
+pub(super) fn validate_claude_models_are_not_pi_routes(provider: &Provider) -> Result<()> {
+    if provider.pi_provider.is_none() {
+        return Ok(());
+    }
+    let mut models = std::iter::once(provider.default_model.as_str())
+        .chain(provider.subagent_model.as_deref())
+        .chain(provider.selectable_models.iter().map(String::as_str))
+        .chain(provider.model_prefixes.iter().map(String::as_str));
+    if let Some(model) = models.find(|model| is_native_claude_model(model)) {
+        bail!(
+            "provider {} maps Claude model `{model}` through Pi; Claude models must stay on the subscription route",
+            provider.id
+        );
+    }
+    Ok(())
+}
+
+fn is_native_claude_model(model: &str) -> bool {
+    matches!(model, "fable" | "opus" | "sonnet" | "haiku")
+        || model.starts_with("claude-") && !model.starts_with("claude-claudex-")
+        || model.starts_with("fable[")
+        || model.starts_with("opus[")
+        || model.starts_with("sonnet[")
+        || model.starts_with("haiku[")
+}
+
 pub(super) fn validate_web_search_mode(provider: &Provider) -> Result<()> {
     let valid = match provider.web_search_mode {
         WebSearchMode::CodexNative => provider.backend == BackendKind::CodexAppServer,
