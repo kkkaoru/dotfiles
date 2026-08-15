@@ -110,8 +110,10 @@ pi --list-models cursor
 Expected `pi list` entry:
 
 ```text
-../../ghq/github.com/kkkaoru/dotfiles/tools/pi-my-cursor-provider
+./packages/pi-my-cursor-provider
 ```
+
+Use the `~/.pi/agent/packages/` link created by `create-symlinks.sh`. `~/.pi` is a symlink into this repository, and pi resolves package-relative paths against `~/.pi/agent` without following that symlink. A `../../tools/...` entry therefore points at a nonexistent `~/tools/...` directory instead of this package.
 
 To roll back without changing Cursor authentication or model selection:
 
