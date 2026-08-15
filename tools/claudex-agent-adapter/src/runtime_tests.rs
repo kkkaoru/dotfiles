@@ -41,6 +41,33 @@ fn parses_pi_provider_interface_and_preserves_default_route() {
     assert_eq!(direct.routes[0].backend, BackendKind::CodexAppServer);
     assert_eq!(direct.routes[0].pi_provider, None);
     assert_eq!(direct.routes[0].pi_model, None);
+    assert!(direct.routes[0].pi_extensions.is_empty());
+
+    let explicit_direct = parse_command(
+        [
+            "serve",
+            "--model",
+            "m",
+            "--backend-route-json",
+            route,
+            "--provider-interface",
+            "direct",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect(),
+    )
+    .expect("explicit direct route");
+    let RuntimeCommand::Serve(explicit_direct) = explicit_direct else {
+        panic!("expected serve command");
+    };
+    assert_eq!(
+        explicit_direct.routes[0].backend,
+        BackendKind::CodexAppServer
+    );
+    assert_eq!(explicit_direct.routes[0].pi_provider, None);
+    assert_eq!(explicit_direct.routes[0].pi_model, None);
+    assert!(explicit_direct.routes[0].pi_extensions.is_empty());
 
     let pi = parse_command(
         [

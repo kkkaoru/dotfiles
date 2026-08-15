@@ -290,13 +290,23 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     set -q CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES; and set subscription_timeout_minutes "$CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES"
     set -a adapter_args --subscription-timeout-minutes "$subscription_timeout_minutes"
 
+    # Pi is the public default. The environment provides a temporary rollback,
+    # and an explicit CLI value remains authoritative over both defaults.
+    set -l provider_interface pi
+    set -q CLAUDEX_PROVIDER_INTERFACE; and set provider_interface "$CLAUDEX_PROVIDER_INTERFACE"
     # --provider-interface configures the adapter itself. Keep every other
     # argument on the Claude Code side of `--`, preserving the default path.
     set -l claude_args
     set -l expects_provider_interface 0
+    set -l has_provider_interface 0
     for argument in $argv
         if test $expects_provider_interface -eq 1
-            set -a adapter_args --provider-interface "$argument"
+            if test $has_provider_interface -eq 1
+                echo "claudex: --provider-interface must not be repeated" >&2
+                return 2
+            end
+            set provider_interface "$argument"
+            set has_provider_interface 1
             set expects_provider_interface 0
             continue
         end
@@ -310,6 +320,11 @@ function claudex --description 'Run Claude Code with config-driven agent backend
         echo "claudex: --provider-interface requires a value" >&2
         return 2
     end
+    if not contains -- "$provider_interface" pi direct
+        echo "claudex: provider interface must be `pi` or `direct`" >&2
+        return 2
+    end
+    set -a adapter_args --provider-interface "$provider_interface"
 
     # Routing is injected by the CLAUDEX_ACTIVE-gated global hook. Avoid a
     # default --agent here: Claude Code persists it as the resumed session's

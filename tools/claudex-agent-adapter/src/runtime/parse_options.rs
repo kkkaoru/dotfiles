@@ -125,8 +125,8 @@ fn apply_option(
                 bail!("--provider-interface must not be repeated");
             }
             let interface = option_value(arguments, "--provider-interface")?;
-            if interface != "pi" {
-                bail!("--provider-interface must be `pi`");
+            if interface != "pi" && interface != "direct" {
+                bail!("--provider-interface must be `pi` or `direct`");
             }
             draft.provider_interface = Some(interface);
         }

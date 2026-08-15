@@ -18,41 +18,104 @@ fn fish_launcher_uses_the_shared_provider_config() {
 }
 
 #[test]
-fn fish_launcher_routes_only_provider_interface_to_the_adapter() {
+fn fish_launcher_defaults_to_pi_and_preserves_interface_overrides() {
     let home = shared_provider_fixture();
     let function = launcher_function();
-    let arguments = run_fish_launcher(
-        &function,
-        &home,
-        "claudex --provider-interface pi --resume session-1 prompt-text",
-    );
-    let (adapter, claude) = arguments
-        .split_once("\n--\n")
-        .expect("adapter and Claude arguments");
-    assert!(
-        adapter.ends_with("--provider-interface\npi"),
-        "adapter arguments: {arguments}"
-    );
-    assert!(!claude.contains("--provider-interface"));
-    assert_eq!(claude, "--resume\nsession-1\nprompt-text\n");
+    for (command, expected) in [
+        ("claudex prompt-text", "pi"),
+        ("claudex --provider-interface pi prompt-text", "pi"),
+        ("claudex --provider-interface direct prompt-text", "direct"),
+    ] {
+        let arguments = run_fish_launcher(&function, &home, command);
+        let (adapter, claude) = arguments
+            .split_once("\n--\n")
+            .expect("adapter and Claude arguments");
+        assert!(
+            adapter.ends_with(&format!("--provider-interface\n{expected}")),
+            "adapter arguments: {arguments}"
+        );
+        assert!(!claude.contains("--provider-interface"));
+        assert_eq!(claude, "prompt-text\n");
+    }
 
-    let missing = Command::new("fish")
+    let environment = Command::new("fish")
+        .args([
+            "-c",
+            &format!("source '{}'; claudex prompt-text", function.display()),
+        ])
+        .env("HOME", home.path())
+        .env("CLAUDEX_PROVIDER_INTERFACE", "direct")
+        .env_remove("CLAUDEX_PROVIDER_CONFIG")
+        .output()
+        .expect("run environment provider interface");
+    assert!(environment.status.success());
+    let environment = String::from_utf8(environment.stdout).expect("UTF-8 adapter arguments");
+    assert!(environment.contains("--provider-interface\ndirect\n--\nprompt-text\n"));
+
+    let cli_override = Command::new("fish")
         .args([
             "-c",
             &format!(
-                "source '{}'; claudex --provider-interface",
+                "source '{}'; claudex --provider-interface pi prompt-text",
                 function.display()
             ),
         ])
         .env("HOME", home.path())
+        .env("CLAUDEX_PROVIDER_INTERFACE", "direct")
         .env_remove("CLAUDEX_PROVIDER_CONFIG")
         .output()
-        .expect("run missing provider interface value");
-    assert_eq!(missing.status.code(), Some(2));
+        .expect("run CLI provider interface override");
+    assert!(cli_override.status.success());
+    let cli_override = String::from_utf8(cli_override.stdout).expect("UTF-8 adapter arguments");
+    assert!(cli_override.contains("--provider-interface\npi\n--\nprompt-text\n"));
+
+    for (arguments, expected) in [
+        (
+            "--provider-interface",
+            "claudex: --provider-interface requires a value\n",
+        ),
+        (
+            "--provider-interface invalid",
+            "claudex: provider interface must be `pi` or `direct`\n",
+        ),
+        (
+            "--provider-interface pi --provider-interface direct",
+            "claudex: --provider-interface must not be repeated\n",
+        ),
+    ] {
+        let output = Command::new("fish")
+            .args([
+                "-c",
+                &format!("source '{}'; claudex {arguments}", function.display()),
+            ])
+            .env("HOME", home.path())
+            .env_remove("CLAUDEX_PROVIDER_CONFIG")
+            .env_remove("CLAUDEX_PROVIDER_INTERFACE")
+            .output()
+            .expect("run invalid provider interface");
+        assert_eq!(output.status.code(), Some(2));
+        assert!(
+            String::from_utf8(output.stderr)
+                .expect("UTF-8 provider interface error")
+                .ends_with(expected)
+        );
+    }
+
+    let invalid_environment = Command::new("fish")
+        .args([
+            "-c",
+            &format!("source '{}'; claudex prompt-text", function.display()),
+        ])
+        .env("HOME", home.path())
+        .env("CLAUDEX_PROVIDER_INTERFACE", "invalid")
+        .env_remove("CLAUDEX_PROVIDER_CONFIG")
+        .output()
+        .expect("run invalid environment provider interface");
+    assert_eq!(invalid_environment.status.code(), Some(2));
     assert!(
-        String::from_utf8(missing.stderr)
-            .expect("UTF-8 missing value error")
-            .ends_with("claudex: --provider-interface requires a value\n")
+        String::from_utf8(invalid_environment.stderr)
+            .expect("UTF-8 provider interface error")
+            .ends_with("claudex: provider interface must be `pi` or `direct`\n")
     );
 }
 
@@ -116,7 +179,8 @@ fn run_fish_launcher_output(
     process
         .args(["-c", &format!("source '{}'; {command}", function.display())])
         .env("HOME", home.path())
-        .env_remove("CLAUDEX_PROVIDER_CONFIG");
+        .env_remove("CLAUDEX_PROVIDER_CONFIG")
+        .env_remove("CLAUDEX_PROVIDER_INTERFACE");
     if let Some(model) = explicit_model {
         process.env("CLAUDEX_MODEL", model);
     } else {
@@ -240,7 +304,7 @@ fn assert_shared_provider_args(arguments: &str) {
     assert!(arguments.contains("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=40\n"));
     assert!(arguments.contains(".config/claudex/providers.json\n"));
     assert!(!arguments.contains("--model\n"));
-    assert!(!arguments.contains("--provider-interface\n"));
+    assert!(arguments.contains("--provider-interface\npi\n"));
     assert!(arguments.contains("--inherit-claude-model\n"));
     assert!(arguments.contains("--subscription-max-processes\n20\n"));
     assert!(!arguments.contains("--allowedTools\nWebSearch,WebFetch\n"));
