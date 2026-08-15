@@ -30,6 +30,13 @@ pub(super) fn request(
         .cloned()
         .unwrap_or_else(|| json!({}));
     let mut options = json!({"metadata": metadata});
+    if let Some(session_id) = request
+        .pointer("/metadata/_claudex_transport_identity/session_id")
+        .and_then(Value::as_str)
+        .filter(|session_id| !session_id.is_empty())
+    {
+        options["sessionId"] = json!(session_id);
+    }
     if let Some(reasoning) = effort.and_then(pi_reasoning) {
         options["reasoning"] = json!(reasoning);
     }
@@ -96,16 +103,35 @@ mod tests {
             "system":[{"type":"text","text":"rules"}],
             "messages":[{"role":"user","content":"hello"}],
             "tools":[{"name":"Read","input_schema":{"type":"object"}}],
-            "metadata":{"user_id":"u"}
+            "metadata":{
+                "user_id":"u",
+                "_claudex_transport_identity":{"session_id":"claude-session"}
+            }
         });
         let value =
             request("r", "t", "openai-codex", "gpt", &raw, Some("max")).expect("gateway request");
         assert_eq!(value["system"], raw["system"]);
         assert_eq!(value["messages"], raw["messages"]);
         assert_eq!(value["tools"], raw["tools"]);
+        assert_eq!(value["options"]["metadata"], raw["metadata"]);
+        assert_eq!(value["options"]["sessionId"], "claude-session");
         assert_eq!(value["options"]["reasoning"], "xhigh");
         assert_eq!(value["origin"], ORIGIN);
         assert!(request("r", "t", "claudex", "model", &raw, None).is_err());
+    }
+
+    #[test]
+    fn request_omits_missing_or_blank_transport_session_ids() {
+        for metadata in [
+            json!({}),
+            json!({"user_id":r#"{"session_id":"fallback"}"#}),
+            json!({"_claudex_transport_identity":{"session_id":""}}),
+        ] {
+            let raw = json!({"metadata":metadata});
+            let value =
+                request("r", "t", "openai-codex", "gpt", &raw, None).expect("gateway request");
+            assert!(value["options"].get("sessionId").is_none());
+        }
     }
 
     #[test]
