@@ -94,9 +94,11 @@ fn fish_launcher_defaults_to_pi_and_preserves_interface_overrides() {
             .output()
             .expect("run invalid provider interface");
         assert_eq!(output.status.code(), Some(2));
-        assert!(String::from_utf8(output.stderr)
-            .expect("UTF-8 provider interface error")
-            .ends_with(expected));
+        assert!(
+            String::from_utf8(output.stderr)
+                .expect("UTF-8 provider interface error")
+                .ends_with(expected)
+        );
     }
 
     let invalid_environment = Command::new("fish")
@@ -110,9 +112,11 @@ fn fish_launcher_defaults_to_pi_and_preserves_interface_overrides() {
         .output()
         .expect("run invalid environment provider interface");
     assert_eq!(invalid_environment.status.code(), Some(2));
-    assert!(String::from_utf8(invalid_environment.stderr)
-        .expect("UTF-8 provider interface error")
-        .ends_with("claudex: provider interface must be `pi` or `direct`\n"));
+    assert!(
+        String::from_utf8(invalid_environment.stderr)
+            .expect("UTF-8 provider interface error")
+            .ends_with("claudex: provider interface must be `pi` or `direct`\n")
+    );
 }
 
 #[test]
@@ -217,9 +221,11 @@ fn assert_hot_swap_error(
             .expect("run fish hot-swap error")
     };
     assert_eq!(output.status.code(), Some(2));
-    assert!(String::from_utf8(output.stderr)
-        .expect("UTF-8 hot-swap error")
-        .ends_with(expected));
+    assert!(
+        String::from_utf8(output.stderr)
+            .expect("UTF-8 hot-swap error")
+            .ends_with(expected)
+    );
 }
 
 fn run_hot_swap(
@@ -295,12 +301,16 @@ fn fish_launcher_keeps_command_tools_available_for_new_and_resumed_sessions() {
     let (adapter_arguments, _) = resumed
         .split_once("\n--\n")
         .expect("adapter and Claude arguments");
-    assert!(!adapter_arguments
-        .lines()
-        .any(|argument| argument == "--model"));
-    assert!(adapter_arguments
-        .lines()
-        .any(|argument| argument == "--inherit-claude-model"));
+    assert!(
+        !adapter_arguments
+            .lines()
+            .any(|argument| argument == "--model")
+    );
+    assert!(
+        adapter_arguments
+            .lines()
+            .any(|argument| argument == "--inherit-claude-model")
+    );
 
     let explicit = run_fish_launcher(
         &function,
@@ -444,10 +454,12 @@ fn assert_shared_provider_args(arguments: &str) {
     assert!(arguments.contains("CLAUDEX_ACTIVE=1\n"));
     assert!(arguments.contains("CLAUDEX_MAIN_MODEL=sonnet[1m]\n"));
     assert!(arguments.contains("CLAUDEX_MAIN_MODEL_KNOWN=1\n"));
-    assert!(arguments
-        .lines()
-        .any(|line| line.starts_with("CLAUDE_CONFIG_DIR=")
-            && line.contains(".config/claudex/claude-config")));
+    assert!(
+        arguments
+            .lines()
+            .any(|line| line.starts_with("CLAUDE_CONFIG_DIR=")
+                && line.contains(".config/claudex/claude-config"))
+    );
     assert!(arguments.contains("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1\n"));
     assert!(arguments.contains("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=40\n"));
     assert!(arguments.contains(".config/claudex/providers.json\n"));
@@ -471,8 +483,10 @@ fn assert_shared_provider_settings(home: &tempfile::TempDir, stderr: &[u8]) {
     )
     .expect("isolated settings after launch");
     assert!(isolated_settings.contains("\"model\": \"sonnet[1m]\""));
-    assert!(String::from_utf8_lossy(stderr)
-        .contains("current sonnet[1m], high; request model authoritative"));
+    assert!(
+        String::from_utf8_lossy(stderr)
+            .contains("current sonnet[1m], high; request model authoritative")
+    );
 }
 
 fn assert_settings_restore_modes(function: &std::path::Path, home: &tempfile::TempDir) {
@@ -806,8 +820,10 @@ fn fish_launcher_uses_claude_settings_model_and_effort_when_available() {
     )));
     assert!(arguments.ends_with("--\nsettings-smoke\n"));
     assert_no_implicit_agent(&arguments);
-    assert!(String::from_utf8_lossy(&output.stderr)
-        .contains("current sonnet[1m], high; request model authoritative"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("current sonnet[1m], high; request model authoritative")
+    );
 }
 
 #[test]
@@ -815,12 +831,16 @@ fn fish_config_sets_the_plain_claude_subagent_limit() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let config =
         fs::read_to_string(root.join(".config/fish/config.fish")).expect("fish configuration");
-    assert!(config
-        .lines()
-        .any(|line| line.contains("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS")));
-    assert!(config
-        .lines()
-        .any(|line| line.contains("or set -gx CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS 40")));
+    assert!(
+        config
+            .lines()
+            .any(|line| line.contains("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"))
+    );
+    assert!(
+        config
+            .lines()
+            .any(|line| line.contains("or set -gx CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS 40"))
+    );
     assert!(
         config.lines().any(|line| {
             line.contains(

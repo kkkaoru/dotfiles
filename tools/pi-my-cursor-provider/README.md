@@ -69,6 +69,28 @@ pi --approve \
 
 Ask Cursor to call `cursor_bridge_probe`. A successful roundtrip displays the tool result `CURSOR_BRIDGE_TOOL_OK` before Cursor completes its response.
 
+## Web Search via delegate-pi
+
+The Claudex adapter supports a `delegate-pi` web search mode (commits 619af02, ff5a12f) that routes Claude Code's WebSearch tool through the Pi gateway instead of CCR workers. The gateway's `cursorWebSearch` handler uses `modelRegistry.complete()` with a structured-output prompt to obtain Title/URL/Snippet triplets from Cursor's native server-side search.
+
+### Current status
+
+- **HTTP-level verification**: GREEN. Cursor returns 5 structured results in ~15s; Exa API (non-Cursor providers) returns 5 results in ~1.4s.
+- **TUI practical usage**: The orchestrator model delegates search to the `claudex-haiku-search` SubAgent (a nativeWorker using `claude-haiku-4-5` on the Subscription route), which bypasses the Pi gateway entirely. The delegate-pi path is therefore not exercised during normal interactive use.
+- **CCR fallback**: The existing CCR pin (commit 79447b7) remains active and functional. Users are unaffected.
+
+### Why delegate-pi is not reached in practice
+
+1. Claude Code's orchestrator prefers delegating WebSearch to `claudex-haiku-search` (nativeWorker, Subscription route)
+2. `claudex-haiku-search` is defined in `nativeWorkers`, NOT in `providers` — it has no PiGateway route
+3. Even when delegate-pi is enabled for the cursor route, the main model's SubAgent delegation takes precedence
+
+### Future activation paths
+
+- Remove `claudex-haiku-search` from nativeWorkers so the orchestrator uses WebSearch directly
+- Add an Anthropic provider to Pi and route haiku-search through PiGateway
+- Modify adapter request routing to intercept WebSearch before SubAgent delegation
+
 ## Replace `pi-cursor-sdk`
 
 The current installation is an npm package recorded as `npm:pi-cursor-sdk` in `~/.pi/agent/settings.json` and installed under `~/.pi/agent/npm/node_modules/pi-cursor-sdk`.
