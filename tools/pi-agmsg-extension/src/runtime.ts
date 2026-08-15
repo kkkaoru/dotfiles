@@ -1,6 +1,7 @@
 import type {
   ActiveIdentity,
   AgmsgActionInput,
+  AgmsgRuntimeDependencies,
   AgmsgService,
   IdentityCommandRequest,
   IdentityLookup,
@@ -10,7 +11,8 @@ import type {
   RepeatScheduler,
   RuntimeContext,
 } from "./contracts.ts";
-import { AgmsgOperations, deliverIncoming, displayOutput } from "./agmsg-operations.ts";
+import { AgmsgOperations, displayOutput } from "./agmsg-operations.ts";
+import { AutomaticDelivery } from "./automatic-delivery.ts";
 import {
   chooseIdentity,
   chooseSetupIdentity,
@@ -32,25 +34,19 @@ import {
 import { MONITOR_INTERVAL_MS } from "./scheduler.ts";
 
 export class AgmsgRuntime {
+  readonly #automaticDelivery: AutomaticDelivery;
   readonly #client: AgmsgService;
   readonly #identityStore: IdentityStore;
   readonly #messages: MessageSink;
   readonly #operations: AgmsgOperations;
   readonly #scheduler: RepeatScheduler;
   #active: ActiveIdentity | undefined;
-  #autoDelivery = true satisfies boolean;
-  #checkAgain = false satisfies boolean;
-  #checking = false satisfies boolean;
+  #deliveryOwned: boolean | undefined;
   #stopMonitor: (() => void) | undefined;
-  #stopped = false satisfies boolean;
 
-  constructor(
-    messages: MessageSink,
-    client: AgmsgService,
-    scheduler: RepeatScheduler,
-    identityStore: IdentityStore,
-  ) {
+  constructor({ client, identityStore, lease, messages, scheduler }: AgmsgRuntimeDependencies) {
     this.#messages = messages;
+    this.#automaticDelivery = new AutomaticDelivery({ identityStore, lease, messages });
     this.#client = client;
     this.#identityStore = identityStore;
     this.#operations = new AgmsgOperations(client, messages);
@@ -58,50 +54,36 @@ export class AgmsgRuntime {
   }
 
   async start(ctx: RuntimeContext): Promise<void> {
-    this.#stopped = false;
+    this.#automaticDelivery.start();
     const identity: ActiveIdentity | undefined = await this.#resolveIdentity(ctx);
     this.#setActive(identity, ctx);
     this.#startMonitor(ctx);
   }
 
-  stop(ctx: RuntimeContext): void {
-    this.#stopped = true;
+  async stop(ctx: RuntimeContext): Promise<void> {
+    await this.#automaticDelivery.stop();
     this.#stopMonitor?.();
     this.#stopMonitor = undefined;
     this.#active = undefined;
+    this.#deliveryOwned = undefined;
     ctx.ui.setStatus("agmsg", undefined);
   }
 
   async checkAutomatically(ctx: RuntimeContext): Promise<void> {
-    if (!this.#autoDelivery || this.#stopped) {
-      return;
-    }
-    if (this.#checking) {
-      this.#checkAgain = true;
-      return;
-    }
-    this.#checking = true;
-    try {
-      const identity: ActiveIdentity | undefined =
-        this.#active ?? (await this.#resolveIdentity(ctx));
-      if (identity === undefined) {
-        return;
-      }
-      this.#active = identity;
-      const output: string = await this.#operations.inbox(identity, true, ctx.signal);
-      if (output === "") {
-        return;
-      }
-      deliverIncoming(this.#messages, output);
-    } catch (error: unknown) {
-      ctx.ui.setStatus("agmsg", `agmsg: ${errorMessage(error)}`);
-    } finally {
-      this.#checking = false;
-      if (this.#checkAgain) {
-        this.#checkAgain = false;
-        await this.checkAutomatically(ctx);
-      }
-    }
+    await this.#automaticDelivery.check({
+      activate: (identity: ActiveIdentity): void => {
+        this.#active = identity;
+      },
+      context: ctx,
+      ownership: (identity: ActiveIdentity, owned: boolean): void => {
+        this.#deliveryOwned = owned;
+        this.#updateStatus(identity, ctx);
+      },
+      receive: async (identity: ActiveIdentity): Promise<string> =>
+        this.#operations.inbox({ identity, quiet: true, signal: ctx.signal }),
+      resolveIdentity: async (): Promise<ActiveIdentity | undefined> =>
+        this.#active ?? this.#resolveIdentity(ctx),
+    });
   }
 
   async execute(input: AgmsgActionInput, ctx: RuntimeContext): Promise<string> {
@@ -167,7 +149,11 @@ export class AgmsgRuntime {
 
   async #runIdentityCommand(request: IdentityCommandRequest): Promise<string> {
     if (request.command === "") {
-      return this.#operations.inbox(request.identity, false, request.context.signal);
+      return this.#operations.inbox({
+        identity: request.identity,
+        quiet: false,
+        signal: request.context.signal,
+      });
     }
     if (request.command === "team") {
       return this.#operations.teams(request.identity, request.context.signal);
@@ -184,11 +170,11 @@ export class AgmsgRuntime {
       });
     }
     if (request.command === "send") {
-      return this.#operations.send(
-        request.identity,
-        parseSend(request.rest),
-        request.context.signal,
-      );
+      return this.#operations.send({
+        identity: request.identity,
+        input: parseSend(request.rest),
+        signal: request.context.signal,
+      });
     }
     if (request.command === "leave") {
       const result: Awaited<ReturnType<typeof leaveTeam>> = await leaveTeam({
@@ -224,12 +210,18 @@ export class AgmsgRuntime {
   }
 
   async #reconnect(ctx: RuntimeContext): Promise<string> {
-    this.stop(ctx);
-    this.#stopped = false;
+    await this.stop(ctx);
+    this.#automaticDelivery.start();
     const identity: ActiveIdentity = await this.#requireExistingCommandIdentity(
       ctx,
       NO_TEAM_RECONNECT_ERROR,
     );
+    const owned: boolean = await this.#automaticDelivery.takeOwnership(identity);
+    if (!owned) {
+      throw new Error("Could not acquire the agmsg automatic-delivery lease. Retry reconnect.");
+    }
+    this.#deliveryOwned = true;
+    this.#updateStatus(identity, ctx);
     this.#startMonitor(ctx);
     await this.checkAutomatically(ctx);
     return `Reconnected agmsg as ${identity.agent} in ${identity.teams.join(",")}.`;
@@ -317,20 +309,31 @@ export class AgmsgRuntime {
     }, MONITOR_INTERVAL_MS);
   }
 
-  #toggleAuto(value: string, ctx: RuntimeContext): string {
+  async #toggleAuto(value: string, ctx: RuntimeContext): Promise<string> {
     if (value !== "on" && value !== "off") {
       throw new Error("Usage: /agmsg auto <on|off>");
     }
-    this.#autoDelivery = value === "on";
-    this.#setActive(this.#active, ctx);
+    await this.#automaticDelivery.setEnabled(value === "on");
+    this.#deliveryOwned = value === "on" ? undefined : false;
+    this.#updateStatus(this.#active, ctx);
     return `Automatic agmsg delivery (background + end-of-turn): ${value}`;
   }
 
   #setActive(identity: ActiveIdentity | undefined, ctx: RuntimeContext): void {
     this.#active = identity;
+    this.#deliveryOwned = undefined;
     if (identity !== undefined) {
       this.#identityStore.save(identity);
     }
-    ctx.ui.setStatus("agmsg", identityStatus(identity, this.#autoDelivery));
+    this.#updateStatus(identity, ctx);
+  }
+
+  #updateStatus(identity: ActiveIdentity | undefined, ctx: RuntimeContext): void {
+    const status: string | undefined = identityStatus(identity, this.#automaticDelivery.enabled);
+    const displayed: string | undefined =
+      status !== undefined && this.#automaticDelivery.enabled && this.#deliveryOwned === false
+        ? `${status} (standby)`
+        : status;
+    ctx.ui.setStatus("agmsg", displayed);
   }
 }

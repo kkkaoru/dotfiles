@@ -6,12 +6,30 @@ import type {
   HistoryRequest,
   MessageSink,
 } from "./contracts.ts";
-import { combine, DEFAULT_HISTORY_LIMIT, firstTeam, selectTeam } from "./runtime-helpers.ts";
+import {
+  combine,
+  DEFAULT_HISTORY_LIMIT,
+  errorMessage,
+  firstTeam,
+  selectTeam,
+} from "./runtime-helpers.ts";
 
 interface ExecuteActionRequest {
   readonly identity: ActiveIdentity;
   readonly input: AgmsgActionInput;
   readonly project: string;
+  readonly signal: AbortSignal | undefined;
+}
+
+interface InboxOperationRequest {
+  readonly identity: ActiveIdentity;
+  readonly quiet: boolean;
+  readonly signal: AbortSignal | undefined;
+}
+
+interface SendOperationRequest {
+  readonly identity: ActiveIdentity;
+  readonly input: Pick<AgmsgActionInput, "message" | "team" | "to">;
   readonly signal: AbortSignal | undefined;
 }
 
@@ -32,6 +50,11 @@ export interface RuntimeHistoryRequest {
 interface Membership {
   readonly members: readonly { readonly name: string }[];
   readonly team: string;
+}
+
+interface TeamInboxResult {
+  readonly error: string | undefined;
+  readonly output: string;
 }
 
 interface OutgoingMessage {
@@ -96,10 +119,18 @@ export class AgmsgOperations {
         });
       }
       case "inbox": {
-        return this.inbox(selectTeam(request.identity, request.input.team), false, request.signal);
+        return this.inbox({
+          identity: selectTeam(request.identity, request.input.team),
+          quiet: false,
+          signal: request.signal,
+        });
       }
       case "send": {
-        return this.send(request.identity, request.input, request.signal);
+        return this.send({
+          identity: request.identity,
+          input: request.input,
+          signal: request.signal,
+        });
       }
       case "team": {
         return this.teams(selectTeam(request.identity, request.input.team), request.signal);
@@ -110,11 +141,7 @@ export class AgmsgOperations {
     }
   }
 
-  async send(
-    identity: ActiveIdentity,
-    input: Pick<AgmsgActionInput, "message" | "team" | "to">,
-    signal: AbortSignal | undefined,
-  ): Promise<string> {
+  async send({ identity, input, signal }: SendOperationRequest): Promise<string> {
     if (input.to === undefined || input.message === undefined) {
       throw new Error("agmsg send requires both 'to' and 'message'");
     }
@@ -140,17 +167,30 @@ export class AgmsgOperations {
     return output;
   }
 
-  async inbox(
-    identity: ActiveIdentity,
-    quiet: boolean,
-    signal: AbortSignal | undefined,
-  ): Promise<string> {
-    const outputs: readonly string[] = await Promise.all(
-      identity.teams.map(async (team) =>
-        this.#client.inbox({ agent: identity.agent, quiet, signal, team }),
-      ),
+  async inbox({ identity, quiet, signal }: InboxOperationRequest): Promise<string> {
+    const results: readonly TeamInboxResult[] = await Promise.all(
+      identity.teams.map(async (team): Promise<TeamInboxResult> => {
+        try {
+          const output: string = await this.#client.inbox({
+            agent: identity.agent,
+            quiet,
+            signal,
+            team,
+          });
+          return { error: undefined, output };
+        } catch (error: unknown) {
+          return { error: `Inbox failed for team ${team}: ${errorMessage(error)}`, output: "" };
+        }
+      }),
     );
-    return renderMessageText(combine(outputs));
+    const outputs: readonly string[] = results.map((result): string => result.output);
+    const errors: readonly string[] = results.flatMap((result): readonly string[] =>
+      result.error === undefined ? [] : [result.error],
+    );
+    if (outputs.every((output: string): boolean => output === "") && errors.length > 0) {
+      throw new Error(combine(errors));
+    }
+    return renderMessageText(combine([...outputs, ...errors]));
   }
 
   async history(request: RuntimeHistoryRequest): Promise<string> {

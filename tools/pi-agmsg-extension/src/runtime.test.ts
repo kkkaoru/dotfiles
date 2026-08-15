@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
   AgmsgService,
+  DeliveryLease,
   HistoryRequest,
   IdentityLookup,
   InboxRequest,
@@ -34,7 +35,6 @@ interface SchedulerState {
 
 interface Harness {
   readonly clientMock: ClientMock;
-  readonly commandContext: RuntimeContext;
   readonly context: RuntimeContext;
   readonly piMock: MessageSink & {
     readonly sendMessage: ReturnType<typeof vi.fn>;
@@ -78,16 +78,21 @@ function createHarness(lookup?: IdentityLookup): Harness {
   const context: RuntimeContext = {
     cwd: "/project",
     hasUI: true,
-    sessionManager: { getBranch: (): readonly unknown[] => [] },
+    sessionManager: { getEntries: (): readonly unknown[] => [] },
     signal: undefined,
     ui,
   };
-  const commandContext: RuntimeContext = context;
   const piMock = { sendMessage: vi.fn() } satisfies MessageSink;
   const schedulerState: SchedulerState = { canceled: false, task: undefined };
   const identityStore: IdentityStore = {
     load: vi.fn(() => undefined),
+    loadPending: vi.fn(() => []),
     save: vi.fn(),
+    savePending: vi.fn(),
+  };
+  const lease: DeliveryLease = {
+    claim: vi.fn(async () => true),
+    release: vi.fn(async () => undefined),
   };
   const scheduler: RepeatScheduler = {
     repeat(task: () => void): () => void {
@@ -100,10 +105,9 @@ function createHarness(lookup?: IdentityLookup): Harness {
   };
   return {
     clientMock,
-    commandContext,
     context,
     piMock,
-    runtime: new AgmsgRuntime(piMock, client, scheduler, identityStore),
+    runtime: new AgmsgRuntime({ client, identityStore, lease, messages: piMock, scheduler }),
     schedulerState,
     ui,
   };
@@ -119,7 +123,7 @@ describe("AgmsgRuntime lifecycle and tool actions", () => {
     await start(harness);
     expect(harness.ui.setStatus).toHaveBeenCalledWith("agmsg", "agmsg: alice (one)");
     expect(harness.schedulerState.task).toBeTypeOf("function");
-    harness.runtime.stop(harness.context);
+    await harness.runtime.stop(harness.context);
     expect(harness.schedulerState.canceled).toBe(true);
     expect(harness.ui.setStatus).toHaveBeenLastCalledWith("agmsg", undefined);
   });
@@ -235,7 +239,7 @@ describe("slash command", () => {
     ];
     await Promise.all(
       commands.map(async (command: string): Promise<void> =>
-        harness.runtime.command(command, harness.commandContext),
+        harness.runtime.command(command, harness.context),
       ),
     );
     expect(harness.piMock.sendMessage).toHaveBeenCalledTimes(8);
@@ -260,23 +264,11 @@ describe("slash command", () => {
     const commands: readonly string[] = ["unknown", "send bob", "history 0", "auto maybe"];
     await Promise.all(
       commands.map(async (command: string): Promise<void> =>
-        harness.runtime.command(command, harness.commandContext),
+        harness.runtime.command(command, harness.context),
       ),
     );
     expect(harness.ui.notify).toHaveBeenCalledTimes(4);
     expect(harness.ui.notify).toHaveBeenCalledWith("Usage: /agmsg auto <on|off>", "error");
-  });
-
-  it("toggles automatic delivery", async () => {
-    const harness = createHarness();
-    await start(harness);
-    await harness.runtime.command("auto off", harness.commandContext);
-    await harness.runtime.checkAutomatically(harness.context);
-    expect(harness.clientMock.inbox).not.toHaveBeenCalled();
-    expect(harness.ui.setStatus).toHaveBeenLastCalledWith("agmsg", "agmsg: alice (one) (manual)");
-    await harness.runtime.command("auto on", harness.commandContext);
-    await harness.runtime.checkAutomatically(harness.context);
-    expect(harness.clientMock.inbox).toHaveBeenCalled();
   });
 });
 
@@ -284,7 +276,7 @@ describe("leave command", () => {
   it("leaves the only active team after confirmation", async () => {
     const harness = createHarness();
     await start(harness);
-    await harness.runtime.command("leave", harness.commandContext);
+    await harness.runtime.command("leave", harness.context);
     expect(harness.ui.confirm).toHaveBeenCalledWith(
       "Leave agmsg team?",
       "alice will leave one across all registered projects.",
@@ -304,7 +296,7 @@ describe("leave command", () => {
     const harness = createHarness({ agent: "alice", kind: "single", teams: ["one", "two"] });
     harness.ui.select.mockResolvedValue("two");
     await start(harness);
-    await harness.runtime.command("leave", harness.commandContext);
+    await harness.runtime.command("leave", harness.context);
     expect(harness.clientMock.leave).toHaveBeenCalledWith({
       agent: "alice",
       signal: undefined,
@@ -315,7 +307,7 @@ describe("leave command", () => {
     const cancelled = createHarness();
     cancelled.ui.confirm.mockResolvedValue(false);
     await start(cancelled);
-    await cancelled.runtime.command("leave one", cancelled.commandContext);
+    await cancelled.runtime.command("leave one", cancelled.context);
     expect(cancelled.clientMock.leave).not.toHaveBeenCalled();
     expect(cancelled.piMock.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({ content: "Leave cancelled." }),
@@ -324,7 +316,7 @@ describe("leave command", () => {
 
   it("throws instead of starting setup when no team membership exists", async () => {
     const harness = createHarness({ availableTeams: ["one"], kind: "not-joined" });
-    await expect(harness.runtime.command("leave", harness.commandContext)).rejects.toThrow(
+    await expect(harness.runtime.command("leave", harness.context)).rejects.toThrow(
       "Cannot leave an agmsg team because this pi agent is not registered in any team.",
     );
     expect(harness.clientMock.leave).not.toHaveBeenCalled();
@@ -334,14 +326,14 @@ describe("leave command", () => {
   it("validates explicit teams and requires confirmation UI", async () => {
     const invalid = createHarness();
     await start(invalid);
-    await expect(invalid.runtime.command("leave missing", invalid.commandContext)).rejects.toThrow(
+    await expect(invalid.runtime.command("leave missing", invalid.context)).rejects.toThrow(
       "Identity alice is not in team missing.",
     );
 
     const headless = createHarness();
-    Object.assign(headless.commandContext, { hasUI: false });
+    Object.assign(headless.context, { hasUI: false });
     await start(headless);
-    await expect(headless.runtime.command("leave one", headless.commandContext)).rejects.toThrow(
+    await expect(headless.runtime.command("leave one", headless.context)).rejects.toThrow(
       "Leaving an agmsg team requires TUI or RPC confirmation.",
     );
   });
@@ -353,7 +345,7 @@ describe("identity setup", () => {
     harness.clientMock.listTeams.mockResolvedValue(["one", "two"]);
     harness.ui.select.mockResolvedValue("one");
     harness.ui.editor.mockResolvedValueOnce(" alice ");
-    await harness.runtime.command("", harness.commandContext);
+    await harness.runtime.command("", harness.context);
     expect(harness.ui.select).toHaveBeenCalledWith("Choose an existing agmsg team or create one", [
       "one",
       "two",
@@ -382,7 +374,7 @@ describe("identity setup", () => {
       teams: ["one"],
     });
     harness.ui.editor.mockResolvedValueOnce("two").mockResolvedValueOnce("new");
-    await harness.runtime.command("setup", harness.commandContext);
+    await harness.runtime.command("setup", harness.context);
     expect(harness.clientMock.join).toHaveBeenCalled();
     expect(harness.piMock.sendMessage).toHaveBeenCalledWith({
       content:
@@ -404,7 +396,7 @@ describe("identity setup", () => {
       { agent: "bob", team: "two" },
     ]);
     harness.ui.select.mockResolvedValue("alice");
-    await harness.runtime.command("whoami", harness.commandContext);
+    await harness.runtime.command("whoami", harness.context);
     expect(harness.piMock.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({ content: "agent=alice teams=one,two type=pi" }),
     );
@@ -415,24 +407,24 @@ describe("identity setup errors", () => {
   it("reports setup cancellation and unavailable UI", async () => {
     const cancelled = createHarness({ availableTeams: [], kind: "not-joined" });
     cancelled.ui.select.mockResolvedValue(undefined);
-    await cancelled.runtime.command("", cancelled.commandContext);
+    await cancelled.runtime.command("", cancelled.context);
     expect(cancelled.ui.notify).toHaveBeenCalledWith("Team selection cancelled", "error");
 
     const headless = createHarness({ agents: ["a", "b"], kind: "multiple", teams: ["one"] });
-    Object.assign(headless.commandContext, { hasUI: false });
-    await headless.runtime.command("", headless.commandContext);
+    Object.assign(headless.context, { hasUI: false });
+    await headless.runtime.command("", headless.context);
     expect(headless.ui.notify).toHaveBeenCalledWith(expect.stringContaining("TUI mode"), "error");
   });
 
   it("reports agent and identity selection cancellation", async () => {
     const harness = createHarness({ availableTeams: [], kind: "not-joined" });
     harness.ui.editor.mockResolvedValueOnce("one").mockResolvedValueOnce(undefined);
-    await harness.runtime.command("setup", harness.commandContext);
+    await harness.runtime.command("setup", harness.context);
     expect(harness.ui.notify).toHaveBeenCalledWith("Agent selection cancelled", "error");
 
     const multiple = createHarness({ agents: ["a", "b"], kind: "multiple", teams: ["one"] });
     multiple.ui.select.mockResolvedValue(undefined);
-    await multiple.runtime.command("setup", multiple.commandContext);
+    await multiple.runtime.command("setup", multiple.context);
     expect(multiple.ui.notify).toHaveBeenCalledWith("Identity selection cancelled", "error");
   });
 });
@@ -441,12 +433,12 @@ describe("team creation flow", () => {
   it("rejects cancellation and an existing name in create mode", async () => {
     const cancelled = createHarness({ availableTeams: [], kind: "not-joined" });
     cancelled.ui.editor.mockResolvedValue(undefined);
-    await cancelled.runtime.command("setup", cancelled.commandContext);
+    await cancelled.runtime.command("setup", cancelled.context);
     expect(cancelled.ui.notify).toHaveBeenCalledWith("Team creation cancelled", "error");
 
     const duplicate = createHarness({ availableTeams: ["one"], kind: "not-joined" });
     duplicate.ui.editor.mockResolvedValue("one");
-    await duplicate.runtime.command("setup", duplicate.commandContext);
+    await duplicate.runtime.command("setup", duplicate.context);
     expect(duplicate.ui.notify).toHaveBeenCalledWith(
       "Team one already exists; select it from the team list.",
       "error",
@@ -457,12 +449,12 @@ describe("team creation flow", () => {
 describe("identity setup defaults", () => {
   it("uses the directory and a unique random name as blank-input defaults", async () => {
     const harness = createHarness({ availableTeams: [], kind: "not-joined" });
-    Object.assign(harness.commandContext, {
+    Object.assign(harness.context, {
       cwd: "/Users/kkk4oru/ghq/github.com/kkkaoru/dotfiles",
     });
     harness.clientMock.members.mockResolvedValue([{ name: "someone-else", types: [] }]);
     harness.ui.editor.mockResolvedValueOnce("").mockResolvedValueOnce("");
-    await harness.runtime.command("setup", harness.commandContext);
+    await harness.runtime.command("setup", harness.context);
     expect(harness.ui.editor).toHaveBeenNthCalledWith(1, "New agmsg team name", "dotfiles");
     expect(harness.ui.editor).toHaveBeenNthCalledWith(
       2,
@@ -481,7 +473,7 @@ describe("identity setup defaults", () => {
   it("can set up from an existing single identity and rejects headless setup", async () => {
     const existing = createHarness();
     existing.ui.editor.mockResolvedValueOnce("two").mockResolvedValueOnce("alice-two");
-    await existing.runtime.command("setup", existing.commandContext);
+    await existing.runtime.command("setup", existing.context);
     expect(existing.clientMock.join).toHaveBeenCalledWith({
       agent: "alice-two",
       project: "/project",
@@ -490,8 +482,8 @@ describe("identity setup defaults", () => {
     });
 
     const headless = createHarness({ availableTeams: [], kind: "not-joined" });
-    Object.assign(headless.commandContext, { hasUI: false });
-    await headless.runtime.command("setup", headless.commandContext);
+    Object.assign(headless.context, { hasUI: false });
+    await headless.runtime.command("setup", headless.context);
     expect(headless.ui.notify).toHaveBeenCalledWith(
       "agmsg setup requires TUI or RPC mode",
       "error",

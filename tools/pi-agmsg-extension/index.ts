@@ -8,6 +8,7 @@ import {
 import { type Static, Type, type TSchema } from "typebox";
 import { AgmsgClient } from "./src/agmsg-client.ts";
 import type { AgmsgActionInput, ExecHost, MessageSink, RuntimeContext } from "./src/contracts.ts";
+import { ProcessDeliveryLease } from "./src/delivery-lease.ts";
 import { SessionIdentityStore } from "./src/identity-store.ts";
 import { AgmsgRuntime } from "./src/runtime.ts";
 import { SYSTEM_SCHEDULER } from "./src/scheduler.ts";
@@ -104,12 +105,13 @@ function truncate(output: string): TruncatedOutput {
 }
 
 export default function agmsgExtension(host: AgmsgExtensionHost): void {
-  const runtime: AgmsgRuntime = new AgmsgRuntime(
-    host,
-    AgmsgClient.fromHost(host),
-    SYSTEM_SCHEDULER,
-    new SessionIdentityStore(host),
-  );
+  const runtime: AgmsgRuntime = new AgmsgRuntime({
+    client: AgmsgClient.fromHost(host),
+    identityStore: new SessionIdentityStore(host),
+    lease: ProcessDeliveryLease.fromSystem(),
+    messages: host,
+    scheduler: SYSTEM_SCHEDULER,
+  });
 
   host.registerTool({
     description:
@@ -156,7 +158,7 @@ export default function agmsgExtension(host: AgmsgExtensionHost): void {
   host.on("agent_settled", async (_event: unknown, context: RuntimeContext): Promise<void> =>
     runtime.checkAutomatically(context),
   );
-  host.on("session_shutdown", (_event: unknown, context: RuntimeContext): void =>
-    runtime.stop(context),
-  );
+  host.on("session_shutdown", async (_event: unknown, context: RuntimeContext): Promise<void> => {
+    await runtime.stop(context);
+  });
 }

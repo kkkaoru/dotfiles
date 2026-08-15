@@ -72,7 +72,7 @@ function createExtensionHarness(): ExtensionHarness {
   const context: RuntimeContext = {
     cwd: "/project",
     hasUI: true,
-    sessionManager: { getBranch: (): readonly unknown[] => [] },
+    sessionManager: { getEntries: (): readonly unknown[] => [] },
     signal: undefined,
     ui: {
       confirm: vi.fn(async () => true),

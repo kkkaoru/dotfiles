@@ -1,14 +1,19 @@
 import type { ActiveIdentity, IdentityStore, RuntimeContext } from "./contracts.ts";
 
 const IDENTITY_ENTRY_TYPE = "agmsg-active-identity" satisfies string;
+const PENDING_ENTRY_TYPE = "agmsg-pending-inbox" satisfies string;
 
 interface IdentityEntryHost {
   readonly appendEntry: (customType: string, data: unknown) => void;
 }
 
-interface StoredIdentityEntry {
-  readonly customType: typeof IDENTITY_ENTRY_TYPE;
-  readonly data: { readonly identity: ActiveIdentity | null };
+interface DecodedIdentity {
+  readonly identity: ActiveIdentity | undefined;
+}
+
+interface StoredPendingEntry {
+  readonly customType: typeof PENDING_ENTRY_TYPE;
+  readonly data: { readonly messages: readonly string[] };
   readonly type: "custom";
 }
 
@@ -24,15 +29,40 @@ function isActiveIdentity(value: unknown): value is ActiveIdentity {
   return Array.isArray(teams) && teams.every((team: unknown): boolean => typeof team === "string");
 }
 
-function isStoredIdentityEntry(value: unknown): value is StoredIdentityEntry {
+function decodeIdentityEntry(value: unknown): DecodedIdentity | undefined {
+  if (!isRecord(value) || value["type"] !== "custom") {
+    return undefined;
+  }
+  if (value["customType"] !== IDENTITY_ENTRY_TYPE || !isRecord(value["data"])) {
+    return undefined;
+  }
+  const state: unknown = value["data"]["state"];
+  if (state === "cleared") {
+    return { identity: undefined };
+  }
+  const identity: unknown = value["data"]["identity"];
+  if (identity === null) {
+    return { identity: undefined };
+  }
+  return isActiveIdentity(identity) ? { identity } : undefined;
+}
+
+function isDecodedIdentity(value: DecodedIdentity | undefined): value is DecodedIdentity {
+  return value !== undefined;
+}
+
+function isStoredPendingEntry(value: unknown): value is StoredPendingEntry {
   if (!isRecord(value) || value["type"] !== "custom") {
     return false;
   }
-  if (value["customType"] !== IDENTITY_ENTRY_TYPE || !isRecord(value["data"])) {
+  if (value["customType"] !== PENDING_ENTRY_TYPE || !isRecord(value["data"])) {
     return false;
   }
-  const identity: unknown = value["data"]["identity"];
-  return identity === null || isActiveIdentity(identity);
+  const messages: unknown = value["data"]["messages"];
+  return (
+    Array.isArray(messages) &&
+    messages.every((message: unknown): boolean => typeof message === "string")
+  );
 }
 
 function identitiesEqual(
@@ -48,17 +78,34 @@ function identitiesEqual(
 export class SessionIdentityStore implements IdentityStore {
   readonly #host: IdentityEntryHost;
   #current: ActiveIdentity | undefined;
+  #pending: readonly string[] = [];
+  #pendingLoaded = false satisfies boolean;
 
   constructor(host: IdentityEntryHost) {
     this.#host = host;
   }
 
   load(context: RuntimeContext): ActiveIdentity | undefined {
-    const entry: StoredIdentityEntry | undefined = context.sessionManager
-      .getBranch()
-      .findLast((value: unknown): value is StoredIdentityEntry => isStoredIdentityEntry(value));
-    this.#current = entry?.data.identity ?? undefined;
+    const decoded: readonly DecodedIdentity[] = context.sessionManager
+      .getEntries()
+      .map((value: unknown): DecodedIdentity | undefined => decodeIdentityEntry(value))
+      .filter((value: DecodedIdentity | undefined): value is DecodedIdentity =>
+        isDecodedIdentity(value),
+      );
+    this.#current = decoded.at(-1)?.identity;
     return this.#current;
+  }
+
+  loadPending(context: RuntimeContext): readonly string[] {
+    if (this.#pendingLoaded) {
+      return this.#pending;
+    }
+    const entry: StoredPendingEntry | undefined = context.sessionManager
+      .getEntries()
+      .findLast((value: unknown): value is StoredPendingEntry => isStoredPendingEntry(value));
+    this.#pending = entry?.data.messages ?? [];
+    this.#pendingLoaded = true;
+    return this.#pending;
   }
 
   save(identity: ActiveIdentity | undefined): void {
@@ -66,6 +113,16 @@ export class SessionIdentityStore implements IdentityStore {
       return;
     }
     this.#current = identity;
-    this.#host.appendEntry(IDENTITY_ENTRY_TYPE, { identity: identity ?? null });
+    const data: unknown =
+      identity === undefined ? { state: "cleared" } : { identity, state: "selected" };
+    this.#host.appendEntry(IDENTITY_ENTRY_TYPE, data);
+  }
+
+  savePending(messages: readonly string[]): void {
+    if (this.#pending.join("\u0000") === messages.join("\u0000")) {
+      return;
+    }
+    this.#pending = messages;
+    this.#host.appendEntry(PENDING_ENTRY_TYPE, { messages });
   }
 }

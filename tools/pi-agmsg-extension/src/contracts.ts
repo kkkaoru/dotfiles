@@ -48,7 +48,7 @@ export interface DialogUi {
 }
 
 export interface SessionReader {
-  readonly getBranch: () => readonly unknown[];
+  readonly getEntries: () => readonly unknown[];
 }
 
 export interface RuntimeContext {
@@ -76,11 +76,23 @@ export interface MessageSink {
 
 export interface IdentityStore {
   readonly load: (context: RuntimeContext) => ActiveIdentity | undefined;
+  readonly loadPending: (context: RuntimeContext) => readonly string[];
   readonly save: (identity: ActiveIdentity | undefined) => void;
+  readonly savePending: (messages: readonly string[]) => void;
 }
 
 export interface RepeatScheduler {
   readonly repeat: (task: () => void, intervalMs: number) => () => void;
+}
+
+export interface DeliveryLeaseRequest {
+  readonly force: boolean;
+  readonly identity: ActiveIdentity;
+}
+
+export interface DeliveryLease {
+  readonly claim: (request: DeliveryLeaseRequest) => Promise<boolean>;
+  readonly release: () => Promise<void>;
 }
 
 export interface ExecHost {
@@ -134,6 +146,14 @@ export interface AgmsgService {
   readonly team: (team: string, signal?: AbortSignal) => Promise<string>;
   readonly version: (signal?: AbortSignal) => Promise<string>;
   readonly whoami: (project: string, signal?: AbortSignal) => Promise<IdentityLookup>;
+}
+
+export interface AgmsgRuntimeDependencies {
+  readonly client: AgmsgService;
+  readonly identityStore: IdentityStore;
+  readonly lease: DeliveryLease;
+  readonly messages: MessageSink;
+  readonly scheduler: RepeatScheduler;
 }
 
 export interface IdentityCommandRequest {
