@@ -64,6 +64,20 @@ impl Bridge {
         Ok(self.apply_subscription_auth_preflight(request, route, effort))
     }
 
+    fn reject_pi_provider_recursion(&self, request: &MessagesRequest) -> Result<()> {
+        let from_pi = request
+            .metadata
+            .get(crate::http_api::messages_handlers::PI_PROVIDER_ORIGIN_METADATA)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let routes_to_pi = self.app.backend_kind_for_model(&request.model)
+            == Some(crate::agent_backend::BackendKind::PiGateway);
+        if from_pi && routes_to_pi {
+            anyhow::bail!("Pi provider recursion rejected model `{}`", request.model);
+        }
+        Ok(())
+    }
+
     async fn messages_inner(
         self: &Arc<Self>,
         mut request: MessagesRequest,
@@ -113,6 +127,7 @@ impl Bridge {
             "resolved request routing"
         );
         let route = self.apply_turn_preflights(&mut request, route, &mut effort, is_subagent)?;
+        self.reject_pi_provider_recursion(&request)?;
         let request_model = request.model.clone();
         let turn_started = Instant::now();
         tracing::info!(

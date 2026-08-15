@@ -16,7 +16,7 @@ use tokio::process::Child;
 use tokio::sync::Mutex;
 
 pub(crate) mod events;
-use events::ThreadEventDispatcher;
+pub(crate) use events::ThreadEventDispatcher;
 pub use events::ThreadEvents;
 mod codex_config;
 pub(crate) use codex_config::{

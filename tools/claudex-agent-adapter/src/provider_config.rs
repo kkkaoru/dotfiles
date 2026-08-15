@@ -48,6 +48,10 @@ struct Provider {
     #[serde(default)]
     model_catalog_json: Option<String>,
     #[serde(default)]
+    pi_provider: Option<String>,
+    #[serde(default)]
+    pi_model: Option<String>,
+    #[serde(default)]
     max_context_tokens: Option<u64>,
     #[serde(default)]
     max_concurrency: Option<usize>,

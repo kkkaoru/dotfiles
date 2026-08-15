@@ -13,7 +13,10 @@ pub(super) async fn request_session(
     method: &str,
     params: Value,
 ) -> Result<Value> {
-    if route.kind == BackendKind::CodexAppServer {
+    if matches!(
+        route.kind,
+        BackendKind::CodexAppServer | BackendKind::PiGateway
+    ) {
         let backend = route.get().await?;
         return Box::pin(backend.request(method, params)).await;
     }

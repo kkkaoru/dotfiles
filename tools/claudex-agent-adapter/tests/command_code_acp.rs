@@ -115,6 +115,8 @@ async fn spawn_command_code_adapter(
         effort: Some("high".to_owned()),
         model_provider: None,
         model_catalog_json: None,
+        pi_provider: None,
+        pi_model: None,
         max_context_tokens: None,
         max_concurrency,
         model_prefixes: vec!["meta/muse-spark".to_owned()],

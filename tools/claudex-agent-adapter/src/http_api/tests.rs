@@ -62,6 +62,26 @@ fn parses_terminal_subagent_policy_headers() {
 }
 
 #[test]
+fn attaches_only_the_exact_pi_provider_origin_header() {
+    let mut request = decode_messages_request(json!({"model":"main"}))
+        .expect("request")
+        .0;
+    assert!(attach_provider_origin(&HeaderMap::new(), &mut request).is_ok());
+    assert_eq!(request.metadata.get(PI_PROVIDER_ORIGIN_METADATA), None);
+
+    let mut headers = HeaderMap::new();
+    headers.insert(PROVIDER_ORIGIN_HEADER, PI_PROVIDER_ORIGIN.parse().unwrap());
+    attach_provider_origin(&headers, &mut request).expect("Pi provider origin");
+    assert_eq!(
+        request.metadata.get(PI_PROVIDER_ORIGIN_METADATA),
+        Some(&json!(true))
+    );
+
+    headers.insert(PROVIDER_ORIGIN_HEADER, "unknown".parse().unwrap());
+    assert!(attach_provider_origin(&headers, &mut request).is_err());
+}
+
+#[test]
 fn parses_native_claude_code_request_identity_headers() {
     let mut headers = HeaderMap::new();
     headers.insert(

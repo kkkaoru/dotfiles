@@ -23,7 +23,7 @@ mod handover;
 mod handover_circuit;
 mod health_route;
 mod logging;
-mod messages_handlers;
+pub(crate) mod messages_handlers;
 mod retained_health;
 mod retained_proxy;
 mod web_search;
@@ -31,7 +31,8 @@ use active::{ActiveWorkState, track_active_http_request, track_active_provider_t
 #[cfg(test)]
 use messages_handlers::{
     CLAUDE_CODE_AGENT_ID_HEADER, CLAUDE_CODE_PARENT_AGENT_ID_HEADER, MAX_CLAUDE_CODE_ID_BYTES,
-    decode_messages_request, request_working_directory,
+    PI_PROVIDER_ORIGIN, PI_PROVIDER_ORIGIN_METADATA, PROVIDER_ORIGIN_HEADER,
+    attach_provider_origin, decode_messages_request, request_working_directory,
 };
 use messages_handlers::{
     CLAUDE_CODE_SESSION_ID_HEADER, authorize, count_tokens_handler, messages, request_identity,

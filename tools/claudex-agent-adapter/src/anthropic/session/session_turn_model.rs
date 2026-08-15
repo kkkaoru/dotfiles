@@ -33,6 +33,13 @@ impl Bridge {
         if let Some(effort) = effort {
             params["effort"] = json!(effort);
         }
+        if self
+            .app_for_session(session)
+            .backend_kind_for_model(&session.model)
+            == Some(crate::agent_backend::BackendKind::PiGateway)
+        {
+            params["claudexRequest"] = serde_json::to_value(request)?;
+        }
         // Mark interactive user turns so ACP keeps a reserved slot free of SubAgent load.
         if !crate::anthropic::agent_effort::is_subagent_request(request) {
             params["priority"] = json!("user");

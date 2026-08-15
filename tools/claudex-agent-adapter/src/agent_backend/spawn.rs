@@ -1,4 +1,6 @@
-use crate::{app_server::AppServer, copilot_acp::CopilotAcp, grok_acp::GrokAcp};
+use crate::{
+    app_server::AppServer, copilot_acp::CopilotAcp, grok_acp::GrokAcp, pi_gateway::PiGateway,
+};
 use anyhow::{Result, bail};
 use std::sync::Arc;
 
@@ -13,10 +15,24 @@ impl AgentBackend {
             BackendKind::ConfiguredAcp => bail!("configured ACP launch details are required"),
             BackendKind::CopilotAcp => Ok(Arc::new(Self::Copilot(CopilotAcp::spawn(model).await?))),
             BackendKind::GrokAcp => Ok(Arc::new(Self::Grok(GrokAcp::spawn(model).await?))),
+            BackendKind::PiGateway => {
+                bail!("Pi gateway provider and model mapping are required")
+            }
         }
     }
 
     pub(super) async fn spawn_route(route: &BackendRoute) -> Result<Arc<Self>> {
+        if route.backend == BackendKind::PiGateway {
+            let provider = route
+                .pi_provider
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("Pi route omitted piProvider"))?;
+            let model = route
+                .pi_model
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("Pi route omitted piModel"))?;
+            return Ok(Arc::new(Self::Pi(PiGateway::spawn(provider, model).await?)));
+        }
         if let Some(acp) = &route.acp {
             let agent = GrokAcp::spawn_configured_with_max_concurrency(
                 &route.model,

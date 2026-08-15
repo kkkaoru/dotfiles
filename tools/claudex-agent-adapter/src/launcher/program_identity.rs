@@ -11,6 +11,7 @@ use crate::agent_backend::{BackendKind, BackendRoute};
 const CODEX_PROGRAM_ENV: &str = "CLAUDEX_CODEX_PROGRAM";
 const COPILOT_PROGRAM_ENV: &str = "CLAUDEX_COPILOT_PROGRAM";
 const GROK_PROGRAM_ENV: &str = "CLAUDEX_GROK_PROGRAM";
+const PI_PROGRAM_ENV: &str = "CLAUDEX_PI_PROGRAM";
 const GROK_PLUGIN_DIR_ENV: &str = "CLAUDEX_GROK_PLUGIN_DIR";
 
 #[derive(Debug, Hash)]
@@ -68,6 +69,7 @@ fn route_program(route: &BackendRoute) -> OsString {
         BackendKind::CodexAppServer => (CODEX_PROGRAM_ENV, "codex"),
         BackendKind::CopilotAcp => (COPILOT_PROGRAM_ENV, "copilot"),
         BackendKind::GrokAcp => (GROK_PROGRAM_ENV, "grok"),
+        BackendKind::PiGateway => (PI_PROGRAM_ENV, "pi"),
         BackendKind::ConfiguredAcp => ("", ""),
     };
     if environment.is_empty() {

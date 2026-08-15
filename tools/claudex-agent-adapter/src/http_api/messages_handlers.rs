@@ -53,6 +53,9 @@ pub(super) async fn messages(
         Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
     request.working_directory = request_working_directory(&headers);
+    if let Err(error) = attach_provider_origin(&headers, &mut request) {
+        return error_response(StatusCode::BAD_REQUEST, error);
+    }
     let mut disabled_subagent_models = match subagent_policy::active_models() {
         Ok(models) => models,
         Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
@@ -67,6 +70,29 @@ pub(super) async fn messages(
         .messages_with_identity(request, identity, tools_were_provided)
         .await
         .unwrap_or_else(|error| error_response(StatusCode::BAD_GATEWAY, error))
+}
+
+pub(crate) const PROVIDER_ORIGIN_HEADER: &str = "x-claudex-origin";
+pub(crate) const PI_PROVIDER_ORIGIN: &str = "pi-provider";
+pub(crate) const PI_PROVIDER_ORIGIN_METADATA: &str = "_claudex_pi_provider_origin";
+
+pub(crate) fn attach_provider_origin(
+    headers: &HeaderMap,
+    request: &mut MessagesRequest,
+) -> anyhow::Result<()> {
+    let Some(value) = headers.get(PROVIDER_ORIGIN_HEADER) else {
+        return Ok(());
+    };
+    anyhow::ensure!(
+        value.as_bytes() == PI_PROVIDER_ORIGIN.as_bytes(),
+        "{PROVIDER_ORIGIN_HEADER} must be `{PI_PROVIDER_ORIGIN}`"
+    );
+    let Value::Object(metadata) = &mut request.metadata else {
+        request.metadata = json!({(PI_PROVIDER_ORIGIN_METADATA): true});
+        return Ok(());
+    };
+    metadata.insert(PI_PROVIDER_ORIGIN_METADATA.to_owned(), Value::Bool(true));
+    Ok(())
 }
 
 fn attach_denylist_warning(request: &mut MessagesRequest) {

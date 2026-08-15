@@ -34,6 +34,8 @@ async fn resolves_dynamic_opencode_model_and_reports_exact_model_capacity() {
         effort: None,
         model_provider: None,
         model_catalog_json: None,
+        pi_provider: None,
+        pi_model: None,
         max_context_tokens: None,
         max_concurrency: Some(MODEL_LIMIT),
         model_prefixes: vec!["opencode-go/".to_owned()],

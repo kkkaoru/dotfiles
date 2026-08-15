@@ -33,6 +33,13 @@ impl Bridge {
         self.agent_efforts
             .remove_tool_results(completed_ids.iter().map(String::as_str));
         // ACP-bridged Agent/Task has no app-server request; continue via transcript.
+        let stateless_pi = self
+            .app_for_session(session)
+            .backend_kind_for_model(&session.model)
+            == Some(crate::agent_backend::BackendKind::PiGateway);
+        if stateless_pi {
+            return Ok(false);
+        }
         let mut backend_submitted = false;
         let responses = responses.into_iter().filter(|(id, _)| {
             !crate::anthropic::stream::acp_tool_bridge::is_acp_bridge_request_id(id)

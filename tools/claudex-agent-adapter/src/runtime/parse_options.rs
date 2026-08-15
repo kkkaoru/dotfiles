@@ -32,6 +32,7 @@ pub(super) struct OptionsDraft {
     pub(super) selectable_models: Vec<String>,
     pub(super) model: Option<String>,
     pub(super) provider_config: Option<PathBuf>,
+    pub(super) provider_interface: Option<String>,
     pub(super) inherit_claude_model: bool,
     pub(super) listen: SocketAddr,
     pub(super) max_processes: usize,
@@ -48,6 +49,7 @@ impl Default for OptionsDraft {
             selectable_models: Vec::new(),
             model: None,
             provider_config: None,
+            provider_interface: None,
             inherit_claude_model: false,
             listen: "127.0.0.1:8318".parse().expect("default listener"),
             max_processes: DEFAULT_MAX_PROCESSES,
@@ -117,6 +119,16 @@ fn apply_option(
         "--provider-config" => {
             draft.provider_config =
                 Some(PathBuf::from(option_value(arguments, "--provider-config")?));
+        }
+        "--provider-interface" => {
+            if draft.provider_interface.is_some() {
+                bail!("--provider-interface must not be repeated");
+            }
+            let interface = option_value(arguments, "--provider-interface")?;
+            if interface != "pi" {
+                bail!("--provider-interface must be `pi`");
+            }
+            draft.provider_interface = Some(interface);
         }
         "--model" => draft.model = Some(option_value(arguments, "--model")?),
         "--inherit-claude-model" => {

@@ -18,6 +18,7 @@ pub(crate) mod logging;
 mod model_id;
 pub mod parallel_scheduler;
 pub mod path_env;
+pub(crate) mod pi_gateway;
 pub mod provider_config;
 pub mod runtime;
 pub(crate) mod sticky_grace;

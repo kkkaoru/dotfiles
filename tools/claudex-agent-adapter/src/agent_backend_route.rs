@@ -22,6 +22,10 @@ pub struct BackendRoute {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_catalog_json: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pi_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pi_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_context_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_concurrency: Option<usize>,
@@ -40,6 +44,8 @@ impl BackendRoute {
             effort: None,
             model_provider: None,
             model_catalog_json: None,
+            pi_provider: None,
+            pi_model: None,
             max_context_tokens: None,
             max_concurrency: None,
             model_prefixes: Vec::new(),
@@ -51,6 +57,8 @@ impl BackendRoute {
         if self.model_provider.is_none()
             && self.effort.is_none()
             && self.model_catalog_json.is_none()
+            && self.pi_provider.is_none()
+            && self.pi_model.is_none()
             && self.max_context_tokens.is_none()
             && self.max_concurrency.is_none()
             && self.model_prefixes.is_empty()

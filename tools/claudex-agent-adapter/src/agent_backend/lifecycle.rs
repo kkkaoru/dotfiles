@@ -33,6 +33,7 @@ async fn abort_routed_provider(routes: &RoutedBackends, thread_id: &str) -> Resu
             | AgentBackend::ConfiguredAcp(_)
             | AgentBackend::Copilot(_)
             | AgentBackend::Grok(_)
+            | AgentBackend::Pi(_)
     ));
     tracing::debug!(
         thread_id,
@@ -58,6 +59,10 @@ impl AgentBackend {
                 agent.cancel_turn(thread_id).await?;
                 Ok(TurnCancellation::Settled)
             }
+            Self::Pi(gateway) => {
+                gateway.cancel_turn(thread_id)?;
+                Ok(TurnCancellation::Settled)
+            }
             Self::Routed(routes) => cancel_routed_turn(routes, thread_id).await,
             Self::SessionScoped(scopes) => {
                 Box::pin(scopes.unguarded_scope().cancel_turn(thread_id)).await
@@ -75,7 +80,9 @@ impl AgentBackend {
             // target cancellation cannot take down a clean sibling. A leaf
             // provider has no sibling ownership context, so shut it down.
             Self::Codex(_) => {}
-            Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) => self.shutdown_leaf().await,
+            Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) | Self::Pi(_) => {
+                self.shutdown_leaf().await
+            }
             Self::Routed(routes) => abort_routed_provider(routes, thread_id).await?,
             Self::SessionScoped(scopes) => {
                 Box::pin(scopes.unguarded_scope().abort_turn_provider(thread_id)).await?;
@@ -89,6 +96,7 @@ impl AgentBackend {
             Self::Codex(server) => server.shutdown().await,
             Self::Copilot(agent) => agent.shutdown().await,
             Self::ConfiguredAcp(agent) | Self::Grok(agent) => agent.shutdown().await,
+            Self::Pi(gateway) => gateway.shutdown().await,
             Self::Routed(routes) => Box::pin(routes.shutdown()).await,
             Self::SessionScoped(scopes) => Box::pin(scopes.shutdown_all()).await,
         }

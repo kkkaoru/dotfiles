@@ -48,6 +48,11 @@ pub(super) fn assemble_options(mut draft: OptionsDraft) -> Result<ParsedOptions>
     if !draft.selectable_models.is_empty() {
         model_catalog.set_selectable_models(draft.selectable_models);
     }
+    if draft.provider_interface.as_deref() == Some("pi") {
+        enable_pi_routes(&mut draft.routes)?;
+    } else {
+        discard_unused_pi_mappings(&mut draft.routes);
+    }
     validate_routes(&draft.routes)?;
     Ok(ParsedOptions {
         adapter: AdapterOptions {
@@ -62,7 +67,45 @@ pub(super) fn assemble_options(mut draft: OptionsDraft) -> Result<ParsedOptions>
         inherit_claude_model: draft.inherit_claude_model,
     })
 }
+fn enable_pi_routes(routes: &mut [BackendRoute]) -> Result<()> {
+    for route in routes {
+        match (&route.pi_provider, &route.pi_model) {
+            (Some(provider), Some(model)) if !provider.is_empty() && !model.is_empty() => {
+                route.backend = BackendKind::PiGateway;
+                route.acp = None;
+            }
+            (None, None) => {}
+            _ => bail!("Pi route mappings require non-empty piProvider and piModel"),
+        }
+    }
+    Ok(())
+}
+
+fn discard_unused_pi_mappings(routes: &mut [BackendRoute]) {
+    routes
+        .iter_mut()
+        .filter(|route| route.backend != BackendKind::PiGateway)
+        .for_each(|route| {
+            route.pi_provider = None;
+            route.pi_model = None;
+        });
+}
+
 fn validate_routes(routes: &[BackendRoute]) -> Result<()> {
+    if routes
+        .iter()
+        .any(|route| match (&route.pi_provider, &route.pi_model) {
+            (None, None) => route.backend == BackendKind::PiGateway,
+            (Some(provider), Some(model)) => {
+                provider.is_empty()
+                    || model.is_empty()
+                    || (route.backend == BackendKind::PiGateway && provider == "claudex")
+            }
+            _ => true,
+        })
+    {
+        bail!("Pi route mappings require non-empty piProvider and piModel");
+    }
     if routes.iter().any(|route| {
         route
             .max_concurrency

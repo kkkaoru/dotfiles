@@ -9,6 +9,7 @@ pub enum BackendKind {
     ConfiguredAcp,
     CopilotAcp,
     GrokAcp,
+    PiGateway,
 }
 
 impl BackendKind {
@@ -18,6 +19,7 @@ impl BackendKind {
             Self::ConfiguredAcp => "configured-acp",
             Self::CopilotAcp => "copilot-acp",
             Self::GrokAcp => "grok-acp",
+            Self::PiGateway => "pi-gateway",
         }
     }
 }
@@ -37,8 +39,9 @@ impl FromStr for BackendKind {
             "configured-acp" => Ok(Self::ConfiguredAcp),
             "copilot-acp" => Ok(Self::CopilotAcp),
             "grok-acp" => Ok(Self::GrokAcp),
+            "pi-gateway" => Ok(Self::PiGateway),
             _ => bail!(
-                "invalid backend `{value}`; expected codex-app-server, configured-acp, copilot-acp, or grok-acp"
+                "invalid backend `{value}`; expected codex-app-server, configured-acp, copilot-acp, grok-acp, or pi-gateway"
             ),
         }
     }

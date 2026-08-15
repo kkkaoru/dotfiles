@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
@@ -29,7 +29,7 @@ pub(crate) struct AgentEffortRecord<'a> {
 pub(crate) const MAX_SESSIONS: usize = 1_024;
 pub(crate) const MAX_SIGNATURE_BUCKETS: usize = MAX_SESSIONS * 2;
 pub(crate) type SignaturePool = StdMutex<HashMap<u64, Vec<Weak<str>>>>;
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct MessagesRequest {
     #[serde(default)]
     pub model: String,

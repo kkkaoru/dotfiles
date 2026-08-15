@@ -21,6 +21,8 @@ impl AgentBackend {
             }
             Self::Grok(agent) if method == "thread/start" => agent.create_session(params).await,
             Self::Grok(_) => bail!("Grok ACP does not support backend request `{method}`"),
+            Self::Pi(gateway) if method == "thread/start" => Ok(gateway.create_thread()),
+            Self::Pi(_) => bail!("Pi gateway does not support backend request `{method}`"),
             Self::Routed(routes) if method == "thread/start" => {
                 let model = params
                     .get("model")
@@ -53,6 +55,8 @@ impl AgentBackend {
             }
             Self::Grok(agent) if method == "turn/start" => agent.start_turn(params).await,
             Self::Grok(_) => bail!("Grok ACP does not support backend request `{method}`"),
+            Self::Pi(gateway) if method == "turn/start" => gateway.start_turn(params).await,
+            Self::Pi(_) => bail!("Pi gateway does not support backend request `{method}`"),
             Self::Routed(routes) if method == "turn/start" => {
                 let thread_id = params
                     .get("threadId")
@@ -84,6 +88,7 @@ impl AgentBackend {
                 bail!("configured ACP did not request Claude Code tool result {id}")
             }
             Self::Grok(_) => bail!("Grok ACP did not request Claude Code tool result {id}"),
+            Self::Pi(_) => Ok(()),
             Self::Routed(routes) => {
                 let backend = routes
                     .first_ready(BackendKind::CodexAppServer)
@@ -104,6 +109,7 @@ impl AgentBackend {
                 bail!("configured ACP did not request Claude Code tool result {id}")
             }
             Self::Grok(_) => bail!("Grok ACP did not request Claude Code tool result {id}"),
+            Self::Pi(_) => Ok(()),
             Self::Routed(routes) => {
                 let route = routes
                     .find(model)
