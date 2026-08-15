@@ -393,14 +393,28 @@ cd /path/to/project
 claudex
 ```
 
-Pi 経由へ切り替える場合だけ、次のadapter用オプションを付けます。
+通常の `claudex` は既定でPi経由です。明示する場合も同じ挙動です。
 
 ```fish
 claudex --provider-interface pi
 ```
 
-許可値は正確に `pi` だけです。このオプションを付けたとき、`providers.json` の
-`piProvider` / `piModel` に従って次のように解決します。
+問題時に標準化前のdirect backendへ戻すrollbackは次です。
+
+```fish
+claudex --provider-interface direct
+# そのshellだけ一時的に既定を戻す場合
+set -lx CLAUDEX_PROVIDER_INTERFACE direct
+claudex
+# fish全sessionで恒久的にdirectを既定にする場合
+set -Ux CLAUDEX_PROVIDER_INTERFACE direct
+# 後でrepository既定のPiへ戻す場合
+set -eU CLAUDEX_PROVIDER_INTERFACE
+```
+
+CLIは環境変数より優先します。許可値は正確に `pi` / `direct` だけで、不正値は起動時に
+明示errorになります。Pi経由では `providers.json` の `piProvider` / `piModel` に従って
+次のように解決します。
 
 | Claudex model | Pi provider | Pi model |
 | --- | --- | --- |
@@ -409,8 +423,9 @@ claudex --provider-interface pi
 | `auto` | `cursor` | `auto` |
 | `cline-pass/deepseek-v4-flash` | `clinepass` | `cline-pass/deepseek-v4-flash` |
 
-オプションを省略した通常の `claudex` は従来どおり各modelのdirect backendを使います。
-Pi 経由から元へ戻す場合も `--provider-interface pi` を外すだけで、設定変更は不要です。
+`direct` を指定するとPi mappingを破棄し、GPT/OllamaはCodex app-server、Cursor/ClinePassは
+configured ACP、GrokはGrok ACPという標準化前と同じbackendへ戻ります。通常のPi設定や認証を
+変更せず、呼び出し単位または環境変数だけでrollbackできます。
 
 direct / Pi は同じ orchestration developer instructions をsystem末尾へ追加します。その85%以上は
 固定ですが、team protocol とparallel schedulerのguidance（通常15%未満）はrequestやworker状態で
