@@ -158,12 +158,10 @@ describe("Anthropic to Pi context conversion", () => {
     }));
     const toolInput = { request: { values: [1, 2, 3] } };
     const developerInstructions = "D".repeat(14_700);
+    const combinedTopLevelSystem = `top-level first\ntop-level second\n\n${developerInstructions}`;
     const context = toPiContext(
       gatewayRequest({
-        system: [
-          { type: "text", text: "top-level first" },
-          { type: "text", text: "top-level second" },
-        ],
+        system: combinedTopLevelSystem,
         messages: [
           { role: "user", content: "initial request" },
           {
@@ -188,26 +186,19 @@ describe("Anthropic to Pi context conversion", () => {
               },
             ],
           },
-          {
-            role: "system",
-            content: [{ type: "text", text: developerInstructions }],
-          },
         ],
         tools,
       }),
       MODEL,
     );
 
-    const expectedSystemPrompt = [
-      "top-level first",
-      "top-level second",
-      "message-level first",
-      "message-level second",
-      developerInstructions,
-    ].join("\n\n");
+    const expectedSystemPrompt = `${combinedTopLevelSystem}\n\nmessage-level first\n\nmessage-level second`;
     expect(Buffer.byteLength(developerInstructions)).toBe(14_700);
     expect(context.systemPrompt).toBe(expectedSystemPrompt);
     expect(context.systemPrompt?.split(developerInstructions)).toHaveLength(2);
+    expect(context.systemPrompt?.indexOf(developerInstructions)).toBeLessThan(
+      context.systemPrompt?.indexOf("message-level first") ?? -1,
+    );
     expect(context.tools).toHaveLength(61);
     expect(context.tools).toStrictEqual(
       tools.map((tool) => ({
