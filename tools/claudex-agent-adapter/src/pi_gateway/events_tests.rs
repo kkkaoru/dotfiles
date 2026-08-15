@@ -26,6 +26,7 @@ fn gateway() -> PiGateway {
         token: "token".to_owned(),
         events: Arc::new(ThreadEventDispatcher::default()),
         active: Arc::new(Mutex::new(HashMap::<String, ActiveTurn>::new())),
+        pending_request_ids: Arc::new(Mutex::new(HashMap::new())),
         alive: AtomicBool::new(true),
     }
 }
@@ -33,7 +34,7 @@ fn gateway() -> PiGateway {
 #[tokio::test]
 async fn translates_text_thinking_tool_usage_and_terminal_events() {
     let gateway = gateway();
-    let receiver = gateway.subscribe_thread("thread");
+    let receiver = gateway.events.subscribe("request");
     let mut tools = HashMap::new();
 
     assert!(

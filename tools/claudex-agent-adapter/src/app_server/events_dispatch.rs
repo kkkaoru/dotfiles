@@ -13,6 +13,14 @@ use super::{
 
 impl ThreadEventDispatcher {
     pub(crate) fn subscribe(&self, thread_id: &str) -> ThreadEvents {
+        self.subscribe_with_drop(thread_id, None)
+    }
+
+    pub(crate) fn subscribe_with_drop(
+        &self,
+        thread_id: &str,
+        on_drop: Option<Box<dyn FnOnce() + Send + Sync>>,
+    ) -> ThreadEvents {
         let channel_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let mut channels = self
             .channels
@@ -30,6 +38,7 @@ impl ThreadEventDispatcher {
             channel_id,
             queue,
             channels: Arc::clone(&self.channels),
+            on_drop,
         }
     }
 
@@ -37,10 +46,18 @@ impl ThreadEventDispatcher {
         if !is_bridge_event(&event) {
             return;
         }
-        let Some(thread_id) = event_thread_id(&event) else {
+        let Some(thread_id) = event_thread_id(&event).map(str::to_owned) else {
             tracing::debug!(?event, "ignored app-server event without thread id");
             return;
         };
+        self.dispatch_to(&thread_id, event);
+    }
+
+    pub(crate) fn dispatch_to(&self, route_id: &str, event: Value) {
+        if !is_bridge_event(&event) {
+            return;
+        }
+        let thread_id = route_id;
         let mut channels = self
             .channels
             .lock()

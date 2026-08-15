@@ -24,14 +24,14 @@ impl PiGateway {
         tracing::debug!(thread_id, request_id, event_type, event = %event, "received Pi gateway event");
         match event_type {
             "start" | "text_start" | "text_end" | "thinking_start" | "thinking_end" => {}
-            "text_delta" => self.dispatch_delta(thread_id, event, false)?,
-            "thinking_delta" => self.dispatch_delta(thread_id, event, true)?,
+            "text_delta" => self.dispatch_delta(thread_id, request_id, event, false)?,
+            "thinking_delta" => self.dispatch_delta(thread_id, request_id, event, true)?,
             "toolcall_start" => start_tool_call(event, tools)?,
             "toolcall_delta" => append_tool_call(event, tools)?,
-            "toolcall_end" => self.finish_tool_call(thread_id, event, tools)?,
+            "toolcall_end" => self.finish_tool_call(thread_id, request_id, event, tools)?,
             "done" => {
-                self.dispatch_usage(thread_id, event);
-                self.events.dispatch(json!({
+                self.dispatch_usage(thread_id, request_id, event);
+                self.events.dispatch_to(request_id, json!({
                     "method":"turn/completed",
                     "params":{"threadId":thread_id,"turn":{"threadId":thread_id,"status":"completed"}}
                 }));
@@ -44,7 +44,7 @@ impl PiGateway {
                     .or_else(|| event.get("message"))
                     .and_then(Value::as_str)
                     .unwrap_or("Pi gateway request failed");
-                self.dispatch_error(thread_id, message);
+                self.dispatch_error_to(request_id, thread_id, message);
                 return Ok(true);
             }
             other => bail!("unsupported Pi gateway event type `{other}`"),
@@ -52,7 +52,13 @@ impl PiGateway {
         Ok(false)
     }
 
-    fn dispatch_delta(&self, thread_id: &str, event: &Value, thinking: bool) -> Result<()> {
+    fn dispatch_delta(
+        &self,
+        thread_id: &str,
+        request_id: &str,
+        event: &Value,
+        thinking: bool,
+    ) -> Result<()> {
         let delta = event
             .get("delta")
             .and_then(Value::as_str)
@@ -62,7 +68,7 @@ impl PiGateway {
         } else {
             "item/agentMessage/delta"
         };
-        self.events.dispatch(json!({
+        self.events.dispatch_to(request_id, json!({
             "method":method,
             "params":{
                 "threadId":thread_id,
@@ -77,6 +83,7 @@ impl PiGateway {
     fn finish_tool_call(
         &self,
         thread_id: &str,
+        request_id: &str,
         event: &Value,
         tools: &mut HashMap<u64, ToolCallBuffer>,
     ) -> Result<()> {
@@ -101,36 +108,45 @@ impl PiGateway {
         if tool.id.is_empty() || tool.name.is_empty() {
             bail!("Pi tool call omitted id or name");
         }
-        self.events.dispatch(json!({
-            "id":tool.id,
-            "method":"item/tool/call",
-            "params":{
-                "threadId":thread_id,
-                "callId":tool.id,
-                "tool":tool.name,
-                "arguments":arguments
-            }
-        }));
+        self.events.dispatch_to(
+            request_id,
+            json!({
+                "id":tool.id,
+                "method":"item/tool/call",
+                "params":{
+                    "threadId":thread_id,
+                    "callId":tool.id,
+                    "tool":tool.name,
+                    "arguments":arguments
+                }
+            }),
+        );
         Ok(())
     }
 
-    fn dispatch_usage(&self, thread_id: &str, event: &Value) {
+    fn dispatch_usage(&self, thread_id: &str, request_id: &str, event: &Value) {
         let usage = event.pointer("/message/usage").unwrap_or(&Value::Null);
-        self.events.dispatch(json!({
-            "method":"thread/tokenUsage/updated",
-            "params":{"threadId":thread_id,"tokenUsage":{"last":{
-                "inputTokens":usage.get("input").and_then(Value::as_u64).unwrap_or(0),
-                "outputTokens":usage.get("output").and_then(Value::as_u64).unwrap_or(0),
-                "reasoningOutputTokens":0
-            }}}
-        }));
+        self.events.dispatch_to(
+            request_id,
+            json!({
+                "method":"thread/tokenUsage/updated",
+                "params":{"threadId":thread_id,"tokenUsage":{"last":{
+                    "inputTokens":usage.get("input").and_then(Value::as_u64).unwrap_or(0),
+                    "outputTokens":usage.get("output").and_then(Value::as_u64).unwrap_or(0),
+                    "reasoningOutputTokens":0
+                }}}
+            }),
+        );
     }
 
-    pub(super) fn dispatch_error(&self, thread_id: &str, message: &str) {
-        self.events.dispatch(json!({
-            "method":"error",
-            "params":{"threadId":thread_id,"willRetry":false,"error":{"message":message}}
-        }));
+    pub(super) fn dispatch_error_to(&self, request_id: &str, thread_id: &str, message: &str) {
+        self.events.dispatch_to(
+            request_id,
+            json!({
+                "method":"error",
+                "params":{"threadId":thread_id,"willRetry":false,"error":{"message":message}}
+            }),
+        );
     }
 }
 

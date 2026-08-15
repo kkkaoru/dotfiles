@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -33,6 +33,7 @@ pub struct PiGateway {
     token: String,
     events: Arc<ThreadEventDispatcher>,
     active: Arc<Mutex<HashMap<String, ActiveTurn>>>,
+    pending_request_ids: Arc<Mutex<HashMap<String, VecDeque<String>>>>,
     alive: AtomicBool,
 }
 
@@ -54,6 +55,7 @@ impl PiGateway {
             token: process.token,
             events: Arc::new(ThreadEventDispatcher::default()),
             active: Arc::new(Mutex::new(HashMap::new())),
+            pending_request_ids: Arc::new(Mutex::new(HashMap::new())),
             alive: AtomicBool::new(true),
         }))
     }
@@ -63,7 +65,37 @@ impl PiGateway {
     }
 
     pub(crate) fn subscribe_thread(&self, thread_id: &str) -> ThreadEvents {
-        self.events.subscribe(thread_id)
+        let request_id = Uuid::new_v4().to_string();
+        self.pending_request_ids
+            .lock()
+            .expect("Pi pending request registry poisoned")
+            .entry(thread_id.to_owned())
+            .or_default()
+            .push_back(request_id.clone());
+        let pending = Arc::clone(&self.pending_request_ids);
+        let reserved_thread = thread_id.to_owned();
+        let reserved_request = request_id.clone();
+        let release = Box::new(move || {
+            release_reserved_request(&pending, &reserved_thread, &reserved_request);
+        });
+        self.events.subscribe_with_drop(&request_id, Some(release))
+    }
+
+    fn take_reserved_request_id(&self, thread_id: &str) -> Result<String> {
+        let mut pending = self
+            .pending_request_ids
+            .lock()
+            .map_err(|_| anyhow!("Pi pending request registry poisoned"))?;
+        let queue = pending.get_mut(thread_id).with_context(|| {
+            format!("Pi turn has no reserved subscriber for thread {thread_id}")
+        })?;
+        let request_id = queue.pop_front().with_context(|| {
+            format!("Pi turn has no reserved subscriber for thread {thread_id}")
+        })?;
+        if queue.is_empty() {
+            pending.remove(thread_id);
+        }
+        Ok(request_id)
     }
 
     pub(crate) async fn start_turn(self: &Arc<Self>, params: Value) -> Result<()> {
@@ -72,7 +104,7 @@ impl PiGateway {
             .get("claudexRequest")
             .context("Pi turn omitted claudexRequest")?;
         let effort = params.get("effort").and_then(Value::as_str);
-        let request_id = Uuid::new_v4().to_string();
+        let request_id = self.take_reserved_request_id(&thread_id)?;
         let request = protocol::request(
             &request_id,
             &self.token,
@@ -124,7 +156,7 @@ impl PiGateway {
         self.remove_active(&thread_id, &request_id);
         if let Err(error) = result {
             self.alive.store(false, Ordering::Release);
-            self.dispatch_error(&thread_id, &format!("{error:#}"));
+            self.dispatch_error_to(&request_id, &thread_id, &format!("{error:#}"));
         }
     }
 
@@ -204,6 +236,10 @@ impl PiGateway {
             return;
         }
         self.cancel_active_turns();
+        self.pending_request_ids
+            .lock()
+            .expect("Pi pending request registry poisoned")
+            .clear();
         let child = self.process.lock().await.take();
         if let Some(child) = child {
             GatewayProcess {
@@ -216,6 +252,23 @@ impl PiGateway {
             .await;
         }
         self.events.close();
+    }
+}
+
+fn release_reserved_request(
+    pending: &Mutex<HashMap<String, VecDeque<String>>>,
+    thread_id: &str,
+    request_id: &str,
+) {
+    let Ok(mut pending) = pending.lock() else {
+        return;
+    };
+    let remove_thread = pending.get_mut(thread_id).is_some_and(|queue| {
+        queue.retain(|reserved| reserved != request_id);
+        queue.is_empty()
+    });
+    if remove_thread {
+        pending.remove(thread_id);
     }
 }
 
@@ -245,3 +298,7 @@ fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str> {
         .and_then(Value::as_str)
         .with_context(|| format!("Pi gateway params omitted {field}"))
 }
+
+#[cfg(test)]
+#[path = "pi_gateway_tests.rs"]
+mod tests;

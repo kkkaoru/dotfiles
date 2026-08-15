@@ -68,6 +68,7 @@ pub struct ThreadEvents {
     channel_id: u64,
     queue: Arc<EventQueue>,
     channels: Arc<Mutex<Registry>>,
+    on_drop: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
 
 impl ThreadEvents {
@@ -89,6 +90,9 @@ impl ThreadEvents {
 
 impl Drop for ThreadEvents {
     fn drop(&mut self) {
+        if let Some(on_drop) = self.on_drop.take() {
+            on_drop();
+        }
         unsubscribe(
             &mut self
                 .channels
