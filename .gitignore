@@ -84,6 +84,18 @@ coverage_out/
 !.pi/agent/themes/
 !.pi/agent/themes/**
 
+# Grok keeps sessions, auth, caches, and binaries beside config. Track only
+# the files this repository manages; ignore everything else so credentials
+# and machine-local state cannot leak into git.
+.grok/**
+!.grok/config.toml
+!.grok/pager.toml
+!.grok/lsp.json
+!.grok/hooks/
+!.grok/hooks/**
+!.grok/skills/
+!.grok/skills/**
+
 # Codex runtime state/cache
 .codex/attachments/
 .codex/packages/
