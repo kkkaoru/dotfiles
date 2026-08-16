@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "/Users/kkk4oru/.cache/claudex/grok-native-high-plugin-v3/bin/reject-cross-provider-agent.sh",
+            "timeout": 5,
+            "type": "command"
+          }
+        ],
+        "matcher": "^spawn_subagent$"
+      }
+    ]
+  }
+}
