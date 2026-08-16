@@ -24,33 +24,38 @@ paths:
 
 ## 関数と制御フロー
 
-- **PY09 関数の凝集性:** 関数の責務を絞り、production logicを再利用し、CLIまたはapplication entry pointを薄いorchestration層にしてください。
+- **PY09 関数の凝集性:** 関数の責務を絞り、production logicを再利用し、テストコード以外は最大限DRYにし、CLIまたはapplication entry pointをステップ数が最小の薄いorchestration層にしてください。
 - **PY10 分岐:** early returnとguard clauseでネストを減らし、conditional expressionは明瞭で単純な値だけに使い、ネストしないでください。
 - **PY11 expression:** comprehensionは可読性を保てる場合だけ使用し、複雑またはネストしたcomprehensionは名前付きstepへ分割してください。
-- **PY12 iteration:** streamingまたは大きなdataにはiteratorとgeneratorを使い、不要なcollection materializationを避けてください。
-- **PY13 引数:** 関連optionが複数あるcallにはkeyword-only parameterまたは型付けしたconfiguration objectを使い、必須inputをambient global stateへ隠さないでください。
+- **PY12 iteration:** streamingまたは大きなdataにはiteratorとgeneratorを使い、不要なcollection materializationを避け、単一関数内の2重以上のloopネストを避けてください。
+- **PY13 引数:** 関連optionが複数あるcall、または引数が3個以上の場合はkeyword-only parameterまたは型付けしたconfiguration objectを使い、必須inputをambient global stateへ隠さないでください。
 - **PY14 async境界:** 非同期処理がない関数を`async`にせず、event loopからblocking I/Oを直接呼び出さないでください。
+- **PY30 実装計画:** 実装の前には実装計画を事前に入念に建ててから実装してください。
+- **PY31 dispatch:** 反復的な`if`/`elif` dispatchは、より明瞭な場合に型付けしたlookup dictまたはmappingへ置き換えてください。
+- **PY32 comparator:** 再利用するsort keyまたは比較関数は`sorted`や`list.sort`の呼び出しとは別に定義してください。
 
 ## 値、error、resource
 
-- **PY15 定数とglobal:** 定数はmodule scopeでuppercase名にし、mutable global stateを避けてください。
+- **PY15 定数とglobal:** 定数に意味のある型情報を持たせ、module scopeでuppercase名にし、magic numberを名前付き定数へ置き換え、mutable global stateを避けてください。共有定数を関数内で定義しないでください。
 - **PY16 必須値:** 不足する設定または入力を検証し、明示的なdomain errorをraiseまたはreturnしてください。契約が定義する場合だけfallbackを使用してください。
 - **PY17 exception:** 最も狭いexception typeをcatchし、`raise ... from ...`でcauseを維持し、bare `except`またはfailureの黙殺を禁止します。
 - **PY18 runtime検証:** production input validationまたは回復可能なruntime errorに`assert`を使用しないでください。
 - **PY19 resource処理:** file、lock、一時resource、transaction、cleanupにはcontext managerを使用してください。
-- **PY20 file I/O:** `pathlib`を使い、text encodingを明示し、不要なmemoryまたは操作を避けられる場合はI/Oをbatch化またはstream化してください。
+- **PY20 file I/O:** `pathlib`を使い、text encodingを明示し、読み書き回数を最小化し、順序が不要な独立writeは並列実行し、文字列として`\n`を書き込む時は正しくescapeしてください。
 
 ## moduleと診断
 
-- **PY21 import:** 明示的なimportを使い、`from module import *`を避け、遅延が必要でない限りimportをmodule scopeに置き、module境界を改善してcircular dependencyを防いでください。
+- **PY21 import:** 明示的なimportを使い、`from module import *`を避け、遅延が必要でない限りimportをmodule scopeに置き、module境界を改善してcircular dependencyを防ぎ、他moduleを再exportするだけのbarrel moduleを作成しないでください。
 - **PY22 module scope:** moduleの凝集性を保ち、無関係な責務または過度な大きさでtestとnavigationが難しい場合は分割してください。
-- **PY23 未使用code:** toolingを抑制せず、未使用function、variable、import、compatibility branch、obsolete codeを削除してください。
+- **PY23 未使用code:** toolingを抑制せず、未使用function、variable、import、compatibility branch、obsolete codeを削除してください。未使用名は削除か利用のどちらかにしてください。unused localをunderscore prefixで黙らせることを禁止し、underscoreは必須だが未使用のparameterに限って許可します。
 - **PY24 文書と診断:** comment、docstring、log、error messageは英語で記述し、構文の言い換えではなくcontractと理由を文書化してください。
+- **PY33 宣言の配置:** type alias、`TypedDict`、`Protocol`、dataclass、Enum、module-level定数はfunction実装より前へ配置し、functionとfunctionの間へ挿入しないでください。
+- **PY34 ルールレビュー:** 実装後、このルールセットに基づいているかを必ず自動でレビューしてください。
 
 ## テストとcoverage
 
-- **PY25 testの所有:** Pythonの動作、public type、data modelを変更したら、既存のtest配置と命名に従ってtestを追加または更新してください。
+- **PY25 testの所有:** Pythonの動作、public type、data modelを変更したら、既存のtest配置と命名に従ってtestを追加または更新してください。テストコード以外のPythonファイルを作成・編集・変更・削除したら、関連するtestも必ず更新してください。
 - **PY26 coverage:** 設定済みのfile単位coverage閾値を下げずに満たし、閾値がなくcoverage toolを利用できる場合は変更した全source fileで90%以上を達成してください。
-- **PY27 testの分離:** fixture、一時path、monkeypatch、test doubleでfilesystem、clock、environment、process、network依存を分離し、testを決定的かつ高速にしてください。
+- **PY27 testの分離:** fixture、一時path、monkeypatch、test doubleでfilesystem、clock、environment、process、network依存を分離し、testを決定的かつ高速にしてください。実行速度も重視してtestを実装してください。
 - **PY28 test framework:** 別のrunnerまたはassertion libraryを導入せず、既存のtest frameworkとfixtureを使用してください。
-- **PY29 testの明瞭性:** 明示的なparameterizationと期待literalを優先し、実装詳細ではなく完全な結果をassertし、対象動作を隠すhelper抽象化を避けてください。
+- **PY29 testの明瞭性:** テストコードはDRYにしないでください。共有helperやloopより明示的なcaseを優先し、test内の`for`とloop内のassertを禁止します。ネストしたtest classとsuite wrapperを減らしてください。期待値にvariable、constant、文字列展開を渡さず、実装詳細ではなく明示的literalで完全な結果をassertしてください。
