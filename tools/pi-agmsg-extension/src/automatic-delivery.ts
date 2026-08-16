@@ -5,8 +5,8 @@ import type {
   MessageSink,
   RuntimeContext,
 } from "./contracts.ts";
-import { deliverIncoming } from "./agmsg-operations.ts";
-import { combine, errorMessage } from "./runtime-helpers.ts";
+import { deliverIncoming, undeliveredInbox } from "./agmsg-operations.ts";
+import { combine, errorMessage, uniqueStrings } from "./runtime-helpers.ts";
 
 interface AutomaticCheckRequest {
   readonly activate: (identity: ActiveIdentity) => void;
@@ -14,6 +14,7 @@ interface AutomaticCheckRequest {
   readonly ownership: (identity: ActiveIdentity, owned: boolean) => void;
   readonly receive: (identity: ActiveIdentity) => Promise<string>;
   readonly resolveIdentity: () => Promise<ActiveIdentity | undefined>;
+  readonly retryQueued: boolean;
 }
 
 interface AutomaticDeliveryDependencies {
@@ -30,6 +31,7 @@ export class AutomaticDelivery {
   #checkFinished: PromiseWithResolvers<boolean> | undefined;
   #checking = false satisfies boolean;
   #enabled = true satisfies boolean;
+  #queuedDelivery: string | undefined;
   #stopped = false satisfies boolean;
 
   constructor({ identityStore, lease, messages }: AutomaticDeliveryDependencies) {
@@ -79,17 +81,15 @@ export class AutomaticDelivery {
     const finished: PromiseWithResolvers<boolean> = Promise.withResolvers<boolean>();
     this.#checkFinished = finished;
     try {
-      this.#deliverPending(request.context);
       const identity: ActiveIdentity | undefined = await request.resolveIdentity();
       if (identity === undefined) {
+        this.#flush(request, this.#identityStore.loadPending(request.context));
         return;
       }
       request.activate(identity);
       const owned: boolean = await this.#lease.claim({ force: false, identity });
       request.ownership(identity, owned);
-      if (owned) {
-        await this.#receive(request, identity);
-      }
+      await this.#receive(request, identity, owned);
     } catch (error: unknown) {
       request.context.ui.setStatus("agmsg", `agmsg: ${errorMessage(error)}`);
     } finally {
@@ -103,26 +103,38 @@ export class AutomaticDelivery {
     }
   }
 
-  async #receive(request: AutomaticCheckRequest, identity: ActiveIdentity): Promise<void> {
-    const output: string = await request.receive(identity);
-    if (output === "") {
-      return;
-    }
-    const pending: readonly string[] = [
-      ...this.#identityStore.loadPending(request.context),
-      output,
-    ];
-    this.#identityStore.savePending(pending);
-    deliverIncoming(this.#messages, combine(pending));
-    this.#identityStore.savePending([]);
+  async #receive(
+    request: AutomaticCheckRequest,
+    identity: ActiveIdentity,
+    owned: boolean,
+  ): Promise<void> {
+    const fetched: string = owned ? await request.receive(identity) : "";
+    this.#flush(
+      request,
+      uniqueStrings(
+        [...this.#identityStore.loadPending(request.context), fetched].filter(
+          (item: string): boolean => item !== "",
+        ),
+      ),
+    );
   }
 
-  #deliverPending(context: RuntimeContext): void {
-    const pending: readonly string[] = this.#identityStore.loadPending(context);
-    if (pending.length === 0) {
+  #flush(request: AutomaticCheckRequest, pending: readonly string[]): void {
+    const remaining: readonly string[] = undeliveredInbox(
+      pending,
+      request.context.sessionManager.buildContextEntries?.() ??
+        request.context.sessionManager.getEntries(),
+    );
+    this.#identityStore.savePending(remaining);
+    if (remaining.length === 0) {
+      this.#queuedDelivery = undefined;
       return;
     }
-    deliverIncoming(this.#messages, combine(pending));
-    this.#identityStore.savePending([]);
+    const batch: string = combine(remaining);
+    if (!request.retryQueued && this.#queuedDelivery === batch) {
+      return;
+    }
+    deliverIncoming(this.#messages, batch);
+    this.#queuedDelivery = batch;
   }
 }

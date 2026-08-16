@@ -51,6 +51,10 @@ export function combine(outputs: readonly string[]): string {
   return outputs.filter((output: string): boolean => output !== "").join("\n\n");
 }
 
+export function uniqueStrings(values: readonly string[]): readonly string[] {
+  return [...new Set(values)];
+}
+
 export function parseCommand(args: string): ParsedCommand {
   const value: string = args.trim();
   const separator: number = value.search(/\s/u);

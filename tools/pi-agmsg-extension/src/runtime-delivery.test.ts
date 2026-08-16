@@ -33,12 +33,14 @@ interface DeliveryHarness {
   readonly context: RuntimeContext;
   readonly identityStore: IdentityStore & {
     readonly save: ReturnType<typeof vi.fn<IdentityStore["save"]>>;
+    readonly savePending: ReturnType<typeof vi.fn<IdentityStore["savePending"]>>;
   };
   readonly lease: DeliveryLease & {
     readonly claim: ReturnType<typeof vi.fn<DeliveryLease["claim"]>>;
     readonly release: ReturnType<typeof vi.fn<DeliveryLease["release"]>>;
   };
   readonly messages: MessageSink & { readonly sendMessage: ReturnType<typeof vi.fn> };
+  readonly persistedInbox: unknown[];
   readonly runtime: AgmsgRuntime;
   readonly schedulerState: SchedulerState;
   readonly ui: RuntimeContext["ui"] & {
@@ -51,28 +53,30 @@ interface DeliveryHarness {
 
 const SINGLE_IDENTITY: IdentityLookup = { agent: "alice", kind: "single", teams: ["one"] };
 
+function createClientMocks(lookup: IdentityLookup): DeliveryHarness["clientMock"] {
+  return {
+    inbox: vi.fn<AgmsgService["inbox"]>(async (request: InboxRequest) => `inbox:${request.team}`),
+    join: vi.fn<AgmsgService["join"]>(async (_request: JoinRequest) => "joined"),
+    send: vi.fn<AgmsgService["send"]>(async (request: SendRequest) => `sent:${request.team}`),
+    whoami: vi.fn<AgmsgService["whoami"]>(async () => lookup),
+  };
+}
+
 function createDeliveryHarness(
   lookup: IdentityLookup,
   storedIdentity?: ActiveIdentity,
+  idle = false,
 ): DeliveryHarness {
-  const inbox = vi.fn<AgmsgService["inbox"]>(
-    async (request: InboxRequest) => `inbox:${request.team}`,
-  );
-  const join = vi.fn<AgmsgService["join"]>(async (_request: JoinRequest) => "joined");
-  const send = vi.fn<AgmsgService["send"]>(async (request: SendRequest) => `sent:${request.team}`);
-  const whoami = vi.fn<AgmsgService["whoami"]>(async () => lookup);
+  const clientMock = createClientMocks(lookup);
   const client: AgmsgService = {
+    ...clientMock,
     history: vi.fn(async (request: HistoryRequest) => `history:${request.team}`),
     identities: vi.fn(async () => [{ agent: "alice", team: "one" }]),
-    inbox,
-    join,
     leave: vi.fn(async (request: LeaveRequest) => `left:${request.team}`),
     listTeams: vi.fn(async () => []),
     members: vi.fn(async () => [{ name: "bob", types: ["codex"] }]),
-    send,
     team: vi.fn(async (team: string) => `team:${team}`),
     version: vi.fn(async () => "v1"),
-    whoami,
   };
   const ui = {
     confirm: vi.fn(async () => true),
@@ -81,20 +85,13 @@ function createDeliveryHarness(
     select: vi.fn(async (_title: string, options: string[]) => options.at(-1)),
     setStatus: vi.fn(),
   };
-  const context: RuntimeContext = {
-    cwd: "/project",
-    hasUI: true,
-    sessionManager: { getEntries: (): readonly unknown[] => [] },
-    signal: undefined,
-    ui,
-  };
-  const messages = { sendMessage: vi.fn() } satisfies MessageSink;
+  const persistedInbox: unknown[] = [];
+  const pendingStates: string[][] = [[]];
   const schedulerState: SchedulerState = {
     canceled: false,
     intervalMs: undefined,
     task: undefined,
   };
-  const pendingStates: string[][] = [[]];
   const identityStore = {
     load: vi.fn(() => storedIdentity),
     loadPending: vi.fn(() => pendingStates.at(-1) ?? []),
@@ -103,6 +100,11 @@ function createDeliveryHarness(
       pendingStates.push([...pending]);
     }),
   } satisfies IdentityStore;
+  const messages = {
+    sendMessage: vi.fn((message: { readonly content: string; readonly customType: string }) => {
+      persistedInbox.push({ content: message.content, customType: message.customType });
+    }),
+  } satisfies MessageSink;
   const lease = {
     claim: vi.fn<DeliveryLease["claim"]>(async () => true),
     release: vi.fn<DeliveryLease["release"]>(async () => undefined),
@@ -119,11 +121,19 @@ function createDeliveryHarness(
   };
   return {
     client,
-    clientMock: { inbox, join, send, whoami },
-    context,
+    clientMock,
+    context: {
+      cwd: "/project",
+      hasUI: true,
+      isIdle: (): boolean => idle,
+      sessionManager: { getEntries: (): readonly unknown[] => persistedInbox },
+      signal: undefined,
+      ui,
+    },
     identityStore,
     lease,
     messages,
+    persistedInbox,
     runtime: new AgmsgRuntime({ client, identityStore, lease, messages, scheduler }),
     schedulerState,
     ui,
@@ -405,7 +415,10 @@ describe("delivery journal", () => {
       },
       { deliverAs: "steer", triggerTurn: true },
     );
-    expect(harness.identityStore.savePending).toHaveBeenLastCalledWith([]);
+    expect(harness.identityStore.savePending.mock.calls).toStrictEqual([
+      [["advisor: retry me"]],
+      [["advisor: retry me"]],
+    ]);
   });
 
   it("waits for an in-flight inbox delivery before session shutdown", async () => {

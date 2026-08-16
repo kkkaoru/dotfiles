@@ -72,10 +72,37 @@ const SENT_DELIVERY_OPTIONS: DeliveryOptions = {
   deliverAs: "steer",
   triggerTurn: false,
 };
+export const INBOX_CUSTOM_TYPE = "agmsg-inbox" satisfies string;
+const INBOX_PREFIX = "Incoming agmsg message:\n" satisfies string;
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null;
+}
+
+export function incomingInboxContent(output: string): string {
+  return `${INBOX_PREFIX}${output}`;
+}
+
+export function undeliveredInbox(
+  pending: readonly string[],
+  entries: readonly unknown[],
+): readonly string[] {
+  const persisted: readonly string[] = entries.flatMap((entry: unknown): readonly string[] => {
+    if (!isRecord(entry) || entry["customType"] !== INBOX_CUSTOM_TYPE) {
+      return [];
+    }
+    const content: unknown = entry["content"];
+    return typeof content === "string" ? [content] : [];
+  });
+  return pending.filter((output: string): boolean => {
+    const content: string = incomingInboxContent(output);
+    return !persisted.some((item: string): boolean => item === content || item.includes(output));
+  });
+}
 
 export function deliverIncoming(messages: MessageSink, output: string): void {
   messages.sendMessage(
-    { content: `Incoming agmsg message:\n${output}`, customType: "agmsg-inbox", display: true },
+    { content: incomingInboxContent(output), customType: INBOX_CUSTOM_TYPE, display: true },
     INCOMING_DELIVERY_OPTIONS,
   );
 }

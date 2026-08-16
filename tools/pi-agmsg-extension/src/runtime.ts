@@ -83,6 +83,7 @@ export class AgmsgRuntime {
         this.#operations.inbox({ identity, quiet: true, signal: ctx.signal }),
       resolveIdentity: async (): Promise<ActiveIdentity | undefined> =>
         this.#active ?? this.#resolveIdentity(ctx),
+      retryQueued: ctx.isIdle?.() === true,
     });
   }
 

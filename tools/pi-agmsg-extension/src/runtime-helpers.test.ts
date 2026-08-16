@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { incomingInboxContent, undeliveredInbox } from "./agmsg-operations.ts";
 import type { ActiveIdentity } from "./contracts.ts";
 import {
   combine,
@@ -10,6 +11,7 @@ import {
   parseSend,
   selectTeam,
   uniqueAgentName,
+  uniqueStrings,
   uniqueTeamName,
 } from "./runtime-helpers.ts";
 
@@ -18,6 +20,7 @@ const identity: ActiveIdentity = { agent: "alice", teams: ["one", "two"] };
 describe("runtime helpers", () => {
   it("combines non-empty script output", () => {
     expect(combine(["one", "", "two"])).toBe("one\n\ntwo");
+    expect(uniqueStrings(["one", "two", "one", ""])).toStrictEqual(["one", "two", ""]);
   });
 
   it("parses commands and send arguments", () => {
@@ -60,5 +63,19 @@ describe("runtime helpers", () => {
   it("normalizes error values", () => {
     expect(errorMessage(new Error("bad"))).toBe("bad");
     expect(errorMessage("bad")).toBe("bad");
+  });
+
+  it("keeps inbox output until a matching session entry exists", () => {
+    const pending: readonly string[] = ["first", "second"];
+    expect(undeliveredInbox(pending, [])).toStrictEqual(pending);
+    expect(
+      undeliveredInbox(pending, [
+        { content: incomingInboxContent("first"), customType: "agmsg-inbox" },
+        { content: "other", customType: "agmsg-sent" },
+      ]),
+    ).toStrictEqual(["second"]);
+    expect(
+      undeliveredInbox(["first"], [{ content: "first", customType: "agmsg-inbox" }]),
+    ).toStrictEqual([]);
   });
 });

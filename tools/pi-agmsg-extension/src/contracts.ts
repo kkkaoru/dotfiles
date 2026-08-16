@@ -48,12 +48,14 @@ export interface DialogUi {
 }
 
 export interface SessionReader {
+  readonly buildContextEntries?: () => readonly unknown[];
   readonly getEntries: () => readonly unknown[];
 }
 
 export interface RuntimeContext {
   readonly cwd: string;
   readonly hasUI: boolean;
+  readonly isIdle?: () => boolean;
   readonly sessionManager: SessionReader;
   readonly signal: AbortSignal | undefined;
   readonly ui: DialogUi;
