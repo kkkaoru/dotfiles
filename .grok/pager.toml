@@ -1,0 +1,7 @@
+# Scrollbar colors from the official Dracula Classic palette:
+# https://github.com/dracula/dracula-theme
+# AnsiBlack / Purple. Grok has no custom TUI theme loader; only these
+# pager slots accept hex overrides.
+[scrollback.scrollbar]
+scrollbar_bg = "#21222C"
+scrollbar_fg = "#BD93F9"
