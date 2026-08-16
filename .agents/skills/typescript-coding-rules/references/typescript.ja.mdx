@@ -6,56 +6,97 @@ paths:
   - "**/*.cts"
 ---
 
-# TypeScriptコーディングルール
-
-これは正規英語版の日本語訳です。各要件は1個のRule IDだけを持ち、1箇所だけに記載します。
+TypeScriptのコーディングルール。全ての項目を同時に常に守ってください
 
 ## リポジトリと検証
 
-- **R01 リポジトリ設定:** リポジトリに設定されたruntime、package manager、workspace構成、scriptを使用してください。別のpackage managerや不要な`package.json`を追加しないでください。
-- **R02 検証toolchain:** 論理的な変更単位ごとに対象を絞ったcheckを実行し、その後、設定済みtype-check、test、および **OxlintとOxfmtの両方** または **Biome** の完全なlint/format toolchainを1つ実行してください。期待動作を再現し、完了前に全failureを解消してください。Oxlintだけ、またはOxfmtだけの実行は不完全です。
-- **R03 品質の維持:** 明示的な承認なしに診断を抑制したり、ignore指定を追加したり、checkを弱めたりしないでください。
+1. bun で実行することをファイル内のコメントに明記しろ
+2. package.json に可能な場合は集約して
+3. 実装の前には実装計画を事前に入念に建ててから実装をしてください
+4. bun run tsc のエラーを解消して、bun run tsc のエラーは常に無い状態にして
+5. bun run tsc は作業を行うたびに実施をしてエラーがあれば修正をしろ
+6. lint のwarning, error を解消して、lint の warning, error は常に無い状態にして
+7. コードの変更をしたら`bun run tsc`, lint, `bun run test` が常に正常終了することを確認してください。
+8. テストコードの変更をしたら`bun run tsc`, lint, `bun run test` が常に正常終了することを確認してください。
+9. \*.ts ファイルを編集したら bun run test を常に実行する
+10. 動作確認をして期待する結果になるまで修正をしつづけろ
+11. コードの変更をして、動作確認のコマンドがわかる場合は常に動作確認をしてください。
+12. typescript-rules.ja.mdx に基づいた実装をしているかのレビューを必ず自動で行うこと
 
-## 型system
+## 型
 
-- **R04 安全でない型:** `any`または`as`による安全でないnarrowingを使用せず、check、predicate、generic、または入力元の型修正でnarrowingしてください。
-- **R05 object形状:** 3個以上のpropertyを持つobject形状には`interface`を使い、ネストしたobject形状は適切なscopeのinterfaceへ分離してください。
-- **R06 閉じた値集合:** union typeを優先し、新しい`enum`を導入しないでください。
-- **R07 literal適合:** `as const`を`satisfies`または明示的な型へ置き換えてください。
-- **R08 型の配置:** typeとinterfaceの宣言をfunction実装より前へ配置してください。
+13. any を禁止
+14. as句で型を強制するのを禁止
+15. "as const" は禁止。 satisfies を使え。
+16. 型の定義でinterfaceを使える型はinterfaceで常に定義してください
+17. 3つ以上のプロパティを持つオブジェクトはinterfaceを定義しろ
+18. interface の型でネストしている部分があれば、interface の定義を適切な範囲で増やして
+19. interface の定義をファイル上部にまとめて。function と function の定義の間に interface を定義することを禁止
+20. union の type の定義を推奨します。
+21. enum の新規の定義を禁止
+22. 型の情報の無いconstの定義を禁止
 
 ## 関数と制御フロー
 
-- **R09 関数の凝集性:** 関数の責務を絞り、production logicを再利用し、`main`または`run`を薄いorchestration層にしてください。
-- **R10 returnの簡素化:** 明瞭な単一expressionにはexpression bodyを使い、`async`関数が1個のpromiseをawaitするだけで後続処理がない場合はpromiseを直接returnしてください。
-- **R11 ネストとternary:** guard clauseでネストを減らし、ternaryは単純な値選択だけに使用してください。ternaryのネストや連鎖は禁止です。
-- **R12 dispatch:** 反復的な`if`/`else if`または`switch` dispatchは、より明瞭な場合にtype-safeなlookup objectまたは`Map`へ置き換えてください。
-- **R13 production iteration:** production codeでは命令的なloopより明瞭なarray methodを優先し、loopのネストを避けてください。
-- **R14 引数:** 引数が3個以上なら型付けした1個のobjectを受け取り、実用的であればparameter listでdestructureしてください。
-- **R15 comparator:** 再利用するsort comparatorは`sort`呼び出しとは別に定義してください。
+23. 関数の分割, 正規化, DRY な記述を推奨
+24. テストコード以外は最大限DRYにしてください
+25. main関数もしくは run 関数が存在している場合は、これらの関数のステップ数は最小になるように処理を分割するようにしてください。
+26. main関数を作成や定義をする場合は、main 関数のスコープ内の定義は可能な限り減らして関数の定義の分離を行って カバレッジが上がりやすくなるようにして
+27. 関数で3つ以上の引数がある場合は、一つのオブジェクトを引数にするようにして
+28. return を省略可能な定義は、sugar syntax で省略しろ
+29. 可読性が良い範囲で return と const の定義は最小にして
+30. 全てのコードでネスト数を最小にしてください
+31. In computer programming, a guard を使って、ネストの中の処理を簡素化できるとこは guard で定義してください。三項演算子をguard で置換するのは禁止
+32. ternary operator は可能な限り利用しろ
+33. ternary operator をnestして連続で使うことを禁止
+34. for よりも Array.prototype.map を利用して
+35. 単一の関数のスコープ内で forで2重以上のネストを可能な限り避けてください
+36. 複数の if と if else や swtich分は Map オブジェクトでの定義と利用で置き換えられる場合は置き換えてください。
+37. sort関数に渡す関数は個別で定義しろ
 
 ## 値、I/O、module
 
-- **R16 定数:** 定数に意味のある型情報を持たせ、固定値とmagic numberを名前付き定数へ置き換え、共有定数はmodule scope、本当にlocalな定数はlocal scopeへ配置してください。
-- **R17 必須値:** 必須の設定やデータがなければ検証して明示的に失敗させ、契約が定義する場合だけfallback defaultを使用してください。
-- **R18 file I/O:** ファイルの読み書き回数を最小化し、順序が不要な独立writeはbatch化または並列実行してください。
-- **R19 未使用宣言:** 未使用のfunction、variable、import、constantを削除し、必須だが未使用のfunction parameterに限ってunderscore prefixを許可してください。
-- **R20 module境界:** namespace importよりnamed importまたはdefault importを優先し、`index.ts` barrel fileを作成しないでください。
-- **R21 診断の言語:** comment、log、error messageは英語で記述してください。
-- **R22 escape:** fileまたは文字列形式のliteral `\n`を正しくescapeしてください。
+38. 固定の値は定数として定義して
+39. magic number は可能な限り減らして
+40. 定数は可能な限り関数のスコープ内で定義するな
+41. constで定義した定数をファイル上部にまとめて。function と function の定義の間に 定数 を定義することを禁止
+42. type, interface, 定数の定義はファイル上部に集約して
+43. letを常に禁止
+44. デフォルト値をコードに含めるのを禁止
+45. 使っていない関数や変数を削除して
+46. unused な定義は全て削除して
+47. 未使用の定数や変数は削除か利用のどちらかを必ずすること。アンダースコア接頭辞を付けた修正を禁止。アンダースコアの利用は関数の引数の調整時のみ許可
+48. ファイルの読み書きがある場合は、最小の回数で行ってください。複数の書き込みがある場合は並列で書き込むようにしてください
+49. `\n`を文字列としてファイルに書き込む時は正しくエスケープして
+50. import \* as でライブラリの読み込みを禁止
+51. index.ts の barrel ファイルの作成を常に禁止
+52. エラーログは常に英語で出力してください
+53. コメントとログは全て英語で定義しろ
 
 ## 外部データとDOM
 
-- **R23 HTML取得:** 既存の抽象化がより適切でない限り`fetch`を優先し、markupを推測せず確認済みの代表的HTMLからparsingを設計してください。
-- **R24 文字encoding:** UTF-8以外の入力は、`iconv-lite`などリポジトリ設定済みのencoding libraryで明示的にdecodeしてください。
-- **R25 DOM環境:** `jsdom`を追加せず、既存のDOM test environmentを使うか、互換性のあるemulationを導入する場合は`happy-dom`を優先してください。
+54. HTMLの取得はfetchを推奨しています
+55. HTMLからデータを取得する処理の場合は必ず、実施のHTMLの情報を元に処理の定義を行う
+56. データの取得先がUTF-8以外の場合は常に適切にiconv-lite でエンコー
+57. jsdom は常に使用しない。happy-dom の利用は推奨。
 
 ## テスト
 
-- **R26 testの所有:** TypeScriptの動作または型を変更したら、`*.test.ts`や`*.test.tsx`など既存のco-locationと命名規則に従ってtestを追加または更新してください。
-- **R27 coverage:** 設定済みのfile単位coverage閾値を下げずに満たし、閾値がなければ変更した全source fileで90%以上を達成してください。
-- **R28 testの分離:** filesystem accessとnetwork requestをmockし、unit testを決定的かつ高速にしてください。
-- **R29 test framework:** 既存のtest runnerとimportを使い、リポジトリが標準化していない限り`bun:test`を含む別runnerを導入しないでください。
-- **R30 test caseの明瞭性:** input、assertion path、期待結果を隠す抽象化やloopより、明示的なtest caseを優先してください。
-- **R31 suite構造:** `describe`のネストと不要なsuite wrapperを減らしてください。
-- **R32 assertion:** `toEqual`より`toStrictEqual`を優先し、`toContain`と`expect(value.includes(item)).toBe(true)`を使用せず、期待する文字列、配列、objectを実装から独立した明示的literalで記述してください。
+58. 同じファイルのディレクトリに \*.test.ts としてテストファイルを生成してください
+59. テストコード以外のtsファイルを作成・編集・変更・削除をした場合は、関連するテストファイルも必ず更新を行う。
+60. typescriptの定義を変更をしたら、関連のあるテストコードも自動で更新してカバレッジを80%以上を担保してください
+61. カバレッジを90%以上を担保してください
+62. 対象ファイルのテストは90%以上を常に担保してください
+63. テストファイルを常に作成して作成したファイルに対してのテストのカバレッジは 80%以上を常に担保する
+64. 対象ファイルのはカバレッジを 80% 以上にすること
+65. テストコードはDRYではない書き方をしてください
+66. テストコードで for 文の利用を禁止。テストコードでは可能な限りNOT DRY なコードを定義してください
+67. テストコードファイルでfor文のscope の中で assert をするのを禁止
+68. describe の記述量は最小にしてテストコードでもネストは常に最小にしろ。describe は多用するな。describe の利用は極限まで減らせ
+69. toEqual ではなくて toStrictEqual を利用しろ
+70. toContain の assert は禁止です。
+71. expect(.includes(xxx)).toBe(true) の assert を常に全てのテストコードで禁止
+72. toBe, toStrictEqual の assert の引数には変数,定数,文字列の展開を禁止。文字列や配列のassert をする場合は 常にに固定の文字列,や配列でassertをすること。
+73. テストコードで、`from bun:test` は常に禁止
+74. テストコードでは、ファイルの読み書き, Webへのリクエストは全て mock を利用してください。テストコードの実行速度を早くするようにしてください。
+75. テストコードは実行速度も重視して、テストコードの実装をしてください。
