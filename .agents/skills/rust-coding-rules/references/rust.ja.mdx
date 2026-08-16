@@ -23,11 +23,13 @@ paths:
 
 ## 関数と制御フロー
 
-- **RS09 関数の凝集性:** 関数の責務を絞り、production logicを再利用し、`main`またはruntime entry pointを薄いorchestration層にしてください。
+- **RS09 関数の凝集性:** 関数の責務を絞り、production logicを再利用し、テストコード以外は最大限DRYにし、`main`またはruntime entry pointをステップ数が最小の薄いorchestration層にしてください。
 - **RS10 分岐:** early return、`match`、`if let`、`let else`でネストを減らし、全状態を最も明示できる構文を選んでください。
-- **RS11 iteration:** 明瞭になる場合はiterator adapterを優先しますが、mutation、short-circuit、statefulな制御フローが明瞭な場合はloopを使用してください。深いloopのネストは避けてください。
-- **RS12 引数:** invariantまたはcall siteが明瞭になる場合、関連する引数を型付けしたstructへまとめてください。単なる個数基準のためだけにparameter structを作らないでください。
+- **RS11 iteration:** 明瞭になる場合はiterator adapterを優先しますが、mutation、short-circuit、statefulな制御フローが明瞭な場合はloopを使用してください。単一関数内の2重以上のloopネストは避けてください。
+- **RS12 引数:** 関連する引数が3個以上ある場合、またはinvariantやcall siteが明瞭になる場合、引数を型付けしたstructへまとめてください。単なる個数基準のためだけにparameter structを作らないでください。
 - **RS13 async境界:** 非同期処理がない関数を`async`にせず、blocking I/Oを実行したりblocking lockを保持したまま`.await`したりしないでください。
+- **RS28 実装計画:** 実装の前には実装計画を事前に入念に建ててから実装してください。
+- **RS29 comparator:** 再利用するsort keyまたは比較関数は`sort`や`sort_by`の呼び出しとは別に定義してください。
 
 ## ownership、mutation、concurrency
 
@@ -37,20 +39,22 @@ paths:
 
 ## 値、module、診断
 
-- **RS17 定数:** 固定値とmagic numberを型付けした名前付き定数へ置き換え、共有定数はmodule scope、本当にlocalな定数はlocalに配置してください。
+- **RS17 定数:** 固定値とmagic numberを型付けした名前付き定数へ置き換え、共有定数はmodule scope、本当にlocalな定数はlocalに配置してください。共有定数を関数内で定義しないでください。
 - **RS18 必須値:** 不足する設定または入力を検証して明示的なerrorを返し、契約が定義する場合だけfallbackを使用してください。
 - **RS19 moduleとimport:** moduleの凝集性を保ち、明示的なimportを優先し、意図的なpreludeまたは狭いtest module以外では広いglob re-exportを避けてください。
-- **RS20 dead code:** warningを抑制せず、未使用item、import、feature branch、廃止済みcompatibility pathを削除してください。
+- **RS20 dead code:** warningを抑制せず、未使用item、import、feature branch、廃止済みcompatibility pathを削除してください。未使用名は削除か利用のどちらかにしてください。unused localをunderscore prefixで黙らせることを禁止し、underscoreは必須だが未使用のparameterに限って許可します。
 - **RS21 文書と診断:** comment、public API document、log、error messageは英語で記述し、構文の言い換えではなく理由とinvariantを文書化してください。
+- **RS30 宣言の配置:** type、struct、enum、trait、module-level定数はfunctionおよび`impl` method実装より前へ配置し、functionとfunctionの間へ挿入しないでください。
+- **RS31 ルールレビュー:** 実装後、このルールセットに基づいているかを必ず自動でレビューしてください。
 
 ## resourceとデータ
 
-- **RS22 resource処理:** file、lock、一時状態、cleanupにはRAIIとscoped guardを使い、不要な操作を減らせる場合はI/Oをbuffer化またはbatch化してください。
+- **RS22 resource処理:** file、lock、一時状態、cleanupにはRAIIとscoped guardを使い、読み書き回数を最小化し、順序が不要な独立I/Oはbuffer化またはbatch化し、文字列として`\n`を書き込む時は正しくescapeしてください。
 - **RS23 データ境界:** domain型を構築する前に外部データを検証し、文字encoding、parse、serialization errorを明示的に処理してください。
 
 ## テストとcoverage
 
-- **RS24 testの所有:** Rustの動作またはpublic typeを変更したら、既存のtest配置に従ってunit testまたはintegration testを追加・更新してください。
+- **RS24 testの所有:** Rustの動作またはpublic typeを変更したら、既存のtest配置に従ってunit testまたはintegration testを追加・更新してください。テストコード以外のRustファイルを作成・編集・変更・削除したら、関連するtestも必ず更新してください。
 - **RS25 coverage:** 設定済みのfile単位coverage閾値を下げずに満たし、閾値がなくcoverage toolを利用できる場合は変更した全source fileで90%以上を達成してください。
-- **RS26 testの分離:** 一時resourceまたはtest doubleでfilesystem、clock、process、network依存を分離し、testを決定的かつ高速にしてください。
-- **RS27 testの明瞭性:** 既存のtest frameworkを使い、inputと期待値を明示し、有用なdiffを表示するassertion macroを選び、対象動作を隠すhelper抽象化を避けてください。
+- **RS26 testの分離:** 一時resourceまたはtest doubleでfilesystem、clock、process、network依存を分離し、testを決定的かつ高速にしてください。実行速度も重視してtestを実装してください。
+- **RS27 testの明瞭性:** テストコードはDRYにしないでください。既存のtest frameworkを使い、共有helperやloopより明示的なcaseを優先し、test内の`for`とloop内のassertを禁止します。ネストしたtest moduleを減らしてください。期待値にvariable、constant、文字列展開を渡さず、inputと期待literalを明示し、有用なdiffを表示するassertion macroを選び、対象動作を隠すhelper抽象化を避けてください。

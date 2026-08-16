@@ -23,11 +23,13 @@ This is the only normative Rust rule set for agents. Every requirement has one R
 
 ## Functions and control flow
 
-- **RS09 Function cohesion:** Keep functions focused, reuse production logic, and keep `main` or runtime entry points as thin orchestration layers.
+- **RS09 Function cohesion:** Keep functions focused, reuse production logic, keep non-test code as DRY as possible, and keep `main` or runtime entry points as thin orchestration layers with as few steps as possible.
 - **RS10 Branching:** Reduce nesting with early returns, `match`, `if let`, and `let else`, selecting the construct that makes all states explicit.
-- **RS11 Iteration:** Prefer iterator adapters when they improve clarity, but use a loop when mutation, short-circuiting, or stateful control flow is clearer; avoid deeply nested loops.
-- **RS12 Parameters:** Group cohesive parameters into a typed struct when that clarifies invariants or call sites; do not create parameter structs solely to satisfy a numeric threshold.
+- **RS11 Iteration:** Prefer iterator adapters when they improve clarity, but use a loop when mutation, short-circuiting, or stateful control flow is clearer; avoid double or deeper loop nesting inside a single function.
+- **RS12 Parameters:** Group cohesive parameters into a typed struct when a function has 3 or more related parameters or when that clarifies invariants or call sites; do not create parameter structs solely to satisfy a numeric threshold.
 - **RS13 Async boundaries:** Do not mark functions `async` without asynchronous work, and do not perform blocking I/O or hold blocking locks across `.await`.
+- **RS28 Implementation planning:** Build a thorough implementation plan before implementing.
+- **RS29 Comparators:** Define reusable sort keys or comparison functions separately from the `sort` or `sort_by` call.
 
 ## Ownership, mutation, and concurrency
 
@@ -37,20 +39,22 @@ This is the only normative Rust rule set for agents. Every requirement has one R
 
 ## Values, modules, and diagnostics
 
-- **RS17 Constants:** Replace fixed values and magic numbers with typed named constants, placing shared constants at module scope and genuinely local constants locally.
+- **RS17 Constants:** Replace fixed values and magic numbers with typed named constants, placing shared constants at module scope and genuinely local constants locally. Do not define shared constants inside a function.
 - **RS18 Required values:** Validate missing configuration or input and return an explicit error; use a fallback only when the contract defines one.
 - **RS19 Modules and imports:** Keep modules cohesive, prefer explicit imports, and avoid broad glob re-exports except in a deliberate prelude or tightly scoped test module.
-- **RS20 Dead code:** Remove unused items, imports, feature branches, and obsolete compatibility paths rather than silencing warnings.
+- **RS20 Dead code:** Remove unused items, imports, feature branches, and obsolete compatibility paths rather than silencing warnings. Either delete or use unused names; do not silence unused locals with an underscore prefix. Underscores are allowed only for required unused parameters.
 - **RS21 Documentation and diagnostics:** Write comments, public API documentation, logs, and error messages in English, documenting rationale and invariants rather than restating syntax.
+- **RS30 Declaration order:** Place type, struct, enum, trait, and module-level constant declarations before function and `impl` method implementations. Do not insert these declarations between functions.
+- **RS31 Rules review:** After implementation, automatically review whether the change follows this rule set.
 
 ## Resources and data
 
-- **RS22 Resource handling:** Use RAII and scoped guards for files, locks, temporary state, and cleanup; buffer or batch I/O when it reduces unnecessary operations.
+- **RS22 Resource handling:** Use RAII and scoped guards for files, locks, temporary state, and cleanup; minimize reads and writes, buffer or batch independent I/O when ordering is unnecessary, and escape literal `\n` correctly when writing it as text.
 - **RS23 Data boundaries:** Validate external data before constructing domain types and handle text encoding, parsing, and serialization errors explicitly.
 
 ## Tests and coverage
 
-- **RS24 Test ownership:** Add or update unit or integration tests whenever Rust behavior or public types change, following the repository's existing test layout.
+- **RS24 Test ownership:** Add or update unit or integration tests whenever Rust behavior or public types change, following the repository's existing test layout. When creating, editing, changing, or deleting a non-test Rust file, always update the related tests.
 - **RS25 Coverage:** Meet the configured per-file coverage threshold without lowering it; if none exists, achieve at least 90% for every changed source file when coverage tooling is available.
-- **RS26 Test isolation:** Keep tests deterministic and fast by isolating filesystem, clock, process, and network dependencies with temporary resources or test doubles.
-- **RS27 Test clarity:** Use the existing test framework, write explicit inputs and expected values, choose assertion macros that show useful diffs, and avoid helper abstractions that hide the behavior under test.
+- **RS26 Test isolation:** Keep tests deterministic and fast by isolating filesystem, clock, process, and network dependencies with temporary resources or test doubles. Implement tests with execution speed as a priority as well.
+- **RS27 Test clarity:** Do not write DRY test code. Use the existing test framework, prefer explicit cases over shared helpers and loops, ban `for` loops in tests, and ban assertions inside a loop. Minimize nested test modules. Do not pass variables, constants, or interpolated strings as expected values; write explicit inputs and expected literals, choose assertion macros that show useful diffs, and avoid helper abstractions that hide the behavior under test.
