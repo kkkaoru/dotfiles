@@ -10,6 +10,7 @@
     "npm:pi-ollama-cloud",
     "./packages/pi-my-cursor-provider",
     "./packages/pi-claudex-provider",
-    "npm:pi-commandcode-provider"
+    "npm:pi-commandcode-provider",
+    "npm:pi-antigravity"
   ]
 }
