@@ -115,13 +115,17 @@ beforeEach(() => {
 
 afterEach(async () => {
   const { cursorProviderTestApi } = await import("../src/provider.ts");
+  const { cursorStoreTestApi } = await import("../src/store.ts");
   await cursorProviderTestApi.waitForIdle();
+  cursorStoreTestApi.reset();
   expect(cursorProviderTestApi.pendingCount()).toBe(0);
 });
 
 test("streams Cursor text with usage through a fresh agent", async () => {
+  const captured: { sendOptions: SendOptions | undefined } = { sendOptions: undefined };
   installScenario({
     async onSend(options) {
+      captured.sendOptions = options;
       await options?.onDelta?.({ update: { type: "text-delta", text: "hello" } });
       await options?.onDelta?.({
         update: {
@@ -153,11 +157,16 @@ test("streams Cursor text with usage through a fresh agent", async () => {
   ]);
   expect(done?.type === "done" ? done.message.usage.totalTokens : -1).toBe(12);
   expect(createAgentMock).toHaveBeenCalledTimes(1);
-  expect(createAgentMock.mock.calls[0]?.[0]).toStrictEqual({
+  const created = createAgentMock.mock.calls[0]?.[0];
+  expect(created).toMatchObject({
     apiKey: "key",
+    agentId: expect.stringMatching(new RegExp(`^pi-cursor-${process.pid}-[0-9a-f-]+$`)),
+    name: expect.stringMatching(new RegExp(`^pi-cursor-${process.pid}-[0-9a-f-]+$`)),
     model: { id: "auto" },
     local: { cwd: process.cwd(), settingSources: [], customTools: {} },
   });
+  expect(created?.local?.store).toBeDefined();
+  expect(captured.sendOptions?.local).toStrictEqual({ force: true });
 });
 
 test("forwards explicit-model effort with the live default variant", async () => {

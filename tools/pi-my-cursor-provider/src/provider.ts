@@ -19,6 +19,7 @@ import type {
 } from "@earendil-works/pi-ai";
 import { buildCursorMessage, findToolResults, toolResultToSdk, toSdkJsonValue } from "./context.ts";
 import { cursorModelSelection } from "./models.ts";
+import { cursorProcessAgentId, getProcessCursorStore } from "./store.ts";
 import { createCursorOutput, type CursorOutput } from "./stream-output.ts";
 
 interface PendingInvocation {
@@ -122,13 +123,21 @@ class CursorSession {
       this.options?.reasoning,
       this.options?.apiKey,
     );
+    const agentId = cursorProcessAgentId();
     this.agent = await Agent.create({
       ...(this.options?.apiKey ? { apiKey: this.options.apiKey } : {}),
+      agentId,
+      name: agentId,
+      idempotencyKey: agentId,
       model,
       local: {
         cwd: process.cwd(),
         settingSources: [],
         customTools,
+        // Isolate this pi process from other concurrent Cursor agents in the
+        // same workspace. The default SDK store is cwd-scoped and one busy
+        // local run blocks every other send() with AgentBusyError.
+        store: getProcessCursorStore(),
       },
     });
     if (this.disposed) {
@@ -137,6 +146,7 @@ class CursorSession {
     }
     this.run = await this.agent.send(buildCursorMessage(this.context), {
       onDelta: ({ update }) => this.handleDelta(update),
+      local: { force: true },
     });
     const result = await this.run.wait();
     if (result.status !== "finished") {
