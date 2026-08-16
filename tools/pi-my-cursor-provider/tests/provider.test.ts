@@ -163,6 +163,7 @@ test("streams Cursor text with usage through a fresh agent", async () => {
     agentId: expect.stringMatching(new RegExp(`^pi-cursor-${process.pid}-[0-9a-f-]+$`)),
     name: expect.stringMatching(new RegExp(`^pi-cursor-${process.pid}-[0-9a-f-]+$`)),
     model: { id: "auto" },
+    tools: ["mcp", "webSearch", "semSearch", "shell"],
     local: { cwd: process.cwd(), settingSources: [], customTools: {} },
   });
   expect(created?.local?.store).toBeDefined();

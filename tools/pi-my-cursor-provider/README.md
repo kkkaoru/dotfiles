@@ -10,7 +10,7 @@ Minimal Cursor agent bridge for pi and Claudex. It preserves the existing `curso
 - Keeps a live Cursor run only across the tool-result continuation belonging to that same request.
 - Converts pi `Context.tools` schemas into Cursor SDK `customTools`.
 - Returns Cursor custom-tool callbacks as normal pi tool calls and resolves them from the next `ToolResultMessage` context.
-- Leaves Cursor-native tools enabled.
+- Allows Cursor `mcp`, `webSearch`, `semSearch`, and `shell`. `mcp` keeps the pi custom-tool bridge; `webSearch` and `semSearch` have no pi equivalent; `shell` keeps Cursor-native command execution. Native `task` and `await` stay disabled so those SDK-internal tools cannot stall the TUI on Working...
 - Discovers the authenticated Cursor model catalog and provides a multi-model fallback catalog when discovery is unavailable.
 - Uses pi's supplied system prompt and tools without reloading ambient Cursor setting sources, avoiding duplicate rules and SDK bootstrap logs in standalone TUI use.
 - Advertises Cursor models to pi at 80% of their real context window (256k models report 204.8k) so pi's native auto-compaction fires before requests can reach Cursor's hard limit, where Cursor returns usage-guideline blocks instead of recognizable overflow errors.

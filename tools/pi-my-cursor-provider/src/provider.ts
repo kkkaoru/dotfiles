@@ -7,6 +7,7 @@ import {
   type SDKCustomTool,
   type SDKJsonValue,
   type TokenUsage,
+  type ToolName,
 } from "@cursor/sdk";
 import type {
   Api,
@@ -31,6 +32,7 @@ interface PendingInvocation {
 
 const pendingByToolCallId = new Map<string, PendingInvocation>();
 const TOOL_BATCH_DELAY_MS = 0;
+const CURSOR_ALLOWED_TOOLS: readonly ToolName[] = ["mcp", "webSearch", "semSearch", "shell"];
 
 interface IndependentSessionState {
   active: CursorSession | undefined;
@@ -130,6 +132,13 @@ class CursorSession {
       name: agentId,
       idempotencyKey: agentId,
       model,
+      // Keep MCP so pi customTools stay available. Cursor exposes those as the
+      // custom-user-tools MCP server, and omitting "mcp" disables that family.
+      // webSearch/semSearch have no pi equivalent. Keep shell for Cursor-native
+      // command execution. Leave task/await off because those native tools run
+      // inside the SDK and never surface as pi tool calls, which leaves the TUI
+      // stuck on Working...
+      tools: [...CURSOR_ALLOWED_TOOLS],
       local: {
         cwd: process.cwd(),
         settingSources: [],
