@@ -111,10 +111,27 @@ if [ -d "${DOTPATH}/.agents/skills" ]; then
   link_tree "${DOTPATH}/.agents/skills" "${HOME}/.agents/skills"
 fi
 
-# Cursor and Grok keep runtime state beside user skills, so merge only skills.
-for harness in cursor grok; do
-  if [ -d "${DOTPATH}/.${harness}/skills" ]; then
-    link_tree "${DOTPATH}/.${harness}/skills" "${HOME}/.${harness}/skills"
+# Cursor keeps runtime state beside user skills, so merge only skills.
+if [ -d "${DOTPATH}/.cursor/skills" ]; then
+  link_tree "${DOTPATH}/.cursor/skills" "${HOME}/.cursor/skills"
+fi
+
+# Grok keeps sessions, auth, caches, and binaries under ~/.grok. Link only
+# repository-managed config, hooks, and skills so those runtime paths stay
+# local. ~/.grok itself must remain a real directory (unlike ~/.pi).
+if [ -L "${HOME}/.grok" ]; then
+  echo "refuse: ${HOME}/.grok is a symlink; keep it as a real directory and merge managed files" >&2
+  exit 1
+fi
+mkdir -p "${HOME}/.grok"
+for file in config.toml pager.toml lsp.json; do
+  if [ -f "${DOTPATH}/.grok/${file}" ]; then
+    link_path "${DOTPATH}/.grok/${file}" "${HOME}/.grok/${file}"
+  fi
+done
+for name in agents commands hooks plugins skills; do
+  if [ -d "${DOTPATH}/.grok/${name}" ]; then
+    link_tree "${DOTPATH}/.grok/${name}" "${HOME}/.grok/${name}"
   fi
 done
 

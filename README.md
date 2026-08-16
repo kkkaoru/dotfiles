@@ -14,6 +14,10 @@ Claude CodeからCodex、Grok、Claude fallback、advisorを動的に使い分�
 This also creates untracked `.pi/agent/packages/` links so Pi can resolve the
 `./packages/...` entries in `.pi/agent/settings.json` after a fresh clone.
 
+Grok config is managed the same way as Pi: only an allowlisted set of files
+under `.grok/` is tracked. `create-symlinks.sh` merges those into `~/.grok`
+and leaves sessions, auth, caches, and binaries on the machine.
+
 ## Node.js
 
 Use nodenv from anyenv
