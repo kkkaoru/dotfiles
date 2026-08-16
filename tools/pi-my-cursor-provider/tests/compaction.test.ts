@@ -153,7 +153,7 @@ test("stops falling back once the signal is aborted", async () => {
 });
 
 test("skips a provider that loses auth between resolution and the attempt", async () => {
-  let calls = 0;
+  const auth: { calls: number } = { calls: 0 };
   const models = [KIMI, COPILOT_GEMINI];
   const complete = vi
     .fn()
@@ -162,7 +162,10 @@ test("skips a provider that loses auth between resolution and the attempt", asyn
   const flippingRegistry = {
     find: (provider: string, modelId: string) =>
       models.find((model) => model.provider === provider && model.id === modelId),
-    hasConfiguredAuth: (model: Model<Api>) => ++calls === 1 || model !== KIMI,
+    hasConfiguredAuth: (model: Model<Api>) => {
+      auth.calls += 1;
+      return auth.calls === 1 || model !== KIMI;
+    },
     complete,
   } as unknown as Parameters<typeof summarizeWithFallbackChain>[3];
 

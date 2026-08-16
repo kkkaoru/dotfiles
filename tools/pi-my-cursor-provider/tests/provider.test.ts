@@ -206,13 +206,13 @@ test("forwards explicit-model effort with the live default variant", async () =>
 });
 
 test("bridges custom tools and continues the same live run with its result", async () => {
-  let toolResult: unknown;
+  const captured: { toolResult: unknown } = { toolResult: undefined };
   installScenario({
     async onSend(options, agentOptions) {
       const tool = agentOptions.local?.customTools?.["read"];
       if (!tool) throw new Error("missing read tool");
       const pending = tool.execute({ path: "README.md" }, { toolCallId: "call-1" });
-      toolResult = await pending;
+      captured.toolResult = await pending;
       await options?.onDelta?.({ update: { type: "text-delta", text: "done" } });
       return result("done");
     },
@@ -269,7 +269,7 @@ test("bridges custom tools and continues the same live run with its result", asy
     "text_delta",
     "done",
   ]);
-  expect(toolResult).toStrictEqual({
+  expect(captured.toolResult).toStrictEqual({
     content: [{ type: "text", text: "file contents" }],
     isError: false,
   });
@@ -317,12 +317,12 @@ test("reports terminal Cursor failures", async () => {
 
 test("aborts the active Cursor run", async () => {
   const controller = new AbortController();
-  let finishWait: ((value: RunResult) => void) | undefined;
+  const waitGate: { finish: ((value: RunResult) => void) | undefined } = { finish: undefined };
   const wait = new Promise<RunResult>((resolve) => {
-    finishWait = resolve;
+    waitGate.finish = resolve;
   });
   const cancel = vi.fn(async () => {
-    finishWait?.({ id: "run-1", status: "cancelled" });
+    waitGate.finish?.({ id: "run-1", status: "cancelled" });
   });
   createAgentMock.mockResolvedValue({
     agentId: "agent-1",
@@ -358,15 +358,15 @@ test("aborts the active Cursor run", async () => {
 });
 
 test("waits for the previous agent to dispose before starting a follow-up request", async () => {
-  let finishFirst: ((value: RunResult) => void) | undefined;
+  const firstGate: { finish: ((value: RunResult) => void) | undefined } = { finish: undefined };
   const firstWait = new Promise<RunResult>((resolve) => {
-    finishFirst = resolve;
+    firstGate.finish = resolve;
   });
-  let releaseDispose: (() => void) | undefined;
+  const disposeGate: { release: (() => void) | undefined } = { release: undefined };
   const firstDispose = new Promise<void>((resolve) => {
-    releaseDispose = resolve;
+    disposeGate.release = resolve;
   });
-  let secondCreated = false;
+  const created: { second: boolean } = { second: false };
 
   createAgentMock
     .mockResolvedValueOnce({
@@ -375,7 +375,7 @@ test("waits for the previous agent to dispose before starting a follow-up reques
       send: async () => ({
         ...fakeRun(() => firstWait),
         cancel: async () => {
-          finishFirst?.({ id: "run-1", status: "cancelled" });
+          firstGate.finish?.({ id: "run-1", status: "cancelled" });
         },
       }),
       close: () => undefined,
@@ -395,7 +395,7 @@ test("waits for the previous agent to dispose before starting a follow-up reques
       }),
     })
     .mockImplementationOnce(async () => {
-      secondCreated = true;
+      created.second = true;
       return {
         agentId: "agent-2",
         model: { id: "auto" },
@@ -427,13 +427,13 @@ test("waits for the previous agent to dispose before starting a follow-up reques
   await new Promise<void>((resolve) => setImmediate(resolve));
 
   expect(createAgentMock).toHaveBeenCalledTimes(1);
-  expect(secondCreated).toBe(false);
+  expect(created.second).toBe(false);
 
-  releaseDispose?.();
+  disposeGate.release?.();
   const [firstEvents, secondEvents] = await Promise.all([collect(firstStream), secondPromise]);
 
   expect(createAgentMock).toHaveBeenCalledTimes(2);
-  expect(secondCreated).toBe(true);
+  expect(created.second).toBe(true);
   expect(firstEvents.at(-1)?.type).toBe("error");
   expect(secondEvents.at(-1)?.type).toBe("done");
 });

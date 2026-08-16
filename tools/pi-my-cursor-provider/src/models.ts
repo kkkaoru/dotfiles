@@ -33,10 +33,14 @@ interface FallbackModel {
   name: string;
 }
 
+interface CatalogState {
+  loaded: boolean;
+  load: Promise<void> | undefined;
+}
+
 const effortCapabilities = new Map<string, EffortCapability>();
 const warnedUnsupportedEffort = new Set<string>();
-let catalogLoaded = false;
-let catalogLoad: Promise<void> | undefined;
+const catalogState: CatalogState = { loaded: false, load: undefined };
 
 const FALLBACK_MODELS: readonly FallbackModel[] = [
   { id: "auto", name: "Cursor Auto" },
@@ -97,7 +101,7 @@ function contextWindowFor(model: SDKModel): number {
 
 export function recordCursorCatalog(catalog: readonly SDKModel[]): void {
   effortCapabilities.clear();
-  catalogLoaded = true;
+  catalogState.loaded = true;
   for (const model of catalog) {
     const parameter = model.parameters?.find(({ id }) => EFFORT_PARAMETER_IDS.has(id));
     if (!parameter) continue;
@@ -119,14 +123,14 @@ function warnUnsupportedEffort(modelId: string, effort: ThinkingLevel): void {
 }
 
 async function ensureCursorCatalog(apiKey: string | undefined): Promise<void> {
-  if (catalogLoaded) return;
-  catalogLoad ??= Cursor.models
+  if (catalogState.loaded) return;
+  catalogState.load ??= Cursor.models
     .list(apiKey ? { apiKey } : undefined)
     .then(recordCursorCatalog)
     .finally(() => {
-      catalogLoad = undefined;
+      catalogState.load = undefined;
     });
-  await catalogLoad;
+  await catalogState.load;
 }
 
 export async function cursorModelSelection(
@@ -143,13 +147,12 @@ export async function cursorModelSelection(
     return { id: modelId };
   }
 
-  let replaced = false;
-  const params = capability.defaults.map((parameter) => {
-    if (parameter.id !== capability.parameterId) return parameter;
-    replaced = true;
-    return { id: capability.parameterId, value };
-  });
-  if (!replaced) params.push({ id: capability.parameterId, value });
+  const replaced = capability.defaults.some((parameter) => parameter.id === capability.parameterId);
+  const params = replaced
+    ? capability.defaults.map((parameter) =>
+        parameter.id === capability.parameterId ? { id: capability.parameterId, value } : parameter,
+      )
+    : [...capability.defaults, { id: capability.parameterId, value }];
   return { id: modelId, params };
 }
 

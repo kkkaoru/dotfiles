@@ -39,18 +39,22 @@ function createInitialMessage(model: Model<Api>): AssistantMessage {
   };
 }
 
+interface OutputState {
+  finished: boolean;
+  openThinking: { contentIndex: number; block: ThinkingContent } | undefined;
+}
+
 export function createCursorOutput(model: Model<Api>): CursorOutput {
   const stream = createAssistantMessageEventStream();
   const partial = createInitialMessage(model);
-  let finished = false;
-  let openThinking: { contentIndex: number; block: ThinkingContent } | undefined;
+  const state: OutputState = { finished: false, openThinking: undefined };
 
   stream.push({ type: "start", partial });
 
   const endThinking = (): void => {
-    if (finished || !openThinking) return;
-    const { contentIndex, block } = openThinking;
-    openThinking = undefined;
+    if (state.finished || !state.openThinking) return;
+    const { contentIndex, block } = state.openThinking;
+    state.openThinking = undefined;
     stream.push({
       type: "thinking_end",
       contentIndex,
@@ -60,7 +64,7 @@ export function createCursorOutput(model: Model<Api>): CursorOutput {
   };
 
   const appendText = (delta: string): void => {
-    if (finished || delta.length === 0) return;
+    if (state.finished || delta.length === 0) return;
     endThinking();
     const previous = partial.content.at(-1);
     if (previous?.type === "text") {
@@ -75,12 +79,12 @@ export function createCursorOutput(model: Model<Api>): CursorOutput {
   };
 
   const appendThinking = (delta: string): void => {
-    if (finished || delta.length === 0) return;
-    if (openThinking) {
-      openThinking.block.thinking += delta;
+    if (state.finished || delta.length === 0) return;
+    if (state.openThinking) {
+      state.openThinking.block.thinking += delta;
       stream.push({
         type: "thinking_delta",
-        contentIndex: openThinking.contentIndex,
+        contentIndex: state.openThinking.contentIndex,
         delta,
         partial,
       });
@@ -89,13 +93,13 @@ export function createCursorOutput(model: Model<Api>): CursorOutput {
     const block: ThinkingContent = { type: "thinking", thinking: delta };
     partial.content.push(block);
     const contentIndex = partial.content.length - 1;
-    openThinking = { contentIndex, block };
+    state.openThinking = { contentIndex, block };
     stream.push({ type: "thinking_start", contentIndex, partial });
     stream.push({ type: "thinking_delta", contentIndex, delta, partial });
   };
 
   const appendToolCall = (toolCall: ToolCall): void => {
-    if (finished) return;
+    if (state.finished) return;
     endThinking();
     partial.content.push(toolCall);
     const contentIndex = partial.content.length - 1;
@@ -110,18 +114,18 @@ export function createCursorOutput(model: Model<Api>): CursorOutput {
   };
 
   const finish = (reason: "stop" | "toolUse"): void => {
-    if (finished) return;
+    if (state.finished) return;
     endThinking();
-    finished = true;
+    state.finished = true;
     partial.stopReason = reason;
     stream.push({ type: "done", reason, message: partial });
     stream.end();
   };
 
   const fail = (error: unknown, aborted: boolean): void => {
-    if (finished) return;
+    if (state.finished) return;
     endThinking();
-    finished = true;
+    state.finished = true;
     partial.stopReason = aborted ? "aborted" : "error";
     partial.errorMessage = error instanceof Error ? error.message : String(error);
     stream.push({ type: "error", reason: partial.stopReason, error: partial });

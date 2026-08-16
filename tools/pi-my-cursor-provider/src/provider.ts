@@ -30,8 +30,16 @@ interface PendingInvocation {
 
 const pendingByToolCallId = new Map<string, PendingInvocation>();
 const TOOL_BATCH_DELAY_MS = 0;
-let activeIndependentSession: CursorSession | undefined;
-let claimQueue: Promise<void> = Promise.resolve();
+
+interface IndependentSessionState {
+  active: CursorSession | undefined;
+  claimQueue: Promise<void>;
+}
+
+const independentSessionState: IndependentSessionState = {
+  active: undefined,
+  claimQueue: Promise.resolve(),
+};
 
 function schemaForTool(tool: Tool): Record<string, SDKJsonValue> {
   const schema = toSdkJsonValue(tool.parameters);
@@ -223,28 +231,28 @@ class CursorSession {
     });
     this.invocations.clear();
     this.detachOutput();
-    if (activeIndependentSession === this) activeIndependentSession = undefined;
+    if (independentSessionState.active === this) independentSessionState.active = undefined;
     await this.agent?.[Symbol.asyncDispose]().catch(() => undefined);
     this.resolveSettle();
   }
 }
 
 async function claimIndependentSession(session: CursorSession): Promise<void> {
-  const previousClaim = claimQueue;
-  let releaseClaim = (): void => undefined;
-  claimQueue = new Promise<void>((resolve) => {
-    releaseClaim = resolve;
+  const previousClaim = independentSessionState.claimQueue;
+  const claimGate: { release: () => void } = { release: () => undefined };
+  independentSessionState.claimQueue = new Promise<void>((resolve) => {
+    claimGate.release = resolve;
   });
   try {
     await previousClaim;
-    const previous = activeIndependentSession;
-    activeIndependentSession = session;
+    const previous = independentSessionState.active;
+    independentSessionState.active = session;
     if (previous && previous !== session) {
       await previous.shutdown(new Error("Superseded by a new Cursor request"));
       await previous.settled;
     }
   } finally {
-    releaseClaim();
+    claimGate.release();
   }
 }
 
@@ -268,5 +276,5 @@ export function streamCursor(
 
 export const cursorProviderTestApi = {
   pendingCount: (): number => pendingByToolCallId.size,
-  waitForIdle: (): Promise<void> => activeIndependentSession?.settled ?? Promise.resolve(),
+  waitForIdle: (): Promise<void> => independentSessionState.active?.settled ?? Promise.resolve(),
 };

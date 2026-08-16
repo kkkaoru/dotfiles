@@ -157,15 +157,14 @@ export function buildSummaryPrompt(
   previousSummary: string | undefined,
   customInstructions: string | undefined,
 ): string {
-  let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
-  if (customInstructions) {
-    basePrompt = `${basePrompt}\n\nAdditional focus: ${customInstructions}`;
-  }
-  let promptText = `<conversation>\n${messagesText}\n</conversation>\n\n`;
-  if (previousSummary) {
-    promptText += `<previous-summary>\n${previousSummary}\n</previous-summary>\n\n`;
-  }
-  return `${promptText}${basePrompt}`;
+  const basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
+  const focusedPrompt = customInstructions
+    ? `${basePrompt}\n\nAdditional focus: ${customInstructions}`
+    : basePrompt;
+  const previousSummaryBlock = previousSummary
+    ? `<previous-summary>\n${previousSummary}\n</previous-summary>\n\n`
+    : "";
+  return `<conversation>\n${messagesText}\n</conversation>\n\n${previousSummaryBlock}${focusedPrompt}`;
 }
 
 export function summarizeWithFallbackChain(
