@@ -32,17 +32,26 @@ interface PendingInvocation {
 
 const pendingByToolCallId = new Map<string, PendingInvocation>();
 const TOOL_BATCH_DELAY_MS = 0;
+const DEFAULT_CLAIM_TIMEOUT_MS = 5_000;
 const CURSOR_ALLOWED_TOOLS: readonly ToolName[] = ["mcp", "webSearch", "semSearch", "shell"];
 
 interface IndependentSessionState {
+  claimTimeoutMs: number;
   active: CursorSession | undefined;
   claimQueue: Promise<void>;
 }
 
 const independentSessionState: IndependentSessionState = {
+  claimTimeoutMs: DEFAULT_CLAIM_TIMEOUT_MS,
   active: undefined,
   claimQueue: Promise.resolve(),
 };
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
 
 function schemaForTool(tool: Tool): Record<string, SDKJsonValue> {
   const schema = toSdkJsonValue(tool.parameters);
@@ -267,8 +276,12 @@ async function claimIndependentSession(session: CursorSession): Promise<void> {
     const previous = independentSessionState.active;
     independentSessionState.active = session;
     if (previous && previous !== session) {
-      await previous.shutdown(new Error("Superseded by a new Cursor request"));
-      await previous.settled;
+      await Promise.race([
+        previous
+          .shutdown(new Error("Superseded by a new Cursor request"))
+          .then(() => previous.settled),
+        delay(independentSessionState.claimTimeoutMs),
+      ]);
     }
   } finally {
     claimGate.release();
@@ -296,4 +309,7 @@ export function streamCursor(
 export const cursorProviderTestApi = {
   pendingCount: (): number => pendingByToolCallId.size,
   waitForIdle: (): Promise<void> => independentSessionState.active?.settled ?? Promise.resolve(),
+  setClaimTimeoutMs(ms = DEFAULT_CLAIM_TIMEOUT_MS): void {
+    independentSessionState.claimTimeoutMs = ms;
+  },
 };

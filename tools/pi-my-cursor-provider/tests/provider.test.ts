@@ -116,6 +116,7 @@ beforeEach(() => {
 afterEach(async () => {
   const { cursorProviderTestApi } = await import("../src/provider.ts");
   const { cursorStoreTestApi } = await import("../src/store.ts");
+  cursorProviderTestApi.setClaimTimeoutMs();
   await cursorProviderTestApi.waitForIdle();
   cursorStoreTestApi.reset();
   expect(cursorProviderTestApi.pendingCount()).toBe(0);
@@ -446,6 +447,62 @@ test("waits for the previous agent to dispose before starting a follow-up reques
   expect(created.second).toBe(true);
   expect(firstEvents.at(-1)?.type).toBe("error");
   expect(secondEvents.at(-1)?.type).toBe("done");
+});
+
+test("does not wait forever when the previous agent dispose hangs", async () => {
+  const firstWait = new Promise<RunResult>(() => undefined);
+  createAgentMock
+    .mockResolvedValueOnce({
+      agentId: "agent-1",
+      model: { id: "auto" },
+      send: async () => fakeRun(() => firstWait),
+      close: () => undefined,
+      reload: async () => undefined,
+      [Symbol.asyncDispose]: () => new Promise(() => undefined),
+      listArtifacts: async () => [],
+      downloadArtifact: async () => Buffer.alloc(0),
+      getUsage: async () => ({
+        usage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          totalTokens: 0,
+        },
+        runs: [],
+      }),
+    })
+    .mockResolvedValueOnce({
+      agentId: "agent-2",
+      model: { id: "auto" },
+      send: async () => fakeRun(async () => result("second")),
+      close: () => undefined,
+      reload: async () => undefined,
+      [Symbol.asyncDispose]: async () => undefined,
+      listArtifacts: async () => [],
+      downloadArtifact: async () => Buffer.alloc(0),
+      getUsage: async () => ({
+        usage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+          totalTokens: 0,
+        },
+        runs: [],
+      }),
+    });
+
+  const { cursorProviderTestApi, streamCursor } = await import("../src/provider.ts");
+  cursorProviderTestApi.setClaimTimeoutMs(20);
+  const firstController = new AbortController();
+  streamCursor(MODEL, baseContext(), { signal: firstController.signal });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const secondEvents = await collect(streamCursor(MODEL, baseContext()));
+
+  expect(createAgentMock).toHaveBeenCalledTimes(2);
+  expect(secondEvents.at(-1)?.type).toBe("done");
+  firstController.abort();
 });
 
 test("uses the terminal status when Cursor provides no error detail", async () => {
