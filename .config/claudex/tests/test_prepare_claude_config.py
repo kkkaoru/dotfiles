@@ -215,9 +215,9 @@ class PrepareClaudeConfigTests(unittest.TestCase):
                     str(PREPARE),
                     str(user_claude),
                     str(isolated),
-                    "grok-4.6",
-                    "high",
-                    "500000",
+                    "cursor/gpt-5.6-terra",
+                    "max",
+                    "800000",
                 ],
                 check=False,
                 capture_output=True,
@@ -229,13 +229,22 @@ class PrepareClaudeConfigTests(unittest.TestCase):
             )
             overrides = isolated_settings["modelOverrides"]
             self.assertEqual(overrides["grok-4.6"], "grok-4.6")
+            self.assertEqual(
+                overrides["cursor/gpt-5.6-luna"], "cursor/gpt-5.6-luna"
+            )
+            self.assertEqual(overrides["cursor/gpt-5.6-sol"], "cursor/gpt-5.6-sol")
+            self.assertEqual(
+                overrides["cursor/gpt-5.6-terra"], "cursor/gpt-5.6-terra"
+            )
             self.assertNotIn("grok-4.5", overrides)
             self.assertEqual(overrides["claude-opus-4-6"], "arn:aws:bedrock:example")
+            self.assertEqual(isolated_settings["model"], "cursor/gpt-5.6-terra")
             self.assertEqual(
-                isolated_settings["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "500000"
+                isolated_settings["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "800000"
             )
             shared = json.loads((user_claude / "settings.json").read_text(encoding="utf-8"))
             self.assertNotIn("grok-4.6", shared.get("modelOverrides", {}))
+            self.assertNotIn("cursor/gpt-5.6-terra", shared.get("modelOverrides", {}))
 
 
 if __name__ == "__main__":
