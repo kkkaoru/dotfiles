@@ -16,15 +16,7 @@ mod sticky;
 
 #[cfg(test)]
 pub(super) use forward::is_hop_by_hop_header;
-pub(super) use forward::proxy_request;
-
-enum ProbeOutcome {
-    Ready(super::retained_health::RetainedHealthProbe),
-    /// Connect refused / dead listen: clear sticky ownership.
-    Unreachable,
-    /// Timeout or undecodable body: fall through without killing the generation.
-    Transient,
-}
+pub(super) use forward::{ProxyOutcome, listen_accepts_health, proxy_request};
 
 pub(super) struct RetainedProxy {
     path: PathBuf,
@@ -125,12 +117,14 @@ impl RetainedProxy {
     }
 
     pub(super) async fn proxy(&self, request: Request) -> Response {
+        self.proxy_outcome(request).await.into_response()
+    }
+
+    pub(in crate::http_api) async fn proxy_outcome(&self, request: Request) -> ProxyOutcome {
         let listen = match self.listen.read() {
             Ok(listen) => *listen,
             Err(_) => {
-                return crate::http_api::handover_circuit::retry_response(
-                    "retained listen lock poisoned".to_owned(),
-                );
+                return ProxyOutcome::TransportFailed("retained listen lock poisoned".to_owned());
             }
         };
         proxy_request(&self.client, listen, request).await

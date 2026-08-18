@@ -1,12 +1,10 @@
-use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
-};
+use std::{collections::HashMap, time::Instant};
 
 use super::super::retained_health::{
     RetainedHealthProbe, agent_still_on_retained, note_retained_activity,
 };
-use super::{ProbeOutcome, RetainedProxy};
+use super::RetainedProxy;
+use super::forward::{ListenHealth, probe_listen_health};
 
 impl RetainedProxy {
     /// Sticky proxy only while the retained generation is reachable and still
@@ -29,13 +27,13 @@ impl RetainedProxy {
         let Some((listen, expected_pid)) = self.listen_and_pid() else {
             return false;
         };
-        match self.probe_health(listen).await {
-            ProbeOutcome::Ready(health) => {
+        match probe_listen_health(&self.client, listen).await {
+            ListenHealth::Ready(health) => {
                 self.decide_sticky_proxy(&health, expected_pid, session_id, agent_id)
             }
             // Slow /health must not terminate warm ACP sessions mid-turn.
-            ProbeOutcome::Transient => false,
-            ProbeOutcome::Unreachable => {
+            ListenHealth::Transient => false,
+            ListenHealth::Unreachable => {
                 self.clear_all_sessions();
                 false
             }
@@ -53,27 +51,6 @@ impl RetainedProxy {
         match (self.listen.read(), self.pid.read()) {
             (Ok(listen), Ok(pid)) => Some((*listen, *pid)),
             _ => None,
-        }
-    }
-
-    async fn probe_health(&self, listen: std::net::SocketAddr) -> ProbeOutcome {
-        let response = match self
-            .client
-            .get(format!("http://{listen}/health"))
-            .timeout(Duration::from_millis(400))
-            .send()
-            .await
-        {
-            Ok(response) => response,
-            Err(error) if error.is_timeout() => return ProbeOutcome::Transient,
-            Err(error) if error.is_connect() => return ProbeOutcome::Unreachable,
-            // DNS / proxy / protocol noise: keep the generation rather than
-            // SIGKILL warm SubAgents on a single ambiguous sample.
-            Err(_) => return ProbeOutcome::Transient,
-        };
-        match response.json::<RetainedHealthProbe>().await {
-            Ok(health) => ProbeOutcome::Ready(health),
-            Err(_) => ProbeOutcome::Transient,
         }
     }
 

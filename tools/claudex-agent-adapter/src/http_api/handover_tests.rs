@@ -1,5 +1,5 @@
 use super::super::retained_proxy::{
-    RetainedProxy, is_hop_by_hop_header, proxy_http_client, proxy_request,
+    RetainedProxy, is_hop_by_hop_header, listen_accepts_health, proxy_http_client, proxy_request,
 };
 use super::*;
 use crate::launcher::RetainedGeneration;
@@ -401,6 +401,11 @@ async fn proxy_middleware_serves_locally_when_retained_is_unreachable() {
         .await
         .expect("sticky after dead retained");
     assert_eq!(
+        response.status(),
+        reqwest::StatusCode::OK,
+        "dead retained sticky must run locally instead of 503"
+    );
+    assert_eq!(
         response.text().await.expect("live body"),
         "live-local",
         "unreachable retained must fall through to the live generation"
@@ -408,6 +413,114 @@ async fn proxy_middleware_serves_locally_when_retained_is_unreachable() {
     assert!(
         !path.exists(),
         "dead retained snapshot must be cleared after the probe"
+    );
+    let second = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "session-a")
+        .body("{}")
+        .send()
+        .await
+        .expect("sticky after forget");
+    assert_eq!(second.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        second.text().await.expect("second live body"),
+        "live-local",
+        "forgotten dead sticky must keep serving locally"
+    );
+}
+
+#[tokio::test]
+async fn retained_proxy_application_503_keeps_session_until_circuit_opens() {
+    let upstream = serve_retained_busy_messages_unavailable().await;
+    let root = tempfile::tempdir().expect("retained 503 fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["session-a"]}}"#
+        ),
+    )
+    .expect("write retained");
+    let cache = tempfile::tempdir().expect("advertised cache");
+    let (advertised, _rx) = ListenHandover::new(
+        "127.0.0.1:8318".parse().unwrap(),
+        cache.path().to_path_buf(),
+    );
+    let state = Some(HandoverState {
+        retained: Some(Arc::new(retained(
+            &path,
+            &upstream.to_string(),
+            &["session-a"],
+        ))),
+        advertised: Some(advertised),
+        client: proxy_http_client(),
+        circuit: Default::default(),
+    });
+    let app = Router::new()
+        .route("/v1/messages", post(|| async { "live-after-circuit" }))
+        .layer(middleware::from_fn_with_state(
+            state,
+            proxy_retained_sessions,
+        ));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("retained 503 listener");
+    let addr = listener.local_addr().expect("retained 503 address");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let first = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "session-a")
+        .body("{}")
+        .send()
+        .await
+        .expect("retained 503");
+    assert_eq!(first.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    let after_first: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("read snapshot")).expect("snapshot");
+    assert_eq!(
+        after_first["session_ids"],
+        serde_json::json!(["session-a"]),
+        "health-ok application 503 must not forget the session"
+    );
+    let second = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "session-a")
+        .body("{}")
+        .send()
+        .await
+        .expect("second retained 503");
+    assert_eq!(second.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    let after_second: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("read snapshot")).expect("snapshot");
+    assert_eq!(
+        after_second["session_ids"],
+        serde_json::json!(["session-a"])
+    );
+    let opened = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "session-a")
+        .body("{}")
+        .send()
+        .await
+        .expect("circuit open");
+    assert_eq!(opened.status(), reqwest::StatusCode::BAD_REQUEST);
+    let after_open: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).expect("read snapshot")).expect("snapshot");
+    assert_eq!(after_open["session_ids"], serde_json::json!([]));
+    let recovered = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "session-a")
+        .body("{}")
+        .send()
+        .await
+        .expect("after circuit");
+    assert_eq!(recovered.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        recovered.text().await.expect("local after circuit"),
+        "live-after-circuit"
     );
 }
 
@@ -946,7 +1059,7 @@ fn retained_proxy_resets_grace_memory_when_pid_changes() {
 async fn rebound_daemon_forwards_idle_keepalive_to_canonical() {
     // Old failure: after live-update rebind, Claude Code keep-alive stayed on
     // the old binary. Cursor SubAgent /v1/messages then never reached :8318.
-    let canonical_upstream = serve_http_once(b"from-canonical").await;
+    let canonical_upstream = serve_canonical_health_and_messages().await;
     let cache = tempfile::tempdir().expect("rebound cache");
     let (advertised, _rx) = ListenHandover::new(canonical_upstream, cache.path().to_path_buf());
     advertised.set_advertised_for_test("127.0.0.1:61915".parse().unwrap());
@@ -1031,34 +1144,181 @@ async fn promoted_warm_start_does_not_proxy_to_dead_ephemeral() {
 }
 
 #[tokio::test]
-async fn diverted_proxy_connect_failure_is_503_with_retry_after() {
+async fn diverted_proxy_dead_service_runs_locally() {
     let addr = serve_dead_canonical_divert().await;
     let response = post_session(addr, "session-a").await;
-    assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
     assert_eq!(
-        response
-            .headers()
-            .get("retry-after")
-            .map(|value| value.as_bytes()),
-        Some(b"1".as_slice())
+        response.text().await.expect("local body"),
+        "must-not-run-local"
     );
-    let json: serde_json::Value = response.json().await.expect("json");
-    assert_eq!(json["error"]["type"], "invalid_request_error");
+}
+
+#[tokio::test]
+async fn diverted_health_gate_does_not_open_circuit() {
+    let addr = serve_dead_canonical_divert().await;
+    let first = post_session(addr, "session-storm").await;
+    assert_eq!(first.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        first.text().await.expect("first local"),
+        "must-not-run-local"
+    );
+    let second = post_session(addr, "session-storm").await;
+    assert_eq!(second.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        second.text().await.expect("second local"),
+        "must-not-run-local"
+    );
+    let third = post_session(addr, "session-storm").await;
+    assert_eq!(third.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        third.text().await.expect("third local"),
+        "must-not-run-local"
+    );
+}
+
+#[tokio::test]
+async fn diverted_garbage_health_runs_locally() {
+    let addr = serve_garbage_health_divert().await;
+    let response = post_session(addr, "session-a").await;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        response.text().await.expect("local body"),
+        "must-not-run-local"
+    );
+}
+
+#[tokio::test]
+async fn diverted_transport_race_returns_one_503_then_runs_locally() {
+    let addr = serve_health_then_close_divert().await;
+    let first = post_session(addr, "session-a").await;
+    assert_eq!(first.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    let second = post_session(addr, "session-a").await;
+    assert_eq!(second.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        second.text().await.expect("local after race"),
+        "must-not-run-local"
+    );
+}
+
+#[tokio::test]
+async fn retained_transport_failure_drops_generation() {
+    let upstream = serve_retained_health_ok_then_close().await;
+    let root = tempfile::tempdir().expect("retained transport fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["session-a","session-b"]}}"#
+        ),
+    )
+    .expect("write retained");
+    let cache = tempfile::tempdir().expect("advertised cache");
+    let (advertised, _rx) = ListenHandover::new(
+        "127.0.0.1:8318".parse().unwrap(),
+        cache.path().to_path_buf(),
+    );
+    let state = Some(HandoverState {
+        retained: Some(Arc::new(retained(
+            &path,
+            &upstream.to_string(),
+            &["session-a", "session-b"],
+        ))),
+        advertised: Some(advertised),
+        client: proxy_http_client(),
+        circuit: Default::default(),
+    });
+    let app = Router::new()
+        .route("/v1/messages", post(|| async { "live-after-drop" }))
+        .layer(middleware::from_fn_with_state(
+            state,
+            proxy_retained_sessions,
+        ));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("retained transport listener");
+    let addr = listener.local_addr().expect("retained transport address");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let first = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "session-a")
+        .body("{}")
+        .send()
+        .await
+        .expect("transport 503");
+    assert_eq!(first.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        !path.exists(),
+        "transport failure must drop the retained generation"
+    );
+    let sibling = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "session-b")
+        .body("{}")
+        .send()
+        .await
+        .expect("sibling after drop");
+    assert_eq!(sibling.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        sibling.text().await.expect("sibling local"),
+        "live-after-drop"
+    );
 }
 
 #[tokio::test]
 async fn same_session_handover_burst_opens_a_non_retryable_circuit() {
-    let addr = serve_dead_canonical_divert().await;
-    for _ in 0..2 {
-        let response = post_session(addr, "session-storm").await;
-        assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
-    }
+    let addr = serve_unavailable_canonical_divert().await;
+    assert_eq!(
+        post_session(addr, "session-storm").await.status(),
+        reqwest::StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        post_session(addr, "session-storm").await.status(),
+        reqwest::StatusCode::SERVICE_UNAVAILABLE
+    );
     let opened = post_session(addr, "session-storm").await;
     assert_eq!(opened.status(), reqwest::StatusCode::BAD_REQUEST);
     let json: serde_json::Value = opened.json().await.expect("json");
     assert_eq!(json["error"]["type"], "invalid_request_error");
     let sibling = post_session(addr, "session-other").await;
     assert_eq!(sibling.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    let recovered = post_session(addr, "session-storm").await;
+    assert_ne!(
+        recovered.status(),
+        reqwest::StatusCode::BAD_REQUEST,
+        "a later same-session request must not stay locked on circuit-open 400"
+    );
+    assert_eq!(
+        recovered.text().await.expect("recovered body"),
+        "must-not-run-local"
+    );
+}
+
+#[tokio::test]
+async fn sibling_session_does_not_inherit_an_open_handover_circuit() {
+    let addr = serve_unavailable_canonical_divert().await;
+    assert_eq!(
+        post_session(addr, "session-locked").await.status(),
+        reqwest::StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        post_session(addr, "session-locked").await.status(),
+        reqwest::StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert_eq!(
+        post_session(addr, "session-locked").await.status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
+    let sibling = post_session(addr, "session-free").await;
+    assert_eq!(sibling.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    let json: serde_json::Value = sibling.json().await.expect("sibling json");
+    assert_ne!(
+        json["error"]["message"],
+        "handover proxy circuit open for session session-free"
+    );
 }
 
 async fn serve_dead_canonical_divert() -> SocketAddr {
@@ -1067,6 +1327,199 @@ async fn serve_dead_canonical_divert() -> SocketAddr {
         ListenHandover::new("127.0.0.1:1".parse().unwrap(), cache.path().to_path_buf());
     advertised.set_advertised_for_test("127.0.0.1:61915".parse().unwrap());
     serve_rebound_proxy(None, advertised, "must-not-run-local").await
+}
+
+async fn serve_garbage_health_divert() -> SocketAddr {
+    let upstream = serve_garbage_health().await;
+    let cache = Box::leak(Box::new(tempfile::tempdir().expect("garbage health cache")));
+    let (advertised, _rx) = ListenHandover::new(upstream, cache.path().to_path_buf());
+    advertised.set_advertised_for_test("127.0.0.1:61915".parse().unwrap());
+    serve_rebound_proxy(None, advertised, "must-not-run-local").await
+}
+
+async fn serve_health_then_close_divert() -> SocketAddr {
+    let upstream = serve_canonical_health_ok_then_close().await;
+    let cache = Box::leak(Box::new(
+        tempfile::tempdir().expect("health then close cache"),
+    ));
+    let (advertised, _rx) = ListenHandover::new(upstream, cache.path().to_path_buf());
+    advertised.set_advertised_for_test("127.0.0.1:61915".parse().unwrap());
+    serve_rebound_proxy(None, advertised, "must-not-run-local").await
+}
+
+async fn serve_garbage_health() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("garbage health listener");
+    let listen = listener.local_addr().expect("garbage health address");
+    tokio::spawn(async move {
+        while let Some(mut stream) = accept_stream(&listener).await {
+            let mut buf = vec![0; 4096];
+            let n = stream.read(&mut buf).await.unwrap_or(0);
+            let request = String::from_utf8_lossy(&buf[..n]);
+            if request.starts_with("GET /health") {
+                write_http_response(&mut stream, "HTTP/1.1 200 OK", b"<html>ok</html>").await;
+                continue;
+            }
+            write_http_response(&mut stream, "HTTP/1.1 200 OK", b"from-garbage").await;
+        }
+    });
+    listen
+}
+
+async fn serve_canonical_health_ok_then_close() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("health then close listener");
+    let listen = listener.local_addr().expect("health then close address");
+    tokio::spawn(async move {
+        let Ok((mut stream, _)) = listener.accept().await else {
+            return;
+        };
+        let mut buf = vec![0; 4096];
+        let n = stream.read(&mut buf).await.unwrap_or(0);
+        let request = String::from_utf8_lossy(&buf[..n]);
+        if request.starts_with("GET /health") {
+            write_http_response(
+                &mut stream,
+                "HTTP/1.1 200 OK",
+                br#"{"status":"ok","pid":1}"#,
+            )
+            .await;
+        }
+        drop(listener);
+    });
+    listen
+}
+
+async fn serve_retained_health_ok_then_close() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("retained health then close listener");
+    let listen = listener
+        .local_addr()
+        .expect("retained health then close address");
+    tokio::spawn(async move {
+        let Ok((mut stream, _)) = listener.accept().await else {
+            return;
+        };
+        let mut buf = vec![0; 4096];
+        let n = stream.read(&mut buf).await.unwrap_or(0);
+        let request = String::from_utf8_lossy(&buf[..n]);
+        if request.starts_with("GET /health") {
+            write_http_response(
+                &mut stream,
+                "HTTP/1.1 200 OK",
+                br#"{"status":"ok","pid":1,"protocol_version":1,"build_id":"old","subscription_max_processes":20,"subscription_timeout_minutes":120,"active_http_requests":1,"active_provider_turns":1,"busy_claude_session_ids":["session-a","session-b"],"active_claude_session_ids":["session-a","session-b"]}"#,
+            )
+            .await;
+        }
+        drop(listener);
+    });
+    listen
+}
+
+async fn serve_unavailable_canonical_divert() -> SocketAddr {
+    let upstream = serve_health_ok_messages_unavailable().await;
+    let cache = Box::leak(Box::new(
+        tempfile::tempdir().expect("unavailable canonical cache"),
+    ));
+    let (advertised, _rx) = ListenHandover::new(upstream, cache.path().to_path_buf());
+    advertised.set_advertised_for_test("127.0.0.1:61915".parse().unwrap());
+    serve_rebound_proxy(None, advertised, "must-not-run-local").await
+}
+
+async fn serve_canonical_health_and_messages() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("canonical upstream listener");
+    let listen = listener.local_addr().expect("canonical upstream address");
+    tokio::spawn(run_canonical_accept_loop(listener));
+    listen
+}
+
+async fn run_canonical_accept_loop(listener: TcpListener) {
+    while let Some(mut stream) = accept_stream(&listener).await {
+        respond_canonical_request(&mut stream).await;
+    }
+}
+
+async fn respond_canonical_request(stream: &mut tokio::net::TcpStream) {
+    let mut buf = vec![0; 4096];
+    let n = stream.read(&mut buf).await.unwrap_or(0);
+    let request = String::from_utf8_lossy(&buf[..n]);
+    if request.starts_with("GET /health") {
+        write_http_response(stream, "HTTP/1.1 200 OK", br#"{"status":"ok","pid":1}"#).await;
+        return;
+    }
+    write_http_response(stream, "HTTP/1.1 200 OK", b"from-canonical").await;
+}
+
+async fn serve_retained_busy_messages_unavailable() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("retained busy 503 listener");
+    let listen = listener.local_addr().expect("retained busy 503 address");
+    tokio::spawn(run_retained_busy_unavailable_loop(listener));
+    listen
+}
+
+async fn run_retained_busy_unavailable_loop(listener: TcpListener) {
+    while let Some(mut stream) = accept_stream(&listener).await {
+        respond_retained_busy_unavailable(&mut stream).await;
+    }
+}
+
+async fn respond_retained_busy_unavailable(stream: &mut tokio::net::TcpStream) {
+    let mut buf = vec![0; 4096];
+    let n = stream.read(&mut buf).await.unwrap_or(0);
+    let request = String::from_utf8_lossy(&buf[..n]);
+    if request.starts_with("GET /health") {
+        write_http_response(
+            stream,
+            "HTTP/1.1 200 OK",
+            br#"{"status":"ok","pid":1,"protocol_version":1,"build_id":"old","subscription_max_processes":20,"subscription_timeout_minutes":120,"active_http_requests":1,"active_provider_turns":1,"busy_claude_session_ids":["session-a"],"active_claude_session_ids":["session-a"]}"#,
+        )
+        .await;
+        return;
+    }
+    write_http_response(
+        stream,
+        "HTTP/1.1 503 Service Unavailable",
+        br#"{"type":"error","error":{"type":"invalid_request_error","message":"retained listen is unreachable"}}"#,
+    )
+    .await;
+}
+
+async fn serve_health_ok_messages_unavailable() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("unavailable upstream listener");
+    let listen = listener.local_addr().expect("unavailable upstream address");
+    tokio::spawn(run_unavailable_accept_loop(listener));
+    listen
+}
+
+async fn run_unavailable_accept_loop(listener: TcpListener) {
+    while let Some(mut stream) = accept_stream(&listener).await {
+        respond_unavailable_request(&mut stream).await;
+    }
+}
+
+async fn respond_unavailable_request(stream: &mut tokio::net::TcpStream) {
+    let mut buf = vec![0; 4096];
+    let n = stream.read(&mut buf).await.unwrap_or(0);
+    let request = String::from_utf8_lossy(&buf[..n]);
+    if request.starts_with("GET /health") {
+        write_http_response(stream, "HTTP/1.1 200 OK", br#"{"status":"ok","pid":1}"#).await;
+        return;
+    }
+    write_http_response(
+        stream,
+        "HTTP/1.1 503 Service Unavailable",
+        br#"{"type":"error","error":{"type":"invalid_request_error","message":"canonical listen is unreachable"}}"#,
+    )
+    .await;
 }
 
 async fn post_session(addr: SocketAddr, session: &str) -> reqwest::Response {
@@ -1176,7 +1629,7 @@ async fn proxy_middleware_serves_locally_when_retained_listen_is_self() {
 
 #[tokio::test]
 async fn rebound_daemon_forwards_requests_without_session_header() {
-    let canonical_upstream = serve_http_once(b"from-canonical").await;
+    let canonical_upstream = serve_canonical_health_and_messages().await;
     let cache = tempfile::tempdir().expect("rebound anonymous cache");
     let (advertised, _rx) = ListenHandover::new(canonical_upstream, cache.path().to_path_buf());
     advertised.set_advertised_for_test("127.0.0.1:61915".parse().unwrap());
@@ -1195,7 +1648,7 @@ async fn rebound_daemon_forwards_requests_without_session_header() {
 
 #[tokio::test]
 async fn rebound_daemon_forwards_unowned_retained_sessions() {
-    let canonical_upstream = serve_http_once(b"from-canonical").await;
+    let canonical_upstream = serve_canonical_health_and_messages().await;
     let cache = tempfile::tempdir().expect("rebound unowned cache");
     let path = cache.path().join("retained.json");
     std::fs::write(
@@ -1226,7 +1679,7 @@ async fn rebound_daemon_forwards_unowned_retained_sessions() {
 
 #[tokio::test]
 async fn rebound_daemon_forwards_when_retained_listen_is_not_self() {
-    let canonical_upstream = serve_http_once(b"from-canonical").await;
+    let canonical_upstream = serve_canonical_health_and_messages().await;
     let cache = tempfile::tempdir().expect("rebound foreign cache");
     let path = cache.path().join("retained.json");
     std::fs::write(
@@ -1326,7 +1779,9 @@ async fn proxy_request_reports_unreadable_body() {
             tokio_stream::wrappers::ReceiverStream::new(rx),
         ))
         .expect("broken body request");
-    let response = proxy_request(&proxy_http_client(), listen, request).await;
+    let response = proxy_request(&proxy_http_client(), listen, request)
+        .await
+        .into_response();
     assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
 }
 
@@ -1343,7 +1798,9 @@ async fn proxy_request_forwards_query_and_strips_hop_by_hop_headers() {
         .header("upgrade", "websocket")
         .body(Body::from("{}"))
         .expect("hop-by-hop request");
-    let response = proxy_request(&proxy_http_client(), listen, request).await;
+    let response = proxy_request(&proxy_http_client(), listen, request)
+        .await
+        .into_response();
     assert_eq!(response.status(), StatusCode::OK);
     let body = axum::body::to_bytes(response.into_body(), 1024)
         .await
@@ -1359,9 +1816,23 @@ async fn proxy_request_surfaces_truncated_upstream_chunks() {
         .method("POST")
         .body(Body::from("{}"))
         .expect("truncated upstream request");
-    let response = proxy_request(&proxy_http_client(), listen, request).await;
+    let response = proxy_request(&proxy_http_client(), listen, request)
+        .await
+        .into_response();
     assert_eq!(response.status(), StatusCode::OK);
     let _ = axum::body::to_bytes(response.into_body(), 1024).await;
+}
+
+#[tokio::test]
+async fn listen_accepts_health_rejects_garbage_2xx() {
+    let listen = serve_garbage_health().await;
+    assert!(!listen_accepts_health(&proxy_http_client(), listen).await);
+}
+
+#[tokio::test]
+async fn listen_accepts_health_accepts_status_ok() {
+    let listen = serve_canonical_health_and_messages().await;
+    assert!(listen_accepts_health(&proxy_http_client(), listen).await);
 }
 
 #[test]
@@ -1730,20 +2201,19 @@ async fn open_circuit_short_circuits_diverted_proxy_without_another_upstream_cal
         client: proxy_http_client(),
         circuit: Default::default(),
     };
-    for _ in 0..3 {
-        state.circuit.note_failure("session-open");
-    }
+    assert!(!state.circuit.note_failure("session-open"));
+    assert!(!state.circuit.note_failure("session-open"));
+    assert!(state.circuit.note_failure("session-open"));
     assert!(super::open_circuit_response(&state, Some("session-open")).is_some());
     let request = Request::builder()
         .uri("/v1/messages")
         .body(Body::empty())
         .expect("request");
     match super::diverted_service_action(&state, Some("session-open"), request).await {
-        super::DivertedService::Proxy(response) => {
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        }
-        _ => panic!("open circuit must divert to a terminal proxy response"),
+        super::DivertedService::RunLocal(_) => {}
+        _ => panic!("open circuit must recover to the live listener"),
     }
+    assert!(!state.circuit.is_open("session-open"));
     let retry = super::observe_proxy(
         &state,
         None,
@@ -1764,9 +2234,9 @@ async fn open_circuit_short_circuits_retained_proxy_when_listen_matches() {
     )
     .expect("write retained");
     let circuit = std::sync::Arc::new(super::HandoverCircuit::default());
-    for _ in 0..3 {
-        circuit.note_failure("session-a");
-    }
+    assert!(!circuit.note_failure("session-a"));
+    assert!(!circuit.note_failure("session-a"));
+    assert!(circuit.note_failure("session-a"));
     let state = Some(HandoverState {
         retained: Some(Arc::new(retained(&path, "127.0.0.1:8318", &["session-a"]))),
         advertised: Some(handover),
@@ -1774,7 +2244,7 @@ async fn open_circuit_short_circuits_retained_proxy_when_listen_matches() {
         circuit,
     });
     let app = Router::new()
-        .route("/v1/messages", post(|| async { "must-not-run" }))
+        .route("/v1/messages", post(|| async { "recovered-local" }))
         .layer(middleware::from_fn_with_state(
             state,
             proxy_retained_sessions,
@@ -1794,5 +2264,9 @@ async fn open_circuit_short_circuits_retained_proxy_when_listen_matches() {
         .send()
         .await
         .expect("open circuit retained");
-    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        response.text().await.expect("recovered local body"),
+        "recovered-local"
+    );
 }

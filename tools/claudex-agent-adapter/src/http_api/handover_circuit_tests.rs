@@ -21,6 +21,20 @@ fn first_failures_stay_closed_until_the_burst_limit() {
 }
 
 #[test]
+fn clear_closes_an_open_circuit_so_a_later_failure_starts_a_new_burst() {
+    let circuit = HandoverCircuit::default();
+    assert!(!circuit.note_failure("session-a"));
+    assert!(!circuit.note_failure("session-a"));
+    assert!(circuit.note_failure("session-a"));
+    circuit.clear("session-a");
+    assert!(!circuit.is_open("session-a"));
+    assert!(
+        !circuit.note_failure("session-a"),
+        "a cleared circuit must not stay open on the next failure"
+    );
+}
+
+#[test]
 fn sibling_sessions_do_not_share_a_circuit() {
     let circuit = HandoverCircuit::default();
     assert!(!circuit.note_failure("session-a"));

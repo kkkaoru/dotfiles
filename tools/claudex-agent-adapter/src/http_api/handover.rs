@@ -15,7 +15,9 @@ use crate::listen_handover::ListenHandover;
 
 use super::CLAUDE_CODE_SESSION_ID_HEADER;
 use super::handover_circuit::{self, HandoverCircuit};
-use super::retained_proxy::{RetainedProxy, proxy_http_client, proxy_request};
+use super::retained_proxy::{
+    ProxyOutcome, RetainedProxy, listen_accepts_health, proxy_http_client, proxy_request,
+};
 
 const CLAUDE_CODE_AGENT_ID_HEADER: &str = "x-claude-code-agent-id";
 
@@ -105,9 +107,6 @@ async fn diverted_service_action(
     if current == service {
         return DivertedService::NotDiverted(request);
     }
-    if let Some(response) = open_circuit_response(state, session_id) {
-        return DivertedService::Proxy(response);
-    }
     // Old daemon left the client-facing service port. Idle keep-alives
     // must ride to that service listen. A promoted warm-start daemon
     // has service=:8318 and advertised=:8318 after cutover — do not
@@ -116,8 +115,22 @@ async fn diverted_service_action(
     if retain_session_locally(state, session_id, current) {
         return DivertedService::RunLocal(request);
     }
-    let response = proxy_request(&state.client, service, request).await;
-    DivertedService::Proxy(observe_proxy(state, session_id, response))
+    if recover_open_circuit(state, session_id) {
+        return DivertedService::RunLocal(request);
+    }
+    if !listen_accepts_health(&state.client, service).await {
+        return DivertedService::RunLocal(request);
+    }
+    match proxy_request(&state.client, service, request).await {
+        ProxyOutcome::Response(response) => {
+            DivertedService::Proxy(observe_proxy(state, session_id, response))
+        }
+        // Race after Ready: one transport 503 is acceptable. Do not increment
+        // the circuit — the next request re-probes and stays local.
+        ProxyOutcome::TransportFailed(message) => {
+            DivertedService::Proxy(handover_circuit::retry_response(message))
+        }
+    }
 }
 
 async fn proxy_or_run_retained(
@@ -133,9 +146,6 @@ async fn proxy_or_run_retained(
     let Some(session_id) = session_id else {
         return next.run(request).await;
     };
-    if let Some(response) = open_circuit_response(state, Some(session_id)) {
-        return response;
-    }
     // One disk snapshot per request — owns/targets/proxy used to each refresh.
     retained.refresh();
     if !retained.owns_cached(session_id) {
@@ -147,10 +157,36 @@ async fn proxy_or_run_retained(
     if !retained.should_proxy_session(session_id, agent_id).await {
         return next.run(request).await;
     }
-    let response = retained.proxy(request).await;
-    observe_proxy(state, Some(session_id), response)
+    if recover_open_circuit(state, Some(session_id)) {
+        return next.run(request).await;
+    }
+    match retained.proxy_outcome(request).await {
+        ProxyOutcome::TransportFailed(message) => {
+            retained.clear_all_sessions();
+            handover_circuit::retry_response(message)
+        }
+        ProxyOutcome::Response(response) => {
+            let response = observe_proxy(state, Some(session_id), response);
+            if state.circuit.is_open(session_id) {
+                retained.forget_session(session_id);
+            }
+            response
+        }
+    }
 }
 
+fn recover_open_circuit(state: &HandoverState, session_id: Option<&str>) -> bool {
+    let Some(session_id) = session_id else {
+        return false;
+    };
+    if !state.circuit.is_open(session_id) {
+        return false;
+    }
+    state.circuit.clear(session_id);
+    true
+}
+
+#[cfg(test)]
 fn open_circuit_response(state: &HandoverState, session_id: Option<&str>) -> Option<Response> {
     let session_id = session_id?;
     if !state.circuit.is_open(session_id) {

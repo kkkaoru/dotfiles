@@ -44,12 +44,12 @@ impl RetainedProxy {
             .unwrap_or(false)
     }
 
-    pub(super) fn forget_session(&self, session_id: &str) {
+    pub(in crate::http_api) fn forget_session(&self, session_id: &str) {
         let _ = forget_retained_session(&self.path, session_id);
         self.refresh();
     }
 
-    pub(super) fn clear_all_sessions(&self) {
+    pub(in crate::http_api) fn clear_all_sessions(&self) {
         let pid = self.pid.read().ok().map(|guard| *guard).unwrap_or(0);
         if let Ok(mut sessions) = self.sessions.write() {
             sessions.clear();
