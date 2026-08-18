@@ -1,13 +1,19 @@
+// This file runs with Bun.
 import { randomUUID } from "node:crypto";
 import {
   Agent,
+  type AgentOptions,
   type InteractionUpdate,
   type Run,
   type SDKAgent,
   type SDKCustomTool,
   type SDKJsonValue,
+  type ShellOutputDeltaUpdate,
   type TokenUsage,
+  type ToolCall,
+  type ToolCallDeltaUpdate,
   type ToolName,
+  type TurnEndedUpdate,
 } from "@cursor/sdk";
 import type {
   Api,
@@ -20,6 +26,7 @@ import type {
 } from "@earendil-works/pi-ai";
 import { buildCursorMessage, findToolResults, toolResultToSdk, toSdkJsonValue } from "./context.ts";
 import { cursorModelSelection } from "./models.ts";
+import { ensureCursorPlatform } from "./platform.ts";
 import { cursorProcessAgentId, getProcessCursorStore } from "./store.ts";
 import { createCursorOutput, type CursorOutput } from "./stream-output.ts";
 
@@ -32,7 +39,7 @@ interface PendingInvocation {
 
 const pendingByToolCallId = new Map<string, PendingInvocation>();
 const TOOL_BATCH_DELAY_MS = 0;
-const DEFAULT_CLAIM_TIMEOUT_MS = 5_000;
+const DEFAULT_CLAIM_TIMEOUT_MS = 1_000; // Enough for the previous local run to release because the process-scoped store isolates agents, and a longer timeout hurts multi-turn latency.
 const CURSOR_ALLOWED_TOOLS: readonly ToolName[] = ["mcp", "webSearch", "semSearch", "shell"];
 
 interface IndependentSessionState {
@@ -77,6 +84,95 @@ function findPendingSession(toolResults: readonly ToolResultMessage[]): CursorSe
     .find((session) => session !== undefined);
 }
 
+const SHELL_OUTPUT_KEYS: readonly string[] = ["text", "data", "stdout", "stderr", "output"];
+
+function shellOutputText(event: Record<string, unknown>): string | undefined {
+  for (const key of SHELL_OUTPUT_KEYS) {
+    const value = event[key];
+    if (typeof value === "string") return value;
+  }
+  return undefined;
+}
+
+function formatDiff(path: string, diffString: string | undefined): string {
+  const body = diffString ?? "";
+  const hasHeader = /^(---|\+\+\+|diff )/.test(body);
+  const header = hasHeader ? "" : `--- ${path}\n+++ ${path}\n`;
+  return `\`\`\`diff\n${header}${body}\n\`\`\``;
+}
+
+function formatToolCallArgs(toolCall: ToolCall): string {
+  return `\`\`\`json\n${JSON.stringify(toolCall.args, undefined, 2)}\n\`\`\``;
+}
+
+function formatToolCallResult(toolCall: ToolCall): string | undefined {
+  if (toolCall.result === undefined) return undefined;
+  if (toolCall.result.status === "error") return `Error: ${String(toolCall.result.error)}`;
+  switch (toolCall.type) {
+    case "edit": {
+      const value = toolCall.result.value;
+      return formatDiff(toolCall.args.path, value.diffString);
+    }
+    case "shell": {
+      const value = toolCall.result.value;
+      const parts = [
+        `Exit code: ${value.exitCode}`,
+        `**stdout:**\n\`\`\`\n${value.stdout}\n\`\`\``,
+      ];
+      if (value.stderr.length > 0) {
+        parts.push(`**stderr:**\n\`\`\`\n${value.stderr}\n\`\`\``);
+      }
+      return parts.join("\n\n");
+    }
+    case "read": {
+      const value = toolCall.result.value;
+      return `\`\`\`\n${value.content}\n\`\`\`\n\n${value.totalLines} lines, ${value.fileSize} bytes`;
+    }
+    case "write": {
+      const value = toolCall.result.value;
+      const after =
+        value.fileContentAfterWrite === undefined
+          ? ""
+          : `\n\nNew content:\n\`\`\`\n${value.fileContentAfterWrite}\n\`\`\``;
+      return `Wrote ${value.linesCreated} lines (${value.fileSize} bytes)${after}`;
+    }
+    case "delete": {
+      const value = toolCall.result.value;
+      return `Deleted ${value.fileSize} bytes`;
+    }
+    case "glob": {
+      const value = toolCall.result.value;
+      const files = value.files.join("\n");
+      const truncated = `${value.clientTruncated ? " (client truncated)" : ""}${
+        value.ripgrepTruncated ? " (ripgrep truncated)" : ""
+      }`;
+      return `${files}\n\nTotal: ${value.totalFiles}${truncated}`;
+    }
+    case "mcp": {
+      const value = toolCall.result.value;
+      const text = value.content
+        .map((item) => item.text?.text ?? "")
+        .filter((line) => line.length > 0)
+        .join("\n");
+      return text.length > 0 ? text : `isError: ${value.isError}`;
+    }
+    default: {
+      const value = toolCall.result.value;
+      return `\`\`\`json\n${JSON.stringify(value, undefined, 2)}\n\`\`\``;
+    }
+  }
+}
+
+function formatCursorToolCallUpdate(toolCall: ToolCall, status: string): string | undefined {
+  const result = status === "started" ? undefined : formatToolCallResult(toolCall);
+  const header = `**${toolCall.type}** (${status})`;
+  if (status === "started") return `${header}\n`;
+  const args = formatToolCallArgs(toolCall);
+  const sections = [args, result].filter((s): s is string => s !== undefined);
+  if (sections.length === 0) return `${header}\n`;
+  return `${header}\n\n${sections.join("\n\n")}\n`;
+}
+
 class CursorSession {
   private readonly context: Context;
   private readonly model: Model<Api>;
@@ -91,6 +187,8 @@ class CursorSession {
   private disposed = false;
   private settle!: Promise<void>;
   private resolveSettle!: () => void;
+  private completedToolCallIds = new Set<string>();
+  private startedToolCallIds = new Set<string>();
 
   constructor(context: Context, model: Model<Api>, options: SimpleStreamOptions | undefined) {
     this.context = context;
@@ -135,7 +233,7 @@ class CursorSession {
       this.options?.apiKey,
     );
     const agentId = cursorProcessAgentId();
-    this.agent = await Agent.create({
+    const agentOptions: AgentOptions = {
       ...(this.options?.apiKey ? { apiKey: this.options.apiKey } : {}),
       agentId,
       name: agentId,
@@ -157,7 +255,11 @@ class CursorSession {
         // local run blocks every other send() with AgentBusyError.
         store: getProcessCursorStore(),
       },
-    });
+    };
+    const platform = await ensureCursorPlatform(this.options?.apiKey, process.cwd());
+    this.agent = platform
+      ? await platform.createAgent(agentOptions)
+      : await Agent.create(agentOptions);
     if (this.disposed) {
       await this.agent[Symbol.asyncDispose]().catch(() => undefined);
       return;
@@ -223,10 +325,88 @@ class CursorSession {
   }
 
   private handleDelta(update: InteractionUpdate): void {
-    if (update.type === "text-delta") this.output?.appendText(update.text);
-    if (update.type === "thinking-delta") this.output?.appendThinking(update.text);
-    if (update.type === "thinking-completed") this.output?.endThinking();
-    if (update.type !== "turn-ended" || !update.usage || !this.output) return;
+    switch (update.type) {
+      case "text-delta":
+        this.output?.appendText(update.text);
+        return;
+      case "thinking-delta":
+        this.output?.appendThinking(update.text);
+        return;
+      case "thinking-completed":
+        this.output?.endThinking();
+        return;
+      case "summary":
+        this.output?.appendTextBlock(update.summary);
+        return;
+      case "summary-completed":
+        this.output?.appendTextBlock("Summary completed.");
+        return;
+      case "step-started":
+        this.output?.appendTextBlock(`Step ${update.stepId} started`);
+        return;
+      case "step-completed":
+        this.output?.appendTextBlock(
+          `Step ${update.stepId} completed (${update.stepDurationMs}ms)`,
+        );
+        return;
+      case "shell-output-delta":
+        this.handleShellOutputDelta(update);
+        return;
+      case "tool-call-started":
+      case "partial-tool-call":
+        this.handleToolCallStarted(update);
+        return;
+      case "tool-call-completed":
+        this.handleToolCallCompleted(update);
+        return;
+      case "tool-call-delta":
+        this.handleToolCallDelta(update);
+        return;
+      case "turn-ended":
+        this.handleTurnEnded(update);
+        return;
+      default:
+        return;
+    }
+  }
+
+  private handleShellOutputDelta(update: ShellOutputDeltaUpdate): void {
+    const text = shellOutputText(update.event);
+    if (text !== undefined) this.output?.appendTextBlock(text);
+  }
+
+  private handleToolCallStarted(update: { callId: string; toolCall: ToolCall }): void {
+    if (this.startedToolCallIds.has(update.callId)) return;
+    this.startedToolCallIds.add(update.callId);
+    const text = formatCursorToolCallUpdate(update.toolCall, "started");
+    if (text !== undefined) this.output?.appendTextBlock(text);
+  }
+
+  private handleToolCallCompleted(update: { callId: string; toolCall: ToolCall }): void {
+    if (this.completedToolCallIds.has(update.callId)) return;
+    this.completedToolCallIds.add(update.callId);
+    const text = formatCursorToolCallUpdate(update.toolCall, "completed");
+    if (text !== undefined) this.output?.appendTextBlock(text);
+  }
+
+  private handleToolCallDelta(update: ToolCallDeltaUpdate): void {
+    const taskUpdate = update.taskUpdate;
+    if (taskUpdate.type === "text-delta") {
+      this.output?.appendTextBlock(taskUpdate.text);
+      return;
+    }
+    if (taskUpdate.type === "tool-call-started" || taskUpdate.type === "partial-tool-call") {
+      this.handleToolCallStarted(taskUpdate);
+      return;
+    }
+    if (taskUpdate.type === "tool-call-completed") {
+      this.handleToolCallCompleted(taskUpdate);
+      return;
+    }
+  }
+
+  private handleTurnEnded(update: TurnEndedUpdate): void {
+    if (!update.usage || !this.output) return;
     const { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } = update.usage;
     updateUsage(this.output, {
       inputTokens,
@@ -312,4 +492,7 @@ export const cursorProviderTestApi = {
   setClaimTimeoutMs(ms = DEFAULT_CLAIM_TIMEOUT_MS): void {
     independentSessionState.claimTimeoutMs = ms;
   },
+  formatDiff,
+  formatCursorToolCallUpdate,
+  shellOutputText,
 };

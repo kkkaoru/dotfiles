@@ -5,6 +5,7 @@ import type {
   RunResult,
   SDKAgent,
   SendOptions,
+  ToolCall,
 } from "@cursor/sdk";
 import type {
   Api,
@@ -109,16 +110,21 @@ function baseContext(): Context {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   createAgentMock.mockReset();
+  const { cursorPlatformTestApi } = await import("../src/platform.ts");
+  cursorPlatformTestApi.reset();
+  cursorPlatformTestApi.setEnabled(false);
 });
 
 afterEach(async () => {
   const { cursorProviderTestApi } = await import("../src/provider.ts");
   const { cursorStoreTestApi } = await import("../src/store.ts");
+  const { cursorPlatformTestApi } = await import("../src/platform.ts");
   cursorProviderTestApi.setClaimTimeoutMs();
   await cursorProviderTestApi.waitForIdle();
   cursorStoreTestApi.reset();
+  cursorPlatformTestApi.reset();
   expect(cursorProviderTestApi.pendingCount()).toBe(0);
 });
 
@@ -548,4 +554,445 @@ test("streams thinking separately from text", async () => {
     "text_delta",
     "done",
   ]);
+});
+
+test("streams additional Cursor update types", async () => {
+  installScenario({
+    async onSend(options) {
+      const updates: InteractionUpdate[] = [
+        { type: "shell-output-delta", event: { text: "shell chunk" } },
+        { type: "text-delta", text: "hello " },
+        { type: "thinking-delta", text: "think" },
+        { type: "thinking-completed", thinkingDurationMs: 1 },
+        { type: "summary", summary: "Working on it" },
+        { type: "summary-completed" },
+        { type: "step-started", stepId: 1 },
+        { type: "step-completed", stepId: 1, stepDurationMs: 100 },
+        {
+          type: "tool-call-started",
+          callId: "shell-1",
+          modelCallId: "mc",
+          toolCall: { type: "shell", args: { command: "ls" } },
+        },
+        {
+          type: "tool-call-completed",
+          callId: "shell-1",
+          modelCallId: "mc",
+          toolCall: {
+            type: "shell",
+            args: { command: "ls" },
+            result: {
+              status: "success",
+              value: {
+                exitCode: 0,
+                signal: "SIGTERM",
+                stdout: "out",
+                stderr: "err",
+                executionTime: 1,
+              },
+            },
+          },
+        },
+        {
+          type: "tool-call-completed",
+          callId: "edit-1",
+          modelCallId: "mc",
+          toolCall: {
+            type: "edit",
+            args: { path: "x" },
+            result: { status: "success", value: { diffString: "+added" } },
+          },
+        },
+        {
+          type: "tool-call-completed",
+          callId: "edit-2",
+          modelCallId: "mc",
+          toolCall: {
+            type: "edit",
+            args: { path: "y" },
+            result: {
+              status: "success",
+              value: { diffString: "--- a/y\n+++ b/y\n-removed" },
+            },
+          },
+        },
+        {
+          type: "tool-call-completed",
+          callId: "read-1",
+          modelCallId: "mc",
+          toolCall: {
+            type: "read",
+            args: { path: "r" },
+            result: { status: "success", value: { content: "file", totalLines: 1, fileSize: 4 } },
+          },
+        },
+        {
+          type: "tool-call-completed",
+          callId: "write-1",
+          modelCallId: "mc",
+          toolCall: {
+            type: "write",
+            args: { path: "w", fileText: "new" },
+            result: {
+              status: "success",
+              value: { path: "w", linesCreated: 1, fileSize: 3, fileContentAfterWrite: "new" },
+            },
+          },
+        },
+        {
+          type: "tool-call-completed",
+          callId: "delete-1",
+          modelCallId: "mc",
+          toolCall: {
+            type: "delete",
+            args: { path: "d" },
+            result: { status: "success", value: { fileSize: 5 } },
+          },
+        },
+        {
+          type: "tool-call-completed",
+          callId: "glob-1",
+          modelCallId: "mc",
+          toolCall: {
+            type: "glob",
+            args: { globPattern: "*.ts" },
+            result: {
+              status: "success",
+              value: {
+                files: ["a.ts", "b.ts"],
+                totalFiles: 2,
+                clientTruncated: true,
+                ripgrepTruncated: false,
+              },
+            },
+          },
+        },
+        {
+          type: "tool-call-completed",
+          callId: "mcp-1",
+          modelCallId: "mc",
+          toolCall: {
+            type: "mcp",
+            args: { providerIdentifier: "p", toolName: "t" },
+            result: {
+              status: "success",
+              value: { content: [{ text: { text: "mcp result" } }], isError: false },
+            },
+          },
+        },
+        {
+          type: "tool-call-completed",
+          callId: "mcp-2",
+          modelCallId: "mc",
+          toolCall: {
+            type: "mcp",
+            args: { providerIdentifier: "p" },
+            result: {
+              status: "success",
+              value: { content: [{ image: { data: "data" } }], isError: true },
+            },
+          },
+        },
+        {
+          type: "tool-call-completed",
+          callId: "plan-1",
+          modelCallId: "mc",
+          toolCall: {
+            type: "createPlan",
+            args: { plan: "do it" },
+            result: { status: "success", value: {} },
+          },
+        },
+        {
+          type: "tool-call-completed",
+          callId: "error-1",
+          modelCallId: "mc",
+          toolCall: {
+            type: "shell",
+            args: { command: "false" },
+            result: { status: "error", error: new Error("failed") },
+          },
+        },
+        {
+          type: "tool-call-started",
+          callId: "dup-start",
+          modelCallId: "mc",
+          toolCall: { type: "shell", args: { command: "ls" } },
+        },
+        {
+          type: "tool-call-started",
+          callId: "dup-start",
+          modelCallId: "mc",
+          toolCall: { type: "shell", args: { command: "ls" } },
+        },
+        {
+          type: "tool-call-completed",
+          callId: "dup-complete",
+          modelCallId: "mc",
+          toolCall: {
+            type: "createPlan",
+            args: { plan: "p" },
+            result: { status: "success", value: {} },
+          },
+        },
+        {
+          type: "tool-call-completed",
+          callId: "dup-complete",
+          modelCallId: "mc",
+          toolCall: {
+            type: "createPlan",
+            args: { plan: "p" },
+            result: { status: "success", value: {} },
+          },
+        },
+        {
+          type: "partial-tool-call",
+          callId: "partial-1",
+          modelCallId: "mc",
+          toolCall: { type: "shell", args: { command: "ls" } },
+        },
+        {
+          type: "tool-call-delta",
+          callId: "task-1",
+          modelCallId: "mc-1",
+          taskUpdate: { type: "text-delta", text: "nested text" },
+        },
+        {
+          type: "tool-call-delta",
+          callId: "task-2",
+          modelCallId: "mc-2",
+          taskUpdate: {
+            type: "tool-call-completed",
+            callId: "nested-1",
+            modelCallId: "mc",
+            toolCall: {
+              type: "shell",
+              args: { command: "ls" },
+              result: {
+                status: "success",
+                value: {
+                  exitCode: 0,
+                  signal: "",
+                  stdout: "nested out",
+                  stderr: "",
+                  executionTime: 1,
+                },
+              },
+            },
+          },
+        },
+        {
+          type: "tool-call-delta",
+          callId: "task-3",
+          modelCallId: "mc-3",
+          taskUpdate: {
+            type: "tool-call-started",
+            callId: "nested-2",
+            modelCallId: "mc",
+            toolCall: { type: "edit", args: { path: "z" } },
+          },
+        },
+        { type: "shell-output-delta", event: { other: 123 } },
+        { type: "token-delta", tokens: 5 },
+        { type: "turn-ended" },
+        {
+          type: "turn-ended",
+          usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        },
+      ];
+      for (const update of updates) await options?.onDelta?.({ update });
+      return result("done");
+    },
+  });
+  const { streamCursor } = await import("../src/provider.ts");
+
+  const events = await collect(streamCursor(MODEL, baseContext()));
+
+  const done = events.at(-1);
+  expect(done?.type).toBe("done");
+  const content = done?.type === "done" ? done.message.content : [];
+  expect(content.length).toBeGreaterThan(0);
+  const allText = content
+    .filter((item): item is { type: "text"; text: string } => item.type === "text")
+    .map((item) => item.text)
+    .join("");
+  expect(allText).toMatch("shell chunk");
+  expect(allText).toMatch("hello");
+});
+
+test("formats diffs with or without a header", async () => {
+  const { cursorProviderTestApi } = await import("../src/provider.ts");
+
+  const withoutHeader = cursorProviderTestApi.formatDiff("x", "+added");
+  expect(withoutHeader).toMatch("--- x");
+  expect(withoutHeader).toMatch("+++ x");
+
+  const withHeader = cursorProviderTestApi.formatDiff("y", "--- a/y\n+++ b/y\n-removed");
+  expect(withHeader).toMatch("--- a/y");
+  expect(withHeader).not.toMatch("--- y\n+++ y");
+});
+
+test("extracts shell output text from known keys", async () => {
+  const { cursorProviderTestApi } = await import("../src/provider.ts");
+
+  expect(cursorProviderTestApi.shellOutputText({ text: "chunk" })).toBe("chunk");
+  expect(cursorProviderTestApi.shellOutputText({ data: "data" })).toBe("data");
+  expect(cursorProviderTestApi.shellOutputText({ stdout: "out" })).toBe("out");
+  expect(cursorProviderTestApi.shellOutputText({ stderr: "err" })).toBe("err");
+  expect(cursorProviderTestApi.shellOutputText({ output: "output" })).toBe("output");
+  expect(cursorProviderTestApi.shellOutputText({ unknown: 123 })).toBeUndefined();
+});
+
+test("formats started and completed tool calls", async () => {
+  const { cursorProviderTestApi } = await import("../src/provider.ts");
+  const shell: ToolCall = { type: "shell", args: { command: "ls" } };
+
+  const started = cursorProviderTestApi.formatCursorToolCallUpdate(shell, "started") ?? "";
+  expect(started).toMatch("**shell** (started)");
+  expect(started).not.toMatch("Exit code");
+
+  const completed =
+    cursorProviderTestApi.formatCursorToolCallUpdate(
+      {
+        type: "shell",
+        args: { command: "ls" },
+        result: {
+          status: "success",
+          value: { exitCode: 0, signal: "", stdout: "out", stderr: "err", executionTime: 1 },
+        },
+      },
+      "completed",
+    ) ?? "";
+  expect(completed).toMatch("**shell** (completed)");
+  expect(completed).toMatch("Exit code: 0");
+  expect(completed).toMatch("out");
+  expect(completed).toMatch("err");
+});
+
+test("formats edit tool call results as markdown diffs", async () => {
+  const { cursorProviderTestApi } = await import("../src/provider.ts");
+  const edit: ToolCall = {
+    type: "edit",
+    args: { path: "x" },
+    result: { status: "success", value: { diffString: "+added" } },
+  };
+
+  const text = cursorProviderTestApi.formatCursorToolCallUpdate(edit, "completed") ?? "";
+  expect(text).toMatch("**edit** (completed)");
+  expect(text).toMatch("```diff");
+  expect(text).toMatch("--- x");
+  expect(text).toMatch("+added");
+});
+
+test("formats remaining tool call result types", async () => {
+  const { cursorProviderTestApi } = await import("../src/provider.ts");
+
+  const read: ToolCall = {
+    type: "read",
+    args: { path: "r" },
+    result: { status: "success", value: { content: "file", totalLines: 1, fileSize: 4 } },
+  };
+  expect(cursorProviderTestApi.formatCursorToolCallUpdate(read, "completed") ?? "").toMatch("file");
+
+  const write: ToolCall = {
+    type: "write",
+    args: { path: "w", fileText: "new" },
+    result: {
+      status: "success",
+      value: { path: "w", linesCreated: 1, fileSize: 3, fileContentAfterWrite: "new" },
+    },
+  };
+  expect(cursorProviderTestApi.formatCursorToolCallUpdate(write, "completed") ?? "").toMatch("new");
+
+  const writeNoAfter: ToolCall = {
+    type: "write",
+    args: { path: "w", fileText: "new" },
+    result: { status: "success", value: { path: "w", linesCreated: 1, fileSize: 3 } },
+  };
+  expect(cursorProviderTestApi.formatCursorToolCallUpdate(writeNoAfter, "completed") ?? "").toMatch(
+    "write",
+  );
+
+  const deleteCall: ToolCall = {
+    type: "delete",
+    args: { path: "d" },
+    result: { status: "success", value: { fileSize: 5 } },
+  };
+  expect(cursorProviderTestApi.formatCursorToolCallUpdate(deleteCall, "completed") ?? "").toMatch(
+    "5",
+  );
+
+  const glob: ToolCall = {
+    type: "glob",
+    args: { globPattern: "*.ts" },
+    result: {
+      status: "success",
+      value: {
+        files: ["a.ts", "b.ts"],
+        totalFiles: 2,
+        clientTruncated: true,
+        ripgrepTruncated: false,
+      },
+    },
+  };
+  expect(cursorProviderTestApi.formatCursorToolCallUpdate(glob, "completed") ?? "").toMatch("a.ts");
+
+  const globTruncated: ToolCall = {
+    type: "glob",
+    args: { globPattern: "*.ts" },
+    result: {
+      status: "success",
+      value: {
+        files: ["a.ts"],
+        totalFiles: 1,
+        clientTruncated: false,
+        ripgrepTruncated: true,
+      },
+    },
+  };
+  expect(
+    cursorProviderTestApi.formatCursorToolCallUpdate(globTruncated, "completed") ?? "",
+  ).toMatch("ripgrep truncated");
+
+  const mcp: ToolCall = {
+    type: "mcp",
+    args: { providerIdentifier: "p", toolName: "t" },
+    result: {
+      status: "success",
+      value: { content: [{ text: { text: "mcp result" } }], isError: false },
+    },
+  };
+  expect(cursorProviderTestApi.formatCursorToolCallUpdate(mcp, "completed") ?? "").toMatch(
+    "mcp result",
+  );
+
+  const mcpEmpty: ToolCall = {
+    type: "mcp",
+    args: { providerIdentifier: "p" },
+    result: {
+      status: "success",
+      value: { content: [{ image: { data: "data" } }], isError: false },
+    },
+  };
+  expect(cursorProviderTestApi.formatCursorToolCallUpdate(mcpEmpty, "completed") ?? "").toMatch(
+    "mcp",
+  );
+
+  const createPlan: ToolCall = {
+    type: "createPlan",
+    args: { plan: "do it" },
+    result: { status: "success", value: {} },
+  };
+  expect(cursorProviderTestApi.formatCursorToolCallUpdate(createPlan, "completed") ?? "").toMatch(
+    "createPlan",
+  );
+
+  const error: ToolCall = {
+    type: "shell",
+    args: { command: "false" },
+    result: { status: "error", error: new Error("failed") },
+  };
+  expect(cursorProviderTestApi.formatCursorToolCallUpdate(error, "completed") ?? "").toMatch(
+    "Error: failed",
+  );
 });

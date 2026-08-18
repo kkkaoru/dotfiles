@@ -1,3 +1,4 @@
+// This file runs with Bun.
 import type {
   Api,
   AssistantMessage,
@@ -12,6 +13,7 @@ export interface CursorOutput {
   readonly stream: AssistantMessageEventStream;
   readonly partial: AssistantMessage;
   appendText(delta: string): void;
+  appendTextBlock(text: string): void;
   appendThinking(delta: string): void;
   endThinking(): void;
   appendToolCall(toolCall: ToolCall): void;
@@ -41,13 +43,14 @@ function createInitialMessage(model: Model<Api>): AssistantMessage {
 
 interface OutputState {
   finished: boolean;
+  openText: number | undefined;
   openThinking: { contentIndex: number; block: ThinkingContent } | undefined;
 }
 
 export function createCursorOutput(model: Model<Api>): CursorOutput {
   const stream = createAssistantMessageEventStream();
   const partial = createInitialMessage(model);
-  const state: OutputState = { finished: false, openThinking: undefined };
+  const state: OutputState = { finished: false, openText: undefined, openThinking: undefined };
 
   stream.push({ type: "start", partial });
 
@@ -66,20 +69,35 @@ export function createCursorOutput(model: Model<Api>): CursorOutput {
   const appendText = (delta: string): void => {
     if (state.finished || delta.length === 0) return;
     endThinking();
-    const previous = partial.content.at(-1);
-    if (previous?.type === "text") {
-      previous.text += delta;
-      stream.push({ type: "text_delta", contentIndex: partial.content.length - 1, delta, partial });
-      return;
+    if (state.openText !== undefined) {
+      const previous = partial.content[state.openText];
+      if (previous?.type === "text") {
+        previous.text += delta;
+        stream.push({ type: "text_delta", contentIndex: state.openText, delta, partial });
+        return;
+      }
+      state.openText = undefined;
     }
     partial.content.push({ type: "text", text: delta });
     const contentIndex = partial.content.length - 1;
+    state.openText = contentIndex;
     stream.push({ type: "text_start", contentIndex, partial });
     stream.push({ type: "text_delta", contentIndex, delta, partial });
   };
 
+  const appendTextBlock = (text: string): void => {
+    if (state.finished || text.length === 0) return;
+    endThinking();
+    state.openText = undefined;
+    partial.content.push({ type: "text", text });
+    const contentIndex = partial.content.length - 1;
+    stream.push({ type: "text_start", contentIndex, partial });
+    stream.push({ type: "text_delta", contentIndex, delta: text, partial });
+  };
+
   const appendThinking = (delta: string): void => {
     if (state.finished || delta.length === 0) return;
+    state.openText = undefined;
     if (state.openThinking) {
       state.openThinking.block.thinking += delta;
       stream.push({
@@ -101,6 +119,7 @@ export function createCursorOutput(model: Model<Api>): CursorOutput {
   const appendToolCall = (toolCall: ToolCall): void => {
     if (state.finished) return;
     endThinking();
+    state.openText = undefined;
     partial.content.push(toolCall);
     const contentIndex = partial.content.length - 1;
     stream.push({ type: "toolcall_start", contentIndex, partial });
@@ -136,6 +155,7 @@ export function createCursorOutput(model: Model<Api>): CursorOutput {
     stream,
     partial,
     appendText,
+    appendTextBlock,
     appendThinking,
     endThinking,
     appendToolCall,

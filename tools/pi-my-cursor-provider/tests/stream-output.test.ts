@@ -77,3 +77,35 @@ test("marks aborted Error failures", async () => {
   expect(output.partial.stopReason).toBe("aborted");
   expect(output.partial.errorMessage).toBe("cancelled");
 });
+
+test("pushes a complete text block and closes active thinking", async () => {
+  const output = createCursorOutput(MODEL);
+  output.appendThinking("thinking");
+  output.appendTextBlock("block");
+  output.finish("stop");
+
+  const events = await collect(output);
+  expect(events.map((event) => event.type)).toStrictEqual([
+    "start",
+    "thinking_start",
+    "thinking_delta",
+    "thinking_end",
+    "text_start",
+    "text_delta",
+    "done",
+  ]);
+  expect(output.partial.content).toStrictEqual([
+    { type: "thinking", thinking: "thinking" },
+    { type: "text", text: "block" },
+  ]);
+});
+
+test("ignores empty or post-finish text blocks", async () => {
+  const output = createCursorOutput(MODEL);
+  output.appendTextBlock("");
+  output.finish("stop");
+  output.appendTextBlock("ignored");
+
+  const events = await collect(output);
+  expect(events.map((event) => event.type)).toStrictEqual(["start", "done"]);
+});

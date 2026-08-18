@@ -1,3 +1,3 @@
 {
-  "ignorePatterns": ["coverage", "node_modules"]
+  "ignorePatterns": ["coverage", "node_modules", "scripts"]
 }
