@@ -669,16 +669,9 @@ mod tests {
         let live = drain_live_frames(&mut receiver);
         assert!(live.contains('▶'), "live SSE must show ▶: {live}");
         crate::anthropic::stream::sanitize::sanitize_committed_blocks(&mut blocks);
-        let thinking = committed_thinking(&blocks);
-        assert_eq!(thinking.len(), 1, "{thinking:?}");
         assert!(
-            thinking[0].contains("Need to inspect the module graph"),
-            "{thinking:?}"
-        );
-        assert!(!thinking[0].contains('▶'), "{thinking:?}");
-        assert!(
-            !thinking[0].contains("Claudex is still working"),
-            "{thinking:?}"
+            committed_thinking(&blocks).is_empty(),
+            "unsigned adapter thinking must not be committed: {blocks:?}"
         );
     }
 }

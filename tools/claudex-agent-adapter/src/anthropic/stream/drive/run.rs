@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
-use super::super::{SegmentBuilder, StreamSender, StreamTurn, send_stream_error};
+use super::super::{SegmentBuilder, StreamSender, StreamTurn, protocol::send_stream_graceful_stop};
 use super::{StreamDriveOptions, response_timeout};
 use crate::anthropic::{
     ActiveTurn, Bridge, model_concurrency::ModelPermit, subagent_timeout::completes_within,
@@ -62,8 +62,9 @@ impl Bridge {
         let Some(waited) = waited else {
             let timeout = timeout.expect("elapsed stream wait has a configured timeout");
             let error = self.expire_subagent_turn(&turn, timeout).await;
+            tracing::warn!(?error, "streaming turn timed out after message_start");
             drop(model_permit);
-            send_stream_error(&sender, error).await;
+            send_stream_graceful_stop(&sender).await;
             return;
         };
         self.finish_stream_turn(

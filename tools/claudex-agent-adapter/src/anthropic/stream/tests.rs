@@ -15,9 +15,13 @@ use tokio::sync::{Mutex, Semaphore, mpsc};
 
 use super::protocol::send_tool_use;
 use super::{
-    SegmentBuilder, StreamWaitInput, builder::parse_tool_call, context_window, error_flow,
-    message_start, sanitize, send_stream_completion, send_stream_error, send_stream_frame,
-    thinking::ThinkingState, tool_use_frames, turn_flow,
+    SegmentBuilder, StreamWaitInput,
+    builder::parse_tool_call,
+    context_window, error_flow, message_start,
+    protocol::{send_stream_error, send_stream_graceful_stop},
+    sanitize, send_stream_completion, send_stream_frame,
+    thinking::ThinkingState,
+    tool_use_frames, turn_flow,
 };
 use crate::{
     agent_backend::AgentBackend,
@@ -537,10 +541,8 @@ fn sanitizes_text_thinking_and_provider_status_variants() {
     sanitize::sanitize_committed_blocks(&mut blocks);
     assert_eq!(blocks[0]["text"], "hello");
     assert_eq!(blocks[1]["type"], "text");
-    assert_eq!(blocks[2]["type"], "thinking");
-    assert_eq!(blocks[3]["thinking"], "useful");
-    assert_eq!(blocks[4]["type"], "unknown");
-    assert_eq!(blocks.len(), 5);
+    assert_eq!(blocks[2]["type"], "unknown");
+    assert_eq!(blocks.len(), 3);
 
     for status in [
         "✓ done",
@@ -1194,16 +1196,9 @@ async fn streams_summarized_thinking_as_separate_units_before_text() {
     let segment = builder.finish(Some(&sender)).await.expect("segment");
     drop(sender);
 
-    // Each summaryIndex is its own thinking block (Claude-like units).
-    assert_eq!(segment.blocks[0]["type"], "thinking");
-    assert_eq!(segment.blocks[0]["thinking"], "Plan");
-    assert_eq!(segment.blocks[1]["type"], "thinking");
-    assert_eq!(segment.blocks[1]["thinking"], "Act");
-    assert_ne!(
-        segment.blocks[0]["signature"],
-        segment.blocks[1]["signature"]
-    );
-    assert_eq!(segment.blocks[2], json!({"type":"text","text":"Answer"}));
+    // Adapter-invented thinking signatures must not be committed for replay.
+    // Live SSE below still streams each summaryIndex as its own unit.
+    assert_eq!(segment.blocks, vec![json!({"type":"text","text":"Answer"})]);
     assert_eq!(segment.usage.input_tokens, 9);
     assert_eq!(segment.usage.output_tokens, 12);
     assert_eq!(segment.usage.reasoning_output_tokens, 7);
@@ -1306,32 +1301,13 @@ async fn feed_subagent_reasoning_across_units(
 }
 
 fn assert_subagent_reasoning_transcript(segment: &crate::anthropic::Segment) {
-    let thinking = segment
-        .blocks
-        .iter()
-        .find_map(|block| {
-            (block.get("type").and_then(Value::as_str) == Some("thinking"))
-                .then(|| block.get("thinking").and_then(Value::as_str))
-                .flatten()
-        })
-        .unwrap_or("");
-    assert_eq!(
+    assert!(
         segment
             .blocks
             .iter()
-            .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
-            .count(),
-        1,
-        "SubAgent turn must keep one native thinking block: {:?}",
+            .all(|block| block.get("type").and_then(Value::as_str) != Some("thinking")),
+        "adapter-local thinking must not be committed for replay: {:?}",
         segment.blocks
-    );
-    // Live SSE streams real CoT; ▶ tool chrome stays on thinking.
-    assert!(thinking.contains("Map the conversion path."));
-    assert!(thinking.contains("Check Vibrato boundaries."));
-    assert!(thinking.contains("Hypothesis: boundaries were dropped."));
-    assert!(
-        !thinking.contains('▶'),
-        "▶ chrome must be stripped from the transcript: {thinking}"
     );
     assert!(
         segment
@@ -1399,12 +1375,7 @@ async fn feed_subagent_read(
 }
 
 async fn assert_codex_cot_in_transcript(builder: &mut SegmentBuilder, needle: &str) {
-    let (finish_sender, _finish_rx) = mpsc::channel::<Result<Bytes, Infallible>>(4);
-    let segment = builder
-        .finish(Some(&finish_sender))
-        .await
-        .expect("finish after Codex CoT");
-    let thinking = segment
+    let live_thinking = builder
         .blocks
         .iter()
         .find_map(|block| {
@@ -1414,12 +1385,25 @@ async fn assert_codex_cot_in_transcript(builder: &mut SegmentBuilder, needle: &s
         })
         .unwrap_or("");
     assert!(
-        thinking.contains(needle),
-        "Codex CoT must land in the transcript: {thinking}"
+        live_thinking.contains(needle),
+        "Codex CoT must stream live before commit: {live_thinking}"
     );
     assert!(
-        !thinking.contains('▶'),
-        "▶ chrome must be stripped from the transcript: {thinking}"
+        !live_thinking.contains('▶'),
+        "▶ chrome must be stripped from live CoT: {live_thinking}"
+    );
+    let (finish_sender, _finish_rx) = mpsc::channel::<Result<Bytes, Infallible>>(4);
+    let segment = builder
+        .finish(Some(&finish_sender))
+        .await
+        .expect("finish after Codex CoT");
+    assert!(
+        segment
+            .blocks
+            .iter()
+            .all(|block| block.get("type").and_then(Value::as_str) != Some("thinking")),
+        "adapter-local thinking must not be committed for replay: {:?}",
+        segment.blocks
     );
 }
 
@@ -1506,8 +1490,8 @@ async fn command_code_reasoning_stays_on_one_thinking_block() {
         .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
         .count();
     assert_eq!(
-        thinking_block_count, 1,
-        "Command Code must not open/close thinking per unit: {:?}",
+        thinking_block_count, 0,
+        "Command Code adapter thinking must not be committed: {:?}",
         segment.blocks
     );
     let mut sse = String::new();
@@ -1583,8 +1567,8 @@ async fn command_code_muse_spark_status_bursts_stay_on_one_thinking_block() {
         .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
         .count();
     assert_eq!(
-        thinking_block_count, 1,
-        "Muse Spark dump must not open/close thinking per burst: {:?}",
+        thinking_block_count, 0,
+        "Muse Spark adapter thinking must not be committed: {:?}",
         segment.blocks
     );
     let mut sse = String::new();
@@ -1635,14 +1619,11 @@ async fn gpt_textdelta_without_summary_paints_native_thinking() {
     let segment = builder.finish(Some(&sender)).await.expect("segment");
     drop(sender);
     assert!(
-        segment.blocks.iter().any(|block| {
-            block.get("type").and_then(Value::as_str) == Some("thinking")
-                && block
-                    .get("thinking")
-                    .and_then(Value::as_str)
-                    .is_some_and(|text| text.contains("neon pooler GUCs"))
-        }),
-        "GPT textDelta must become native thinking: {:?}",
+        segment
+            .blocks
+            .iter()
+            .all(|block| block.get("type").and_then(Value::as_str) != Some("thinking")),
+        "GPT adapter thinking must not be committed: {:?}",
         segment.blocks
     );
     let mut sse = String::new();
@@ -1661,6 +1642,7 @@ async fn gpt_textdelta_without_summary_paints_native_thinking() {
 
 #[tokio::test]
 async fn gpt_textdelta_without_content_index_still_paints_main_thinking() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
     let mut builder = SegmentBuilder::for_turn(1, false, "glm-5.2:cloud");
     builder
         .model_output_event(
@@ -1671,21 +1653,27 @@ async fn gpt_textdelta_without_content_index_still_paints_main_thinking() {
                     "delta":"Ollama GLM CoT without contentIndex must still stream.\n"
                 }
             }),
-            None,
+            Some(&sender),
         )
         .await
         .expect("glm textdelta");
-    let segment = builder.finish(None).await.expect("segment");
+    let segment = builder.finish(Some(&sender)).await.expect("segment");
+    drop(sender);
     assert!(
-        segment.blocks.iter().any(|block| {
-            block.get("type").and_then(Value::as_str) == Some("thinking")
-                && block
-                    .get("thinking")
-                    .and_then(Value::as_str)
-                    .is_some_and(|text| text.contains("without contentIndex"))
-        }),
-        "main Codex textDelta must not require contentIndex: {:?}",
+        segment
+            .blocks
+            .iter()
+            .all(|block| block.get("type").and_then(Value::as_str) != Some("thinking")),
+        "main adapter thinking must not be committed: {:?}",
         segment.blocks
+    );
+    let mut sse = String::new();
+    while let Some(frame) = receiver.recv().await {
+        sse.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert!(
+        sse.contains("without contentIndex"),
+        "main Codex textDelta must not require contentIndex: {sse}"
     );
 }
 
@@ -1826,21 +1814,7 @@ fn assert_clean_mixed_handoff_transcript(segment: &crate::anthropic::Segment) {
         .iter()
         .filter_map(|block| block["type"].as_str())
         .collect::<Vec<_>>();
-    assert_eq!(block_types, vec!["thinking", "tool_use"]);
-    let thinking = segment
-        .blocks
-        .iter()
-        .filter_map(|block| {
-            (block["type"] == "thinking")
-                .then(|| block["thinking"].as_str())
-                .flatten()
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        thinking,
-        vec!["UNIQUE_REASONING_A\nUNIQUE_REASONING_B"],
-        "transcript must commit CoT exactly once without provider chrome"
-    );
+    assert_eq!(block_types, vec!["tool_use"]);
     assert_eq!(
         segment
             .blocks
@@ -1851,9 +1825,8 @@ fn assert_clean_mixed_handoff_transcript(segment: &crate::anthropic::Segment) {
         "native Read must remain the only executable tool block"
     );
     let transcript = serde_json::to_string(&segment.blocks).expect("transcript JSON");
-    for sentinel in ["UNIQUE_REASONING_A", "UNIQUE_REASONING_B"] {
-        assert_eq!(transcript.matches(sentinel).count(), 1);
-    }
+    assert!(!transcript.contains("UNIQUE_REASONING_A"));
+    assert!(!transcript.contains("UNIQUE_REASONING_B"));
     assert!(!transcript.contains("PROVIDER_OWNED_PROGRESS"));
 }
 
@@ -1906,15 +1879,23 @@ async fn gpt_summary_still_hides_raw_textdelta() {
         )
         .await
         .expect("raw textdelta");
-    let segment = builder.finish(None).await.expect("segment");
-    let thinking = segment
+    let live_thinking = builder
         .blocks
         .iter()
         .find(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
         .and_then(|block| block.get("thinking").and_then(Value::as_str))
         .unwrap_or_default();
-    assert!(thinking.contains("Inspect the neon pooler next"));
-    assert!(!thinking.contains("raw secret"));
+    assert!(live_thinking.contains("Inspect the neon pooler next"));
+    assert!(!live_thinking.contains("raw secret"));
+    let segment = builder.finish(None).await.expect("segment");
+    assert!(
+        segment
+            .blocks
+            .iter()
+            .all(|block| block.get("type").and_then(Value::as_str) != Some("thinking")),
+        "adapter-local thinking must not be committed: {:?}",
+        segment.blocks
+    );
 }
 
 #[tokio::test]
@@ -2797,14 +2778,7 @@ async fn closes_each_reasoning_item_with_its_own_signature() {
             .expect("reasoning item");
     }
     let segment = builder.finish(None).await.expect("segment");
-    assert_eq!(segment.blocks.len(), 2);
-    assert_eq!(segment.blocks[0]["thinking"], "one");
-    assert_eq!(segment.blocks[1]["thinking"], "two");
-    assert_ne!(
-        segment.blocks[0]["signature"],
-        segment.blocks[1]["signature"]
-    );
-    assert!(segment.usage.output_tokens > 0);
+    assert!(segment.blocks.is_empty());
 }
 
 #[test]
@@ -3886,9 +3860,9 @@ async fn drive_stream_reports_unretryable_context_window_errors() {
     while let Some(frame) = receiver.recv().await {
         output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
     }
-    assert!(output.contains("context window"));
-    assert!(output.contains("\"stop_reason\":\"error\""));
+    assert!(output.contains("\"stop_reason\":\"end_turn\""));
     assert!(output.contains("event: message_stop"));
+    assert!(!output.contains("event: error"));
 }
 
 #[tokio::test]
@@ -4083,9 +4057,9 @@ async fn drive_stream_reports_context_retry_setup_errors() {
     while let Some(frame) = receiver.recv().await {
         output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
     }
-    assert!(output.contains("retry setup failed"));
-    assert!(output.contains("\"stop_reason\":\"error\""));
+    assert!(output.contains("\"stop_reason\":\"end_turn\""));
     assert!(output.contains("event: message_stop"));
+    assert!(!output.contains("event: error"));
     assert!(bridge.sessions.lock().await.is_empty());
 }
 
@@ -4133,9 +4107,10 @@ async fn drive_stream_reports_closed_provider_event_streams() {
     while let Some(frame) = receiver.recv().await {
         output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
     }
-    assert!(output.contains("event stream closed"));
-    assert!(output.contains("\"stop_reason\":\"error\""));
+    assert!(output.contains("\"stop_reason\":\"end_turn\""));
     assert!(output.contains("event: message_stop"));
+    assert!(!output.contains("event: error"));
+    assert!(!output.contains("api_error"));
 }
 
 #[tokio::test]
@@ -4165,9 +4140,11 @@ async fn drive_stream_cancels_provider_leaf_when_wait_fails() {
         output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
     }
     assert!(
-        output.contains("event stream closed") || output.contains("\"stop_reason\":\"error\""),
-        "wait failure must surface to Claude Code: {output}"
+        output.contains("\"stop_reason\":\"end_turn\"") && output.contains("event: message_stop"),
+        "wait failure must close the primed SSE without an error event: {output}"
     );
+    assert!(!output.contains("event: error"));
+    assert!(!output.contains("api_error"));
     assert!(
         bridge.sessions.lock().await.is_empty(),
         "failed stream must cancel and unregister the session (not orphan ACP)"
@@ -4294,9 +4271,11 @@ async fn subagent_stream_hard_timeout_cancels_and_reports_a_visible_error() {
         output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
     }
     assert!(
-        output.contains("configured hard timeout"),
+        output.contains("\"stop_reason\":\"end_turn\"") && output.contains("event: message_stop"),
         "unexpected stream: {output}"
     );
+    assert!(!output.contains("event: error"));
+    assert!(!output.contains("configured hard timeout"));
     assert!(!output.contains("dynamic progress"));
     assert!(bridge.detached_sessions.lock().await.is_empty());
     assert_eq!(
@@ -4375,12 +4354,9 @@ async fn subagent_empty_end_turn_without_retry_reports_billing_error() {
     while let Some(frame) = receiver.recv().await {
         output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
     }
-    assert!(
-        output.contains("no assistant content")
-            || output.contains("billing")
-            || output.contains("error"),
-        "unexpected empty SubAgent stream: {output}"
-    );
+    assert!(output.contains("\"stop_reason\":\"end_turn\""));
+    assert!(output.contains("event: message_stop"));
+    assert!(!output.contains("event: error"));
 }
 
 #[tokio::test]
@@ -4643,7 +4619,9 @@ async fn retry_context_stream_without_a_retry_removes_the_session_and_reports_th
         .await;
 
     let output = collect_sse_frames(&mut receiver).await;
-    assert!(output.contains("context retry payload was unavailable"));
+    assert!(output.contains("\"stop_reason\":\"end_turn\""));
+    assert!(output.contains("event: message_stop"));
+    assert!(!output.contains("event: error"));
 }
 
 #[tokio::test]
@@ -4721,10 +4699,9 @@ async fn drive_stream_retries_a_dead_provider_failure() {
     while let Some(frame) = receiver.recv().await {
         output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
     }
-    assert!(
-        output.contains("error") || output.contains("closed") || output.contains("fail"),
-        "unexpected provider-failure stream: {output}"
-    );
+    assert!(output.contains("\"stop_reason\":\"end_turn\""));
+    assert!(output.contains("event: message_stop"));
+    assert!(!output.contains("event: error"));
 }
 
 #[tokio::test]
@@ -5229,6 +5206,21 @@ async fn stream_error_closes_the_agent_card_with_message_stop() {
 }
 
 #[tokio::test]
+async fn graceful_stop_closes_primed_sse_without_error_event() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    send_stream_graceful_stop(&sender).await;
+    drop(sender);
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert!(output.contains("\"stop_reason\":\"end_turn\""));
+    assert!(output.contains("event: message_stop"));
+    assert!(!output.contains("event: error"));
+    assert!(!output.contains("api_error"));
+}
+
+#[tokio::test]
 async fn completion_frame_exposes_verified_web_evidence_metadata() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(2);
     let segment = super::super::Segment {
@@ -5353,9 +5345,9 @@ async fn prepared_stream_releases_its_concurrency_ticket_after_a_prepare_error()
     let frame = receiver
         .recv()
         .await
-        .expect("stream preparation error frame")
+        .expect("stream preparation stop frame")
         .expect("infallible frame");
-    assert!(String::from_utf8_lossy(&frame).contains("no active claudex session"));
+    assert!(String::from_utf8_lossy(&frame).contains("\"stop_reason\":\"end_turn\""));
     assert_eq!(
         serde_json::to_value(limits.snapshot()).unwrap()["main"]["active"],
         0

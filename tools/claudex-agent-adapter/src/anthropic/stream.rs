@@ -49,7 +49,7 @@ pub(super) use crate::anthropic::stream_batch::{NextEvent, next_event};
 pub(super) use control::{error_flow, turn_flow};
 #[cfg(test)]
 pub(super) use protocol::tool_use_frames;
-use protocol::{StreamSender, send_stream_error, sse_response};
+use protocol::{StreamSender, sse_response};
 pub(super) use protocol::{
     message_start, send_stream_completion, send_stream_frame, streaming_sse_response,
 };

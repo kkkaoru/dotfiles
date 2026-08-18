@@ -16,6 +16,10 @@ pub(super) const PREMATURE_STATUS_ONLY_NOTICE: &str = "Claudex: ACP worker ended
 toolless reply. This is not a completed result. Reroute the same scope; do not treat the provider \
 as exhausted.";
 
+const ADAPTER_LOCAL_THINKING_PREFIX: &str = "claudex_local_";
+const PROVIDER_PROGRESS_SIGNATURE: &str = "claudex_provider_progress";
+const ACTIVITY_KEEPALIVE_SIGNATURE: &str = "claudex_activity_keepalive";
+
 /// Events that count as decoded activity for Claude Code's idle watchdog.
 pub(super) fn is_visible_activity_event(event: &Value) -> bool {
     matches!(
@@ -50,8 +54,7 @@ pub(super) fn sanitize_committed_blocks(blocks: &mut Vec<Value>) {
         }
         Some("thinking") => {
             let signature = block.get("signature").and_then(Value::as_str).unwrap_or("");
-            if signature == "claudex_provider_progress" || signature == "claudex_activity_keepalive"
-            {
+            if should_drop_thinking_signature(signature) {
                 return false;
             }
             let Some(thinking) = block.get("thinking").and_then(Value::as_str) else {
@@ -75,6 +78,13 @@ pub(super) fn sanitize_committed_blocks(blocks: &mut Vec<Value>) {
         }
         _ => true,
     });
+}
+
+fn should_drop_thinking_signature(signature: &str) -> bool {
+    signature.is_empty()
+        || signature == PROVIDER_PROGRESS_SIGNATURE
+        || signature == ACTIVITY_KEEPALIVE_SIGNATURE
+        || signature.starts_with(ADAPTER_LOCAL_THINKING_PREFIX)
 }
 
 fn is_provider_status_only(text: &str) -> bool {

@@ -4,14 +4,19 @@ For end-user setup, cross-Mac installation, routing configuration, and daily usa
 [Claudex guide](../../.config/claudex/README.md).
 
 This local Rust service presents the subset of Anthropic's Messages API used by
-Claude Code and routes it to built-in or config-defined agent backends:
+Claude Code and routes it to built-in or config-defined agent backends.
+Claudex launch always uses the Pi gateway (`pi --mode rpc` via
+`pi-claudex-provider`). `--provider-interface` accepts only `pi`; omitted means
+`pi`. ACP-native (`grok --acp`, `cursor-agent acp`, `qwen --acp`,
+`command-code-acp`) is not a claudex route.
 
 | `--backend-route MODEL=BACKEND` | Backend protocol | Tool runtime |
 | --- | --- | --- |
+| `pi-gateway` | Pi RPC gateway (`pi --mode rpc`) | Provider `streamSimple` through `pi-claudex-provider` |
 | `codex-app-server` | Codex app-server JSON-RPC | Claude Code tools bridged through Codex |
-| `configured-acp` | Configured Agent Client Protocol command | Provider-owned agent tools and permission requests |
-| `copilot-acp` | GitHub Copilot CLI Agent Client Protocol (ACP) | Copilot CLI agent tools and permission requests |
-| `grok-acp` | Grok Build Agent Client Protocol (ACP) | Grok Build agent tools and permission requests |
+| `configured-acp` | Configured Agent Client Protocol command | Library/test ACP adapter; not a claudex launch route |
+| `copilot-acp` | GitHub Copilot CLI Agent Client Protocol (ACP) | Library/test ACP adapter; not a claudex launch route |
+| `grok-acp` | Grok Build Agent Client Protocol (ACP) | Library/test ACP adapter; not a claudex launch route |
 
 All routes coexist in one daemon without eagerly starting provider processes.
 Each configured backend starts lazily on its first model request and remains
@@ -124,13 +129,13 @@ claudex-agent-adapter serve --model MODEL --backend-route MODEL=BACKEND [...] [A
 claudex-agent-adapter build-id
 ```
 
-Backend values are `codex-app-server`, `configured-acp`, `copilot-acp`, and
-`grok-acp`. The preferred launcher path is `--provider-config
+Backend values include `pi-gateway` (the claudex production path), plus
+`codex-app-server`, `configured-acp`, `copilot-acp`, and `grok-acp` for library
+and test routes. The preferred launcher path is `--provider-config
 $HOME/.config/claudex/providers.json`. It defines enabled providers, default
-models, effort, model prefixes, quota names, fallback, ACP launch settings, and
-the legacy/worker-compatibility `mainProviders` list. `mainProviders` does not
-select or remap the model in a main-session request. A `configured-acp` provider also supplies a program and argument array;
-`{model}` placeholders are replaced directly without invoking a shell.
+models, effort, model prefixes, quota names, fallback, Pi `piProvider` /
+`piModel` mappings, and the legacy/worker-compatibility `mainProviders` list.
+`mainProviders` does not select or remap the model in a main-session request.
 `--backend-route` is repeatable, model keys must be unique, and the main
 `--model` must have a route.
 Codex app-server routes may additionally set `modelProvider` and

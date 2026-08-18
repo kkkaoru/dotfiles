@@ -78,6 +78,7 @@ pub(in crate::anthropic) async fn send_stream_completion(sender: &StreamSender, 
     .await;
 }
 
+#[cfg(test)]
 pub(super) async fn send_stream_error(sender: &StreamSender, error: anyhow::Error) {
     let error_type = super::super::error::error_type(&error);
     let _ = send_stream_frame(Some(sender), "error", || {
@@ -89,10 +90,23 @@ pub(super) async fn send_stream_error(sender: &StreamSender, error: anyhow::Erro
     .await;
     // Claude Code keeps a SubAgent card running after a mid-response API/ACP
     // drop unless the SSE also ends with a terminal stop_reason + message_stop.
+    send_terminal_stop(sender, "error").await;
+}
+
+/// Close an already-primed SSE turn without `event: error`.
+///
+/// Claude Code maps `event: error` / `api_error` after `message_start` to
+/// `API Error: Server error mid-response`. Callers that already queued
+/// `message_start` must use this instead of [`send_stream_error`].
+pub(super) async fn send_stream_graceful_stop(sender: &StreamSender) {
+    send_terminal_stop(sender, "end_turn").await;
+}
+
+async fn send_terminal_stop(sender: &StreamSender, stop_reason: &'static str) {
     let _ = send_stream_frame(Some(sender), "message_delta", || {
         json!({
             "type":"message_delta",
-            "delta":{"stop_reason":"error","stop_sequence":null},
+            "delta":{"stop_reason":stop_reason,"stop_sequence":null},
             "usage":{"output_tokens":0,"server_tool_use":{"web_search_requests":0}}
         })
     })

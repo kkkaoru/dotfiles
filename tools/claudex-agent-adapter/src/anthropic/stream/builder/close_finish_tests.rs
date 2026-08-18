@@ -135,7 +135,9 @@ async fn blocked_subagent_notice_finishes_end_turn_despite_provider_tool_use() {
     assert!(
         segment.blocks[0]["text"]
             .as_str()
-            .is_some_and(|text| text.contains("was not launched") || text.contains("Continue without it.") || text.contains("disabled by policy")),
+            .is_some_and(|text| text.contains("was not launched")
+                || text.contains("Continue without it.")
+                || text.contains("disabled by policy")),
         "notice must stay visible: {}",
         segment.blocks[0]["text"]
     );
@@ -150,8 +152,7 @@ async fn blocked_subagent_notice_streams_message_stop_after_finish() {
 
     use crate::anthropic::stream::protocol::send_stream_completion;
 
-    let notice =
-        "The requested SubAgent model is disabled by policy, so it was not started. Continue without it.";
+    let notice = "The requested SubAgent model is disabled by policy, so it was not started. Continue without it.";
     let mut builder = SegmentBuilder::new(1);
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
     builder

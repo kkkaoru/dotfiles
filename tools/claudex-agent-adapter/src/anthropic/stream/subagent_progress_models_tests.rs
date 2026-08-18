@@ -482,29 +482,17 @@ async fn assert_finished_transcript(case: &Case, builder: &mut SegmentBuilder) {
         );
     }
     if let Some(reasoning) = case.reasoning {
-        let thinking = segment
-            .blocks
-            .iter()
-            .find_map(|block| {
-                (block.get("type").and_then(Value::as_str) == Some("thinking"))
-                    .then(|| block.get("thinking").and_then(Value::as_str))
-                    .flatten()
-            })
-            .unwrap_or("");
         assert!(
-            thinking.contains(reasoning.trim()),
-            "{}: buffered CoT must land in the transcript (kind={:?}): thinking={thinking:?} blocks={:?}",
+            segment.blocks.iter().all(|block| {
+                block.get("type").and_then(Value::as_str) != Some("thinking")
+                    && !block
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| text.contains(reasoning.trim()))
+            }),
+            "{}: adapter-local CoT must not be committed for replay: {:?}",
             case.name,
-            match case.reasoning_kind {
-                ReasoningKind::Summary => "summary",
-                ReasoningKind::RawTextDelta => "raw-textdelta",
-            },
             segment.blocks
-        );
-        assert!(
-            !thinking.contains('▶'),
-            "{}: ▶ chrome must be stripped from the transcript: {thinking}",
-            case.name
         );
     }
     assert!(

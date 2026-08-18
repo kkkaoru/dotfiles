@@ -39,6 +39,20 @@ async fn marks_missing_provider_environment_as_non_retryable() {
     assert!(output.contains("event: message_stop"));
 }
 
+#[tokio::test]
+async fn graceful_stop_emits_end_turn_without_error_event() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+
+    send_stream_graceful_stop(&sender).await;
+    drop(sender);
+
+    let output = drain_frames(&mut receiver).await;
+    assert!(output.contains("\"stop_reason\":\"end_turn\""));
+    assert!(output.contains("event: message_stop"));
+    assert!(!output.contains("event: error"));
+    assert!(!output.contains("api_error"));
+}
+
 async fn drain_frames(receiver: &mut mpsc::Receiver<Result<Bytes, Infallible>>) -> String {
     let mut output = String::new();
     while let Some(frame) = receiver.recv().await {

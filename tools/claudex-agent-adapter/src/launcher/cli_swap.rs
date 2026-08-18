@@ -45,13 +45,11 @@ async fn with_live_bootstrap_model(options: AdapterOptions) -> Result<AdapterOpt
     }
     let probe = ServiceConfig::new(options.clone())?;
     let client = reqwest::Client::new();
-    Ok(
-        match health::fetch_health(&client, &probe).await {
-            Some(health) if !health.model.is_empty() => AdapterOptions {
-                model: health.model,
-                ..options
-            },
-            _ => options,
+    Ok(match health::fetch_health(&client, &probe).await {
+        Some(health) if !health.model.is_empty() => AdapterOptions {
+            model: health.model,
+            ..options
         },
-    )
+        _ => options,
+    })
 }

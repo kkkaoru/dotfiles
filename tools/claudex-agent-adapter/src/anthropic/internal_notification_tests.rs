@@ -190,3 +190,89 @@ fn preserves_teammate_wrappers_that_carry_a_subagent_prompt() {
             .is_some_and(|text| text.contains("Use the assigned model"))
     );
 }
+
+#[test]
+fn treats_notification_with_trailing_system_reminder_as_internal() {
+    assert!(is_internal_notification_request(&request(
+        "<task-notification>done</task-notification>\n<system-reminder>Claudex routing data</system-reminder>".into()
+    )));
+}
+
+#[test]
+fn treats_notification_with_sibling_system_reminder_as_internal() {
+    assert!(is_internal_notification_request(&request(json!([
+        {
+            "type": "text",
+            "text": "<task-notification>done</task-notification>"
+        },
+        {
+            "type": "text",
+            "text": "<system-reminder>Claudex routing data</system-reminder>"
+        }
+    ]))));
+}
+
+#[test]
+fn treats_system_notification_prefix_plus_task_notification_as_internal() {
+    assert!(is_internal_notification_request(&request(
+        "[SYSTEM NOTIFICATION - NOT USER INPUT]\n<task-notification>done</task-notification>"
+            .into()
+    )));
+}
+
+#[test]
+fn keeps_please_continue_after_notification_as_a_user_turn() {
+    assert!(!is_internal_notification_request(&request(
+        "<task-notification>done</task-notification>\nPlease continue the real task".into()
+    )));
+}
+
+#[test]
+fn inserts_placeholder_user_turn_between_assistants_after_dropping_notification() {
+    let mut request = request("unused".into());
+    request.messages = vec![
+        json!({"role":"assistant","content":[{"type":"text","text":"first answer"}]}),
+        json!({"role":"user","content":"<task-notification>done</task-notification>"}),
+        json!({"role":"assistant","content":[{"type":"text","text":"second answer"}]}),
+        json!({"role":"user","content":"Please continue the real task"}),
+    ];
+
+    remove_from_transcript(&mut request);
+
+    assert_eq!(
+        request.messages,
+        vec![
+            json!({"role":"assistant","content":[{"type":"text","text":"first answer"}]}),
+            json!({"role":"user","content":"Background task update received."}),
+            json!({"role":"assistant","content":[{"type":"text","text":"second answer"}]}),
+            json!({"role":"user","content":"Please continue the real task"}),
+        ]
+    );
+}
+
+#[test]
+fn keeps_user_message_that_only_has_a_tool_result() {
+    let mut request = request("unused".into());
+    request.messages = vec![json!({
+        "role":"user",
+        "content":[{
+            "type":"tool_result",
+            "tool_use_id":"toolu_keep",
+            "content":"provider result"
+        }]
+    })];
+
+    remove_from_transcript(&mut request);
+
+    assert_eq!(
+        request.messages,
+        vec![json!({
+            "role":"user",
+            "content":[{
+                "type":"tool_result",
+                "tool_use_id":"toolu_keep",
+                "content":"provider result"
+            }]
+        })]
+    );
+}

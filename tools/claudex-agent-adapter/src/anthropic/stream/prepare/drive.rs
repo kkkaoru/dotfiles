@@ -5,7 +5,7 @@ use anyhow::Result;
 
 use super::super::{
     ACTIVITY_KEEPALIVE_INTERVAL, INITIAL_ACTIVITY_DELAY, SUBAGENT_INITIAL_ACTIVITY_DELAY,
-    send_stream_error,
+    protocol::send_stream_graceful_stop,
 };
 use super::{
     PrepareActivityOptions, PreparedStream, SegmentBuilder, StreamSender, prepare_with_activity,
@@ -168,6 +168,7 @@ impl Bridge {
             self.note_provider_exhaustion(&error, Some(model));
         }
         let _ = builder.close_open_blocks(Some(sender)).await;
-        send_stream_error(sender, error).await;
+        tracing::warn!(?error, "prepared stream failed after message_start");
+        send_stream_graceful_stop(sender).await;
     }
 }

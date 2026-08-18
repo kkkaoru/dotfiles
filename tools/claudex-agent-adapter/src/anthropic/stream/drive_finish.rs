@@ -2,7 +2,8 @@ use anyhow::anyhow;
 use std::sync::Arc;
 
 use super::{
-    SegmentBuilder, StreamSender, StreamTurn, drive::ContextRetryStream, send_stream_error,
+    SegmentBuilder, StreamSender, StreamTurn, drive::ContextRetryStream,
+    protocol::send_stream_graceful_stop,
 };
 use crate::anthropic::{
     ActiveTurn, Bridge, model_concurrency::ModelPermit, segment::EMPTY_ACP_END_TURN,
@@ -130,6 +131,6 @@ impl Bridge {
         let _ = self
             .disconnect_stream(&turn.session, Arc::clone(&turn.events))
             .await;
-        send_stream_error(&sender, error).await;
+        send_stream_graceful_stop(&sender).await;
     }
 }

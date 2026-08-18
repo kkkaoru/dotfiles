@@ -1,4 +1,48 @@
-use super::strip_worker_status_lines;
+use serde_json::json;
+
+use super::{sanitize_committed_blocks, strip_worker_status_lines};
+
+#[test]
+fn drops_unsigned_and_adapter_local_thinking_from_committed_blocks() {
+    let mut blocks = vec![
+        json!({"type":"thinking","thinking":"unsigned draft","signature":""}),
+        json!({
+            "type":"thinking",
+            "thinking":"adapter invented",
+            "signature":"claudex_local_abc123"
+        }),
+        json!({
+            "type":"thinking",
+            "thinking":"keepalive",
+            "signature":"claudex_activity_keepalive"
+        }),
+        json!({
+            "type":"thinking",
+            "thinking":"provider progress",
+            "signature":"claudex_provider_progress"
+        }),
+        json!({
+            "type":"thinking",
+            "thinking":"keep this reasoning",
+            "signature":"grok_provider_sig"
+        }),
+        json!({"type":"text","text":"visible answer"}),
+    ];
+
+    sanitize_committed_blocks(&mut blocks);
+
+    assert_eq!(
+        blocks,
+        vec![
+            json!({
+                "type":"thinking",
+                "thinking":"keep this reasoning",
+                "signature":"grok_provider_sig"
+            }),
+            json!({"type":"text","text":"visible answer"}),
+        ]
+    );
+}
 
 #[test]
 fn strip_worker_status_lines_removes_single_status_line() {
