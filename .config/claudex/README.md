@@ -26,12 +26,13 @@ flowchart LR
     Fish --> Adapter[claudex-agent-adapter]
     Adapter --> Orchestrator[Claude Code main session\nrequest model/effort]
     Orchestrator --> Hook[provider利用状況フック]
-    Hook --> Codex[claudex-gpt\ngpt-5.6-luna\nCodex app-server]
-    Hook --> CodexSpark[claudex-gpt-spark\ngpt-5.3-codex-spark\nCodex app-server]
-    Hook --> Grok[claudex-grok\nGrok ACP]
-    Hook --> Qwen[claudex-qwen\nQwen Code ACP]
-    Hook --> Cursor[claudex-cursor\nCursor ACP]
-    Hook --> ClineDs[claudex-cline-deepseek-flash\nClinePass ACP]
+    Hook --> Codex[claudex-gpt\ngpt-5.6-luna\nPi gateway]
+    Hook --> CodexSpark[claudex-gpt-spark\ngpt-5.3-codex-spark\nPi gateway]
+    Hook --> Grok[claudex-grok\nPi gateway]
+    Hook --> Qwen[claudex-qwen\nPi gateway]
+    Hook --> Cursor[claudex-cursor\nPi gateway]
+    Hook --> CursorLuna[claudex-cursor-luna-max\ngpt-5.6-luna-max\nPi gateway]
+    Hook --> ClineDs[claudex-cline-deepseek-flash\nPi gateway]
     Hook --> CommandCode[claudex-command-code-muse-spark-1-2-contributor\ncmd -p Muse Spark Contributor]
     Hook --> Sonnet[claudex-sonnet\nclaude-sonnet-5]
     Hook --> Fallback[claudex-sonnet\nClaude fallback]
@@ -54,6 +55,7 @@ flowchart LR
 | DeepSeek Flash worker | `claudex-deepseek-flash` | `opencode-go/deepseek-v4-flash` | `max` | CodexBarのOpenCode Go枠に空きがあり、denylistに無い場合（このマシンでは無効化維持） |
 | OpenCode GPT Luna worker | `claudex-opencode-gpt` | `opencode-go/gpt-5.6-luna` | `max` | CodexBarのOpenCode Go枠に空きがある場合。Codexの `gpt-5.6-luna` / `claudex-gpt` とは別route |
 | Cursor worker | `claudex-cursor` | `auto` | `high` | CodexBarのCursor枠に空きがある場合。`cursor-agent --model auto --yolo acp`。modelはCLI+session/newで固定し、毎turnの `set_session_model` 再選択はしない |
+| Cursor Luna Max worker | `claudex-cursor-luna-max` | `gpt-5.6-luna-max` | `max` | Cursor UIの「GPT-5.6 Luna 1M Max」。`cursor-agent --model gpt-5.6-luna-max --yolo acp`。Cursor枠を共有し、1Mの80%（`800000`）を入力上限として安全側に広告 |
 | Cline DeepSeek Flash worker | `claudex-cline-deepseek-flash` | `cline-pass/deepseek-v4-flash` | `xhigh` | ClinePass枠（CodexBar `clinepass` weekly left）。`--thinking xhigh`。OpenCode Go DeepSeekとは別 |
 | Command Code Muse Spark Contributor worker | `claudex-command-code-muse-spark-1-2-contributor` | `meta/muse-spark-1.2-contributor` | `high` | 自動 `selected_workers` 候補。CodexBar `commandcode` の weekly / 5h left で順位付け。agent slug に Muse Spark 1.2 と contributor を含める（将来の Command Code 他モデルと区別）。公式 `cmd -p` を `command-code-acp` が ACP 化し、既存 `configured-acp` で起動。Provider API / Meta 直接APIは使わない |
 | Antigravity Gemini Flash worker | `claudex-antigravity-gemini-3-7-flash` | `gemini-3.7-flash` | `high` | Pi provider `antigravity`。`webSearchMode` は実測まで `disabled`。CodexBar usage 枠は未接続 |
@@ -110,12 +112,13 @@ OpenCode内で実行されるprovider-owned toolはClaude側で再実行しな�
 これらの一時statusは最終回答と保存transcriptから除去されます。
 DeepSeek / OpenCode GPT Luna workerは独立した調査をまとめて実行し、確定済みの判断を反復せず、
 長い処理のフェーズ間で短い進捗を返すよう定義しています。
-Cursor ACPは `cursor-agent --model {model} --yolo acp` を起動し、既定modelは `auto` です。
+Cursor ACPは `cursor-agent --model {model} --yolo acp` を起動します。既存routeの既定modelは
+`auto`、Luna Max routeはCLI/ACPで確認済みの `gpt-5.6-luna-max` です。
 `--yolo` はCursor CLIの `--force` 別名で、main sessionの無確認実行と同等のtool権限にします。
 Command Code Muse Sparkは `command-code-acp --model {model} --effort {effort}` を起動し、
 内部で公式 headless `cmd -p --output-format json --yolo --trust --skip-onboarding --no-skills --no-session` を回します。SubAgent は常に one-shot（`--resume` しない）で、Claudex の ACP_NATIVE / routing dump / 再構成 transcript も `cmd` に載せません。
 `--effort` は ACP/TUI 表示用だけで、Muse Spark は reasoning effort を受け付けないため `cmd` には渡しません。
-`webSearchMode` は `acp-native`（Claude の巨大 system/routing を `cmd -p` に載せない）。
+`webSearchMode` は `delegate-pi`（Claude の巨大 system/routing を `cmd -p` に載せず、Pi gateway 経由で Exa 検索を行う）。
 agent 定義から skills を外し、`SubagentStart` hook も Command Code だけ短文 reminder にする。
 進捗（▶/✓ と `text_delta` thinking）は既存 ACP `ToolCall` / thought chunk 経由で SubAgent TUI に出ます。
 `command-code-acp` は Muse Spark の文字単位 NDJSON をまとめて流す。ツール進捗は Cursor/Qwen/Grok/Cline と同じ ACP `ToolCall` 経路（`▶ name: query/path/url` → `✓`/`✗`、無音時は `… still working · last:`）。固定文（`ツール結果待ち` / `続きの調査または回答` / `次: …`）は出さない。ネイティブ `text_delta` は live text。`api_retry` / `tool_queued` / CoT thinking は親 TUI に流さない。
@@ -433,29 +436,19 @@ cd /path/to/project
 claudex
 ```
 
-通常の `claudex` は既定でPi経由です。明示する場合も同じ挙動です。
+`claudex` は常に Pi gateway（`pi --mode rpc` via `pi-claudex-provider`）です。
+`--provider-interface` の許可値は `pi` だけです。省略時も `pi` です。
+`direct` と ACP-native（`grok --acp`、`cursor-agent acp`、`qwen --acp`、
+`command-code-acp`）は claudex の route ではありません。
+`CLAUDEX_PROVIDER_INTERFACE=direct` や `--provider-interface direct` は起動時に
+error になります。CLI は環境変数より優先します。
+`claudex` / `claudex-hot-swap` / `scripts/claudex-hot-swap` / adapter 直呼びも同じです。
 
 ```fish
 claudex --provider-interface pi
 ```
 
-問題時に標準化前のdirect backendへ戻すrollbackは次です。
-
-```fish
-claudex --provider-interface direct
-# そのshellだけ一時的に既定を戻す場合
-set -lx CLAUDEX_PROVIDER_INTERFACE direct
-claudex
-# fish全sessionで恒久的にdirectを既定にする場合
-set -Ux CLAUDEX_PROVIDER_INTERFACE direct
-# 後でrepository既定のPiへ戻す場合
-set -eU CLAUDEX_PROVIDER_INTERFACE
-```
-
-CLIは環境変数より優先します。許可値は正確に `pi` / `direct` だけで、不正値は起動時に
-明示errorになります。`claudex` / `claudex-hot-swap` / `scripts/claudex-hot-swap` は同じ既定
-(`pi`、環境変数、CLI)に従います。`claudex-agent-adapter` を直接呼ぶ場合だけ、省略時は
-後方互換の `direct` です。Pi経由では `providers.json` の `piProvider` / `piModel` に従って
+Pi経由では `providers.json` の `piProvider` / `piModel` に従って
 次のように解決します。
 
 | Claudex model | Pi provider | Pi model |
@@ -465,6 +458,7 @@ CLIは環境変数より優先します。許可値は正確に `pi` / `direct` 
 | `grok-4.6` | `xai` | `grok-4.6` |
 | `glm-5.2:cloud` | `ollama-cloud` | `glm-5.2` |
 | `auto` | `cursor` | `auto` |
+| `gpt-5.6-luna-max` | `cursor` | `gpt-5.6-luna-max` |
 | `cline-pass/deepseek-v4-flash` | `clinepass` | `cline-pass/deepseek-v4-flash` |
 | `qwen3.8-max-preview` | `qwen-token-plan-individual` | `qwen3.8-max` |
 | `opencode-go/deepseek-v4-pro` | `opencode-go` | `deepseek-v4-pro` |
@@ -472,16 +466,11 @@ CLIは環境変数より優先します。許可値は正確に `pi` / `direct` 
 | `opencode-go/gpt-5.6-luna` | `opencode-go` | `gpt-5.6-luna` |
 | `meta/muse-spark-1.2-contributor` | `commandcode` | `meta/muse-spark-1.2-contributor` |
 
-`direct` を指定するとPi mappingを破棄し、GPT/OllamaはCodex app-server、Cursor/ClinePassは
-configured ACP、GrokはGrok ACPという標準化前と同じbackendへ戻ります。通常のPi設定や認証を
-変更せず、呼び出し単位または環境変数だけでrollbackできます。
-
-direct / Pi は同じ orchestration developer instructions をsystem末尾へ追加します。その85%以上は
+Pi は同じ orchestration developer instructions をsystem末尾へ追加します。その85%以上は
 固定ですが、team protocol とparallel schedulerのguidance（通常15%未満）はrequestやworker状態で
 変わります。Piのsystem promptは単一文字列なので、可変部分以降のprompt-cache prefixはturnごとに
-無効化され得ます。これは両経路共通の将来のcache最適化対象であり、現在は挙動の一致を優先します。
-また実TUIのmessages内には後置system reminderがあり、direct / Piともdeveloper instructionsより後で
-providerへ渡します。後続systemがorchestrationを弱める可能性も、両経路共通の既知課題です。
+無効化され得ます。また実TUIのmessages内には後置system reminderがあり、developer instructionsより後で
+providerへ渡します。
 
 Pi childは `piGatewayExtension` とrouteの `piExtensions` だけを明示ロードし、ambientなextensions /
 skills / prompt templates / themesを無効化します。GPT/Fuguはbuilt-in providerなのでgatewayだけ、Cursor /
@@ -728,15 +717,18 @@ headerです。直後の各identity行または `↓ to manage` から個別work
 CLAUDEX_MODEL=grok-4.6 claudex
 CLAUDEX_MODEL=gpt-5.3-codex-spark claudex
 CLAUDEX_MODEL=gpt-5.6-terra claudex
+CLAUDEX_MODEL=gpt-5.6-luna-max claudex
 CLAUDEX_MODEL=qwen3.8-max-preview claudex
 ```
 
-`gpt-5.6-terra` は Codex `codex` provider の main `/model` 候補（`selectableModels`）です。
+`gpt-5.6-terra` は Codex `codex` provider、`gpt-5.6-luna-max` は Cursor
+`cursor-luna-max` provider の main `/model` 候補（`selectableModels`）です。
 自動 SubAgent は従来どおり `gpt-5.6-luna` / `claudex-gpt` です。Terra を outer にしても
 main は実装せず、実質作業は Agent/Task で worker へ委譲します。Terra を outer にする場合は
 `/model` で `claude-claudex-gpt-5.6-terra` を選ぶか、上記の `CLAUDEX_MODEL` を使います。
 Claude Code は `gpt-5.6-terra` や `auto`、`grok-4.6` を未知モデルとして 200k compact 前提にするため、launcher は
-provider の `maxContextTokens`（Codex は `110000`、Cursor `auto` は `200000`、Grok は xAI 公表の `500000`）を
+provider の `maxContextTokens`（Codex は `110000`、Cursor `auto` は `200000`、Cursor Luna Max は
+安全側の `800000`、Grok は xAI 公表の `500000`）を
 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` へ渡します。加えて `prepare-claude-config.py` は隔離
 `settings.json` の `modelOverrides` に `grok-4.6` の identity map を書き、
 Claude Code の unrecognized-model 警告が求めるマッピングを isolated 側だけに残します。
@@ -990,7 +982,9 @@ adapter自身が上限を強制するため超過実行は許可されません�
 
 ### 汎用ACPを追加
 
-Rustコードを変更せず、`configured-acp` providerを追加できます。
+ACP-native は claudex の route ではありません。新しい claudex provider は
+`backend: "pi-gateway"` と `piProvider` / `piModel` を使います。
+adapter の `configured-acp` モジュールは library / test 用に残っています。
 
 ```json
 {
