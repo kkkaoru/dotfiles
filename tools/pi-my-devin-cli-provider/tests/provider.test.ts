@@ -110,6 +110,8 @@ test("streams message and thought updates from a reused ACP job", async () => {
     "thinking_end",
     "text_start",
     "text_delta",
+    "text_start",
+    "text_delta",
     "done",
   ]);
   expect(mocks.resolveDevinSessionId).toHaveBeenCalledWith("pi-session-1");
@@ -140,11 +142,17 @@ test("renders a completed tool_call diff as a text block", async () => {
     "start",
     "text_start",
     "text_delta",
+    "text_start",
+    "text_delta",
     "done",
   ]);
   const done = events.at(-1);
   expect(done?.type === "done" ? done.message.content : []).toStrictEqual([
-    { type: "text", text: "**Edit x** (edit)\n\n```diff\n--- x\n+++ x\n-a\n+b\n```\n\n" },
+    { type: "text", text: "✓ **Edit x** (edit) — completed" },
+    {
+      type: "text",
+      text: "✓ **Edit x** (edit) — completed\n\n**Tool output:**\n```diff\n--- x\n+++ x\n-a\n+b\n```",
+    },
   ]);
 });
 
@@ -173,11 +181,17 @@ test("renders a completed tool_call_update diff after an in_progress start", asy
     "start",
     "text_start",
     "text_delta",
+    "text_start",
+    "text_delta",
     "done",
   ]);
   const done = events.at(-1);
   expect(done?.type === "done" ? done.message.content : []).toStrictEqual([
-    { type: "text", text: "**Edit y** (edit)\n\n```diff\n--- y\n+++ y\n-c\n+d\n```\n\n" },
+    { type: "text", text: "▶ **Edit y** (edit) — in_progress" },
+    {
+      type: "text",
+      text: "✓ **Edit y** (edit) — completed\n\n**Tool output:**\n```diff\n--- y\n+++ y\n-c\n+d\n```",
+    },
   ]);
 });
 
@@ -199,11 +213,17 @@ test("renders text content from a completed tool call", async () => {
     "start",
     "text_start",
     "text_delta",
+    "text_start",
+    "text_delta",
     "done",
   ]);
   const done = events.at(-1);
   expect(done?.type === "done" ? done.message.content : []).toStrictEqual([
-    { type: "text", text: "**Read README** (read)\n\nhello world\n\n" },
+    { type: "text", text: "✓ **Read README** (read) — completed" },
+    {
+      type: "text",
+      text: "✓ **Read README** (read) — completed\n\n**Tool output:**\nhello world",
+    },
   ]);
 });
 
@@ -225,11 +245,17 @@ test("renders a new file diff when oldText is null", async () => {
     "start",
     "text_start",
     "text_delta",
+    "text_start",
+    "text_delta",
     "done",
   ]);
   const done = events.at(-1);
   expect(done?.type === "done" ? done.message.content : []).toStrictEqual([
-    { type: "text", text: "**Create z** (edit)\n\n```diff\n+++ z\n+new line\n```\n\n" },
+    { type: "text", text: "✓ **Create z** (edit) — completed" },
+    {
+      type: "text",
+      text: "✓ **Create z** (edit) — completed\n\n**Tool output:**\n```diff\n+++ z\n+new line\n```",
+    },
   ]);
 });
 
@@ -251,11 +277,17 @@ test("renders a deleted file diff when newText is empty", async () => {
     "start",
     "text_start",
     "text_delta",
+    "text_start",
+    "text_delta",
     "done",
   ]);
   const done = events.at(-1);
   expect(done?.type === "done" ? done.message.content : []).toStrictEqual([
-    { type: "text", text: "**Delete w** (delete)\n\n```diff\n--- w\n+++ w\n-remove me\n```\n\n" },
+    { type: "text", text: "✓ **Delete w** (delete) — completed" },
+    {
+      type: "text",
+      text: "✓ **Delete w** (delete) — completed\n\n**Tool output:**\n```diff\n--- w\n+++ w\n-remove me\n```",
+    },
   ]);
 });
 
@@ -276,15 +308,21 @@ test("uses the tool kind as the header when a completed tool call has no title",
     "start",
     "text_start",
     "text_delta",
+    "text_start",
+    "text_delta",
     "done",
   ]);
   const done = events.at(-1);
   expect(done?.type === "done" ? done.message.content : []).toStrictEqual([
-    { type: "text", text: "**other**\n\nnote\n\n" },
+    { type: "text", text: "✓ **other** (other) — completed" },
+    {
+      type: "text",
+      text: "✓ **other** (other) — completed\n\n**Tool output:**\nnote",
+    },
   ]);
 });
 
-test("ignores completed tool calls with only non-text content", async () => {
+test("renders completed tool calls with terminal content", async () => {
   mocks.runDevinJob.mockImplementation(async (job) => {
     job.onUpdate({
       sessionUpdate: "tool_call_update",
@@ -298,9 +336,251 @@ test("ignores completed tool calls with only non-text content", async () => {
   const { streamDevin } = await import("../src/provider.ts");
   const events: AssistantMessageEvent[] = await collect(streamDevin(MODEL, CONTEXT));
 
-  expect(events.map((event) => event.type)).toStrictEqual(["start", "done"]);
+  expect(events.map((event) => event.type)).toStrictEqual([
+    "start",
+    "text_start",
+    "text_delta",
+    "text_start",
+    "text_delta",
+    "done",
+  ]);
   const done = events.at(-1);
-  expect(done?.type === "done" ? done.message.content : []).toStrictEqual([]);
+  expect(done?.type === "done" ? done.message.content : []).toStrictEqual([
+    { type: "text", text: "✓ **Run server** (execute) — completed" },
+    {
+      type: "text",
+      text: "✓ **Run server** (execute) — completed\n\n**Terminal output (stdout/stderr):**\nTerminal ID: t1",
+    },
+  ]);
+});
+
+test("renders Devin command snapshots, output, and terminal exit metadata", async () => {
+  mocks.runDevinJob.mockImplementation(async (job) => {
+    job.onUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "functions.exec:0",
+      title: "Ran command",
+      kind: "execute",
+      content: [
+        {
+          type: "content",
+          content: {
+            type: "resource",
+            resource: {
+              mimeType: "text/x-shellscript",
+              text: "printf 'OUT\\n'",
+              uri: "tool://preview",
+            },
+            _meta: { "cognition.ai/preview_is_shell_command": true },
+          },
+        },
+      ],
+      rawInput: { command: "printf 'OUT\\n'", workdir: "/tmp/workspace" },
+      _meta: { "cognition.ai/inferenceToolName": "exec" },
+    });
+    job.onUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "functions.exec:0",
+      status: "in_progress",
+      _meta: { "cognition.ai/cwd": "/tmp/workspace" },
+    });
+    job.onUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "functions.exec:0",
+      status: "in_progress",
+      content: [{ type: "content", content: { type: "text", text: "OUT" } }],
+    });
+    job.onUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "functions.exec:0",
+      status: "in_progress",
+      content: [{ type: "content", content: { type: "text", text: "OUT\nERR" } }],
+      _meta: {
+        terminal_exit: { terminal_id: "terminal-1", exit_code: 0, signal: null },
+      },
+    });
+    job.onUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "functions.exec:0",
+      status: "completed",
+      _meta: { "cognition.ai/inferenceToolName": "exec" },
+    });
+  });
+  const { streamDevin } = await import("../src/provider.ts");
+  const events: AssistantMessageEvent[] = await collect(streamDevin(MODEL, CONTEXT));
+
+  expect(events.map((event) => event.type)).toStrictEqual([
+    "start",
+    "text_start",
+    "text_delta",
+    "text_start",
+    "text_delta",
+    "done",
+  ]);
+  const done = events.at(-1);
+  expect(done?.type === "done" ? done.message.content : []).toStrictEqual([
+    {
+      type: "text",
+      text: "▶ **Ran command** (execute) — started\n\n**Command:**\n```sh\nprintf 'OUT\\n'\n```\n\n**Working directory:** `/tmp/workspace`",
+    },
+    {
+      type: "text",
+      text: "✓ **Ran command** (execute) — completed\n\n**Command:**\n```sh\nprintf 'OUT\\n'\n```\n\n**Working directory:** `/tmp/workspace`\n\n**Terminal output (stdout/stderr):**\nOUT\nERR\n\n**Exit code:** 0\n**Terminal:** `terminal-1`",
+    },
+  ]);
+});
+
+test("renders failed command output and exit status", async () => {
+  mocks.runDevinJob.mockImplementation(async (job) => {
+    job.onUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "failed-command",
+      title: "Run failing command",
+      kind: "execute",
+      status: "pending",
+      rawInput: { command: "false" },
+    });
+    job.onUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "failed-command",
+      status: "failed",
+      rawOutput: { stdout: "OUT", stderr: "ERR", exitCode: 7 },
+    });
+  });
+  const { streamDevin } = await import("../src/provider.ts");
+  const events: AssistantMessageEvent[] = await collect(streamDevin(MODEL, CONTEXT));
+
+  const done = events.at(-1);
+  expect(done?.type === "done" ? done.message.content : []).toStrictEqual([
+    {
+      type: "text",
+      text: "▶ **Run failing command** (execute) — pending\n\n**Command:**\n```sh\nfalse\n```",
+    },
+    {
+      type: "text",
+      text: "✗ **Run failing command** (execute) — failed\n\n**Command:**\n```sh\nfalse\n```\n\n**stdout:**\n```\nOUT\n```\n\n**stderr:**\n```\nERR\n```\n\n**Exit code:** 7",
+    },
+  ]);
+});
+
+test("retains Devin edit diffs across status-only updates", async () => {
+  mocks.runDevinJob.mockImplementation(async (job) => {
+    job.onUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "functions.write:0",
+      title: "Wrote probe.txt",
+      kind: "edit",
+      content: [{ type: "diff", path: "/tmp/probe.txt", newText: "PROBE\n" }],
+      rawInput: { file_path: "/tmp/probe.txt", content: "PROBE\n" },
+    });
+    job.onUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "functions.write:0",
+      status: "in_progress",
+    });
+    job.onUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "functions.write:0",
+      status: "completed",
+    });
+  });
+  const { streamDevin } = await import("../src/provider.ts");
+  const events: AssistantMessageEvent[] = await collect(streamDevin(MODEL, CONTEXT));
+
+  const done = events.at(-1);
+  expect(done?.type === "done" ? done.message.content : []).toStrictEqual([
+    {
+      type: "text",
+      text: "▶ **Wrote probe.txt** (edit) — started\n\n**Path:** `/tmp/probe.txt`",
+    },
+    {
+      type: "text",
+      text: "✓ **Wrote probe.txt** (edit) — completed\n\n**Path:** `/tmp/probe.txt`\n\n**Tool output:**\n```diff\n+++ /tmp/probe.txt\n+PROBE\n```",
+    },
+  ]);
+});
+
+test("formats ACP resource and media content with a raw input fallback", async () => {
+  mocks.runDevinJob.mockImplementation(async (job) => {
+    job.onUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "inspect-1",
+      title: "Inspect resources",
+      kind: "other",
+      status: "completed",
+      rawInput: { query: "probe" },
+      rawOutput: { output: "raw output" },
+      content: [
+        {
+          type: "content",
+          content: {
+            type: "resource",
+            resource: { uri: "resource://text", text: "resource text" },
+          },
+        },
+        {
+          type: "content",
+          content: { type: "resource_link", name: "linked", uri: "resource://linked" },
+        },
+        {
+          type: "content",
+          content: { type: "image", data: "image", mimeType: "image/png" },
+        },
+        {
+          type: "content",
+          content: { type: "audio", data: "audio", mimeType: "audio/wav" },
+        },
+        {
+          type: "content",
+          content: {
+            type: "resource",
+            resource: {
+              uri: "resource://binary",
+              blob: "binary",
+              mimeType: "application/octet-stream",
+            },
+          },
+        },
+      ],
+    });
+  });
+  const { streamDevin } = await import("../src/provider.ts");
+  const events: AssistantMessageEvent[] = await collect(streamDevin(MODEL, CONTEXT));
+
+  const done = events.at(-1);
+  expect(done?.type === "done" ? done.message.content : []).toStrictEqual([
+    {
+      type: "text",
+      text: '✓ **Inspect resources** (other) — completed\n\n**Input:**\n```json\n{\n  "query": "probe"\n}\n```',
+    },
+    {
+      type: "text",
+      text: '✓ **Inspect resources** (other) — completed\n\n**Input:**\n```json\n{\n  "query": "probe"\n}\n```\n\n**Tool output:**\nresource text\nResource: linked (resource://linked)\n[image: image/png]\n[audio: audio/wav]\n[binary resource: application/octet-stream]\n\n**Output:**\n```\nraw output\n```',
+    },
+  ]);
+});
+
+test("renders a non-structured raw output value", async () => {
+  mocks.runDevinJob.mockImplementation(async (job) => {
+    job.onUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "raw-1",
+      title: "Return raw output",
+      status: "completed",
+      rawOutput: "raw output",
+    });
+  });
+  const { streamDevin } = await import("../src/provider.ts");
+  const events: AssistantMessageEvent[] = await collect(streamDevin(MODEL, CONTEXT));
+
+  const done = events.at(-1);
+  expect(done?.type === "done" ? done.message.content : []).toStrictEqual([
+    { type: "text", text: "✓ **Return raw output** (other) — completed" },
+    {
+      type: "text",
+      text: "✓ **Return raw output** (other) — completed\n\n**Raw output:**\n```json\nraw output\n```",
+    },
+  ]);
 });
 
 test("reports ACP job failures on the assistant stream", async () => {
