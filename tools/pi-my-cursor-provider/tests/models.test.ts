@@ -61,12 +61,21 @@ test("provides multiple useful fallback models", () => {
     "claude-sonnet-4-6",
     "claude-opus-5",
     "gpt-5.6-sol",
+    "gpt-5.6-luna-max",
     "gpt-5.4",
     "gemini-3.1-pro",
     "grok-4.6",
     "kimi-k3",
     "glm-5.2",
   ]);
+  expect(FALLBACK_CURSOR_MODELS).toContainEqual(
+    expect.objectContaining({
+      id: "gpt-5.6-luna-max",
+      name: "GPT-5.6 Luna 1M Max",
+      contextWindow: 800_000,
+      reasoning: true,
+    }),
+  );
 });
 
 test("converts the live Cursor catalog and context variants with a safety margin", () => {

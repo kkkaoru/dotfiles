@@ -2,7 +2,7 @@ import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import { expect, test, vi } from "vitest";
 import cursorExtension from "../index.ts";
 
-test("registers the compatible cursor/auto provider", () => {
+test("registers the compatible Cursor provider catalog", () => {
   const registerProvider = vi.fn();
   const on = vi.fn();
 
@@ -22,6 +22,7 @@ test("registers the compatible cursor/auto provider", () => {
     "claude-sonnet-4-6",
     "claude-opus-5",
     "gpt-5.6-sol",
+    "gpt-5.6-luna-max",
     "gpt-5.4",
     "gemini-3.1-pro",
     "grok-4.6",

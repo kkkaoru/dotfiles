@@ -31,6 +31,8 @@ interface EffortCapability {
 interface FallbackModel {
   id: string;
   name: string;
+  contextWindow?: number;
+  reasoning?: boolean;
 }
 
 interface CatalogState {
@@ -48,6 +50,12 @@ const FALLBACK_MODELS: readonly FallbackModel[] = [
   { id: "claude-sonnet-4-6", name: "Sonnet 4.6" },
   { id: "claude-opus-5", name: "Opus 5" },
   { id: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
+  {
+    id: "gpt-5.6-luna-max",
+    name: "GPT-5.6 Luna 1M Max",
+    contextWindow: 1_000_000,
+    reasoning: true,
+  },
   { id: "gpt-5.4", name: "GPT-5.4" },
   { id: "gemini-3.1-pro", name: "Gemini 3.1 Pro" },
   { id: "grok-4.6", name: "Cursor Grok 4.6" },
@@ -77,8 +85,8 @@ export function effectiveContextWindow(contextWindow: number): number {
   return Math.floor(contextWindow * CONTEXT_WINDOW_SAFETY);
 }
 
-export const FALLBACK_CURSOR_MODELS: ProviderModelConfig[] = FALLBACK_MODELS.map(({ id, name }) =>
-  modelConfig(id, name),
+export const FALLBACK_CURSOR_MODELS: ProviderModelConfig[] = FALLBACK_MODELS.map(
+  ({ id, name, contextWindow, reasoning }) => modelConfig(id, name, contextWindow, reasoning),
 );
 
 function parseContextWindow(value: string): number | undefined {
