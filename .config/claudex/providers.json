@@ -313,6 +313,24 @@
       ],
       "backend": "pi-gateway",
       "webSearchMode": "disabled"
+    },
+    {
+      "id": "devin",
+      "agent": "claudex-devin-swe-1-7",
+      "defaultModel": "devin/swe-1-7",
+      "subagentModel": "devin/swe-1-7",
+      "piProvider": "devin",
+      "piModel": "swe-1-7",
+      "piExtensions": [
+        "../../tools/pi-my-devin-cli-provider/index.ts"
+      ],
+      "effort": "high",
+      "enabled": true,
+      "modelPrefixes": [
+        "devin/swe-1-7"
+      ],
+      "backend": "pi-gateway",
+      "webSearchMode": "disabled"
     }
   ],
   "fallback": {
