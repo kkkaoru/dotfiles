@@ -134,7 +134,7 @@ sudo pmset -c displaysleep 0
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "${SCRIPT_DIR}/optimize-spotlight.sh" ]]; then
-  bash "${SCRIPT_DIR}/optimize-spotlight.sh" apply
+  bash "${SCRIPT_DIR}/optimize-spotlight.sh" install
 else
   echo "--> Spotlight の最適化をスキップ (optimize-spotlight.sh が見つかりません)"
 fi
