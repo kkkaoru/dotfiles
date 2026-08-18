@@ -73,6 +73,15 @@ describe("Claudex model catalog", () => {
       "contains no enabled models",
     );
   });
+
+  it("honors an abort signal during model loading", async () => {
+    const file = await configFile({ providers: [{ defaultModel: "gpt-5.6-luna" }] });
+    const controller = new AbortController();
+    controller.abort();
+    await expect(loadClaudexModels(file, controller.signal)).rejects.toThrow(
+      "Claudex model refresh was aborted",
+    );
+  });
 });
 
 describe("Claudex Pi provider registration", () => {
@@ -105,6 +114,20 @@ describe("Claudex Pi provider registration", () => {
       signal: new AbortController().signal,
     });
     expect(refreshed?.map((model) => model.id)).toStrictEqual(["model-b"]);
+  });
+
+  it("propagates an abort signal to model refresh", async () => {
+    const file = await configFile({ providers: [{ defaultModel: "model-a" }] });
+    const config = await createClaudexProviderConfig({ [CLAUDEX_CONFIG_ENV]: file });
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      config.refreshModels?.({
+        allowNetwork: false,
+        publish: async () => true,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("Claudex model refresh was aborted");
   });
 
   it("rejects invalid protocols and unauthenticated non-loopback adapters", async () => {

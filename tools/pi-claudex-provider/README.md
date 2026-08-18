@@ -32,11 +32,11 @@ The socket uses strict LF-delimited JSON, version `1`. Every client message incl
 
 Adapter `webSearchMode=delegate-pi` reaches this socket via `/worker/web-search`.
 
-| Session provider | Search path | Notes |
-| --- | --- | --- |
-| `cursor` | `modelRegistry.complete()` prompt-only native search | Same-session model only; no silent Exa fallback |
-| any other non-`claudex` provider | Exa `POST https://api.exa.ai/search` | Requires `EXA_API_KEY`; missing key → explicit `web_search_error` |
-| `claudex` | rejected | Avoids recursive gateway search |
+| Session provider                 | Search path                                          | Notes                                                             |
+| -------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------- |
+| `cursor`                         | `modelRegistry.complete()` prompt-only native search | Same-session model only; no silent Exa fallback                   |
+| any other non-`claudex` provider | Exa `POST https://api.exa.ai/search`                 | Requires `EXA_API_KEY`; missing key → explicit `web_search_error` |
+| `claudex`                        | rejected                                             | Avoids recursive gateway search                                   |
 
 Empty Exa/Cursor result sets are success (`results: []`), not errors. Cross-provider fallback is forbidden.
 

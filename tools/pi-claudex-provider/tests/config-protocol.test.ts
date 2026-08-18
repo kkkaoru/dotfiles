@@ -90,6 +90,7 @@ describe("gateway protocol", () => {
             reasoning: "high",
             maxTokens: 100,
             temperature: 0.2,
+            samplingParams: { top_p: 0.9, top_k: 40 },
             metadata: { user_id: "u" },
             sessionId: "session",
             cacheRetention: "long",
@@ -105,6 +106,7 @@ describe("gateway protocol", () => {
           reasoning: "high",
           maxTokens: 100,
           temperature: 0.2,
+          samplingParams: { top_p: 0.9, top_k: 40 },
           metadata: { user_id: "u" },
           sessionId: "session",
           cacheRetention: "long",
@@ -156,6 +158,71 @@ describe("gateway protocol", () => {
     expect(() => parse(request({ id: "x".repeat(257) }))).toThrow("id is too long");
   });
 
+  it("parses web_search with and without options", () => {
+    expect(
+      parse({
+        version: 1,
+        type: "web_search",
+        id: "ws1",
+        token: TOKEN,
+        provider: "cursor",
+        modelId: "auto",
+        query: "foo",
+      }),
+    ).toStrictEqual({
+      version: 1,
+      type: "web_search",
+      id: "ws1",
+      token: TOKEN,
+      provider: "cursor",
+      modelId: "auto",
+      query: "foo",
+      options: {},
+    });
+    expect(
+      parse({
+        version: 1,
+        type: "web_search",
+        id: "ws2",
+        token: TOKEN,
+        provider: "cursor",
+        modelId: "auto",
+        query: "bar",
+        options: { maxTokens: 100, temperature: 0.2, samplingParams: { top_p: 0.9 } },
+      }),
+    ).toMatchObject({
+      options: { maxTokens: 100, temperature: 0.2, samplingParams: { top_p: 0.9 } },
+    });
+    expect(() =>
+      parse({
+        version: 1,
+        type: "web_search",
+        id: "ws3",
+        token: TOKEN,
+        provider: "cursor",
+        modelId: "auto",
+        query: "baz",
+        options: "bad",
+      }),
+    ).toThrow("options must be an object");
+    expect(() =>
+      parse({
+        version: 1,
+        type: "web_search",
+        id: "ws4",
+        token: TOKEN,
+        provider: "cursor",
+        modelId: "auto",
+        query: "qux",
+        options: { maxTokens: 0 },
+      }),
+    ).toThrow("positive integer");
+  });
+
+  it("omits empty samplingParams", () => {
+    expect(parse(request({ options: { samplingParams: {} } }))).toMatchObject({ options: {} });
+  });
+
   it("rejects malformed request fields and options", () => {
     expect(() => parse(request({ messages: {} }))).toThrow("messages must be an array");
     expect(() => parse(request({ tools: {} }))).toThrow("tools must be an array");
@@ -169,6 +236,12 @@ describe("gateway protocol", () => {
     expect(() => parse(request({ options: { maxTokens: 0 } }))).toThrow("positive integer");
     expect(() => parse(request({ options: { temperature: Number.POSITIVE_INFINITY } }))).toThrow(
       "temperature must be finite",
+    );
+    expect(() => parse(request({ options: { samplingParams: "bad" } }))).toThrow(
+      "samplingParams must be an object",
+    );
+    expect(() => parse(request({ options: { samplingParams: { top_p: "bad" } } }))).toThrow(
+      "samplingParams.top_p must be a finite number",
     );
     expect(() => parse(request({ options: { sessionId: "" } }))).toThrow("non-empty string");
     expect(() => parse(request({ options: { metadata: [] } }))).toThrow(

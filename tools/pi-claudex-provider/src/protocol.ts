@@ -1,10 +1,25 @@
 import { GatewayError } from "./errors.ts";
+import { isRecord, optionalSamplingParams } from "./sampling.ts";
+
+export { isRecord } from "./sampling.ts";
 
 export const PROTOCOL_VERSION = 1;
 export const CLAUDEX_ORIGIN = "claudex";
 const MAX_IDENTIFIER_LENGTH = 256;
-const REASONING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-const CACHE_RETENTIONS = new Set(["none", "short", "long"]);
+const REASONING_LEVELS = new Set<NonNullable<GatewayRequestOptions["reasoning"]>>([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
+const CACHE_RETENTIONS = new Set<NonNullable<GatewayRequestOptions["cacheRetention"]>>([
+  "none",
+  "short",
+  "long",
+]);
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -26,6 +41,7 @@ export interface GatewayRequestOptions {
   reasoning?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
   maxTokens?: number;
   temperature?: number;
+  samplingParams?: Record<string, number>;
   metadata?: JsonRecord;
   sessionId?: string;
   cacheRetention?: "none" | "short" | "long";
@@ -54,6 +70,7 @@ export interface WebSearchRequest extends ClientBase {
   provider: string;
   modelId: string;
   query: string;
+  options?: GatewayRequestOptions;
 }
 
 export type ClientMessage =
@@ -84,10 +101,6 @@ export interface WebSearchErrorMessage extends ServerMessage {
   provider: string;
   modelId: string;
   message: string;
-}
-
-export function isRecord(value: unknown): value is JsonRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function serverMessage(type: string, fields: JsonRecord = {}): ServerMessage {
@@ -135,17 +148,6 @@ function requiredArray(value: JsonRecord, key: string, requestId: string): unkno
   return result;
 }
 
-function optionalString(value: JsonRecord, key: string, requestId: string): string | undefined {
-  const result = value[key];
-  if (result === undefined) {
-    return undefined;
-  }
-  if (typeof result !== "string" || result.length === 0) {
-    throw new GatewayError(`Gateway option ${key} must be a non-empty string`, requestId);
-  }
-  return result;
-}
-
 function optionalPositiveInteger(
   value: JsonRecord,
   key: string,
@@ -176,53 +178,34 @@ function optionalFiniteNumber(
   return result;
 }
 
-function optionalEnum(
+function isMember<Allowed extends string>(
+  value: string,
+  allowed: ReadonlySet<Allowed>,
+): value is Allowed {
+  return [...allowed].some((item) => item === value);
+}
+
+function optionalEnum<Allowed extends string>(
   value: JsonRecord,
   key: string,
-  allowed: ReadonlySet<string>,
+  allowed: ReadonlySet<Allowed>,
   requestId: string,
-): string | undefined {
+): Allowed | undefined {
   const result = value[key];
   if (result === undefined) {
     return undefined;
   }
-  if (typeof result !== "string" || !allowed.has(result)) {
+  if (typeof result !== "string" || !isMember(result, allowed)) {
     throw new GatewayError(`Gateway option ${key} is invalid`, requestId);
   }
   return result;
 }
 
-function optionalReasoning(value: JsonRecord, id: string): GatewayRequestOptions["reasoning"] {
-  const reasoning = optionalEnum(value, "reasoning", REASONING_LEVELS, id);
-  if (
-    reasoning === "off" ||
-    reasoning === "minimal" ||
-    reasoning === "low" ||
-    reasoning === "medium"
-  ) {
-    return reasoning;
-  }
-  if (reasoning === "high" || reasoning === "xhigh" || reasoning === "max") {
-    return reasoning;
-  }
-  return undefined;
-}
-
-function optionalCacheRetention(
-  value: JsonRecord,
-  id: string,
-): GatewayRequestOptions["cacheRetention"] {
-  const retention = optionalEnum(value, "cacheRetention", CACHE_RETENTIONS, id);
-  if (retention === "none" || retention === "short" || retention === "long") {
-    return retention;
-  }
-  return undefined;
-}
-
 function parseSamplingOptions(value: JsonRecord, id: string): GatewayRequestOptions {
-  const reasoning = optionalReasoning(value, id);
+  const reasoning = optionalEnum(value, "reasoning", REASONING_LEVELS, id);
   const maxTokens = optionalPositiveInteger(value, "maxTokens", id);
   const temperature = optionalFiniteNumber(value, "temperature", id);
+  const samplingParams = optionalSamplingParams(value, id);
   const options: GatewayRequestOptions = {};
   if (reasoning !== undefined) {
     options.reasoning = reasoning;
@@ -233,12 +216,22 @@ function parseSamplingOptions(value: JsonRecord, id: string): GatewayRequestOpti
   if (temperature !== undefined) {
     options.temperature = temperature;
   }
+  if (samplingParams !== undefined) {
+    options.samplingParams = samplingParams;
+  }
   return options;
 }
 
 function parseSessionOptions(value: JsonRecord, id: string): GatewayRequestOptions {
-  const cacheRetention = optionalCacheRetention(value, id);
-  const sessionId = optionalString(value, "sessionId", id);
+  const cacheRetention = optionalEnum(value, "cacheRetention", CACHE_RETENTIONS, id);
+  const sessionIdRaw = value["sessionId"];
+  if (
+    sessionIdRaw !== undefined &&
+    (typeof sessionIdRaw !== "string" || sessionIdRaw.length === 0)
+  ) {
+    throw new GatewayError("Gateway option sessionId must be a non-empty string", id);
+  }
+  const sessionId = sessionIdRaw;
   const { metadata } = value;
   if (metadata !== undefined && !isRecord(metadata)) {
     throw new GatewayError("Gateway option metadata must be an object", id);
@@ -305,6 +298,10 @@ export function parseClientMessage(line: string): ClientMessage {
     return { version: PROTOCOL_VERSION, type, id, token: requiredString(value, "token") };
   }
   if (type === "web_search") {
+    const rawOptions = value["options"];
+    if (rawOptions !== undefined && !isRecord(rawOptions)) {
+      throw new GatewayError("Gateway request options must be an object", id);
+    }
     return {
       version: PROTOCOL_VERSION,
       type,
@@ -313,6 +310,7 @@ export function parseClientMessage(line: string): ClientMessage {
       provider: requiredIdentifier(value, "provider", id),
       modelId: requiredIdentifier(value, "modelId", id),
       query: requiredString(value, "query"),
+      options: isRecord(rawOptions) ? parseOptions(rawOptions, id) : {},
     };
   }
   if (type !== "request") {

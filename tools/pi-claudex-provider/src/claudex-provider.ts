@@ -1,4 +1,5 @@
 import type { ProviderConfig } from "@earendil-works/pi-coding-agent";
+import type { RefreshModelsContext } from "@earendil-works/pi-ai";
 import { loadClaudexModels } from "./claudex-models.ts";
 
 export const CLAUDEX_PROVIDER_ID = "claudex";
@@ -64,6 +65,7 @@ export async function createClaudexProviderConfig(
     api: "anthropic-messages",
     headers: { [CLAUDEX_ORIGIN_HEADER]: CLAUDEX_ORIGIN_VALUE },
     models,
-    refreshModels: async () => loadClaudexModels(settings.configPath),
+    refreshModels: async (context?: RefreshModelsContext) =>
+      loadClaudexModels(settings.configPath, context?.signal),
   };
 }

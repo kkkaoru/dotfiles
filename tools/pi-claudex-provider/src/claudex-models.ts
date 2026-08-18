@@ -106,8 +106,19 @@ function toProviderModel(candidate: ModelCandidate): ProviderModelConfig {
   };
 }
 
-export async function loadClaudexModels(configPath: string): Promise<ProviderModelConfig[]> {
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw new DOMException("Claudex model refresh was aborted", "AbortError");
+  }
+}
+
+export async function loadClaudexModels(
+  configPath: string,
+  signal?: AbortSignal,
+): Promise<ProviderModelConfig[]> {
+  throwIfAborted(signal);
   const text = await readFile(expandHome(configPath), "utf8");
+  throwIfAborted(signal);
   const parsed: unknown = JSON.parse(text);
   if (!isRecord(parsed)) {
     throw new Error("Claudex provider config must be a JSON object");

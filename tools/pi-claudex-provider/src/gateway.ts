@@ -1,3 +1,4 @@
+import type { Api, Model, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { streamDirectModel } from "./direct-stream.ts";
 import { errorMessage, GatewayError } from "./errors.ts";
@@ -124,26 +125,30 @@ export class GatewayConnection {
     await this.writer.write(serverMessage("models", { id: message.id, models }));
   }
 
-  private async webSearch(request: WebSearchRequest): Promise<void> {
+  private findModel(provider: string, modelId: string): Model<Api> | undefined {
     // eslint-disable-next-line unicorn/no-array-method-this-argument -- ModelRegistry.find
-    const model = this.registry.find(request.provider, request.modelId);
-    if (model === undefined) {
-      await this.sendWebSearchError(
-        request,
-        `Model not found: ${request.provider}/${request.modelId}`,
-      );
-      return;
+    const exact = this.registry.find(provider, modelId);
+    if (exact !== undefined) {
+      return exact;
     }
-    if (model.provider === "cursor") {
+    // Provider extensions may register models under a different provider name.
+    // Fall back to a provider-agnostic lookup so that delegate-pi web searches use Exa.
+    return this.registry.getAvailable().find((model) => model.id === modelId);
+  }
+
+  private async webSearch(request: WebSearchRequest): Promise<void> {
+    const model = this.findModel(request.provider, request.modelId);
+    if (model?.provider === "cursor") {
       await this.cursorWebSearch(request, model);
       return;
     }
-    await this.exaWebSearch(request, model);
+    // For all other providers, use Exa directly with the requested piProvider/modelId.
+    // This avoids a PiGateway fallback when the model is not yet in the registry.
+    await this.exaWebSearch(request, { provider: request.provider, id: request.modelId });
   }
 
   private async sendWebSearchError(request: WebSearchRequest, message: string): Promise<void> {
-    // eslint-disable-next-line unicorn/no-array-method-this-argument -- ModelRegistry.find
-    const model = this.registry.find(request.provider, request.modelId);
+    const model = this.findModel(request.provider, request.modelId);
     await this.writer.write(
       serverMessage("web_search_error", {
         id: request.id,
@@ -155,14 +160,21 @@ export class GatewayConnection {
     );
   }
 
-  private async cursorWebSearch(
-    request: WebSearchRequest,
-    model: { provider: string; id: string },
-  ): Promise<void> {
+  private async cursorWebSearch(request: WebSearchRequest, model: Model<Api>): Promise<void> {
+    if (!this.registry.hasConfiguredAuth(model)) {
+      await this.sendWebSearchError(
+        request,
+        `Authentication not configured for ${model.provider}/${model.id}`,
+      );
+      return;
+    }
     try {
-      const timeoutMs = 30_000;
-      const result = await Promise.race([
-        this.registry.complete(model as never, {
+      const maxTokens = request.options?.maxTokens;
+      const temperature = request.options?.temperature;
+      const samplingParams = request.options?.samplingParams;
+      const result = await this.registry.complete(
+        model,
+        {
           systemPrompt: "You are a helpful assistant with live web search capability.",
           messages: [
             {
@@ -172,17 +184,17 @@ export class GatewayConnection {
             },
           ],
           tools: [],
-        }),
-        new Promise<never>((_resolve, reject) => {
-          setTimeout(
-            () => reject(new Error(`Cursor search timed out after ${timeoutMs}ms`)),
-            timeoutMs,
-          );
-        }),
-      ]);
+        },
+        {
+          signal: AbortSignal.timeout(30_000),
+          ...(maxTokens !== undefined && { maxTokens }),
+          ...(temperature !== undefined && { temperature }),
+          ...(samplingParams !== undefined && { samplingParams }),
+        },
+      );
       const fullText = result.content
-        .filter((block) => block.type === "text" && "text" in block)
-        .map((block) => (block as { text: string }).text)
+        .filter((block): block is TextContent => block.type === "text")
+        .map((block) => block.text)
         .join("\n");
       const parsed = parseSearchTriplets(fullText);
       await this.writer.write(

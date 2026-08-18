@@ -70,6 +70,9 @@ function applyRequestOptions(options: SimpleStreamOptions, request: StreamReques
   if (requestOptions.temperature !== undefined) {
     options.temperature = requestOptions.temperature;
   }
+  if (requestOptions.samplingParams !== undefined) {
+    options.samplingParams = requestOptions.samplingParams;
+  }
   if (requestOptions.metadata !== undefined) {
     options.metadata = requestOptions.metadata;
   }

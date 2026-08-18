@@ -285,30 +285,39 @@ describe("web_search handler", () => {
     }
   });
 
-  it("returns error when model is not found", async () => {
-    const messages: ServerMessage[] = [];
-    const reg = {
-      getAvailable: () => [],
-      find: () => undefined,
-    } as unknown as ExtensionContext["modelRegistry"];
-    const gateway = new GatewayConnection(reg, {
-      write: async (message) => {
-        messages.push(message);
-      },
-    });
-    gateway.handle({
-      version: 1,
-      type: "web_search",
-      id: "ws2",
-      token: TOKEN,
-      provider: "nonexistent",
-      modelId: "missing",
-      query: "test",
-    });
-    await settle();
-    expect(messages).toHaveLength(1);
-    expect(messages[0]?.type).toBe("web_search_error");
-    expect((messages[0] as Record<string, unknown>)["message"]).toContain("Model not found");
+  it("falls back to provider-agnostic Exa search when the exact provider/model is not registered", async () => {
+    const originalKey = process.env["EXA_API_KEY"];
+    delete process.env["EXA_API_KEY"];
+    try {
+      const messages: ServerMessage[] = [];
+      const reg = {
+        getAvailable: () => [{ ...MODEL, provider: "claudex" }],
+        find: (provider: string, modelId: string) =>
+          provider === MODEL.provider && modelId === MODEL.id ? MODEL : undefined,
+      } as unknown as ExtensionContext["modelRegistry"];
+      const gateway = new GatewayConnection(reg, {
+        write: async (message) => {
+          messages.push(message);
+        },
+      });
+      gateway.handle({
+        version: 1,
+        type: "web_search",
+        id: "ws2",
+        token: TOKEN,
+        provider: "xai",
+        modelId: MODEL.id,
+        query: "test",
+      });
+      await settle();
+      expect(messages).toHaveLength(1);
+      expect(messages[0]?.type).toBe("web_search_error");
+      expect((messages[0] as Record<string, unknown>)["message"]).toContain("EXA_API_KEY");
+    } finally {
+      if (originalKey !== undefined) {
+        process.env["EXA_API_KEY"] = originalKey;
+      }
+    }
   });
 
   it("calls complete() and parses results for cursor provider", async () => {
@@ -327,6 +336,7 @@ describe("web_search handler", () => {
       getAvailable: () => [cursorModel],
       find: (provider: string, modelId: string) =>
         provider === "cursor" && modelId === "auto" ? cursorModel : undefined,
+      hasConfiguredAuth: () => true,
       complete: completeMock,
     } as unknown as ExtensionContext["modelRegistry"];
     const messages: ServerMessage[] = [];
@@ -346,6 +356,54 @@ describe("web_search handler", () => {
     });
     await settle();
     expect(completeMock).toHaveBeenCalledTimes(1);
+    expect(completeMock.mock.calls[0]?.[2]).toMatchObject({
+      signal: expect.any(AbortSignal),
+    });
+  });
+
+  it("forwards maxTokens and temperature to complete() for cursor web search", async () => {
+    const cursorModel = { ...MODEL, provider: "cursor", id: "auto" };
+    const completeMock = vi.fn().mockResolvedValue({
+      content: [
+        {
+          type: "text",
+          text: ["Title: Test Result", "URL: https://example.com", "Snippet: A test snippet"].join(
+            "\n",
+          ),
+        },
+      ],
+    });
+    const reg = {
+      getAvailable: () => [cursorModel],
+      find: (provider: string, modelId: string) =>
+        provider === "cursor" && modelId === "auto" ? cursorModel : undefined,
+      hasConfiguredAuth: () => true,
+      complete: completeMock,
+    } as unknown as ExtensionContext["modelRegistry"];
+    const messages: ServerMessage[] = [];
+    const gateway = new GatewayConnection(reg, {
+      write: async (message) => {
+        messages.push(message);
+      },
+    });
+    gateway.handle({
+      version: 1,
+      type: "web_search",
+      id: "ws4",
+      token: TOKEN,
+      provider: "cursor",
+      modelId: "auto",
+      query: "bitcoin price",
+      options: { maxTokens: 1024, temperature: 0.5, samplingParams: { top_p: 0.9 } },
+    });
+    await settle();
+    expect(completeMock).toHaveBeenCalledTimes(1);
+    expect(completeMock.mock.calls[0]?.[2]).toMatchObject({
+      maxTokens: 1024,
+      temperature: 0.5,
+      samplingParams: { top_p: 0.9 },
+      signal: expect.any(AbortSignal),
+    });
     expect(messages).toHaveLength(1);
     expect(messages[0]?.type).toBe("web_search_result");
     const result = messages[0] as Record<string, unknown>;
@@ -356,6 +414,39 @@ describe("web_search handler", () => {
     expect(results[0]?.title).toBe("Test Result");
     expect(results[0]?.url).toBe("https://example.com");
   });
+
+  it("returns error when cursor authentication is not configured", async () => {
+    const cursorModel = { ...MODEL, provider: "cursor", id: "auto" };
+    const reg = {
+      getAvailable: () => [cursorModel],
+      find: (provider: string, modelId: string) =>
+        provider === "cursor" && modelId === "auto" ? cursorModel : undefined,
+      hasConfiguredAuth: () => false,
+      complete: vi.fn(),
+    } as unknown as ExtensionContext["modelRegistry"];
+    const messages: ServerMessage[] = [];
+    const gateway = new GatewayConnection(reg, {
+      write: async (message) => {
+        messages.push(message);
+      },
+    });
+    gateway.handle({
+      version: 1,
+      type: "web_search",
+      id: "ws-cursor-auth",
+      token: TOKEN,
+      provider: "cursor",
+      modelId: "auto",
+      query: "bitcoin price",
+    });
+    await settle();
+    expect(reg.complete).not.toHaveBeenCalled();
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.type).toBe("web_search_error");
+    expect((messages[0] as Record<string, unknown>)["message"]).toContain(
+      "Authentication not configured",
+    );
+  });
 });
 
 it("returns error when cursor complete() throws", async () => {
@@ -365,6 +456,7 @@ it("returns error when cursor complete() throws", async () => {
     getAvailable: () => [cursorModel],
     find: (prov: string, mid: string) =>
       prov === "cursor" && mid === "auto" ? cursorModel : undefined,
+    hasConfiguredAuth: () => true,
     complete: completeMock,
   } as unknown as ExtensionContext["modelRegistry"];
   const messages: ServerMessage[] = [];
