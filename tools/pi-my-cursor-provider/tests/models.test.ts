@@ -1,12 +1,15 @@
 import type { SDKModel } from "@cursor/sdk";
 import type { RefreshModelsContext } from "@earendil-works/pi-ai";
-import { expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import {
   cursorCatalogToModels,
   cursorModelSelection,
+  cursorModelsTestApi,
   FALLBACK_CURSOR_MODELS,
+  loadCursorCatalog,
   recordCursorCatalog,
   refreshCursorModels,
+  saveCursorCatalog,
 } from "../src/models.ts";
 
 const CATALOG: SDKModel[] = [
@@ -54,6 +57,10 @@ function refreshContext(overrides: Partial<RefreshModelsContext> = {}): RefreshM
   };
 }
 
+beforeEach(async () => {
+  await cursorModelsTestApi.resetCache();
+});
+
 test("provides multiple useful fallback models", () => {
   expect(FALLBACK_CURSOR_MODELS.map((model) => model.id)).toStrictEqual([
     "auto",
@@ -61,7 +68,8 @@ test("provides multiple useful fallback models", () => {
     "claude-sonnet-4-6",
     "claude-opus-5",
     "gpt-5.6-sol",
-    "gpt-5.6-luna-max",
+    "gpt-5.6-luna",
+    "gpt-5.6-terra",
     "gpt-5.4",
     "gemini-3.1-pro",
     "grok-4.6",
@@ -70,8 +78,24 @@ test("provides multiple useful fallback models", () => {
   ]);
   expect(FALLBACK_CURSOR_MODELS).toContainEqual(
     expect.objectContaining({
-      id: "gpt-5.6-luna-max",
-      name: "GPT-5.6 Luna 1M Max",
+      id: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol",
+      contextWindow: 800_000,
+      reasoning: true,
+    }),
+  );
+  expect(FALLBACK_CURSOR_MODELS).toContainEqual(
+    expect.objectContaining({
+      id: "gpt-5.6-luna",
+      name: "GPT-5.6 Luna",
+      contextWindow: 800_000,
+      reasoning: true,
+    }),
+  );
+  expect(FALLBACK_CURSOR_MODELS).toContainEqual(
+    expect.objectContaining({
+      id: "gpt-5.6-terra",
+      name: "GPT-5.6 Terra",
       contextWindow: 800_000,
       reasoning: true,
     }),
@@ -157,4 +181,43 @@ test("fetches the authenticated live catalog", async () => {
 
   expect(list).toHaveBeenCalledWith({ apiKey: "key" });
   expect(models.map((model) => model.id)).toStrictEqual(["auto", "gpt-5.6-sol"]);
+});
+
+test("saves and loads the catalog cache", async () => {
+  await saveCursorCatalog("key", CATALOG);
+  const cached = await loadCursorCatalog();
+  expect(cached).toStrictEqual(CATALOG);
+});
+
+test("uses a fresh cached catalog when network is not allowed", async () => {
+  await saveCursorCatalog("key", CATALOG);
+
+  const models = await refreshCursorModels(refreshContext());
+
+  expect(models.map((model) => model.id)).toStrictEqual(["auto", "gpt-5.6-sol"]);
+});
+
+test("uses a fresh cached catalog for model selection without a network call", async () => {
+  const cursor = await import("@cursor/sdk");
+  const list = vi.spyOn(cursor.Cursor.models, "list").mockResolvedValue(CATALOG);
+  await saveCursorCatalog("key", CATALOG);
+
+  const model = await cursorModelSelection("gpt-5.6-sol", "high", "key");
+
+  expect(list).not.toHaveBeenCalled();
+  expect(model).toMatchObject({
+    id: "gpt-5.6-sol",
+    params: expect.arrayContaining([{ id: "reasoning", value: "high" }]),
+  });
+});
+
+test("falls back to hardcoded models when the cache is stale and network is not allowed", async () => {
+  const now = Date.now();
+  vi.spyOn(Date, "now").mockReturnValue(now - 2 * 60 * 60 * 1000);
+  await saveCursorCatalog("key", CATALOG);
+  vi.restoreAllMocks();
+
+  const models = await refreshCursorModels(refreshContext());
+
+  expect(models).toStrictEqual(FALLBACK_CURSOR_MODELS);
 });

@@ -1,6 +1,12 @@
 import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
-import { expect, test, vi } from "vitest";
+import { beforeEach, expect, test, vi } from "vitest";
 import cursorExtension from "../index.ts";
+import { cursorPlatformTestApi } from "../src/platform.ts";
+
+beforeEach(() => {
+  cursorPlatformTestApi.reset();
+  cursorPlatformTestApi.setEnabled(false);
+});
 
 test("registers the compatible Cursor provider catalog", () => {
   const registerProvider = vi.fn();
@@ -22,7 +28,8 @@ test("registers the compatible Cursor provider catalog", () => {
     "claude-sonnet-4-6",
     "claude-opus-5",
     "gpt-5.6-sol",
-    "gpt-5.6-luna-max",
+    "gpt-5.6-luna",
+    "gpt-5.6-terra",
     "gpt-5.4",
     "gemini-3.1-pro",
     "grok-4.6",

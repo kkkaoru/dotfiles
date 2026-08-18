@@ -1,6 +1,10 @@
 import { Cursor, type ModelParameterValue, type ModelSelection, type SDKModel } from "@cursor/sdk";
 import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import type { Credential, RefreshModelsContext, ThinkingLevel } from "@earendil-works/pi-ai";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
 const DEFAULT_CONTEXT_WINDOW = 256_000;
 const DEFAULT_MAX_TOKENS = 16_384;
@@ -21,6 +25,10 @@ const EFFORT_PREFERENCES: Record<ThinkingLevel, readonly string[]> = {
   xhigh: ["xhigh", "max", "high"],
   max: ["max", "xhigh", "high"],
 };
+const CATALOG_CACHE_VERSION = "v1";
+const CATALOG_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const CATALOG_CACHE_DIR = join(homedir(), ".cache", "pi-my-cursor-provider");
+const CATALOG_CACHE_PATH = join(CATALOG_CACHE_DIR, "catalog.json");
 
 interface EffortCapability {
   readonly defaults: readonly ModelParameterValue[];
@@ -40,6 +48,13 @@ interface CatalogState {
   load: Promise<void> | undefined;
 }
 
+interface CatalogCache {
+  version: string;
+  timestamp: number;
+  apiKeyHash: string;
+  catalog: SDKModel[];
+}
+
 const effortCapabilities = new Map<string, EffortCapability>();
 const warnedUnsupportedEffort = new Set<string>();
 const catalogState: CatalogState = { loaded: false, load: undefined };
@@ -49,10 +64,21 @@ const FALLBACK_MODELS: readonly FallbackModel[] = [
   { id: "composer-2.5", name: "Composer 2.5" },
   { id: "claude-sonnet-4-6", name: "Sonnet 4.6" },
   { id: "claude-opus-5", name: "Opus 5" },
-  { id: "gpt-5.6-sol", name: "GPT-5.6 Sol" },
   {
-    id: "gpt-5.6-luna-max",
-    name: "GPT-5.6 Luna 1M Max",
+    id: "gpt-5.6-sol",
+    name: "GPT-5.6 Sol",
+    contextWindow: 1_000_000,
+    reasoning: true,
+  },
+  {
+    id: "gpt-5.6-luna",
+    name: "GPT-5.6 Luna",
+    contextWindow: 1_000_000,
+    reasoning: true,
+  },
+  {
+    id: "gpt-5.6-terra",
+    name: "GPT-5.6 Terra",
     contextWindow: 1_000_000,
     reasoning: true,
   },
@@ -130,14 +156,52 @@ function warnUnsupportedEffort(modelId: string, effort: ThinkingLevel): void {
   );
 }
 
+function hashApiKey(apiKey: string): string {
+  return createHash("sha256").update(apiKey).digest("hex");
+}
+
+export async function saveCursorCatalog(
+  apiKey: string,
+  catalog: readonly SDKModel[],
+): Promise<void> {
+  const cache: CatalogCache = {
+    version: CATALOG_CACHE_VERSION,
+    timestamp: Date.now(),
+    apiKeyHash: hashApiKey(apiKey),
+    catalog: [...catalog],
+  };
+  await mkdir(CATALOG_CACHE_DIR, { recursive: true });
+  await writeFile(CATALOG_CACHE_PATH, JSON.stringify(cache), "utf8");
+}
+
+export async function loadCursorCatalog(): Promise<readonly SDKModel[] | undefined> {
+  try {
+    const raw = await readFile(CATALOG_CACHE_PATH, "utf8");
+    const parsed = JSON.parse(raw) as CatalogCache;
+    if (parsed.version !== CATALOG_CACHE_VERSION) return undefined;
+    if (Date.now() - parsed.timestamp > CATALOG_CACHE_TTL_MS) return undefined;
+    return parsed.catalog;
+  } catch {
+    return undefined;
+  }
+}
+
 async function ensureCursorCatalog(apiKey: string | undefined): Promise<void> {
   if (catalogState.loaded) return;
-  catalogState.load ??= Cursor.models
-    .list(apiKey ? { apiKey } : undefined)
-    .then(recordCursorCatalog)
-    .finally(() => {
-      catalogState.load = undefined;
-    });
+  catalogState.load ??= (async () => {
+    const cached = await loadCursorCatalog();
+    if (cached) {
+      recordCursorCatalog(cached);
+      return;
+    }
+    const catalog = await Cursor.models.list(apiKey ? { apiKey } : undefined);
+    recordCursorCatalog(catalog);
+    if (apiKey) {
+      await saveCursorCatalog(apiKey, catalog).catch(() => undefined);
+    }
+  })().finally(() => {
+    catalogState.load = undefined;
+  });
   await catalogState.load;
 }
 
@@ -187,11 +251,29 @@ export async function refreshCursorModels(
   context: RefreshModelsContext,
 ): Promise<ProviderModelConfig[]> {
   const apiKey = credentialApiKey(context.credential);
-  if (!context.allowNetwork || !apiKey) return FALLBACK_CURSOR_MODELS;
+  if (!context.allowNetwork || !apiKey) {
+    const cached = await loadCursorCatalog();
+    if (cached) {
+      recordCursorCatalog(cached);
+      return cursorCatalogToModels(cached);
+    }
+    return FALLBACK_CURSOR_MODELS;
+  }
   context.signal.throwIfAborted();
   const catalog = await Cursor.models.list({ apiKey });
   context.signal.throwIfAborted();
   if (catalog.length === 0) return FALLBACK_CURSOR_MODELS;
   recordCursorCatalog(catalog);
+  await saveCursorCatalog(apiKey, catalog).catch(() => undefined);
   return cursorCatalogToModels(catalog);
 }
+
+export const cursorModelsTestApi = {
+  async resetCache(): Promise<void> {
+    catalogState.loaded = false;
+    catalogState.load = undefined;
+    effortCapabilities.clear();
+    warnedUnsupportedEffort.clear();
+    await rm(CATALOG_CACHE_PATH, { force: true });
+  },
+};
