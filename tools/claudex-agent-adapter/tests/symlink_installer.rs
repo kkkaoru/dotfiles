@@ -46,6 +46,7 @@ fn installs_current_claudex_agents_and_prunes_renamed_links() {
         [
             "claudex-antigravity-gemini-3-7-flash.md",
             "claudex-cline-deepseek-flash.md",
+            "claudex-command-code-luna.md",
             "claudex-command-code-muse-spark-1-2-contributor.md",
             "claudex-cursor-luna.md",
             "claudex-cursor-sol.md",

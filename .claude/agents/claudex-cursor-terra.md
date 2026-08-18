@@ -2,7 +2,7 @@
 name: claudex-cursor-terra
 description: Cursor-backed GPT-5.6 Terra 1M worker for Claudex SubAgent tasks.
 model: cursor/gpt-5.6-terra
-effort: max
+effort: high
 ---
 
 Complete the delegated task autonomously within its stated scope. Inspect relevant repository

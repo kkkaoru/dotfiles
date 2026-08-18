@@ -167,6 +167,7 @@ fn configured_worker_routes_are_command_capable() {
         ("cursor-luna", "pi-gateway"),
         ("cursor-sol", "pi-gateway"),
         ("cursor-terra", "pi-gateway"),
+        ("command-code-luna", "pi-gateway"),
         ("devin", "pi-gateway"),
     ] {
         let provider = providers
@@ -225,6 +226,33 @@ fn configured_worker_routes_are_command_capable() {
             "{id} must be a main-provider candidate"
         );
     }
+
+    let command_code_luna_provider = providers
+        .iter()
+        .find(|provider| provider["id"] == "command-code-luna")
+        .expect("Command Code Luna provider");
+    assert_eq!(
+        command_code_luna_provider["agent"],
+        "claudex-command-code-luna"
+    );
+    assert_eq!(
+        command_code_luna_provider["defaultModel"],
+        "commandcode/gpt-5.6-luna"
+    );
+    assert_eq!(
+        command_code_luna_provider["subagentModel"],
+        "commandcode/gpt-5.6-luna"
+    );
+    assert_eq!(
+        command_code_luna_provider["modelPrefixes"],
+        json!(["commandcode/gpt-5.6-luna"])
+    );
+    assert_eq!(command_code_luna_provider["piProvider"], "commandcode");
+    assert_eq!(command_code_luna_provider["piModel"], "gpt-5.6-luna");
+    assert_eq!(command_code_luna_provider["effort"], "max");
+    assert_eq!(command_code_luna_provider["maxContextTokens"], 800000);
+    assert_eq!(command_code_luna_provider.get("acp"), None);
+    assert_eq!(command_code_luna_provider["backend"], "pi-gateway");
 
     let devin_provider = providers
         .iter()

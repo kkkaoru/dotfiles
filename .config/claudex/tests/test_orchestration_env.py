@@ -171,7 +171,7 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
                         "id": "grok",
                         "agent": "claudex-grok",
                         "defaultModel": "grok-4.6",
-                        "effort": "high",
+                        "effort": "medium",
                         "maxContextTokens": 500000,
                         "modelPrefixes": ["grok"],
                         "backend": "grok-acp",

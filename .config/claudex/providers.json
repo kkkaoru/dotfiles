@@ -1,7 +1,7 @@
 {
   "version": 1,
   "piGatewayExtension": "../../tools/pi-claudex-provider/index.ts",
-  "mainProviders": ["codex", "codex-spark", "grok", "fugu", "ollama-glm-5-2", "opencode-go", "command-code", "cursor", "cursor-luna", "cursor-sol", "cursor-terra"],
+  "mainProviders": ["codex", "codex-spark", "grok", "fugu", "ollama-glm-5-2", "opencode-go", "command-code", "command-code-luna", "cursor", "cursor-luna", "cursor-sol", "cursor-terra"],
   "providers": [
     {
       "id": "codex",
@@ -86,7 +86,7 @@
       "defaultModel": "grok-4.6",
       "piProvider": "xai",
       "piModel": "grok-4.6",
-      "effort": "high",
+      "effort": "medium",
       "maxContextTokens": 500000,
       "enabled": true,
       "usageProvider": "grok",
@@ -228,7 +228,7 @@
       "piExtensions": [
         "../../tools/pi-my-cursor-provider/index.ts"
       ],
-      "effort": "max",
+      "effort": "high",
       "maxContextTokens": 800000,
       "enabled": true,
       "usageProvider": "cursor",
@@ -251,7 +251,7 @@
       "piExtensions": [
         "../../tools/pi-my-cursor-provider/index.ts"
       ],
-      "effort": "max",
+      "effort": "high",
       "maxContextTokens": 800000,
       "enabled": true,
       "usageProvider": "cursor",
@@ -299,6 +299,29 @@
       "usageProvider": "commandcode",
       "modelPrefixes": [
         "meta/muse-spark"
+      ],
+      "backend": "pi-gateway",
+      "webSearchMode": "delegate-pi"
+    },
+    {
+      "id": "command-code-luna",
+      "agent": "claudex-command-code-luna",
+      "defaultModel": "commandcode/gpt-5.6-luna",
+      "subagentModel": "commandcode/gpt-5.6-luna",
+      "piProvider": "commandcode",
+      "piModel": "gpt-5.6-luna",
+      "piExtensions": [
+        "~/.pi/agent/npm/node_modules/pi-commandcode-provider/index.ts"
+      ],
+      "effort": "max",
+      "maxContextTokens": 800000,
+      "enabled": true,
+      "usageProvider": "commandcode",
+      "modelPrefixes": [
+        "commandcode/gpt-5.6-luna"
+      ],
+      "selectableModels": [
+        "commandcode/gpt-5.6-luna"
       ],
       "backend": "pi-gateway",
       "webSearchMode": "delegate-pi"

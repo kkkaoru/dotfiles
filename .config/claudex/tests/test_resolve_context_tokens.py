@@ -30,6 +30,11 @@ class ResolveContextTokensTests(unittest.TestCase):
         ]:
             self.assertEqual(self.resolve(str(PROVIDERS), model), "800000", model)
 
+    def test_command_code_luna_uses_eight_hundred_thousand_window(self) -> None:
+        self.assertEqual(
+            self.resolve(str(PROVIDERS), "commandcode/gpt-5.6-luna"), "800000"
+        )
+
     def test_cursor_auto_uses_two_hundred_thousand_window(self) -> None:
         for model in ["auto", "claude-claudex-auto"]:
             self.assertEqual(self.resolve(str(PROVIDERS), model), "200000", model)

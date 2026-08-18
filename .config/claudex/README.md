@@ -36,6 +36,7 @@ flowchart LR
     Hook --> CursorTerra[claudex-cursor-terra\ncursor/gpt-5.6-terra\nPi gateway]
     Hook --> ClineDs[claudex-cline-deepseek-flash\nPi gateway]
     Hook --> CommandCode[claudex-command-code-muse-spark-1-2-contributor\ncmd -p Muse Spark Contributor]
+    Hook --> CommandCodeLuna[claudex-command-code-luna\ncommandcode/gpt-5.6-luna\nPi gateway]
     Hook --> Sonnet[claudex-sonnet\nclaude-sonnet-5]
     Hook --> Fallback[claudex-sonnet\nClaude fallback]
     Orchestrator -. 標準機能 .-> BuiltinAdvisor[Claude Code advisor()\nadvisorModel: opus]
@@ -51,16 +52,17 @@ flowchart LR
 | Codex Spark worker | `claudex-gpt-spark` | `gpt-5.3-codex-spark` | `xhigh` | CodexBar `codex` の `extraRateWindows` `codex-spark-weekly` 残量（通常の Codex weekly とは別）。枯渇時は選択されない |
 | Fugu worker | `claudex-fugu` | `fugu` | `high` | CodexBarのSakana枠に空きがある場合 |
 | Ollama GLM worker | `claudex-ollama-glm-5-2` | `glm-5.2:cloud` | `max` | CodexBarのOllama枠に空きがある場合 |
-| Grok worker | `claudex-grok` | `grok-4.6` | `high` | Grokに空きがある場合 |
+| Grok worker | `claudex-grok` | `grok-4.6` | `medium` | Grokに空きがある場合 |
 | Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | CodexBarの `qwencloud` 枠に空きがあり、モデル同時実行数の上限内の場合 |
 | DeepSeek Pro worker | `claudex-deepseek-pro` | `opencode-go/deepseek-v4-pro` | `max` | CodexBarのOpenCode Go枠に空きがある場合。Flashとは別agent/model |
 | DeepSeek Flash worker | `claudex-deepseek-flash` | `opencode-go/deepseek-v4-flash` | `max` | CodexBarのOpenCode Go枠に空きがあり、denylistに無い場合（このマシンでは無効化維持） |
 | OpenCode GPT Luna worker | `claudex-opencode-gpt` | `opencode-go/gpt-5.6-luna` | `max` | CodexBarのOpenCode Go枠に空きがある場合。Codexの `gpt-5.6-luna` / `claudex-gpt` とは別route |
 | Cursor worker | `claudex-cursor` | `auto` | `high` | CodexBarのCursor枠に空きがある場合。`cursor-agent --model auto --yolo acp`。modelはCLI+session/newで固定し、毎turnの `set_session_model` 再選択はしない |
 | Cursor Luna worker | `claudex-cursor-luna` | `cursor/gpt-5.6-luna` | `max` | Cursor PiGateway の GPT-5.6 Luna。Cursorの1M variantに合わせ、80%（`800000`）を入力上限として安全側に広告 |
-| Cursor Sol worker | `claudex-cursor-sol` | `cursor/gpt-5.6-sol` | `max` | Cursor PiGateway の GPT-5.6 Sol。1M variantに合わせ、80%（`800000`）を入力上限として安全側に広告 |
-| Cursor Terra worker | `claudex-cursor-terra` | `cursor/gpt-5.6-terra` | `max` | Cursor PiGateway の GPT-5.6 Terra。1M variantに合わせ、80%（`800000`）を入力上限として安全側に広告 |
+| Cursor Sol worker | `claudex-cursor-sol` | `cursor/gpt-5.6-sol` | `high` | Cursor PiGateway の GPT-5.6 Sol。1M variantに合わせ、80%（`800000`）を入力上限として安全側に広告 |
+| Cursor Terra worker | `claudex-cursor-terra` | `cursor/gpt-5.6-terra` | `high` | Cursor PiGateway の GPT-5.6 Terra。1M variantに合わせ、80%（`800000`）を入力上限として安全側に広告 |
 | Cline DeepSeek Flash worker | `claudex-cline-deepseek-flash` | `cline-pass/deepseek-v4-flash` | `xhigh` | ClinePass枠（CodexBar `clinepass` weekly left）。`--thinking xhigh`。OpenCode Go DeepSeekとは別 |
+| Command Code GPT Luna worker | `claudex-command-code-luna` | `commandcode/gpt-5.6-luna` | `max` | Command Code Provider API の GPT-5.6 Luna。1M variantに合わせ、80%（`800000`）を入力上限として安全側に広告。Codex/OpenCode/Cursor Lunaとは別route |
 | Command Code Muse Spark Contributor worker | `claudex-command-code-muse-spark-1-2-contributor` | `meta/muse-spark-1.2-contributor` | `high` | 自動 `selected_workers` 候補。CodexBar `commandcode` の weekly / 5h left で順位付け。agent slug に Muse Spark 1.2 と contributor を含める（将来の Command Code 他モデルと区別）。公式 `cmd -p` を `command-code-acp` が ACP 化し、既存 `configured-acp` で起動。Provider API / Meta 直接APIは使わない |
 | Antigravity Gemini Flash worker | `claudex-antigravity-gemini-3-7-flash` | `gemini-3.7-flash` | `high` | Pi provider `antigravity`。`webSearchMode` は実測まで `disabled`。CodexBar usage 枠は未接続 |
 | Sonnet worker | `claudex-sonnet` | `claude-sonnet-5` | `high` | CodexBarのClaude枠（`usageProvider: claude`）残量。`claudex-haiku-search` と同じClaude usage leftを参照。outerがSonnet 5のときは同一modelの自動選択を抑制（明示起動と `CLAUDEX_ALLOW_SONNET_SUBAGENT=1` は可） |
@@ -94,10 +96,10 @@ permission contextを継承します。調査・reviewという役割だけを�
 background SubAgentはClaude Codeの仕様上、main sessionで対話確認できる未承認操作を自動拒否
 するため、その可能性がある作業はforegroundで委譲します。main sessionを
 `--dangerously-skip-permissions` で起動した場合、そのmodeはSubAgentにも優先して継承されます。
-Grok ACPの `grok-4.6` / `high` routeは
-`grok --model grok-4.6 --reasoning-effort high agent --always-approve stdio` として起動します。
+Grok ACPの `grok-4.6` / `medium` routeは
+`grok --model grok-4.6 --reasoning-effort medium agent --always-approve stdio` として起動します。
 このnative Grok routeでは、adapterが解決してlogへ出すobservable effortも常に設定済みlaunch
-effortの `high` です。適用されないrequest-level effortをturn固有値として表示しません。
+effortの `medium` です。適用されないrequest-level effortをturn固有値として表示しません。
 `configured-acp` のOpenCodeはこの正規化の対象外で、従来どおりACP session configでeffortを
 設定します。
 Qwen ACPは `--approval-mode yolo` を明示し、provider自身の
@@ -326,8 +328,8 @@ brew install --cask claude-code codex codexbar
   `codexbar` コマンドが見つからない場合は、同READMEのCLI tarballまたはCLI install手順も
   実行してください。
 - Grok Build CLIは利用可能な配布元からインストールし、`grok login` を実行します。
-  このadapterの `grok-4.6` / `high` routeは
-  `grok --model grok-4.6 --reasoning-effort high agent --always-approve stdio` のACP接続を使用します。
+  このadapterの `grok-4.6` / `medium` routeは
+  `grok --model grok-4.6 --reasoning-effort medium agent --always-approve stdio` のACP接続を使用します。
   GrokはClaude互換hookのstdinを閉じないため、adapterはchildに `CLAUDEX_GROK_ACP=1` を渡し、
   `SessionStart` のClaude専用Herdr通知を入力読取前にskipします。これにより各sessionの10秒timeoutと
   timeout後に残るhook processを防ぎます。
@@ -472,6 +474,7 @@ Pi経由では `providers.json` の `piProvider` / `piModel` に従って
 | `opencode-go/deepseek-v4-pro` | `opencode-go` | `deepseek-v4-pro` |
 | `opencode-go/deepseek-v4-flash` | `opencode-go` | `deepseek-v4-flash` |
 | `opencode-go/gpt-5.6-luna` | `opencode-go` | `gpt-5.6-luna` |
+| `commandcode/gpt-5.6-luna` | `commandcode` | `gpt-5.6-luna` |
 | `meta/muse-spark-1.2-contributor` | `commandcode` | `meta/muse-spark-1.2-contributor` |
 
 Pi は同じ orchestration developer instructions をsystem末尾へ追加します。その85%以上は
@@ -728,12 +731,14 @@ CLAUDEX_MODEL=gpt-5.6-terra claudex
 CLAUDEX_MODEL=cursor/gpt-5.6-luna claudex
 CLAUDEX_MODEL=cursor/gpt-5.6-sol claudex
 CLAUDEX_MODEL=cursor/gpt-5.6-terra claudex
+CLAUDEX_MODEL=commandcode/gpt-5.6-luna claudex
 CLAUDEX_MODEL=qwen3.8-max-preview claudex
 ```
 
 `gpt-5.6-terra` は Codex `codex` provider、`cursor/gpt-5.6-luna`、
 `cursor/gpt-5.6-sol`、`cursor/gpt-5.6-terra` は Cursor の main `/model` 候補
-（`selectableModels`）です。Cursorモデルは namespaced ID にしてCodexの
+（`selectableModels`）です。`commandcode/gpt-5.6-luna` は Command Code Provider API の
+main候補です。Cursorモデルは namespaced ID にしてCodexの
 `gpt-5.6-luna` / `gpt-5.6-terra` と衝突しないようにしています。
 自動 SubAgent は従来どおり `gpt-5.6-luna` / `claudex-gpt` です。Terra を outer にしても
 main は実装せず、実質作業は Agent/Task で worker へ委譲します。Terra を outer にする場合は
@@ -943,7 +948,7 @@ recipientを動的に選びます。既存の `agentId` / `agent_id` は
 provider routeの代表modelは `providers.json` の `defaultModel`、workerを別modelへ固定する
 場合は `subagentModel` を変更します。同じproviderで `/model` に出したい追加main候補は
 `selectableModels` に列挙します（例: Codex の `gpt-5.6-terra`）。Cursorの `cursor/gpt-5.6-luna` / `cursor/gpt-5.6-sol` /
-`cursor/gpt-5.6-terra` は明示worker routeとして登録します。これは広告専用で、新しい
+`cursor/gpt-5.6-terra` と Command Code の `commandcode/gpt-5.6-luna` は明示worker routeとして登録します。これは広告専用で、新しい
 SubAgent / worker は作りません。main sessionのmodelは `.claude/settings.json` または
 `CLAUDEX_MODEL` からClaude Code requestへ入り、その実modelがauthoritativeです。同じproviderで
 将来追加されるモデルを動的に受け入れる場合は `modelPrefixes` を維持または追加します。

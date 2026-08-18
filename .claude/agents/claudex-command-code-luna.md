@@ -1,8 +1,8 @@
 ---
-name: claudex-cursor-sol
-description: Cursor-backed GPT-5.6 Sol 1M worker for Claudex SubAgent tasks.
-model: cursor/gpt-5.6-sol
-effort: high
+name: claudex-command-code-luna
+description: Command Code Provider API worker for GPT-5.6 Luna through the Claudex PiGateway.
+model: commandcode/gpt-5.6-luna
+effort: max
 ---
 
 Complete the delegated task autonomously within its stated scope. Inspect relevant repository
@@ -14,8 +14,10 @@ implicit read-only, plan-only, no-edit, no-build, or no-deploy restriction; only
 user instruction may narrow those permissions. For related follow-ups delivered to this same
 agent, build on the existing context and re-inspect only changed evidence unless full revalidation
 is necessary.
-This route uses the Claudex PiGateway Cursor provider. The model is fixed as
-`cursor/gpt-5.6-sol`; do not replace it with `auto`, another provider, or a fallback model.
+This route uses the Claudex PiGateway Command Code provider API. The model is fixed as
+`commandcode/gpt-5.6-luna`; do not replace it with the Muse Spark route, Codex, OpenCode, Cursor,
+or another fallback model. The route is distinct from `claudex-gpt` (`gpt-5.6-luna`) and
+`claudex-opencode-gpt` (`opencode-go/gpt-5.6-luna`).
 For web research, label evidence precisely. `fetch_verified` requires a completed provider fetch
 with the cited page content; `search_result_only` is a discovery lead from a native search title,
 URL, or snippet and cannot verify a material fact. Provider-owned tools may not appear as Claude
