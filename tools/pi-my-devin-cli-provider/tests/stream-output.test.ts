@@ -52,6 +52,31 @@ test("streams thinking followed by adjacent text and finishes once", async () =>
   ]);
 });
 
+test("starts a new text block with appendTextBlock", async () => {
+  const output: DevinOutput = createDevinOutput(MODEL);
+  output.appendText("first");
+  output.appendTextBlock("second");
+  output.appendText("third");
+  output.finish();
+
+  const events: AssistantMessageEvent[] = await collect(output);
+  expect(events.map((event) => event.type)).toStrictEqual([
+    "start",
+    "text_start",
+    "text_delta",
+    "text_start",
+    "text_delta",
+    "text_start",
+    "text_delta",
+    "done",
+  ]);
+  expect(output.partial.content).toStrictEqual([
+    { type: "text", text: "first" },
+    { type: "text", text: "second" },
+    { type: "text", text: "third" },
+  ]);
+});
+
 test("reports non-Error and aborted Error failures", async () => {
   const failed: DevinOutput = createDevinOutput(MODEL);
   failed.appendThinking("pending");

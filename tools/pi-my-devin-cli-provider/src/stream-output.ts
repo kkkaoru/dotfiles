@@ -12,6 +12,7 @@ export interface DevinOutput {
   readonly partial: AssistantMessage;
   readonly stream: AssistantMessageEventStream;
   appendText(delta: string): void;
+  appendTextBlock(text: string): void;
   appendThinking(delta: string): void;
   fail(error: unknown, aborted: boolean): void;
   finish(): void;
@@ -19,6 +20,7 @@ export interface DevinOutput {
 
 interface OutputState {
   finished: boolean;
+  openText: number | undefined;
   openThinking: { contentIndex: number; block: ThinkingContent } | undefined;
 }
 
@@ -45,7 +47,7 @@ function createInitialMessage(model: Model<Api>): AssistantMessage {
 export function createDevinOutput(model: Model<Api>): DevinOutput {
   const stream: AssistantMessageEventStream = createAssistantMessageEventStream();
   const partial: AssistantMessage = createInitialMessage(model);
-  const state: OutputState = { finished: false, openThinking: undefined };
+  const state: OutputState = { finished: false, openText: undefined, openThinking: undefined };
 
   stream.push({ type: "start", partial });
 
@@ -59,20 +61,35 @@ export function createDevinOutput(model: Model<Api>): DevinOutput {
   const appendText = (delta: string): void => {
     if (state.finished || delta.length === 0) return;
     endThinking();
-    const previous = partial.content.at(-1);
-    if (previous?.type === "text") {
-      previous.text += delta;
-      stream.push({ type: "text_delta", contentIndex: partial.content.length - 1, delta, partial });
-      return;
+    if (state.openText !== undefined) {
+      const previous = partial.content[state.openText];
+      if (previous?.type === "text") {
+        previous.text += delta;
+        stream.push({ type: "text_delta", contentIndex: state.openText, delta, partial });
+        return;
+      }
+      state.openText = undefined;
     }
     partial.content.push({ type: "text", text: delta });
     const contentIndex: number = partial.content.length - 1;
+    state.openText = contentIndex;
     stream.push({ type: "text_start", contentIndex, partial });
     stream.push({ type: "text_delta", contentIndex, delta, partial });
   };
 
+  const appendTextBlock = (text: string): void => {
+    if (state.finished || text.length === 0) return;
+    endThinking();
+    state.openText = undefined;
+    partial.content.push({ type: "text", text });
+    const contentIndex: number = partial.content.length - 1;
+    stream.push({ type: "text_start", contentIndex, partial });
+    stream.push({ type: "text_delta", contentIndex, delta: text, partial });
+  };
+
   const appendThinking = (delta: string): void => {
     if (state.finished || delta.length === 0) return;
+    state.openText = undefined;
     if (state.openThinking) {
       state.openThinking.block.thinking += delta;
       stream.push({
@@ -110,5 +127,5 @@ export function createDevinOutput(model: Model<Api>): DevinOutput {
     stream.end();
   };
 
-  return { stream, partial, appendText, appendThinking, finish, fail };
+  return { stream, partial, appendText, appendTextBlock, appendThinking, finish, fail };
 }

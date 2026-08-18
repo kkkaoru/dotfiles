@@ -122,6 +122,187 @@ test("streams message and thought updates from a reused ACP job", async () => {
   expect(mocks.runDevinJob.mock.calls[0]?.[0]?.continuationPrompt).toBe("Say hello");
 });
 
+test("renders a completed tool_call diff as a text block", async () => {
+  mocks.runDevinJob.mockImplementation(async (job) => {
+    job.onUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "edit-1",
+      title: "Edit x",
+      kind: "edit",
+      status: "completed",
+      content: [{ type: "diff", path: "x", oldText: "a", newText: "b" }],
+    });
+  });
+  const { streamDevin } = await import("../src/provider.ts");
+  const events: AssistantMessageEvent[] = await collect(streamDevin(MODEL, CONTEXT));
+
+  expect(events.map((event) => event.type)).toStrictEqual([
+    "start",
+    "text_start",
+    "text_delta",
+    "done",
+  ]);
+  const done = events.at(-1);
+  expect(done?.type === "done" ? done.message.content : []).toStrictEqual([
+    { type: "text", text: "**Edit x** (edit)\n\n```diff\n--- x\n+++ x\n-a\n+b\n```\n\n" },
+  ]);
+});
+
+test("renders a completed tool_call_update diff after an in_progress start", async () => {
+  mocks.runDevinJob.mockImplementation(async (job) => {
+    job.onUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "edit-2",
+      title: "Edit y",
+      kind: "edit",
+      status: "in_progress",
+    });
+    job.onUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "edit-2",
+      title: "Edit y",
+      kind: "edit",
+      status: "completed",
+      content: [{ type: "diff", path: "y", oldText: "c", newText: "d" }],
+    });
+  });
+  const { streamDevin } = await import("../src/provider.ts");
+  const events: AssistantMessageEvent[] = await collect(streamDevin(MODEL, CONTEXT));
+
+  expect(events.map((event) => event.type)).toStrictEqual([
+    "start",
+    "text_start",
+    "text_delta",
+    "done",
+  ]);
+  const done = events.at(-1);
+  expect(done?.type === "done" ? done.message.content : []).toStrictEqual([
+    { type: "text", text: "**Edit y** (edit)\n\n```diff\n--- y\n+++ y\n-c\n+d\n```\n\n" },
+  ]);
+});
+
+test("renders text content from a completed tool call", async () => {
+  mocks.runDevinJob.mockImplementation(async (job) => {
+    job.onUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "read-1",
+      title: "Read README",
+      kind: "read",
+      status: "completed",
+      content: [{ type: "content", content: { type: "text", text: "hello world" } }],
+    });
+  });
+  const { streamDevin } = await import("../src/provider.ts");
+  const events: AssistantMessageEvent[] = await collect(streamDevin(MODEL, CONTEXT));
+
+  expect(events.map((event) => event.type)).toStrictEqual([
+    "start",
+    "text_start",
+    "text_delta",
+    "done",
+  ]);
+  const done = events.at(-1);
+  expect(done?.type === "done" ? done.message.content : []).toStrictEqual([
+    { type: "text", text: "**Read README** (read)\n\nhello world\n\n" },
+  ]);
+});
+
+test("renders a new file diff when oldText is null", async () => {
+  mocks.runDevinJob.mockImplementation(async (job) => {
+    job.onUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "write-1",
+      title: "Create z",
+      kind: "edit",
+      status: "completed",
+      content: [{ type: "diff", path: "z", oldText: null, newText: "new line" }],
+    });
+  });
+  const { streamDevin } = await import("../src/provider.ts");
+  const events: AssistantMessageEvent[] = await collect(streamDevin(MODEL, CONTEXT));
+
+  expect(events.map((event) => event.type)).toStrictEqual([
+    "start",
+    "text_start",
+    "text_delta",
+    "done",
+  ]);
+  const done = events.at(-1);
+  expect(done?.type === "done" ? done.message.content : []).toStrictEqual([
+    { type: "text", text: "**Create z** (edit)\n\n```diff\n+++ z\n+new line\n```\n\n" },
+  ]);
+});
+
+test("renders a deleted file diff when newText is empty", async () => {
+  mocks.runDevinJob.mockImplementation(async (job) => {
+    job.onUpdate({
+      sessionUpdate: "tool_call",
+      toolCallId: "delete-1",
+      title: "Delete w",
+      kind: "delete",
+      status: "completed",
+      content: [{ type: "diff", path: "w", oldText: "remove me", newText: "" }],
+    });
+  });
+  const { streamDevin } = await import("../src/provider.ts");
+  const events: AssistantMessageEvent[] = await collect(streamDevin(MODEL, CONTEXT));
+
+  expect(events.map((event) => event.type)).toStrictEqual([
+    "start",
+    "text_start",
+    "text_delta",
+    "done",
+  ]);
+  const done = events.at(-1);
+  expect(done?.type === "done" ? done.message.content : []).toStrictEqual([
+    { type: "text", text: "**Delete w** (delete)\n\n```diff\n--- w\n+++ w\n-remove me\n```\n\n" },
+  ]);
+});
+
+test("uses the tool kind as the header when a completed tool call has no title", async () => {
+  mocks.runDevinJob.mockImplementation(async (job) => {
+    job.onUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "other-1",
+      kind: "other",
+      status: "completed",
+      content: [{ type: "content", content: { type: "text", text: "note" } }],
+    });
+  });
+  const { streamDevin } = await import("../src/provider.ts");
+  const events: AssistantMessageEvent[] = await collect(streamDevin(MODEL, CONTEXT));
+
+  expect(events.map((event) => event.type)).toStrictEqual([
+    "start",
+    "text_start",
+    "text_delta",
+    "done",
+  ]);
+  const done = events.at(-1);
+  expect(done?.type === "done" ? done.message.content : []).toStrictEqual([
+    { type: "text", text: "**other**\n\nnote\n\n" },
+  ]);
+});
+
+test("ignores completed tool calls with only non-text content", async () => {
+  mocks.runDevinJob.mockImplementation(async (job) => {
+    job.onUpdate({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "terminal-1",
+      title: "Run server",
+      kind: "execute",
+      status: "completed",
+      content: [{ type: "terminal", terminalId: "t1" }],
+    });
+  });
+  const { streamDevin } = await import("../src/provider.ts");
+  const events: AssistantMessageEvent[] = await collect(streamDevin(MODEL, CONTEXT));
+
+  expect(events.map((event) => event.type)).toStrictEqual(["start", "done"]);
+  const done = events.at(-1);
+  expect(done?.type === "done" ? done.message.content : []).toStrictEqual([]);
+});
+
 test("reports ACP job failures on the assistant stream", async () => {
   mocks.runDevinJob.mockRejectedValue(new Error("connection closed: authentication required"));
   const { streamDevin } = await import("../src/provider.ts");
