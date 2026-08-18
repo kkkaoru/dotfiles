@@ -84,6 +84,54 @@ mod tests {
     }
 
     #[test]
+    fn installed_cursor_luna_max_is_a_main_selectable_and_worker_route() {
+        let loaded = load(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../.config/claudex/providers.json")
+                .as_path(),
+        )
+        .expect("load repository providers.json");
+
+        assert!(
+            loaded
+                .model_catalog
+                .selectable_models()
+                .iter()
+                .any(|model| model == "gpt-5.6-luna-max"),
+            "Cursor Luna Max must be advertised for /model"
+        );
+        assert_eq!(
+            loaded.model_catalog.worker_fields("claudex-cursor-luna-max"),
+            Some(("gpt-5.6-luna-max", "max"))
+        );
+        let luna_route = loaded
+            .routes
+            .iter()
+            .find(|route| route.model == "gpt-5.6-luna-max")
+            .expect("Cursor Luna Max backend route");
+        assert_eq!(luna_route.backend, BackendKind::PiGateway);
+        assert_eq!(luna_route.pi_provider.as_deref(), Some("cursor"));
+        assert_eq!(luna_route.pi_model.as_deref(), Some("gpt-5.6-luna-max"));
+        assert!(luna_route.acp.is_none());
+        assert_eq!(luna_route.effort.as_deref(), Some("max"));
+        assert_eq!(luna_route.max_context_tokens, Some(800_000));
+        assert_eq!(luna_route.model_prefixes, ["gpt-5.6-luna-max"]);
+        let cursor_auto = loaded
+            .routes
+            .iter()
+            .find(|route| route.model == "auto" && route.model_prefixes == ["auto"])
+            .expect("the existing Cursor auto route must remain intact");
+        assert_eq!(cursor_auto.backend, BackendKind::PiGateway);
+        let grok = loaded
+            .routes
+            .iter()
+            .find(|route| route.model == "grok-4.6")
+            .expect("Grok backend route");
+        assert_eq!(grok.backend, BackendKind::PiGateway);
+        assert!(grok.acp.is_none());
+    }
+
+    #[test]
     fn rejects_claude_models_mapped_through_pi() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("providers.json");
@@ -528,6 +576,20 @@ mod tests {
 
         let empty = ModelCatalog::from_routes(&[BackendRoute::new("", BackendKind::GrokAcp)]);
         assert!(!empty.matches(""));
+    }
+
+    #[test]
+    fn accepts_pi_gateway_catalog_and_codex_native_search() {
+        let catalog: ProviderConfig = serde_json::from_str(&config(
+            r#"{"id":"p","agent":"w","defaultModel":"m","effort":"high","modelProvider":"sakana","modelCatalogJson":"~/.codex/fugu.json","backend":"pi-gateway"}"#,
+        ))
+        .unwrap();
+        assert!(validate(catalog).is_ok());
+        let search: ProviderConfig = serde_json::from_str(&config(
+            r#"{"id":"p","agent":"w","defaultModel":"m","effort":"high","backend":"pi-gateway","webSearchMode":"codex-native"}"#,
+        ))
+        .unwrap();
+        assert!(validate(search).is_ok());
     }
 
     #[test]

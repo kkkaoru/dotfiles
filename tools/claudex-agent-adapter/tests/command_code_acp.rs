@@ -205,7 +205,7 @@ fn providers_json_registers_command_code_for_automatic_selection() {
         .find(|provider| provider["id"] == "command-code")
         .expect("command-code provider");
     assert_eq!(provider["backend"], "configured-acp");
-    assert_eq!(provider["webSearchMode"], "acp-native");
+    assert_eq!(provider["webSearchMode"], "delegate-pi");
     assert_eq!(provider["maxConcurrency"], 2);
     assert_eq!(
         provider["agent"],

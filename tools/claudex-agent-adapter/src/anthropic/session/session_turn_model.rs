@@ -41,10 +41,9 @@ impl Bridge {
             == Some(crate::agent_backend::BackendKind::PiGateway)
         {
             let is_subagent = crate::anthropic::agent_effort::is_subagent_request(request);
-            let acp_native = provider
-                .web_search_mode(&session.model)
-                .uses_provider_native_agent_loop();
-            params["claudexRequest"] = pi_claude_request(request, is_subagent, acp_native)?;
+            // PiGateway turns must never carry ACP-native instructions, even if a stale
+            // webSearchMode claims otherwise.
+            params["claudexRequest"] = pi_claude_request(request, is_subagent, false)?;
         }
         // Mark interactive user turns so ACP keeps a reserved slot free of SubAgent load.
         if !crate::anthropic::agent_effort::is_subagent_request(request) {

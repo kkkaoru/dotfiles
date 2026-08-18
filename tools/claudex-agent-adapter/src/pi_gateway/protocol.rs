@@ -40,6 +40,38 @@ pub(super) fn request(
     if let Some(reasoning) = effort.and_then(pi_reasoning) {
         options["reasoning"] = json!(reasoning);
     }
+    if let Some(max_tokens) = request
+        .get("max_tokens")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+    {
+        options["maxTokens"] = json!(max_tokens);
+    }
+    if let Some(temperature) = request
+        .get("temperature")
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite())
+    {
+        options["temperature"] = json!(temperature);
+    }
+    let mut sampling_params = serde_json::Map::new();
+    if let Some(top_p) = request
+        .get("top_p")
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && (0.0..=1.0).contains(value))
+    {
+        sampling_params.insert("top_p".to_string(), json!(top_p));
+    }
+    if let Some(top_k) = request
+        .get("top_k")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+    {
+        sampling_params.insert("top_k".to_string(), json!(top_k));
+    }
+    if !sampling_params.is_empty() {
+        options["samplingParams"] = Value::Object(sampling_params);
+    }
     Ok(json!({
         "version": VERSION,
         "type": "request",
@@ -145,6 +177,40 @@ mod tests {
         assert_eq!(value["options"]["reasoning"], "xhigh");
         assert_eq!(value["origin"], ORIGIN);
         assert!(request("r", "t", "claudex", "model", &raw, None).is_err());
+    }
+
+    #[test]
+    fn request_forwards_max_tokens_and_temperature() {
+        let raw = json!({
+            "max_tokens": 1234,
+            "temperature": 0.5,
+        });
+        let value = request("r", "t", "openai-codex", "gpt", &raw, None).expect("gateway request");
+        assert_eq!(value["options"]["maxTokens"], 1234);
+        assert_eq!(value["options"]["temperature"], 0.5);
+    }
+
+    #[test]
+    fn request_omits_invalid_sampling_options() {
+        let raw = json!({"max_tokens": 0, "temperature": "hot"});
+        let value = request("r", "t", "openai-codex", "gpt", &raw, None).expect("gateway request");
+        assert!(value["options"].get("maxTokens").is_none());
+        assert!(value["options"].get("temperature").is_none());
+    }
+
+    #[test]
+    fn request_forwards_top_p_and_top_k_as_sampling_params() {
+        let raw = json!({"top_p": 0.9, "top_k": 40});
+        let value = request("r", "t", "openai-codex", "gpt", &raw, None).expect("gateway request");
+        assert_eq!(value["options"]["samplingParams"]["top_p"], 0.9);
+        assert_eq!(value["options"]["samplingParams"]["top_k"], 40);
+    }
+
+    #[test]
+    fn request_omits_invalid_top_p_and_top_k() {
+        let raw = json!({"top_p": 1.5, "top_k": 0, "top_p_out_of_range": -0.1});
+        let value = request("r", "t", "openai-codex", "gpt", &raw, None).expect("gateway request");
+        assert!(value["options"].get("samplingParams").is_none());
     }
 
     #[test]

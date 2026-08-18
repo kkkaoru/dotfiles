@@ -75,10 +75,14 @@ pub(super) fn validate_backend_fields(provider: &Provider) -> Result<()> {
     {
         bail!("modelProvider and modelCatalogJson must not be empty");
     }
-    if provider.backend != BackendKind::CodexAppServer
-        && (provider.model_provider.is_some() || provider.model_catalog_json.is_some())
+    if !matches!(
+        provider.backend,
+        BackendKind::CodexAppServer | BackendKind::PiGateway
+    ) && (provider.model_provider.is_some() || provider.model_catalog_json.is_some())
     {
-        bail!("modelProvider and modelCatalogJson are valid only with codex-app-server");
+        bail!(
+            "modelProvider and modelCatalogJson are valid only with codex-app-server or pi-gateway"
+        );
     }
     Ok(())
 }
@@ -146,7 +150,10 @@ fn prefix_captures_claude_model(prefix: &str) -> bool {
 
 pub(super) fn validate_web_search_mode(provider: &Provider) -> Result<()> {
     let valid = match provider.web_search_mode {
-        WebSearchMode::CodexNative => provider.backend == BackendKind::CodexAppServer,
+        WebSearchMode::CodexNative => matches!(
+            provider.backend,
+            BackendKind::CodexAppServer | BackendKind::PiGateway
+        ),
         WebSearchMode::AcpNative | WebSearchMode::DelegateMcp => {
             provider.backend != BackendKind::CodexAppServer
         }

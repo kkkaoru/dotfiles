@@ -167,6 +167,8 @@ fn configured_worker_routes_are_command_capable() {
         ("ollama-glm-5-2", "codex-app-server"),
         ("grok", "grok-acp"),
         ("opencode-go", "configured-acp"),
+        ("cursor", "configured-acp"),
+        ("cursor-luna-max", "configured-acp"),
     ] {
         let provider = providers
             .iter()
@@ -183,6 +185,28 @@ fn configured_worker_routes_are_command_capable() {
         let effort = provider["effort"].as_str().expect("provider worker effort");
         assert_command_capable_worker(&root, agent, model, effort);
     }
+
+    let luna_provider = providers
+        .iter()
+        .find(|provider| provider["id"] == "cursor-luna-max")
+        .expect("Cursor Luna Max provider");
+    assert_eq!(luna_provider["defaultModel"], "gpt-5.6-luna-max");
+    assert_eq!(luna_provider["subagentModel"], "gpt-5.6-luna-max");
+    assert_eq!(luna_provider["modelPrefixes"], json!(["gpt-5.6-luna-max"]));
+    assert_eq!(
+        luna_provider["selectableModels"],
+        json!(["gpt-5.6-luna-max"])
+    );
+    assert_eq!(
+        luna_provider["acp"]["arguments"],
+        json!(["--model", "{model}", "--yolo", "acp"])
+    );
+    assert!(
+        config["mainProviders"]
+            .as_array()
+            .is_some_and(|main| main.iter().any(|id| id == "cursor-luna-max")),
+        "Cursor Luna Max must be a main-provider candidate"
+    );
 
     let native_workers = config["nativeWorkers"]
         .as_array()

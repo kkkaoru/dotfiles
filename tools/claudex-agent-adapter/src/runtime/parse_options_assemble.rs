@@ -48,10 +48,12 @@ pub(super) fn assemble_options(mut draft: OptionsDraft) -> Result<ParsedOptions>
     if !draft.selectable_models.is_empty() {
         model_catalog.set_selectable_models(draft.selectable_models);
     }
-    if draft.provider_interface.as_deref() == Some("pi") {
-        enable_pi_routes(&mut draft.routes)?;
-    } else {
-        discard_unused_pi_mappings(&mut draft.routes);
+    match draft.provider_interface.as_deref() {
+        None | Some("pi") => enable_pi_routes(&mut draft.routes)?,
+        Some("direct") => {
+            bail!("ACP-native --provider-interface direct is removed; use pi")
+        }
+        Some(_) => bail!("--provider-interface must be `pi`"),
     }
     validate_routes(&draft.routes)?;
     Ok(ParsedOptions {
@@ -81,17 +83,6 @@ fn enable_pi_routes(routes: &mut [BackendRoute]) -> Result<()> {
     Ok(())
 }
 
-fn discard_unused_pi_mappings(routes: &mut [BackendRoute]) {
-    routes
-        .iter_mut()
-        .filter(|route| route.backend != BackendKind::PiGateway)
-        .for_each(|route| {
-            route.pi_provider = None;
-            route.pi_model = None;
-            route.pi_extensions.clear();
-        });
-}
-
 fn validate_routes(routes: &[BackendRoute]) -> Result<()> {
     if routes
         .iter()
@@ -106,6 +97,12 @@ fn validate_routes(routes: &[BackendRoute]) -> Result<()> {
         })
     {
         bail!("Pi route mappings require non-empty piProvider and piModel");
+    }
+    if routes.iter().any(|route| {
+        route.backend == BackendKind::PiGateway
+            && route.web_search_mode == crate::web_search::WebSearchMode::AcpNative
+    }) {
+        bail!("PiGateway routes cannot use acp-native webSearchMode");
     }
     if routes.iter().any(|route| {
         route
@@ -152,6 +149,16 @@ mod tests {
         let mut large = route("large");
         large.max_concurrency = Some(crate::grok_acp::MAX_MODEL_CONCURRENCY + 1);
         assert!(validate_routes(&[large]).is_err());
+    }
+
+    #[test]
+    fn rejects_acp_native_for_pi_gateway_routes() {
+        let mut bad = route("grok-4.6");
+        bad.backend = BackendKind::PiGateway;
+        bad.pi_provider = Some("xai".to_owned());
+        bad.pi_model = Some("grok-4.6".to_owned());
+        bad.web_search_mode = crate::web_search::WebSearchMode::AcpNative;
+        assert!(validate_routes(&[bad]).is_err());
     }
 
     #[test]

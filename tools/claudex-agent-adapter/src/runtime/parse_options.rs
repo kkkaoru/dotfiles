@@ -125,8 +125,11 @@ fn apply_option(
                 bail!("--provider-interface must not be repeated");
             }
             let interface = option_value(arguments, "--provider-interface")?;
-            if interface != "pi" && interface != "direct" {
-                bail!("--provider-interface must be `pi` or `direct`");
+            if interface == "direct" {
+                bail!("ACP-native --provider-interface direct is removed; use pi");
+            }
+            if interface != "pi" {
+                bail!("--provider-interface must be `pi`");
             }
             draft.provider_interface = Some(interface);
         }

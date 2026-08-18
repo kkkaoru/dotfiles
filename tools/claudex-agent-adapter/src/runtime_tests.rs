@@ -28,20 +28,22 @@ async fn wait_for_health(client: &Client, url: &str) -> reqwest::Response {
 #[test]
 fn parses_pi_provider_interface_and_preserves_default_route() {
     let route = r#"{"model":"m","backend":"codex-app-server","piProvider":"openai-codex","piModel":"gpt-5.6-luna"}"#;
-    let direct = parse_command(
+    let omitted = parse_command(
         ["serve", "--model", "m", "--backend-route-json", route]
             .into_iter()
             .map(OsString::from)
             .collect(),
     )
-    .expect("direct route");
-    let RuntimeCommand::Serve(direct) = direct else {
+    .expect("omitted provider interface");
+    let RuntimeCommand::Serve(omitted) = omitted else {
         panic!("expected serve command");
     };
-    assert_eq!(direct.routes[0].backend, BackendKind::CodexAppServer);
-    assert_eq!(direct.routes[0].pi_provider, None);
-    assert_eq!(direct.routes[0].pi_model, None);
-    assert!(direct.routes[0].pi_extensions.is_empty());
+    assert_eq!(omitted.routes[0].backend, BackendKind::PiGateway);
+    assert_eq!(
+        omitted.routes[0].pi_provider.as_deref(),
+        Some("openai-codex")
+    );
+    assert_eq!(omitted.routes[0].pi_model.as_deref(), Some("gpt-5.6-luna"));
 
     let explicit_direct = parse_command(
         [
@@ -57,17 +59,12 @@ fn parses_pi_provider_interface_and_preserves_default_route() {
         .map(OsString::from)
         .collect(),
     )
-    .expect("explicit direct route");
-    let RuntimeCommand::Serve(explicit_direct) = explicit_direct else {
-        panic!("expected serve command");
-    };
-    assert_eq!(
-        explicit_direct.routes[0].backend,
-        BackendKind::CodexAppServer
+    .expect_err("explicit direct route");
+    assert!(
+        explicit_direct
+            .to_string()
+            .contains("ACP-native --provider-interface direct is removed; use pi")
     );
-    assert_eq!(explicit_direct.routes[0].pi_provider, None);
-    assert_eq!(explicit_direct.routes[0].pi_model, None);
-    assert!(explicit_direct.routes[0].pi_extensions.is_empty());
 
     let pi = parse_command(
         [
@@ -91,24 +88,41 @@ fn parses_pi_provider_interface_and_preserves_default_route() {
     assert_eq!(pi.routes[0].pi_provider.as_deref(), Some("openai-codex"));
     assert_eq!(pi.routes[0].pi_model.as_deref(), Some("gpt-5.6-luna"));
 
-    for arguments in [
-        vec!["serve", "--model", "m", "--provider-interface", ""],
-        vec!["serve", "--model", "m", "--provider-interface", "other"],
-        vec![
-            "serve",
-            "--model",
-            "m",
-            "--provider-interface",
-            "pi",
-            "--provider-interface",
-            "pi",
-        ],
-    ] {
-        assert!(
-            parse_command(arguments.into_iter().map(OsString::from).collect()).is_err(),
-            "invalid provider interface must fail"
-        );
-    }
+    assert!(
+        parse_command(
+            ["serve", "--model", "m", "--provider-interface", ""]
+                .into_iter()
+                .map(OsString::from)
+                .collect()
+        )
+        .is_err()
+    );
+    assert!(
+        parse_command(
+            ["serve", "--model", "m", "--provider-interface", "other"]
+                .into_iter()
+                .map(OsString::from)
+                .collect()
+        )
+        .is_err()
+    );
+    assert!(
+        parse_command(
+            [
+                "serve",
+                "--model",
+                "m",
+                "--provider-interface",
+                "pi",
+                "--provider-interface",
+                "pi",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect()
+        )
+        .is_err()
+    );
 }
 
 #[test]
