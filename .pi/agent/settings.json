@@ -1,9 +1,9 @@
 {
   "lastChangelogVersion": "0.84.2",
   "theme": "dracula",
-  "defaultProvider": "devin",
-  "defaultModel": "swe-1-7",
-  "defaultThinkingLevel": "off",
+  "defaultProvider": "commandcode",
+  "defaultModel": "gpt-5.6-luna",
+  "defaultThinkingLevel": "max",
   "packages": [
     "npm:pi-effort",
     "./packages/pi-my-clinepass-provider",
