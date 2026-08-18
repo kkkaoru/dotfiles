@@ -29,12 +29,43 @@ fn installs_current_claudex_agents_and_prunes_renamed_links() {
         !stale_link.is_symlink(),
         "stale managed link must be pruned"
     );
-    for agent in ["claudex-gpt-spark.md", "claudex-ollama-glm-5-2.md"] {
-        let installed = agents.join(agent);
-        assert!(installed.is_symlink(), "{agent} must be installed");
-        assert!(
-            installed.exists(),
-            "{agent} must target a current definition"
-        );
-    }
+    assert!(
+        root.join(".claude/agents/claudex-devin-swe-1-7.md")
+            .is_file(),
+        "Devin SWE-1.7 must remain a managed agent definition"
+    );
+    let mut installed = fs::read_dir(&agents)
+        .expect("installed agent definitions")
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_symlink() && entry.path().exists())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    installed.sort();
+    assert_eq!(
+        installed,
+        [
+            "claudex-antigravity-gemini-3-7-flash.md",
+            "claudex-cline-deepseek-flash.md",
+            "claudex-command-code-muse-spark-1-2-contributor.md",
+            "claudex-cursor-luna.md",
+            "claudex-cursor-sol.md",
+            "claudex-cursor-terra.md",
+            "claudex-cursor.md",
+            "claudex-deepseek-flash.md",
+            "claudex-deepseek-pro.md",
+            "claudex-devin-swe-1-7.md",
+            "claudex-fugu.md",
+            "claudex-gpt-spark.md",
+            "claudex-gpt.md",
+            "claudex-grok.md",
+            "claudex-haiku-search.md",
+            "claudex-haiku.md",
+            "claudex-ollama-glm-5-2.md",
+            "claudex-opencode-gpt.md",
+            "claudex-orchestrator.md",
+            "claudex-qwen.md",
+            "claudex-sonnet.md",
+            "custom-advisor.md",
+        ]
+    );
 }

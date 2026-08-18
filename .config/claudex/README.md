@@ -31,7 +31,9 @@ flowchart LR
     Hook --> Grok[claudex-grok\nPi gateway]
     Hook --> Qwen[claudex-qwen\nPi gateway]
     Hook --> Cursor[claudex-cursor\nPi gateway]
-    Hook --> CursorLuna[claudex-cursor-luna-max\ngpt-5.6-luna-max\nPi gateway]
+    Hook --> CursorLuna[claudex-cursor-luna\ncursor/gpt-5.6-luna\nPi gateway]
+    Hook --> CursorSol[claudex-cursor-sol\ncursor/gpt-5.6-sol\nPi gateway]
+    Hook --> CursorTerra[claudex-cursor-terra\ncursor/gpt-5.6-terra\nPi gateway]
     Hook --> ClineDs[claudex-cline-deepseek-flash\nPi gateway]
     Hook --> CommandCode[claudex-command-code-muse-spark-1-2-contributor\ncmd -p Muse Spark Contributor]
     Hook --> Sonnet[claudex-sonnet\nclaude-sonnet-5]
@@ -55,7 +57,9 @@ flowchart LR
 | DeepSeek Flash worker | `claudex-deepseek-flash` | `opencode-go/deepseek-v4-flash` | `max` | CodexBarのOpenCode Go枠に空きがあり、denylistに無い場合（このマシンでは無効化維持） |
 | OpenCode GPT Luna worker | `claudex-opencode-gpt` | `opencode-go/gpt-5.6-luna` | `max` | CodexBarのOpenCode Go枠に空きがある場合。Codexの `gpt-5.6-luna` / `claudex-gpt` とは別route |
 | Cursor worker | `claudex-cursor` | `auto` | `high` | CodexBarのCursor枠に空きがある場合。`cursor-agent --model auto --yolo acp`。modelはCLI+session/newで固定し、毎turnの `set_session_model` 再選択はしない |
-| Cursor Luna Max worker | `claudex-cursor-luna-max` | `gpt-5.6-luna-max` | `max` | Cursor UIの「GPT-5.6 Luna 1M Max」。`cursor-agent --model gpt-5.6-luna-max --yolo acp`。Cursor枠を共有し、1Mの80%（`800000`）を入力上限として安全側に広告 |
+| Cursor Luna worker | `claudex-cursor-luna` | `cursor/gpt-5.6-luna` | `max` | Cursor PiGateway の GPT-5.6 Luna。Cursorの1M variantに合わせ、80%（`800000`）を入力上限として安全側に広告 |
+| Cursor Sol worker | `claudex-cursor-sol` | `cursor/gpt-5.6-sol` | `max` | Cursor PiGateway の GPT-5.6 Sol。1M variantに合わせ、80%（`800000`）を入力上限として安全側に広告 |
+| Cursor Terra worker | `claudex-cursor-terra` | `cursor/gpt-5.6-terra` | `max` | Cursor PiGateway の GPT-5.6 Terra。1M variantに合わせ、80%（`800000`）を入力上限として安全側に広告 |
 | Cline DeepSeek Flash worker | `claudex-cline-deepseek-flash` | `cline-pass/deepseek-v4-flash` | `xhigh` | ClinePass枠（CodexBar `clinepass` weekly left）。`--thinking xhigh`。OpenCode Go DeepSeekとは別 |
 | Command Code Muse Spark Contributor worker | `claudex-command-code-muse-spark-1-2-contributor` | `meta/muse-spark-1.2-contributor` | `high` | 自動 `selected_workers` 候補。CodexBar `commandcode` の weekly / 5h left で順位付け。agent slug に Muse Spark 1.2 と contributor を含める（将来の Command Code 他モデルと区別）。公式 `cmd -p` を `command-code-acp` が ACP 化し、既存 `configured-acp` で起動。Provider API / Meta 直接APIは使わない |
 | Antigravity Gemini Flash worker | `claudex-antigravity-gemini-3-7-flash` | `gemini-3.7-flash` | `high` | Pi provider `antigravity`。`webSearchMode` は実測まで `disabled`。CodexBar usage 枠は未接続 |
@@ -112,9 +116,11 @@ OpenCode内で実行されるprovider-owned toolはClaude側で再実行しな�
 これらの一時statusは最終回答と保存transcriptから除去されます。
 DeepSeek / OpenCode GPT Luna workerは独立した調査をまとめて実行し、確定済みの判断を反復せず、
 長い処理のフェーズ間で短い進捗を返すよう定義しています。
-Cursor ACPは `cursor-agent --model {model} --yolo acp` を起動します。既存routeの既定modelは
-`auto`、Luna Max routeはCLI/ACPで確認済みの `gpt-5.6-luna-max` です。
-`--yolo` はCursor CLIの `--force` 別名で、main sessionの無確認実行と同等のtool権限にします。
+Cursor routeはすべて PiGateway の `cursor` providerへ `piModel` を渡します。既存routeの既定modelは
+`auto`、追加した明示routeは `cursor/gpt-5.6-luna`、`cursor/gpt-5.6-sol`、
+`cursor/gpt-5.6-terra` です。Cursor SDKの実カタログでは3モデルとも1M variantが確認できるため、
+Claudexは安全側の `800000` を `maxContextTokens` に設定します。ACP-nativeの
+`cursor-agent acp` はClaudex routeでは使用しません。
 Command Code Muse Sparkは `command-code-acp --model {model} --effort {effort}` を起動し、
 内部で公式 headless `cmd -p --output-format json --yolo --trust --skip-onboarding --no-skills --no-session` を回します。SubAgent は常に one-shot（`--resume` しない）で、Claudex の ACP_NATIVE / routing dump / 再構成 transcript も `cmd` に載せません。
 `--effort` は ACP/TUI 表示用だけで、Muse Spark は reasoning effort を受け付けないため `cmd` には渡しません。
@@ -458,7 +464,9 @@ Pi経由では `providers.json` の `piProvider` / `piModel` に従って
 | `grok-4.6` | `xai` | `grok-4.6` |
 | `glm-5.2:cloud` | `ollama-cloud` | `glm-5.2` |
 | `auto` | `cursor` | `auto` |
-| `gpt-5.6-luna-max` | `cursor` | `gpt-5.6-luna-max` |
+| `cursor/gpt-5.6-luna` | `cursor` | `gpt-5.6-luna` |
+| `cursor/gpt-5.6-sol` | `cursor` | `gpt-5.6-sol` |
+| `cursor/gpt-5.6-terra` | `cursor` | `gpt-5.6-terra` |
 | `cline-pass/deepseek-v4-flash` | `clinepass` | `cline-pass/deepseek-v4-flash` |
 | `qwen3.8-max-preview` | `qwen-token-plan-individual` | `qwen3.8-max` |
 | `opencode-go/deepseek-v4-pro` | `opencode-go` | `deepseek-v4-pro` |
@@ -482,7 +490,7 @@ ClinePass / Ollamaは対応provider extensionもロードします。必要なex
 `UserPromptSubmit` hookがrouting contextを注入します。このため新規・resumeのどちらでも
 sessionの表示名をagent名へ変更しません。加えて `prepare-claude-config.py` が
 claudex 専用の隔離 `settings.json` にだけ `PreToolUse` / `PostToolUse` /
-`SubagentStop`（Rust バイナリ `~/.cargo/bin/claudex-tool-policy`、crate は
+`SubagentStop` / `SessionEnd`（Rust バイナリ `~/.cargo/bin/claudex-tool-policy`、crate は
 `tools/claudex-tool-policy`）を注入し、routed worker がある
 あいだ main session の Read/Write/Edit/検索ツールを拒否し、SubAgent 同士の同一
 ファイル Write/Edit を排他ロックします（Bash は main でも許可）。これらの拒否は
@@ -717,18 +725,22 @@ headerです。直後の各identity行または `↓ to manage` から個別work
 CLAUDEX_MODEL=grok-4.6 claudex
 CLAUDEX_MODEL=gpt-5.3-codex-spark claudex
 CLAUDEX_MODEL=gpt-5.6-terra claudex
-CLAUDEX_MODEL=gpt-5.6-luna-max claudex
+CLAUDEX_MODEL=cursor/gpt-5.6-luna claudex
+CLAUDEX_MODEL=cursor/gpt-5.6-sol claudex
+CLAUDEX_MODEL=cursor/gpt-5.6-terra claudex
 CLAUDEX_MODEL=qwen3.8-max-preview claudex
 ```
 
-`gpt-5.6-terra` は Codex `codex` provider、`gpt-5.6-luna-max` は Cursor
-`cursor-luna-max` provider の main `/model` 候補（`selectableModels`）です。
+`gpt-5.6-terra` は Codex `codex` provider、`cursor/gpt-5.6-luna`、
+`cursor/gpt-5.6-sol`、`cursor/gpt-5.6-terra` は Cursor の main `/model` 候補
+（`selectableModels`）です。Cursorモデルは namespaced ID にしてCodexの
+`gpt-5.6-luna` / `gpt-5.6-terra` と衝突しないようにしています。
 自動 SubAgent は従来どおり `gpt-5.6-luna` / `claudex-gpt` です。Terra を outer にしても
 main は実装せず、実質作業は Agent/Task で worker へ委譲します。Terra を outer にする場合は
 `/model` で `claude-claudex-gpt-5.6-terra` を選ぶか、上記の `CLAUDEX_MODEL` を使います。
 Claude Code は `gpt-5.6-terra` や `auto`、`grok-4.6` を未知モデルとして 200k compact 前提にするため、launcher は
-provider の `maxContextTokens`（Codex は `110000`、Cursor `auto` は `200000`、Cursor Luna Max は
-安全側の `800000`、Grok は xAI 公表の `500000`）を
+provider の `maxContextTokens`（Codex は `110000`、Cursor `auto` は `200000`、Cursorの
+GPT-5.6 Luna/Sol/Terra は安全側の `800000`、Grok は xAI 公表の `500000`）を
 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` へ渡します。加えて `prepare-claude-config.py` は隔離
 `settings.json` の `modelOverrides` に `grok-4.6` の identity map を書き、
 Claude Code の unrecognized-model 警告が求めるマッピングを isolated 側だけに残します。
@@ -930,7 +942,8 @@ recipientを動的に選びます。既存の `agentId` / `agent_id` は
 
 provider routeの代表modelは `providers.json` の `defaultModel`、workerを別modelへ固定する
 場合は `subagentModel` を変更します。同じproviderで `/model` に出したい追加main候補は
-`selectableModels` に列挙します（例: Codex の `gpt-5.6-terra`）。これは広告専用で、新しい
+`selectableModels` に列挙します（例: Codex の `gpt-5.6-terra`）。Cursorの `cursor/gpt-5.6-luna` / `cursor/gpt-5.6-sol` /
+`cursor/gpt-5.6-terra` は明示worker routeとして登録します。これは広告専用で、新しい
 SubAgent / worker は作りません。main sessionのmodelは `.claude/settings.json` または
 `CLAUDEX_MODEL` からClaude Code requestへ入り、その実modelがauthoritativeです。同じproviderで
 将来追加されるモデルを動的に受け入れる場合は `modelPrefixes` を維持または追加します。

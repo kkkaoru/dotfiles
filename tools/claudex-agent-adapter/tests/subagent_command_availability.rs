@@ -164,7 +164,10 @@ fn configured_worker_routes_are_command_capable() {
         ("grok", "pi-gateway"),
         ("opencode-go", "pi-gateway"),
         ("cursor", "pi-gateway"),
-        ("cursor-luna-max", "pi-gateway"),
+        ("cursor-luna", "pi-gateway"),
+        ("cursor-sol", "pi-gateway"),
+        ("cursor-terra", "pi-gateway"),
+        ("devin", "pi-gateway"),
     ] {
         let provider = providers
             .iter()
@@ -182,26 +185,62 @@ fn configured_worker_routes_are_command_capable() {
         assert_command_capable_worker(&root, agent, model, effort);
     }
 
-    let luna_provider = providers
+    for (id, agent, model, pi_model) in [
+        (
+            "cursor-luna",
+            "claudex-cursor-luna",
+            "cursor/gpt-5.6-luna",
+            "gpt-5.6-luna",
+        ),
+        (
+            "cursor-sol",
+            "claudex-cursor-sol",
+            "cursor/gpt-5.6-sol",
+            "gpt-5.6-sol",
+        ),
+        (
+            "cursor-terra",
+            "claudex-cursor-terra",
+            "cursor/gpt-5.6-terra",
+            "gpt-5.6-terra",
+        ),
+    ] {
+        let provider = providers
+            .iter()
+            .find(|provider| provider["id"] == id)
+            .unwrap_or_else(|| panic!("{id} provider"));
+        assert_eq!(provider["agent"], agent);
+        assert_eq!(provider["defaultModel"], model);
+        assert_eq!(provider["subagentModel"], model);
+        assert_eq!(provider["modelPrefixes"], json!([model]));
+        assert_eq!(provider["selectableModels"], json!([model]));
+        assert_eq!(provider["piProvider"], "cursor");
+        assert_eq!(provider["piModel"], pi_model);
+        assert_eq!(provider.get("acp"), None);
+        assert_eq!(provider["backend"], "pi-gateway");
+        assert!(
+            config["mainProviders"]
+                .as_array()
+                .is_some_and(|main| main.iter().any(|main_id| main_id == id)),
+            "{id} must be a main-provider candidate"
+        );
+    }
+
+    let devin_provider = providers
         .iter()
-        .find(|provider| provider["id"] == "cursor-luna-max")
-        .expect("Cursor Luna Max provider");
-    assert_eq!(luna_provider["defaultModel"], "gpt-5.6-luna-max");
-    assert_eq!(luna_provider["subagentModel"], "gpt-5.6-luna-max");
-    assert_eq!(luna_provider["modelPrefixes"], json!(["gpt-5.6-luna-max"]));
+        .find(|provider| provider["id"] == "devin")
+        .expect("Devin provider");
+    assert_eq!(devin_provider["defaultModel"], "devin/swe-1-7");
+    assert_eq!(devin_provider["subagentModel"], "devin/swe-1-7");
+    assert_eq!(devin_provider["modelPrefixes"], json!(["devin/swe-1-7"]));
+    assert_eq!(devin_provider["piProvider"], "devin");
+    assert_eq!(devin_provider["piModel"], "swe-1-7");
     assert_eq!(
-        luna_provider["selectableModels"],
-        json!(["gpt-5.6-luna-max"])
+        devin_provider["piExtensions"],
+        json!(["../../tools/pi-my-devin-cli-provider/index.ts"])
     );
-    assert_eq!(luna_provider["piProvider"], "cursor");
-    assert_eq!(luna_provider["piModel"], "gpt-5.6-luna-max");
-    assert_eq!(luna_provider.get("acp"), None);
-    assert!(
-        config["mainProviders"]
-            .as_array()
-            .is_some_and(|main| main.iter().any(|id| id == "cursor-luna-max")),
-        "Cursor Luna Max must be a main-provider candidate"
-    );
+    assert_eq!(devin_provider.get("acp"), None);
+    assert_eq!(devin_provider["backend"], "pi-gateway");
 
     let native_workers = config["nativeWorkers"]
         .as_array()

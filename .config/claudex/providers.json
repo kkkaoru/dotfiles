@@ -1,7 +1,7 @@
 {
   "version": 1,
   "piGatewayExtension": "../../tools/pi-claudex-provider/index.ts",
-  "mainProviders": ["codex", "codex-spark", "grok", "fugu", "ollama-glm-5-2", "opencode-go", "command-code", "cursor-luna-max"],
+  "mainProviders": ["codex", "codex-spark", "grok", "fugu", "ollama-glm-5-2", "opencode-go", "command-code", "cursor", "cursor-luna", "cursor-sol", "cursor-terra"],
   "providers": [
     {
       "id": "codex",
@@ -196,12 +196,12 @@
       "webSearchMode": "delegate-pi"
     },
     {
-      "id": "cursor-luna-max",
-      "agent": "claudex-cursor-luna-max",
-      "defaultModel": "gpt-5.6-luna-max",
-      "subagentModel": "gpt-5.6-luna-max",
+      "id": "cursor-luna",
+      "agent": "claudex-cursor-luna",
+      "defaultModel": "cursor/gpt-5.6-luna",
+      "subagentModel": "cursor/gpt-5.6-luna",
       "piProvider": "cursor",
-      "piModel": "gpt-5.6-luna-max",
+      "piModel": "gpt-5.6-luna",
       "piExtensions": [
         "../../tools/pi-my-cursor-provider/index.ts"
       ],
@@ -210,10 +210,56 @@
       "enabled": true,
       "usageProvider": "cursor",
       "modelPrefixes": [
-        "gpt-5.6-luna-max"
+        "cursor/gpt-5.6-luna"
       ],
       "selectableModels": [
-        "gpt-5.6-luna-max"
+        "cursor/gpt-5.6-luna"
+      ],
+      "backend": "pi-gateway",
+      "webSearchMode": "delegate-pi"
+    },
+    {
+      "id": "cursor-sol",
+      "agent": "claudex-cursor-sol",
+      "defaultModel": "cursor/gpt-5.6-sol",
+      "subagentModel": "cursor/gpt-5.6-sol",
+      "piProvider": "cursor",
+      "piModel": "gpt-5.6-sol",
+      "piExtensions": [
+        "../../tools/pi-my-cursor-provider/index.ts"
+      ],
+      "effort": "max",
+      "maxContextTokens": 800000,
+      "enabled": true,
+      "usageProvider": "cursor",
+      "modelPrefixes": [
+        "cursor/gpt-5.6-sol"
+      ],
+      "selectableModels": [
+        "cursor/gpt-5.6-sol"
+      ],
+      "backend": "pi-gateway",
+      "webSearchMode": "delegate-pi"
+    },
+    {
+      "id": "cursor-terra",
+      "agent": "claudex-cursor-terra",
+      "defaultModel": "cursor/gpt-5.6-terra",
+      "subagentModel": "cursor/gpt-5.6-terra",
+      "piProvider": "cursor",
+      "piModel": "gpt-5.6-terra",
+      "piExtensions": [
+        "../../tools/pi-my-cursor-provider/index.ts"
+      ],
+      "effort": "max",
+      "maxContextTokens": 800000,
+      "enabled": true,
+      "usageProvider": "cursor",
+      "modelPrefixes": [
+        "cursor/gpt-5.6-terra"
+      ],
+      "selectableModels": [
+        "cursor/gpt-5.6-terra"
       ],
       "backend": "pi-gateway",
       "webSearchMode": "delegate-pi"

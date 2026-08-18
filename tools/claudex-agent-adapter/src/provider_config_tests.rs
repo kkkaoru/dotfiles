@@ -84,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn installed_cursor_luna_max_is_a_main_selectable_and_worker_route() {
+    fn installed_cursor_models_are_explicit_pi_gateway_routes() {
         let loaded = load(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../../.config/claudex/providers.json")
@@ -92,30 +92,34 @@ mod tests {
         )
         .expect("load repository providers.json");
 
-        assert!(
-            loaded
-                .model_catalog
-                .selectable_models()
+        for (agent, model, pi_model) in [
+            ("claudex-cursor-luna", "cursor/gpt-5.6-luna", "gpt-5.6-luna"),
+            ("claudex-cursor-sol", "cursor/gpt-5.6-sol", "gpt-5.6-sol"),
+            ("claudex-cursor-terra", "cursor/gpt-5.6-terra", "gpt-5.6-terra"),
+        ] {
+            assert!(
+                loaded
+                    .model_catalog
+                    .selectable_models()
+                    .iter()
+                    .any(|candidate| candidate == model),
+                "{model} must be advertised for /model"
+            );
+            assert_eq!(loaded.model_catalog.worker_fields(agent), Some((model, "max")));
+            let route = loaded
+                .routes
                 .iter()
-                .any(|model| model == "gpt-5.6-luna-max"),
-            "Cursor Luna Max must be advertised for /model"
-        );
-        assert_eq!(
-            loaded.model_catalog.worker_fields("claudex-cursor-luna-max"),
-            Some(("gpt-5.6-luna-max", "max"))
-        );
-        let luna_route = loaded
-            .routes
-            .iter()
-            .find(|route| route.model == "gpt-5.6-luna-max")
-            .expect("Cursor Luna Max backend route");
-        assert_eq!(luna_route.backend, BackendKind::PiGateway);
-        assert_eq!(luna_route.pi_provider.as_deref(), Some("cursor"));
-        assert_eq!(luna_route.pi_model.as_deref(), Some("gpt-5.6-luna-max"));
-        assert!(luna_route.acp.is_none());
-        assert_eq!(luna_route.effort.as_deref(), Some("max"));
-        assert_eq!(luna_route.max_context_tokens, Some(800_000));
-        assert_eq!(luna_route.model_prefixes, ["gpt-5.6-luna-max"]);
+                .find(|route| route.model == model)
+                .expect("Cursor backend route");
+            assert_eq!(route.backend, BackendKind::PiGateway);
+            assert_eq!(route.pi_provider.as_deref(), Some("cursor"));
+            assert_eq!(route.pi_model.as_deref(), Some(pi_model));
+            assert!(route.acp.is_none());
+            assert_eq!(route.effort.as_deref(), Some("max"));
+            assert_eq!(route.max_context_tokens, Some(800_000));
+            assert_eq!(route.model_prefixes, [model]);
+        }
+
         let cursor_auto = loaded
             .routes
             .iter()
@@ -129,6 +133,40 @@ mod tests {
             .expect("Grok backend route");
         assert_eq!(grok.backend, BackendKind::PiGateway);
         assert!(grok.acp.is_none());
+    }
+
+    #[test]
+    fn installed_devin_swe_is_a_pi_gateway_worker_route() {
+        let loaded = load(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../.config/claudex/providers.json")
+                .as_path(),
+        )
+        .expect("load repository providers.json");
+
+        assert_eq!(
+            loaded.model_catalog.worker_fields("claudex-devin-swe-1-7"),
+            Some(("devin/swe-1-7", "high"))
+        );
+        let devin = loaded
+            .routes
+            .iter()
+            .find(|route| route.model == "devin/swe-1-7")
+            .expect("Devin SWE-1.7 backend route");
+        assert_eq!(devin.backend, BackendKind::PiGateway);
+        assert_eq!(devin.pi_provider.as_deref(), Some("devin"));
+        assert_eq!(devin.pi_model.as_deref(), Some("swe-1-7"));
+        assert!(devin.acp.is_none());
+        assert_eq!(devin.effort.as_deref(), Some("high"));
+        assert_eq!(devin.model_prefixes, ["devin/swe-1-7"]);
+        assert!(
+            devin
+                .pi_extensions
+                .iter()
+                .any(|path| path.ends_with("tools/pi-my-devin-cli-provider/index.ts")),
+            "Devin must load the Pi custom provider, not an ACP-native backend: {:?}",
+            devin.pi_extensions
+        );
     }
 
     #[test]
