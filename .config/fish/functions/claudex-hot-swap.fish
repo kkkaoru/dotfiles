@@ -60,8 +60,12 @@ function claudex-hot-swap --description 'Replace an idle claudex adapter on the 
         echo "claudex-hot-swap: --provider-interface requires a value" >&2
         return 2
     end
-    if not contains -- "$provider_interface" pi direct
-        echo "claudex-hot-swap: provider interface must be `pi` or `direct`" >&2
+    if test "$provider_interface" = direct
+        echo "claudex-hot-swap: ACP-native --provider-interface direct is removed; use pi" >&2
+        return 2
+    end
+    if test "$provider_interface" != pi
+        echo "claudex-hot-swap: provider interface must be `pi`" >&2
         return 2
     end
 

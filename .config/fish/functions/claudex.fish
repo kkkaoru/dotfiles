@@ -290,8 +290,8 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     set -q CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES; and set subscription_timeout_minutes "$CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES"
     set -a adapter_args --subscription-timeout-minutes "$subscription_timeout_minutes"
 
-    # Pi is the public default. The environment provides a temporary rollback,
-    # and an explicit CLI value remains authoritative over both defaults.
+    # Claudex always uses the Pi gateway. CLI remains authoritative over the
+    # environment, and only `pi` is accepted.
     set -l provider_interface pi
     set -q CLAUDEX_PROVIDER_INTERFACE; and set provider_interface "$CLAUDEX_PROVIDER_INTERFACE"
     # --provider-interface configures the adapter itself. Keep every other
@@ -320,8 +320,12 @@ function claudex --description 'Run Claude Code with config-driven agent backend
         echo "claudex: --provider-interface requires a value" >&2
         return 2
     end
-    if not contains -- "$provider_interface" pi direct
-        echo "claudex: provider interface must be `pi` or `direct`" >&2
+    if test "$provider_interface" = direct
+        echo "claudex: ACP-native --provider-interface direct is removed; use pi" >&2
+        return 2
+    end
+    if test "$provider_interface" != pi
+        echo "claudex: provider interface must be `pi`" >&2
         return 2
     end
     set -a adapter_args --provider-interface "$provider_interface"

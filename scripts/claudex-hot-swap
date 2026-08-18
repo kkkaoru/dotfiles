@@ -67,9 +67,13 @@ if [ "$EXPECTS_PROVIDER_INTERFACE" -eq 1 ]; then
   exit 2
 fi
 case "$PROVIDER_INTERFACE" in
-  pi|direct) ;;
+  pi) ;;
+  direct)
+    echo "claudex-hot-swap: ACP-native --provider-interface direct is removed; use pi" >&2
+    exit 2
+    ;;
   *)
-    echo "claudex-hot-swap: provider interface must be \`pi\` or \`direct\`" >&2
+    echo "claudex-hot-swap: provider interface must be \`pi\`" >&2
     exit 2
     ;;
 esac
