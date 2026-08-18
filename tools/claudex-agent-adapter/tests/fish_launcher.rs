@@ -21,22 +21,51 @@ fn fish_launcher_uses_the_shared_provider_config() {
 fn fish_launcher_defaults_to_pi_and_preserves_interface_overrides() {
     let home = shared_provider_fixture();
     let function = launcher_function();
-    for (command, expected) in [
-        ("claudex prompt-text", "pi"),
-        ("claudex --provider-interface pi prompt-text", "pi"),
-        ("claudex --provider-interface direct prompt-text", "direct"),
-    ] {
-        let arguments = run_fish_launcher(&function, &home, command);
-        let (adapter, claude) = arguments
-            .split_once("\n--\n")
-            .expect("adapter and Claude arguments");
-        assert!(
-            adapter.ends_with(&format!("--provider-interface\n{expected}")),
-            "adapter arguments: {arguments}"
-        );
-        assert!(!claude.contains("--provider-interface"));
-        assert_eq!(claude, "prompt-text\n");
-    }
+    let omitted = run_fish_launcher(&function, &home, "claudex prompt-text");
+    let (omitted_adapter, omitted_claude) = omitted
+        .split_once("\n--\n")
+        .expect("adapter and Claude arguments");
+    assert!(
+        omitted_adapter.ends_with("--provider-interface\npi"),
+        "adapter arguments: {omitted}"
+    );
+    assert!(!omitted_claude.contains("--provider-interface"));
+    assert_eq!(omitted_claude, "prompt-text\n");
+
+    let explicit_pi = run_fish_launcher(
+        &function,
+        &home,
+        "claudex --provider-interface pi prompt-text",
+    );
+    let (explicit_adapter, explicit_claude) = explicit_pi
+        .split_once("\n--\n")
+        .expect("adapter and Claude arguments");
+    assert!(
+        explicit_adapter.ends_with("--provider-interface\npi"),
+        "adapter arguments: {explicit_pi}"
+    );
+    assert!(!explicit_claude.contains("--provider-interface"));
+    assert_eq!(explicit_claude, "prompt-text\n");
+
+    let explicit_direct = Command::new("fish")
+        .args([
+            "-c",
+            &format!(
+                "source '{}'; claudex --provider-interface direct prompt-text",
+                function.display()
+            ),
+        ])
+        .env("HOME", home.path())
+        .env_remove("CLAUDEX_PROVIDER_CONFIG")
+        .env_remove("CLAUDEX_PROVIDER_INTERFACE")
+        .output()
+        .expect("run explicit direct provider interface");
+    assert_eq!(explicit_direct.status.code(), Some(2));
+    assert!(
+        String::from_utf8(explicit_direct.stderr)
+            .expect("UTF-8 provider interface error")
+            .ends_with("claudex: ACP-native --provider-interface direct is removed; use pi\n")
+    );
 
     let environment = Command::new("fish")
         .args([
@@ -48,9 +77,12 @@ fn fish_launcher_defaults_to_pi_and_preserves_interface_overrides() {
         .env_remove("CLAUDEX_PROVIDER_CONFIG")
         .output()
         .expect("run environment provider interface");
-    assert!(environment.status.success());
-    let environment = String::from_utf8(environment.stdout).expect("UTF-8 adapter arguments");
-    assert!(environment.contains("--provider-interface\ndirect\n--\nprompt-text\n"));
+    assert_eq!(environment.status.code(), Some(2));
+    assert!(
+        String::from_utf8(environment.stderr)
+            .expect("UTF-8 provider interface error")
+            .ends_with("claudex: ACP-native --provider-interface direct is removed; use pi\n")
+    );
 
     let cli_override = Command::new("fish")
         .args([
@@ -69,37 +101,65 @@ fn fish_launcher_defaults_to_pi_and_preserves_interface_overrides() {
     let cli_override = String::from_utf8(cli_override.stdout).expect("UTF-8 adapter arguments");
     assert!(cli_override.contains("--provider-interface\npi\n--\nprompt-text\n"));
 
-    for (arguments, expected) in [
-        (
-            "--provider-interface",
-            "claudex: --provider-interface requires a value\n",
-        ),
-        (
-            "--provider-interface invalid",
-            "claudex: provider interface must be `pi` or `direct`\n",
-        ),
-        (
-            "--provider-interface pi --provider-interface direct",
-            "claudex: --provider-interface must not be repeated\n",
-        ),
-    ] {
-        let output = Command::new("fish")
-            .args([
-                "-c",
-                &format!("source '{}'; claudex {arguments}", function.display()),
-            ])
-            .env("HOME", home.path())
-            .env_remove("CLAUDEX_PROVIDER_CONFIG")
-            .env_remove("CLAUDEX_PROVIDER_INTERFACE")
-            .output()
-            .expect("run invalid provider interface");
-        assert_eq!(output.status.code(), Some(2));
-        assert!(
-            String::from_utf8(output.stderr)
-                .expect("UTF-8 provider interface error")
-                .ends_with(expected)
-        );
-    }
+    let missing_value = Command::new("fish")
+        .args([
+            "-c",
+            &format!(
+                "source '{}'; claudex --provider-interface",
+                function.display()
+            ),
+        ])
+        .env("HOME", home.path())
+        .env_remove("CLAUDEX_PROVIDER_CONFIG")
+        .env_remove("CLAUDEX_PROVIDER_INTERFACE")
+        .output()
+        .expect("run missing provider interface value");
+    assert_eq!(missing_value.status.code(), Some(2));
+    assert!(
+        String::from_utf8(missing_value.stderr)
+            .expect("UTF-8 provider interface error")
+            .ends_with("claudex: --provider-interface requires a value\n")
+    );
+
+    let invalid_value = Command::new("fish")
+        .args([
+            "-c",
+            &format!(
+                "source '{}'; claudex --provider-interface invalid",
+                function.display()
+            ),
+        ])
+        .env("HOME", home.path())
+        .env_remove("CLAUDEX_PROVIDER_CONFIG")
+        .env_remove("CLAUDEX_PROVIDER_INTERFACE")
+        .output()
+        .expect("run invalid provider interface");
+    assert_eq!(invalid_value.status.code(), Some(2));
+    assert!(
+        String::from_utf8(invalid_value.stderr)
+            .expect("UTF-8 provider interface error")
+            .ends_with("claudex: provider interface must be `pi`\n")
+    );
+
+    let repeated = Command::new("fish")
+        .args([
+            "-c",
+            &format!(
+                "source '{}'; claudex --provider-interface pi --provider-interface direct",
+                function.display()
+            ),
+        ])
+        .env("HOME", home.path())
+        .env_remove("CLAUDEX_PROVIDER_CONFIG")
+        .env_remove("CLAUDEX_PROVIDER_INTERFACE")
+        .output()
+        .expect("run repeated provider interface");
+    assert_eq!(repeated.status.code(), Some(2));
+    assert!(
+        String::from_utf8(repeated.stderr)
+            .expect("UTF-8 provider interface error")
+            .ends_with("claudex: --provider-interface must not be repeated\n")
+    );
 
     let invalid_environment = Command::new("fish")
         .args([
@@ -115,7 +175,7 @@ fn fish_launcher_defaults_to_pi_and_preserves_interface_overrides() {
     assert!(
         String::from_utf8(invalid_environment.stderr)
             .expect("UTF-8 provider interface error")
-            .ends_with("claudex: provider interface must be `pi` or `direct`\n")
+            .ends_with("claudex: provider interface must be `pi`\n")
     );
 }
 
@@ -131,8 +191,30 @@ fn hot_swap_wrappers_default_to_pi_and_preserve_overrides() {
     let default = run_hot_swap(&fish, &posix, home.path(), None, &[]);
     assert_hot_swap_interface(&default, "pi");
 
-    let environment = run_hot_swap(&fish, &posix, home.path(), Some("direct"), &[]);
-    assert_hot_swap_interface(&environment, "direct");
+    assert_hot_swap_error(
+        &fish,
+        home.path(),
+        &["--provider-interface", "direct"],
+        "claudex-hot-swap: ACP-native --provider-interface direct is removed; use pi\n",
+    );
+    assert_hot_swap_error(
+        &posix,
+        home.path(),
+        &["--provider-interface", "direct"],
+        "claudex-hot-swap: ACP-native --provider-interface direct is removed; use pi\n",
+    );
+    assert_hot_swap_environment_error(
+        &fish,
+        home.path(),
+        "direct",
+        "claudex-hot-swap: ACP-native --provider-interface direct is removed; use pi\n",
+    );
+    assert_hot_swap_environment_error(
+        &posix,
+        home.path(),
+        "direct",
+        "claudex-hot-swap: ACP-native --provider-interface direct is removed; use pi\n",
+    );
 
     let cli = run_hot_swap(
         &fish,
@@ -143,28 +225,52 @@ fn hot_swap_wrappers_default_to_pi_and_preserve_overrides() {
     );
     assert_hot_swap_interface(&cli, "pi");
 
-    for (arguments, expected) in [
-        (
-            &["--provider-interface"] as &[&str],
-            "claudex-hot-swap: --provider-interface requires a value\n",
-        ),
-        (
-            &["--provider-interface", "invalid"],
-            "claudex-hot-swap: provider interface must be `pi` or `direct`\n",
-        ),
-        (
-            &[
-                "--provider-interface",
-                "pi",
-                "--provider-interface",
-                "direct",
-            ],
-            "claudex-hot-swap: --provider-interface must not be repeated\n",
-        ),
-    ] {
-        assert_hot_swap_error(&fish, home.path(), arguments, expected);
-        assert_hot_swap_error(&posix, home.path(), arguments, expected);
-    }
+    assert_hot_swap_error(
+        &fish,
+        home.path(),
+        &["--provider-interface"],
+        "claudex-hot-swap: --provider-interface requires a value\n",
+    );
+    assert_hot_swap_error(
+        &posix,
+        home.path(),
+        &["--provider-interface"],
+        "claudex-hot-swap: --provider-interface requires a value\n",
+    );
+    assert_hot_swap_error(
+        &fish,
+        home.path(),
+        &["--provider-interface", "invalid"],
+        "claudex-hot-swap: provider interface must be `pi`\n",
+    );
+    assert_hot_swap_error(
+        &posix,
+        home.path(),
+        &["--provider-interface", "invalid"],
+        "claudex-hot-swap: provider interface must be `pi`\n",
+    );
+    assert_hot_swap_error(
+        &fish,
+        home.path(),
+        &[
+            "--provider-interface",
+            "pi",
+            "--provider-interface",
+            "direct",
+        ],
+        "claudex-hot-swap: --provider-interface must not be repeated\n",
+    );
+    assert_hot_swap_error(
+        &posix,
+        home.path(),
+        &[
+            "--provider-interface",
+            "pi",
+            "--provider-interface",
+            "direct",
+        ],
+        "claudex-hot-swap: --provider-interface must not be repeated\n",
+    );
 }
 
 fn write_fake_curl(home: &std::path::Path) {
@@ -200,32 +306,62 @@ fn assert_hot_swap_error(
     arguments: &[&str],
     expected: &str,
 ) {
-    let is_posix = program
-        .file_name()
-        .is_some_and(|name| name == "claudex-hot-swap");
-    let output = if is_posix {
-        let mut args = vec![program.to_string_lossy().into_owned()];
-        args.extend(arguments.iter().map(|value| (*value).to_owned()));
-        Command::new("sh")
-            .args(args)
-            .env("HOME", home)
-            .env_remove("CLAUDEX_PROVIDER_INTERFACE")
-            .output()
-            .expect("run posix hot-swap error")
-    } else {
-        Command::new("fish")
-            .args(["-c", &hot_swap_fish_command(program, arguments)])
-            .env("HOME", home)
-            .env_remove("CLAUDEX_PROVIDER_INTERFACE")
-            .output()
-            .expect("run fish hot-swap error")
-    };
+    let output = run_hot_swap_output(program, home, None, arguments);
     assert_eq!(output.status.code(), Some(2));
     assert!(
         String::from_utf8(output.stderr)
             .expect("UTF-8 hot-swap error")
             .ends_with(expected)
     );
+}
+
+fn assert_hot_swap_environment_error(
+    program: &std::path::Path,
+    home: &std::path::Path,
+    environment: &str,
+    expected: &str,
+) {
+    let output = run_hot_swap_output(program, home, Some(environment), &[]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(
+        String::from_utf8(output.stderr)
+            .expect("UTF-8 hot-swap environment error")
+            .ends_with(expected)
+    );
+}
+
+fn run_hot_swap_output(
+    program: &std::path::Path,
+    home: &std::path::Path,
+    environment: Option<&str>,
+    arguments: &[&str],
+) -> std::process::Output {
+    let is_posix = program
+        .file_name()
+        .is_some_and(|name| name == "claudex-hot-swap");
+    let mut command = if is_posix {
+        let mut args = vec![program.to_string_lossy().into_owned()];
+        args.extend(arguments.iter().map(|value| (*value).to_owned()));
+        let mut command = Command::new("sh");
+        command.args(args);
+        command
+    } else {
+        let mut command = Command::new("fish");
+        command.args(["-c", &hot_swap_fish_command(program, arguments)]);
+        command
+    };
+    command.env("HOME", home);
+    match environment {
+        Some(value) => {
+            command.env("CLAUDEX_PROVIDER_INTERFACE", value);
+        }
+        None => {
+            command.env_remove("CLAUDEX_PROVIDER_INTERFACE");
+        }
+    }
+    command
+        .output()
+        .expect("run hot-swap provider interface case")
 }
 
 fn run_hot_swap(
@@ -1015,19 +1151,10 @@ fn assert_qwen_runtime_is_bounded(root: &std::path::Path, config: &serde_json::V
         .iter()
         .find(|provider| provider["id"] == "qwen")
         .expect("Qwen provider");
-    assert_eq!(qwen["acp"]["program"], "/usr/bin/env");
-    assert_eq!(
-        qwen["acp"]["arguments"],
-        serde_json::json!([
-            "QWEN_WEB_FETCH_PROCESSING_TIMEOUT_MS=8000",
-            "qwen",
-            "--acp",
-            "--approval-mode",
-            "yolo",
-            "--model",
-            "{model}"
-        ])
-    );
+    assert_eq!(qwen["backend"], "pi-gateway");
+    assert_eq!(qwen.get("acp"), None);
+    assert_eq!(qwen["piProvider"], "qwen-token-plan-individual");
+    assert_eq!(qwen["piModel"], "qwen3.8-max");
 
     let agent = fs::read_to_string(root.join(".claude/agents/claudex-qwen.md"))
         .expect("Qwen worker definition");
