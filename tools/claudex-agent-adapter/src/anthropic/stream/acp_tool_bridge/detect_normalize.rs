@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 use super::{
-    DESCRIPTION_ALIASES, GROK_HIGH_PROFILE, PROMPT_ALIASES, SPAWN_SUBAGENT, nonempty_string,
+    DESCRIPTION_ALIASES, GROK_MEDIUM_PROFILE, PROMPT_ALIASES, SPAWN_SUBAGENT, nonempty_string,
     take_alias_string,
 };
 
@@ -39,7 +39,7 @@ pub(in crate::anthropic::stream::acp_tool_bridge) fn normalize_launch_arguments(
             .contains("spawn_subagent")
     {
         if let Some(subagent_type) = object.get("subagent_type").and_then(Value::as_str)
-            && (subagent_type == GROK_HIGH_PROFILE || subagent_type.ends_with(":claudex-high"))
+            && (subagent_type == GROK_MEDIUM_PROFILE || subagent_type.ends_with(":claudex-medium"))
         {
             object.insert("subagent_type".to_owned(), json!("claudex-grok"));
         }

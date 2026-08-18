@@ -963,7 +963,7 @@ fn configured_worker_effort_replaces_an_unsupported_explicit_effort() {
 #[test]
 fn native_grok_route_effort_overrides_explicit_and_unmatched_request_effort() {
     let mut route = BackendRoute::new("grok-4.6", BackendKind::GrokAcp);
-    route.effort = Some("high".to_owned());
+    route.effort = Some("medium".to_owned());
     let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[route]), "main".to_owned());
     let mut request = MessagesRequest {
         model: "grok-4.6".to_owned(),
@@ -982,11 +982,11 @@ fn native_grok_route_effort_overrides_explicit_and_unmatched_request_effort() {
         request.output_config = json!({"effort":requested});
         assert_eq!(
             bridge.resolve_request_effort(&request, AgentEffort::Unmatched),
-            Some("high".to_owned())
+            Some("medium".to_owned())
         );
         assert_eq!(
             bridge.resolve_request_effort(&request, AgentEffort::Explicit(requested.to_owned())),
-            Some("high".to_owned())
+            Some("medium".to_owned())
         );
     }
 

@@ -846,7 +846,7 @@ mod tests {
         let path = root.path().join("providers.json");
         std::fs::write(
             &path,
-            r#"{"version":1,"mainProviders":["grok"],"providers":[{"id":"grok","agent":"claudex-grok","defaultModel":"grok-4.6","effort":"high","backend":"grok-acp"}],"fallback":{"agent":"claudex-sonnet","model":"claude-sonnet-5","effort":"high"}}"#,
+            r#"{"version":1,"mainProviders":["grok"],"providers":[{"id":"grok","agent":"claudex-grok","defaultModel":"grok-4.6","effort":"medium","backend":"grok-acp"}],"fallback":{"agent":"claudex-sonnet","model":"claude-sonnet-5","effort":"high"}}"#,
         )
         .expect("write provider config");
         let catalog = crate::provider_config::load(&path)
@@ -862,7 +862,7 @@ mod tests {
         );
 
         assert_eq!(arguments["claudex_model"], "grok-4.6");
-        assert_eq!(arguments["claudex_effort"], "high");
+        assert_eq!(arguments["claudex_effort"], "medium");
         super::validate_routed_agent_arguments_with_catalog(
             "Agent",
             &arguments,

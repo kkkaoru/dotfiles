@@ -335,7 +335,7 @@ fn parse_sse(body: &str) -> Vec<Value> {
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
-async fn provider_config_high_reaches_the_exact_native_grok_argv() {
+async fn provider_config_medium_reaches_the_exact_native_grok_argv() {
     let _process_env_lock = process_env_lock().await;
     let root = tempfile::tempdir().expect("provider route fixture");
     let config = root.path().join("providers.json");
@@ -348,7 +348,7 @@ async fn provider_config_high_reaches_the_exact_native_grok_argv() {
                 "id":"grok",
                 "agent":"claudex-grok",
                 "defaultModel":"grok-4.6",
-                "effort":"high",
+                "effort":"medium",
                 "backend":"grok-acp"
             }],
             "fallback":{"agent":"fallback","model":"claude-sonnet-5","effort":"high"}
@@ -356,7 +356,7 @@ async fn provider_config_high_reaches_the_exact_native_grok_argv() {
     )
     .expect("write provider config");
     let loaded = provider_config::load(&config).expect("load provider config");
-    assert_eq!(loaded.routes[0].effort.as_deref(), Some("high"));
+    assert_eq!(loaded.routes[0].effort.as_deref(), Some("medium"));
 
     let wrapper = root.path().join("grok-wrapper");
     std::fs::write(
@@ -419,7 +419,7 @@ async fn provider_config_high_reaches_the_exact_native_grok_argv() {
             "--model",
             "grok-4.6",
             "--reasoning-effort",
-            "high",
+            "medium",
             "agent",
             "--always-approve",
             "--no-leader",
@@ -446,10 +446,10 @@ async fn generated_plugin_and_parent_child_marker_form_a_grok_boundary_contract(
         GrokAcp::spawn_with_program("nested-boundary", &grok, root.path().to_owned()).await;
     let agent = spawned.expect("start mock through real grok program-name branch");
 
-    let plugin = home.join(".cache/claudex/grok-native-high-plugin-v3");
-    let profile = std::fs::read_to_string(plugin.join("agents/claudex-high.md"))
-        .expect("read generated provider-local high profile");
-    assert!(profile.contains("effort: high"));
+    let plugin = home.join(".cache/claudex/grok-native-medium-plugin-v3");
+    let profile = std::fs::read_to_string(plugin.join("agents/claudex-medium.md"))
+        .expect("read generated provider-local medium profile");
+    assert!(profile.contains("effort: medium"));
     assert!(!profile.contains("\nmodel:"));
     for invalid in ["claudex-xhigh.md", "claudex-max.md", "claudex-gpt.md"] {
         assert!(!plugin.join("agents").join(invalid).exists());
@@ -765,7 +765,7 @@ async fn grok_plugin_reports_a_stale_alias_directory_that_cannot_be_removed() {
     let home = tempfile::tempdir().expect("plugin home");
     let agents = home
         .path()
-        .join(".cache/claudex/grok-native-high-plugin-v3/agents");
+        .join(".cache/claudex/grok-native-medium-plugin-v3/agents");
     std::fs::create_dir_all(&agents).expect("plugin agents directory");
     std::fs::create_dir(agents.join("claudex-gpt.md")).expect("stale alias directory");
     let bin = home.path().join("bin");

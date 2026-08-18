@@ -536,7 +536,7 @@ fn daemon_arguments_preserve_configured_worker_routes() {
         .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
             "claudex-grok".to_owned(),
             "grok-4.6".to_owned(),
-            "high".to_owned(),
+            "medium".to_owned(),
         )])
         .expect("worker route");
     let arguments = daemon_arguments(&config.options)

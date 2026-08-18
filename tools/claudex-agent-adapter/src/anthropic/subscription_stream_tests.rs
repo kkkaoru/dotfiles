@@ -1212,7 +1212,7 @@ fn explicit_subscription_tool_context() -> SubscriptionToolContext {
         None,
         "parent-model",
         vec![json!({
-            "role":"user", "content":"Claudex routing for this turn: {\"providers\":{},\"selected_workers\":[{\"agent\":\"claudex-gpt-spark\",\"model\":\"gpt-5.3-codex-spark\",\"effort\":\"xhigh\"},{\"agent\":\"claudex-grok\",\"model\":\"grok-4.6\",\"effort\":\"high\"}]}"
+            "role":"user", "content":"Claudex routing for this turn: {\"providers\":{},\"selected_workers\":[{\"agent\":\"claudex-gpt-spark\",\"model\":\"gpt-5.3-codex-spark\",\"effort\":\"xhigh\"},{\"agent\":\"claudex-grok\",\"model\":\"grok-4.6\",\"effort\":\"medium\"}]}"
         })],
         json!(null),
     )

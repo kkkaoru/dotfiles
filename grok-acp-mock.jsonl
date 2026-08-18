@@ -3,6 +3,6 @@
 {"initialize":{"_meta":{"clientType":"claudex-agent-adapter","startupHints":{"nonInteractive":true,"skipGitStatus":true,"skipProjectLayout":true}},"clientCapabilities":{"fs":{"readTextFile":false,"writeTextFile":false},"terminal":false},"clientInfo":{"name":"claudex-agent-adapter","title":null,"version":"0.1.0"},"protocolVersion":1}}
 {"authenticate":{"_meta":{"headless":true},"methodId":"cached_token"}}
 {"new_session":{"_meta":{"modelId":"grok-4.6"},"cwd":"/Users/kaoru/.cache/claudex/codex-home","mcpServers":[]}}
-{"set_model":{"_meta":{"reasoningEffort":"high"},"modelId":"grok-4.6","sessionId":"grok-session-1"}}
+{"set_model":{"_meta":{"reasoningEffort":"medium"},"modelId":"grok-4.6","sessionId":"grok-session-1"}}
 {"prompt":{"prompt":[{"text":"Grok SubAgent effort routing: when the user explicitly requests low, medium, high, or xhigh effort for a SubAgent, use the corresponding subagent_type claudex-low, claudex-medium, claudex-high, or claudex-xhigh. This selects only the child effort; preserve any separately requested model. Use the normal Grok SubAgent types when the user does not specify a child effort.\n\nroute smoke test","type":"text"}],"sessionId":"grok-session-1"}}
 {"permission_response":{"outcome":{"optionId":"allow-once","outcome":"selected"}}}

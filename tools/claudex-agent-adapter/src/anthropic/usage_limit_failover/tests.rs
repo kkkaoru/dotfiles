@@ -73,7 +73,7 @@ fn grok_and_qwen_bridge() -> Bridge {
     let mut catalog = ModelCatalog::default();
     catalog
         .set_worker_routes(vec![
-            crate::provider_config::WorkerRoute::new("claudex-grok", GROK_46, "high"),
+            crate::provider_config::WorkerRoute::new("claudex-grok", GROK_46, "medium"),
             crate::provider_config::WorkerRoute::new("claudex-qwen", QWEN_CLOUD, "high"),
         ])
         .expect("install Grok and Qwen workers");
@@ -1504,7 +1504,7 @@ fn write_usage_routing_cursor_auto_low_remaining(home: &std::path::Path) {
             "selected_workers": [{
                 "agent": "claudex-grok",
                 "model": "grok-4.6",
-                "effort": "high"
+                "effort": "medium"
             }],
             "disabled_subagent_models": []
         }

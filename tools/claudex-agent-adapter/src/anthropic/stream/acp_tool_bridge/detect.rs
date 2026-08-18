@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde_json::{Map, Value};
 
 const SPAWN_SUBAGENT: &str = "spawn_subagent";
-const GROK_HIGH_PROFILE: &str = "grok-native-high-plugin-v3:claudex-high";
+const GROK_MEDIUM_PROFILE: &str = "grok-native-medium-plugin-v3:claudex-medium";
 const PROMPT_ALIASES: &[&str] = &["prompt", "task", "message", "instruction", "query", "input"];
 const DESCRIPTION_ALIASES: &[&str] = &["description", "title", "name", "summary", "subject"];
 

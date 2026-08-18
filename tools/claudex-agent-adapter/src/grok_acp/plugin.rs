@@ -17,11 +17,11 @@ and end the turn immediately; do not call get_command_or_subagent_output or Task
 positive timeout_ms in the same turn. Retrieve results only after a Claude completion notification \
 on a later turn.";
 
-const PROFILE_NAME: &str = "claudex-high";
-const PROFILE_EFFORT: &str = "high";
+const PROFILE_NAME: &str = "claudex-medium";
+const PROFILE_EFFORT: &str = "medium";
 /// Legacy profile kept for cache cleanup; Claudex no longer launches via spawn_subagent.
 #[cfg(test)]
-const QUALIFIED_PROFILE_NAME: &str = "grok-native-high-plugin-v3:claudex-high";
+const QUALIFIED_PROFILE_NAME: &str = "grok-native-medium-plugin-v3:claudex-medium";
 const UNSAFE_CROSS_PROVIDER_ALIASES: &[&str] = &[
     "custom-advisor",
     "claudex-orchestrator",
@@ -71,7 +71,7 @@ fn prepare_with(
         return Ok(None);
     }
     let home = home.context("HOME is required for Grok plugin cache")?;
-    let root = home.join(".cache/claudex/grok-native-high-plugin-v3");
+    let root = home.join(".cache/claudex/grok-native-medium-plugin-v3");
     let agents = root.join("agents");
     let bin = root.join("bin");
     let user_hooks = home.join(".grok/hooks");
@@ -136,7 +136,7 @@ fn write_if_changed(path: PathBuf, content: &str) -> Result<()> {
 fn profile(name: &str) -> String {
     format!(
         "---\nname: {name}\n\
-         description: Provider-local Grok SubAgent inheriting the active model with high reasoning effort.\n\
+         description: Provider-local Grok SubAgent inheriting the active model with medium reasoning effort.\n\
          promptMode: extend\neffort: {PROFILE_EFFORT}\n---\n\n\
          Work as a Grok-native general-purpose SubAgent. Inherit the active model, never select a \
          cross-provider agent, and complete the delegated task.\n"

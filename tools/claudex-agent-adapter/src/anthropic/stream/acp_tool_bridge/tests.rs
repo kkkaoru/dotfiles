@@ -61,7 +61,7 @@ mod tests {
                 "arguments":{
                     "description":"smoke",
                     "prompt":"CHILD_OK",
-                    "subagent_type":"grok-native-high-plugin-v3:claudex-high",
+                    "subagent_type":"grok-native-medium-plugin-v3:claudex-medium",
                     "run_in_background":false
                 }
             }
@@ -523,16 +523,16 @@ mod tests {
     fn covers_normalize_launch_arguments_spawn_subagent() {
         let spawn = json!({
             "prompt": "go",
-            "subagent_type": "grok-native-high-plugin-v3:claudex-high"
+            "subagent_type": "grok-native-medium-plugin-v3:claudex-medium"
         });
         let result = normalize_launch_arguments("spawn_subagent", &spawn);
         assert_eq!(result["subagent_type"], "claudex-grok");
         assert_eq!(result["run_in_background"], true);
 
-        // ends_with(":claudex-high") without equaling the grok high profile constant
+        // ends_with(":claudex-medium") without equaling the Grok medium profile constant
         let suffix_only = json!({
             "prompt": "go",
-            "subagent_type": "custom-worker:claudex-high"
+            "subagent_type": "custom-worker:claudex-medium"
         });
         let result = normalize_launch_arguments("spawn_subagent", &suffix_only);
         assert_eq!(result["subagent_type"], "claudex-grok");

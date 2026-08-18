@@ -7,11 +7,11 @@ use super::{
 };
 
 #[test]
-fn profile_is_provider_local_model_inheriting_high() {
+fn profile_is_provider_local_model_inheriting_medium() {
     let profile = profile(PROFILE_NAME);
-    assert_eq!(PROFILE_NAME, "claudex-high");
-    assert_eq!(PROFILE_EFFORT, "high");
-    assert!(profile.contains("effort: high"));
+    assert_eq!(PROFILE_NAME, "claudex-medium");
+    assert_eq!(PROFILE_EFFORT, "medium");
+    assert!(profile.contains("effort: medium"));
     assert!(!profile.contains("\nmodel:"));
     assert!(ROUTING_INSTRUCTIONS.contains("Agent or Task"));
     assert!(ROUTING_INSTRUCTIONS.contains("selected_workers"));
@@ -29,12 +29,12 @@ fn profile_is_provider_local_model_inheriting_high() {
 fn project_grok_worker_enforces_the_same_nested_contract() {
     let worker = include_str!("../../../../../.claude/agents/claudex-grok.md");
     assert!(worker.contains("model: grok-4.6"));
-    assert!(worker.contains("effort: high"));
+    assert!(worker.contains("effort: medium"));
     assert!(worker.contains("never Grok `spawn_subagent`"));
     assert!(worker.contains("subagent_type: claudex-grok"));
     assert!(worker.contains("claudex_model: grok-4.6"));
     assert!(worker.contains("run_in_background: true"));
-    assert!(!worker.contains("grok-native-high-plugin-v3:claudex-high"));
+    assert!(!worker.contains("grok-native-medium-plugin-v3:claudex-medium"));
     for invalid in ["claudex-xhigh", "claudex-max"] {
         assert!(!worker.contains(invalid));
     }
@@ -53,15 +53,15 @@ fn custom_program_does_not_receive_builtin_plugin() {
 }
 
 #[test]
-fn prepares_and_reuses_only_the_builtin_high_profile() {
+fn prepares_and_reuses_only_the_builtin_medium_profile() {
     let home = tempfile::tempdir().unwrap();
     let plugin = prepare_with(OsStr::new("grok"), None, Some(home.path().to_owned()))
         .unwrap()
         .unwrap();
-    assert!(plugin.join("agents/claudex-high.md").is_file());
+    assert!(plugin.join("agents/claudex-medium.md").is_file());
     for invalid in [
         "claudex-low.md",
-        "claudex-medium.md",
+        "claudex-high.md",
         "claudex-xhigh.md",
         "claudex-max.md",
     ] {
@@ -78,12 +78,12 @@ fn rejects_cross_provider_aliases_before_they_reach_the_grok_api() {
     let home = tempfile::tempdir().unwrap();
     let stale_hook = home
         .path()
-        .join(".cache/claudex/grok-native-high-plugin-v3/hooks/hooks.json");
+        .join(".cache/claudex/grok-native-medium-plugin-v3/hooks/hooks.json");
     std::fs::create_dir_all(stale_hook.parent().unwrap()).unwrap();
     std::fs::write(&stale_hook, "stale process hook").unwrap();
     let agents = home
         .path()
-        .join(".cache/claudex/grok-native-high-plugin-v3/agents");
+        .join(".cache/claudex/grok-native-medium-plugin-v3/agents");
     std::fs::create_dir_all(&agents).unwrap();
     std::fs::write(agents.join("claudex-gpt.md"), "stale unsafe shadow").unwrap();
     let plugin = prepare_with(OsStr::new("grok"), None, Some(home.path().to_owned()))
@@ -114,12 +114,12 @@ fn rewrites_existing_builtin_plugin_files_and_removes_the_stale_hook() {
     let home = tempfile::tempdir().unwrap();
     let root = home
         .path()
-        .join(".cache/claudex/grok-native-high-plugin-v3");
+        .join(".cache/claudex/grok-native-medium-plugin-v3");
     std::fs::create_dir_all(root.join("agents")).unwrap();
     std::fs::create_dir_all(root.join("bin")).unwrap();
     std::fs::create_dir_all(root.join("hooks")).unwrap();
     std::fs::create_dir_all(home.path().join(".grok/hooks")).unwrap();
-    std::fs::write(root.join("agents/claudex-high.md"), "old profile").unwrap();
+    std::fs::write(root.join("agents/claudex-medium.md"), "old profile").unwrap();
     std::fs::write(root.join("bin/reject-cross-provider-agent.sh"), "old guard").unwrap();
     std::fs::write(root.join("hooks/hooks.json"), "old process hook").unwrap();
     std::fs::write(
@@ -134,7 +134,7 @@ fn rewrites_existing_builtin_plugin_files_and_removes_the_stale_hook() {
     assert_eq!(plugin, root);
     assert!(!root.join("hooks/hooks.json").exists());
     assert_eq!(
-        std::fs::read_to_string(root.join("agents/claudex-high.md")).unwrap(),
+        std::fs::read_to_string(root.join("agents/claudex-medium.md")).unwrap(),
         profile(PROFILE_NAME)
     );
     assert_eq!(
@@ -164,7 +164,7 @@ fn reports_stale_shadow_removal_failures_with_the_alias_path() {
     let home = tempfile::tempdir().unwrap();
     let agents = home
         .path()
-        .join(".cache/claudex/grok-native-high-plugin-v3/agents");
+        .join(".cache/claudex/grok-native-medium-plugin-v3/agents");
     std::fs::create_dir_all(&agents).unwrap();
     std::fs::create_dir(agents.join("claudex-gpt.md")).unwrap();
 

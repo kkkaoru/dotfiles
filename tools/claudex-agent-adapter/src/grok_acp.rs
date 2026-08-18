@@ -41,7 +41,7 @@ pub(crate) const DEFAULT_CONFIGURED_MAX_CONCURRENCY: usize = 3;
 const OUTER_TURN_RESERVE: usize = 1;
 pub(crate) const MAX_MODEL_CONCURRENCY: usize =
     tokio::sync::Semaphore::MAX_PERMITS - OUTER_TURN_RESERVE;
-pub(crate) const DEFAULT_REASONING_EFFORT: &str = "high";
+pub(crate) const DEFAULT_REASONING_EFFORT: &str = "medium";
 
 use connection::AcpProvider;
 #[allow(unused_imports)]
