@@ -27,6 +27,7 @@ pub(in crate::http_api) enum ProxyOutcome {
 }
 
 impl ProxyOutcome {
+    #[cfg(test)]
     pub(in crate::http_api) fn into_response(self) -> Response {
         match self {
             Self::Response(response) => response,

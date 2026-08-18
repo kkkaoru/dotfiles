@@ -5,7 +5,9 @@ use std::{
     time::Instant,
 };
 
-use axum::{extract::Request, response::Response};
+use axum::extract::Request;
+#[cfg(test)]
+use axum::response::Response;
 
 use super::retained_health::seed_recent_from_snapshot;
 use crate::launcher::{RetainedGeneration, read_retained};
@@ -116,6 +118,7 @@ impl RetainedProxy {
         }
     }
 
+    #[cfg(test)]
     pub(super) async fn proxy(&self, request: Request) -> Response {
         self.proxy_outcome(request).await.into_response()
     }
