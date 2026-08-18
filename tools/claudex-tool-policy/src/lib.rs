@@ -10,7 +10,9 @@
 //!   path so main-session denials never apply to workers.
 //! * PreToolUse Write/Edit acquires a per-path lock for the calling `agent_id` so
 //!   parallel SubAgents cannot mutate the same file at once.
-//! * PostToolUse and SubagentStop release those locks.
+//! * PostToolUse, SubagentStop, and SessionEnd release those locks.
+//! * Lock-store failures fail open. Real conflicts name the holder, never
+//!   "another agent". A group-readable lock directory is repaired to 0700.
 
 mod env;
 mod locks;

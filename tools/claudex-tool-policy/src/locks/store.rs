@@ -12,9 +12,10 @@ use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-const LOCK_TTL_SECONDS: f64 = 45.0 * 60.0;
+pub(super) const LOCK_TTL_SECONDS: f64 = 5.0 * 60.0;
 const MAX_LOCK_BYTES: u64 = 16 * 1024;
 const GUARD_WAIT: Duration = Duration::from_millis(100);
+pub(super) const UNKNOWN_HOLDER: &str = "unknown holder";
 static CLAIM_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 pub(super) struct RecordPaths {
@@ -24,6 +25,12 @@ pub(super) struct RecordPaths {
 }
 
 pub(super) struct RecordGuard(File);
+
+pub(super) struct LockIdentity<'a> {
+    pub(super) agent_id: &'a str,
+    pub(super) session_id: &'a str,
+    pub(super) agent_type: Option<&'a str>,
+}
 
 fn io_error(kind: ErrorKind, message: &'static str) -> std::io::Error {
     std::io::Error::new(kind, message)
@@ -47,7 +54,32 @@ fn private_file(file: &File, maximum_bytes: u64) -> std::io::Result<()> {
 
 pub(super) fn ensure_lock_dir(context: &PolicyContext) -> std::io::Result<File> {
     let cache = crate::state::open_cache_directory(context)?;
-    crate::state::open_child_directory(&cache, "file-locks", true)
+    match crate::state::open_child_directory(&cache, "file-locks", true) {
+        Ok(directory) => Ok(directory),
+        Err(_) => repair_lock_dir(&cache),
+    }
+}
+
+fn repair_lock_dir(cache: &File) -> std::io::Result<File> {
+    let directory = crate::state::open_at(
+        cache,
+        "file-locks",
+        libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_DIRECTORY,
+        0,
+    )?;
+    let metadata = directory.metadata()?;
+    if !metadata.is_dir() || metadata.uid() != current_uid() {
+        return Err(io_error(
+            ErrorKind::PermissionDenied,
+            "file lock directory is not owner-controlled",
+        ));
+    }
+    // SAFETY: directory is an owned directory fd we opened and own.
+    if unsafe { libc::fchmod(directory.as_raw_fd(), 0o700) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    crate::state::validate_directory(&directory, true)?;
+    Ok(directory)
 }
 
 fn try_guard_lock(file: &File) -> std::io::Result<bool> {
@@ -275,6 +307,22 @@ pub(super) fn owner_matches(record: &Value, agent_id: &str, session_id: &str) ->
     record_holder(record) == Some(agent_id) && record_session(record) == Some(session_id)
 }
 
+pub(super) fn session_matches(record: &Value, session_id: &str) -> bool {
+    record_session(record) == Some(session_id)
+}
+
+pub(super) fn holder_display(record: &Value) -> String {
+    match (
+        nonempty_str(record.get("agent_type")),
+        nonempty_str(record.get("agent_id")),
+    ) {
+        (Some(kind), Some(id)) if kind != id => format!("{kind} ({id})"),
+        (Some(kind), _) => kind.to_owned(),
+        (None, Some(id)) => id.to_owned(),
+        (None, None) => UNKNOWN_HOLDER.to_owned(),
+    }
+}
+
 pub(super) fn claim_id(agent_id: &str, absolute: &str, now: f64) -> String {
     let counter = CLAIM_COUNTER.fetch_add(1, Ordering::Relaxed);
     let seed = format!(
@@ -287,25 +335,71 @@ pub(super) fn claim_id(agent_id: &str, absolute: &str, now: f64) -> String {
 
 pub(super) fn lock_record(
     absolute: &str,
-    agent_id: &str,
-    session_id: &str,
+    identity: &LockIdentity<'_>,
     claim_id: &str,
     now: f64,
 ) -> Value {
-    serde_json::json!({
+    let mut record = serde_json::json!({
         "path": absolute,
-        "agent_id": agent_id,
-        "session_id": session_id,
+        "agent_id": identity.agent_id,
+        "session_id": identity.session_id,
         "claim_id": claim_id,
         "pid": process::id(),
         "acquired_at": now,
-    })
+    });
+    if let Some(agent_type) = identity.agent_type {
+        record["agent_type"] = Value::from(agent_type);
+    }
+    record
 }
 
 pub(super) fn is_stale(record: &Value, now: f64) -> bool {
     lock_is_stale(record, now)
 }
 
-pub(super) fn holder_of(record: &Value) -> Option<&str> {
-    record_holder(record)
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn holder_display_prefers_type_and_id() {
+        assert_eq!(
+            holder_display(&json!({"agent_type": "claudex-grok", "agent_id": "agent-a"})),
+            "claudex-grok (agent-a)"
+        );
+    }
+
+    #[test]
+    fn holder_display_uses_id_when_type_is_absent() {
+        assert_eq!(holder_display(&json!({"agent_id": "agent-a"})), "agent-a");
+    }
+
+    #[test]
+    fn holder_display_falls_back_to_unknown() {
+        assert_eq!(holder_display(&json!({})), "unknown holder");
+    }
+
+    #[test]
+    fn holder_display_uses_type_when_it_matches_id() {
+        assert_eq!(
+            holder_display(&json!({"agent_type": "agent-a", "agent_id": "agent-a"})),
+            "agent-a"
+        );
+    }
+
+    #[test]
+    fn lock_is_stale_only_after_ttl() {
+        let record = json!({"acquired_at": 1_000.0});
+        assert!(!lock_is_stale(&record, 1_300.0));
+        assert!(lock_is_stale(&record, 1_301.0));
+    }
+
+    #[test]
+    fn lock_is_stale_rejects_invalid_timestamps() {
+        assert!(!lock_is_stale(&json!({"acquired_at": -1.0}), 1_301.0));
+        assert!(!lock_is_stale(&json!({"acquired_at": 1_000.0}), f64::NAN));
+        assert!(!lock_is_stale(&json!({"acquired_at": 2_000.0}), 1_000.0));
+        assert!(session_matches(&json!({"session_id": "sess-a"}), "sess-a"));
+    }
 }

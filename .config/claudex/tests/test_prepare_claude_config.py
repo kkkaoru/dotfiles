@@ -72,6 +72,7 @@ class PrepareClaudeConfigTests(unittest.TestCase):
             self.assertIn("PreToolUse", isolated_hooks)
             self.assertIn("PostToolUse", isolated_hooks)
             self.assertIn("SubagentStop", isolated_hooks)
+            self.assertIn("SessionEnd", isolated_hooks)
             pre = json.dumps(isolated_hooks["PreToolUse"])
             self.assertIn("claudex-tool-policy", pre)
             # Plain shared settings must not gain mechanical tool limits.

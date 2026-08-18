@@ -330,6 +330,48 @@ fn file_lock_symlink_attack_is_denied_without_clobbering_target() {
 }
 
 #[test]
+fn owner_readable_lock_directory_is_repaired_instead_of_denying_as_another_agent() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("owned.rs");
+    fs::write(&target, "ok\n").unwrap();
+    let lock_dir = tmp.path().join("file-locks");
+    fs::create_dir(&lock_dir).unwrap();
+    fs::set_permissions(&lock_dir, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let output = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "new"},
+            "session_id": "session-a",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert_ne!(
+        output
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny"),
+        "owner-controlled 0755 file-locks must be repaired, not reported as another agent: {output}"
+    );
+    let reason = output
+        .pointer("/hookSpecificOutput/permissionDecisionReason")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    assert!(
+        !reason.contains("another agent"),
+        "infrastructure denial leaked the unnamed-holder fallback: {reason}"
+    );
+    assert_eq!(
+        fs::metadata(&lock_dir).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+}
+
+#[test]
 fn stale_file_lock_is_reclaimed_under_guard_after_ttl() {
     let tmp = TempDir::new().unwrap();
     let target = tmp.path().join("shared.rs");
@@ -361,7 +403,7 @@ fn stale_file_lock_is_reclaimed_under_guard_after_ttl() {
     });
     let second_result = handle_event_with_context(
         second.as_object().unwrap(),
-        &explicit_context(tmp.path(), 1_000.0 + 45.0 * 60.0 + 1.0),
+        &explicit_context(tmp.path(), 1_000.0 + 5.0 * 60.0 + 1.0),
     );
     assert_ne!(
         second_result
@@ -478,6 +520,697 @@ fn recursive_subagent_stop_returns_success_without_mutating_locks() {
             .and_then(Value::as_str),
         Some("deny")
     );
+}
+
+#[test]
+fn same_agent_can_refresh_its_own_lock() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("shared.rs");
+    fs::write(&target, "source\n").unwrap();
+    let first = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "first"},
+            "session_id": "session-a",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert_ne!(
+        first
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+    let second = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "second"},
+            "session_id": "session-a",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_001.0),
+    );
+    assert_ne!(
+        second
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+}
+
+#[test]
+fn file_lock_in_group_readable_dir_reports_real_holder() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("shared.rs");
+    fs::write(&target, "source\n").unwrap();
+    let first = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "first"},
+            "session_id": "session-a",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert_ne!(
+        first
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+    fs::set_permissions(
+        tmp.path().join("file-locks"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let second = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "second"},
+            "session_id": "session-a",
+            "agent_id": "agent-b"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_001.0),
+    );
+    assert_eq!(second["hookSpecificOutput"]["permissionDecision"], "deny");
+    let reason = second["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap();
+    assert!(reason.contains("agent-a"));
+    assert!(!reason.contains("another agent"));
+}
+
+#[test]
+fn stale_file_lock_in_group_readable_dir_is_reclaimed() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("shared.rs");
+    fs::write(&target, "source\n").unwrap();
+    let first = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "first"},
+            "session_id": "session-a",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert_ne!(
+        first
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+    fs::set_permissions(
+        tmp.path().join("file-locks"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let second = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "second"},
+            "session_id": "session-b",
+            "agent_id": "agent-b"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0 + 5.0 * 60.0 + 1.0),
+    );
+    assert_ne!(
+        second
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+}
+
+#[test]
+fn session_end_releases_session_locks() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("owned.rs");
+    fs::write(&target, "ok\n").unwrap();
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "ok"},
+            "session_id": "sess",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "SessionEnd",
+            "session_id": "sess"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_001.0),
+    );
+    let allowed = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "next"},
+            "session_id": "sess",
+            "agent_id": "agent-b"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_002.0),
+    );
+    assert_ne!(
+        allowed
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+}
+
+#[test]
+fn session_end_does_not_release_other_session_locks() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("owned.rs");
+    fs::write(&target, "ok\n").unwrap();
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "ok"},
+            "session_id": "sess-a",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "SessionEnd",
+            "session_id": "sess-b"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_001.0),
+    );
+    let blocked = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "next"},
+            "session_id": "sess-a",
+            "agent_id": "agent-b"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_002.0),
+    );
+    assert_eq!(blocked["hookSpecificOutput"]["permissionDecision"], "deny");
+    let reason = blocked["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap();
+    assert!(reason.contains("agent-a"));
+}
+
+#[test]
+fn lock_conflict_reports_agent_type_and_id() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("shared.rs");
+    fs::write(&target, "source\n").unwrap();
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "first"},
+            "session_id": "sess",
+            "agent_id": "agent-a",
+            "agent_type": "claudex-grok"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    let second = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "second"},
+            "session_id": "sess",
+            "agent_id": "agent-b"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_001.0),
+    );
+    assert_eq!(second["hookSpecificOutput"]["permissionDecision"], "deny");
+    let reason = second["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap();
+    assert!(reason.contains("claudex-grok (agent-a)"));
+    assert!(!reason.contains("another agent"));
+}
+
+#[test]
+fn malformed_lock_is_reclaimed() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("shared.rs");
+    fs::write(&target, "source\n").unwrap();
+    let lock_dir = tmp.path().join("file-locks");
+    fs::create_dir(&lock_dir).unwrap();
+    fs::set_permissions(&lock_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let lock_path = file_lock_path(tmp.path(), &target);
+    fs::write(&lock_path, "not-json\n").unwrap();
+    fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let output = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "new"},
+            "session_id": "sess",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert_ne!(
+        output
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+}
+
+#[test]
+fn lock_store_failure_fails_open() {
+    let tmp = TempDir::new().unwrap();
+    let cache = tmp.path().join("not-a-directory");
+    fs::write(&cache, "x\n").unwrap();
+    let output = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "/tmp/x", "content": "new"},
+            "session_id": "sess",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &PolicyContext::new(cache, tmp.path().to_path_buf(), 1_000.0, true, false),
+    );
+    assert_ne!(
+        output
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+}
+
+#[test]
+fn fresh_lock_is_not_reclaimed_before_ttl() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("shared.rs");
+    fs::write(&target, "source\n").unwrap();
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "first"},
+            "session_id": "session-a",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    let second = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "second"},
+            "session_id": "session-b",
+            "agent_id": "agent-b"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0 + 5.0 * 60.0),
+    );
+    assert_eq!(second["hookSpecificOutput"]["permissionDecision"], "deny");
+}
+
+#[test]
+fn main_session_write_does_not_report_file_lock() {
+    let tmp = TempDir::new().unwrap();
+    write_session_delegation(tmp.path(), "sess-main", true, 1_000.0);
+    let target = tmp.path().join("shared.rs");
+    fs::write(&target, "source\n").unwrap();
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "worker"},
+            "session_id": "sess-main",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    let main = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "main"},
+            "session_id": "sess-main"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_001.0),
+    );
+    assert_eq!(main["hookSpecificOutput"]["permissionDecision"], "deny");
+    let reason = main["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap();
+    assert!(reason.contains("Agent/Task"));
+    assert!(!reason.contains("locked by"));
+}
+
+#[test]
+fn post_tool_use_releases_path_lock() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("owned.rs");
+    fs::write(&target, "ok\n").unwrap();
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "ok"},
+            "session_id": "sess",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "ok"},
+            "session_id": "sess",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_001.0),
+    );
+    let allowed = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "next"},
+            "session_id": "sess",
+            "agent_id": "agent-b"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_002.0),
+    );
+    assert_ne!(
+        allowed
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+}
+
+#[test]
+fn multi_edit_conflict_rolls_back_earlier_paths() {
+    let tmp = TempDir::new().unwrap();
+    let first = tmp.path().join("first.rs");
+    let second = tmp.path().join("second.rs");
+    fs::write(&first, "one\n").unwrap();
+    fs::write(&second, "two\n").unwrap();
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": second, "content": "held"},
+            "session_id": "sess",
+            "agent_id": "agent-b"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    let denied = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "MultiEdit",
+            "tool_input": {
+                "edits": [
+                    {"file_path": first, "old_string": "one", "new_string": "ONE"},
+                    {"path": second, "old_string": "two", "new_string": "TWO"}
+                ]
+            },
+            "session_id": "sess",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_001.0),
+    );
+    assert_eq!(denied["hookSpecificOutput"]["permissionDecision"], "deny");
+    let allowed = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": first, "content": "free"},
+            "session_id": "sess",
+            "agent_id": "agent-c"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_002.0),
+    );
+    assert_ne!(
+        allowed
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+}
+
+#[test]
+fn tilde_path_and_notebook_lock_the_resolved_file() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("note.ipynb");
+    fs::write(&target, "{}\n").unwrap();
+    let first = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "NotebookEdit",
+            "tool_input": {"notebook_path": "~/note.ipynb"},
+            "session_id": "sess",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert_ne!(
+        first
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+    let second = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "x"},
+            "session_id": "sess",
+            "agent_id": "agent-b"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_001.0),
+    );
+    assert_eq!(second["hookSpecificOutput"]["permissionDecision"], "deny");
+}
+
+#[test]
+fn non_object_lock_record_is_reclaimed() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("shared.rs");
+    fs::write(&target, "source\n").unwrap();
+    let lock_dir = tmp.path().join("file-locks");
+    fs::create_dir(&lock_dir).unwrap();
+    fs::set_permissions(&lock_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let lock_path = file_lock_path(tmp.path(), &target);
+    fs::write(&lock_path, "[]\n").unwrap();
+    fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let output = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "new"},
+            "session_id": "sess",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert_ne!(
+        output
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+}
+
+#[test]
+fn oversized_lock_record_is_reclaimed() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("shared.rs");
+    fs::write(&target, "source\n").unwrap();
+    let lock_dir = tmp.path().join("file-locks");
+    fs::create_dir(&lock_dir).unwrap();
+    fs::set_permissions(&lock_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let lock_path = file_lock_path(tmp.path(), &target);
+    fs::write(&lock_path, vec![b'x'; 16_384]).unwrap();
+    fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o600)).unwrap();
+    let output = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "new"},
+            "session_id": "sess",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert_ne!(
+        output
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+}
+
+#[test]
+fn group_writable_lock_record_is_denied_as_unsafe() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("shared.rs");
+    fs::write(&target, "source\n").unwrap();
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "first"},
+            "session_id": "sess",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    let lock_path = file_lock_path(tmp.path(), &target);
+    fs::set_permissions(&lock_path, fs::Permissions::from_mode(0o644)).unwrap();
+    let second = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "second"},
+            "session_id": "sess",
+            "agent_id": "agent-b"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_001.0),
+    );
+    assert_eq!(second["hookSpecificOutput"]["permissionDecision"], "deny");
+    let reason = second["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap();
+    assert!(reason.contains("unsafe or unreadable"));
+    assert!(!reason.contains("another agent"));
+}
+
+#[test]
+fn file_lock_busy_guard_reports_busy_not_another_agent() {
+    use std::os::fd::AsRawFd as _;
+
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("shared.rs");
+    fs::write(&target, "source\n").unwrap();
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "first"},
+            "session_id": "sess",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    let lock_path = file_lock_path(tmp.path(), &target);
+    let name = lock_path.file_name().unwrap().to_str().unwrap();
+    let digest = name.strip_suffix(".lock.json").unwrap();
+    let guard = tmp
+        .path()
+        .join("file-locks")
+        .join(format!("{digest}.guard"));
+    let held = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&guard)
+        .unwrap();
+    let locked = unsafe { libc::flock(held.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    assert_eq!(locked, 0);
+    let second = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "second"},
+            "session_id": "sess",
+            "agent_id": "agent-b"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_001.0),
+    );
+    assert_eq!(second["hookSpecificOutput"]["permissionDecision"], "deny");
+    let reason = second["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap();
+    assert!(reason.contains("lock is busy"));
+    assert!(!reason.contains("another agent"));
 }
 
 #[test]

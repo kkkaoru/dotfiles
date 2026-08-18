@@ -50,6 +50,12 @@ CLAUDEX_TOOL_POLICY_HOOKS: dict[str, list[dict[str, Any]]] = {
             "hooks": [{"type": "command", "command": TOOL_POLICY_HOOK, "timeout": 10}],
         }
     ],
+    "SessionEnd": [
+        {
+            "matcher": "*",
+            "hooks": [{"type": "command", "command": TOOL_POLICY_HOOK, "timeout": 10}],
+        }
+    ],
 }
 
 

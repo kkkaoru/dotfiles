@@ -1,7 +1,9 @@
 use crate::allow;
 use crate::deny;
 use crate::env::nonempty_str;
-use crate::locks::{acquire_locks, release_agent_locks, release_paths, tool_file_paths};
+use crate::locks::{
+    acquire_locks, release_agent_locks, release_paths, release_session_locks, tool_file_paths,
+};
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -190,6 +192,11 @@ fn handle_subagent_stop(payload: &Map<String, Value>, context: &PolicyContext) -
     allow(None, None)
 }
 
+fn handle_session_end(payload: &Map<String, Value>, context: &PolicyContext) -> Value {
+    release_session_locks(payload, context);
+    allow(None, None)
+}
+
 /// Dispatch a Claude Code hook event payload.
 pub fn handle_event(payload: &Map<String, Value>) -> Value {
     handle_event_with_context(payload, &PolicyContext::from_environment())
@@ -201,6 +208,7 @@ pub fn handle_event_with_context(payload: &Map<String, Value>, context: &PolicyC
         Some("PreToolUse") => handle_pre_tool_use(payload, context),
         Some("PostToolUse") => handle_post_tool_use(payload, context),
         Some("SubagentStop") => handle_subagent_stop(payload, context),
+        Some("SessionEnd") => handle_session_end(payload, context),
         _ => allow(None, None),
     }
 }

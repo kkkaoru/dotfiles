@@ -6,7 +6,9 @@ use std::path::PathBuf;
 mod acquire;
 mod store;
 
-pub(crate) use acquire::{acquire_locks, release_agent_locks, release_paths};
+pub(crate) use acquire::{
+    acquire_locks, release_agent_locks, release_paths, release_session_locks,
+};
 
 fn path_from_edit(edit: &Value) -> Option<String> {
     let object = edit.as_object()?;
@@ -47,13 +49,30 @@ fn resolve_absolute(path: &str, home: &std::path::Path) -> String {
         .into_owned()
 }
 
-fn deny_locked(absolute: &str, holder: Option<&str>) -> Value {
+fn deny_locked(absolute: &str, holder: &str) -> Value {
     deny(
         "PreToolUse",
         &format!(
-            "File `{absolute}` is locked by SubAgent `{}`. Partition write scopes so parallel \
-             workers do not edit the same path, or wait for that worker to finish before retrying.",
-            holder.unwrap_or("another agent")
+            "File `{absolute}` is locked by SubAgent `{holder}`. Partition write scopes so parallel \
+             workers do not edit the same path, or wait for that worker to finish before retrying."
+        ),
+    )
+}
+
+fn deny_lock_busy(absolute: &str) -> Value {
+    deny(
+        "PreToolUse",
+        &format!(
+            "File `{absolute}` lock is busy. Retry the write after the concurrent hook finishes."
+        ),
+    )
+}
+
+fn deny_lock_unsafe(absolute: &str) -> Value {
+    deny(
+        "PreToolUse",
+        &format!(
+            "File `{absolute}` lock is unsafe or unreadable. Remove the conflicting lock file."
         ),
     )
 }

@@ -264,6 +264,84 @@ class ClaudexToolPolicyTests(unittest.TestCase):
                 "deny",
             )
 
+    def test_session_end_releases_locks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            target = Path(tmp) / "owned.rs"
+            target.write_text("ok\n", encoding="utf-8")
+            self.run_policy(
+                {
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": "Write",
+                    "tool_input": {"file_path": str(target), "content": "ok"},
+                    "session_id": "sess",
+                    "agent_id": "agent-a",
+                },
+                cache=cache,
+            )
+            self.run_policy(
+                {
+                    "hook_event_name": "SessionEnd",
+                    "session_id": "sess",
+                },
+                cache=cache,
+            )
+            allowed = self.run_policy(
+                {
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": "Write",
+                    "tool_input": {"file_path": str(target), "content": "next"},
+                    "session_id": "sess",
+                    "agent_id": "agent-b",
+                },
+                cache=cache,
+            )
+            self.assertNotEqual(
+                allowed.get("hookSpecificOutput", {}).get("permissionDecision"),
+                "deny",
+            )
+
+    def test_group_readable_lock_dir_is_repaired_not_another_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            target = Path(tmp) / "shared.rs"
+            target.write_text("fn main() {}\n", encoding="utf-8")
+            first = self.run_policy(
+                {
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": "Write",
+                    "tool_input": {"file_path": str(target), "content": "a"},
+                    "session_id": "sess",
+                    "agent_id": "agent-a",
+                    "agent_type": "claudex-grok",
+                },
+                cache=cache,
+            )
+            self.assertNotEqual(
+                first.get("hookSpecificOutput", {}).get("permissionDecision"),
+                "deny",
+            )
+            lock_dir = cache / "file-locks"
+            lock_dir.chmod(0o755)
+            second = self.run_policy(
+                {
+                    "hook_event_name": "PreToolUse",
+                    "tool_name": "Write",
+                    "tool_input": {"file_path": str(target), "content": "b"},
+                    "session_id": "sess",
+                    "agent_id": "agent-b",
+                },
+                cache=cache,
+            )
+            self.assertEqual(
+                second["hookSpecificOutput"]["permissionDecision"],
+                "deny",
+            )
+            reason = second["hookSpecificOutput"]["permissionDecisionReason"]
+            self.assertIn("claudex-grok (agent-a)", reason)
+            self.assertNotIn("another agent", reason)
+            self.assertEqual(lock_dir.stat().st_mode & 0o777, 0o700)
+
     def test_allow_main_tools_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cache = Path(tmp)
