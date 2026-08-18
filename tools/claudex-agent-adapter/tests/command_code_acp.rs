@@ -221,11 +221,9 @@ fn providers_json_registers_command_code_for_automatic_selection() {
     assert_eq!(provider["defaultModel"], MODEL);
     assert_eq!(provider["subagentModel"], MODEL);
     assert_eq!(provider["usageProvider"], "commandcode");
-    assert_eq!(provider["acp"]["program"], "command-code-acp");
-    assert_eq!(
-        provider["acp"]["arguments"],
-        json!(["--model", "{model}", "--effort", "{effort}"])
-    );
+    assert_eq!(provider["piProvider"], "commandcode");
+    assert_eq!(provider["piModel"], MODEL);
+    assert_eq!(provider.get("acp"), None);
     let main = config["mainProviders"]
         .as_array()
         .expect("mainProviders")
