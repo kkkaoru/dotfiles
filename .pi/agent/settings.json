@@ -1,14 +1,15 @@
 {
   "lastChangelogVersion": "0.84.2",
   "theme": "dracula",
-  "defaultProvider": "xai",
-  "defaultModel": "grok-4.6",
-  "defaultThinkingLevel": "medium",
+  "defaultProvider": "devin",
+  "defaultModel": "swe-1-7",
+  "defaultThinkingLevel": "off",
   "packages": [
     "npm:pi-effort",
     "./packages/pi-my-clinepass-provider",
     "npm:pi-ollama-cloud",
     "./packages/pi-my-cursor-provider",
+    "./packages/pi-my-devin-cli-provider",
     "./packages/pi-claudex-provider",
     "npm:pi-commandcode-provider",
     "npm:pi-antigravity"

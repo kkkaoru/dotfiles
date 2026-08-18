@@ -147,7 +147,7 @@ done
 # Pi resolves package-relative paths against ~/.pi/agent without following the
 # ~/.pi symlink. Point settings at these local package links so other machines
 # can reuse the same relative paths after create-symlinks.sh.
-for package in pi-my-clinepass-provider pi-my-cursor-provider pi-claudex-provider; do
+for package in pi-my-clinepass-provider pi-my-cursor-provider pi-my-devin-cli-provider pi-claudex-provider; do
   package_path="${DOTPATH}/tools/${package}"
   if [ -d "$package_path" ]; then
     link_path "$package_path" "${DOTPATH}/.pi/agent/packages/${package}"
