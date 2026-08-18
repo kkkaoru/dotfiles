@@ -305,6 +305,9 @@ def run_checks(root: Path, selected: Iterable[Check]) -> None:
     for check in selected:
         print(f"quality: {' '.join(check.command)} ({check.directory})", flush=True)
         directory = root / check.directory
+        if not directory.is_dir():
+            print(f"quality: skip missing {check.directory}", flush=True)
+            continue
         if check.allow_paths is None:
             subprocess.run(check.command, cwd=directory, check=True)
             continue
