@@ -106,7 +106,7 @@ fn every_model_worker_inherits_shell_and_command_capability() {
 }
 
 #[test]
-fn opencode_provider_starts_the_acp_subcommand() {
+fn opencode_provider_maps_to_pi_gateway() {
     let root = repository_root();
     let config: Value = serde_json::from_str(
         &fs::read_to_string(root.join(".config/claudex/providers.json"))
@@ -119,14 +119,10 @@ fn opencode_provider_starts_the_acp_subcommand() {
         .iter()
         .find(|provider| provider["id"] == "opencode-go")
         .expect("OpenCode provider");
-    let arguments = provider["acp"]["arguments"]
-        .as_array()
-        .expect("OpenCode ACP arguments");
-    assert_eq!(
-        arguments,
-        &[Value::String("acp".to_owned())],
-        "OpenCode ACP permissions are approved through the ACP client; TUI-only flags must not intercept the subcommand"
-    );
+    assert_eq!(provider["backend"], "pi-gateway");
+    assert_eq!(provider["piProvider"], "opencode-go");
+    assert_eq!(provider["piModel"], "deepseek-v4-pro");
+    assert_eq!(provider.get("acp"), None);
 }
 
 #[test]
@@ -161,14 +157,14 @@ fn configured_worker_routes_are_command_capable() {
     let providers = config["providers"].as_array().expect("providers array");
 
     for (id, backend) in [
-        ("codex", "codex-app-server"),
-        ("codex-spark", "codex-app-server"),
-        ("fugu", "codex-app-server"),
-        ("ollama-glm-5-2", "codex-app-server"),
-        ("grok", "grok-acp"),
-        ("opencode-go", "configured-acp"),
-        ("cursor", "configured-acp"),
-        ("cursor-luna-max", "configured-acp"),
+        ("codex", "pi-gateway"),
+        ("codex-spark", "pi-gateway"),
+        ("fugu", "pi-gateway"),
+        ("ollama-glm-5-2", "pi-gateway"),
+        ("grok", "pi-gateway"),
+        ("opencode-go", "pi-gateway"),
+        ("cursor", "pi-gateway"),
+        ("cursor-luna-max", "pi-gateway"),
     ] {
         let provider = providers
             .iter()
@@ -197,10 +193,9 @@ fn configured_worker_routes_are_command_capable() {
         luna_provider["selectableModels"],
         json!(["gpt-5.6-luna-max"])
     );
-    assert_eq!(
-        luna_provider["acp"]["arguments"],
-        json!(["--model", "{model}", "--yolo", "acp"])
-    );
+    assert_eq!(luna_provider["piProvider"], "cursor");
+    assert_eq!(luna_provider["piModel"], "gpt-5.6-luna-max");
+    assert_eq!(luna_provider.get("acp"), None);
     assert!(
         config["mainProviders"]
             .as_array()
