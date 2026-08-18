@@ -21,13 +21,20 @@ SHARED_SETTINGS_NAMES = frozenset({"settings.json", "settings.local.json"})
 DISCOVERY_PREFIX = "claude-claudex-"
 PLAIN_CLAUDE_FALLBACK_MODEL = "sonnet[1m]"
 DEFAULT_STOP_HOOK_BLOCK_CAP = "64"
-# Identity map for the live Grok id Claude Code does not ship. xAI publishes a
-# 500k window for grok-4.6; the launcher still sends that via
+# xAI publishes a 500k window for grok-4.6; the launcher still sends that via
 # CLAUDE_CODE_MAX_CONTEXT_TOKENS from providers.json.
-GROK_LIVE_MODEL = "grok-4.6"
 TOOL_POLICY_HOOK = (
     'test "${CLAUDEX_ACTIVE:-}" != 1 || '
     'exec "$HOME/.cargo/bin/claudex-tool-policy"'
+)
+# External model ids accepted by the Claudex adapter but not shipped in Claude
+# Code's built-in catalog. Identity mappings suppress the SDK warning without
+# changing the model sent to the adapter.
+CLAUDEX_EXTERNAL_MODEL_IDS = (
+    "grok-4.6",
+    "cursor/gpt-5.6-luna",
+    "cursor/gpt-5.6-sol",
+    "cursor/gpt-5.6-terra",
 )
 # Registered only on the claudex-isolated settings.json. Plain `claude` keeps
 # using ~/.claude/settings.json without these mechanical tool limits.
@@ -157,12 +164,13 @@ def apply_claudex_hook_env(settings: dict[str, Any]) -> None:
     env.setdefault("CLAUDE_CODE_STOP_HOOK_BLOCK_CAP", DEFAULT_STOP_HOOK_BLOCK_CAP)
 
 
-def apply_grok_model_overrides(settings: dict[str, Any]) -> None:
+def apply_external_model_overrides(settings: dict[str, Any]) -> None:
     overrides = settings.get("modelOverrides")
     if not isinstance(overrides, dict):
         overrides = {}
         settings["modelOverrides"] = overrides
-    overrides.setdefault(GROK_LIVE_MODEL, GROK_LIVE_MODEL)
+    for model in CLAUDEX_EXTERNAL_MODEL_IDS:
+        overrides.setdefault(model, model)
     # Drop leftover grok-4.5 identity keys copied from older user settings.
     overrides.pop("grok-4.5", None)
 
@@ -179,7 +187,7 @@ def write_isolated_settings(
     settings["effortLevel"] = effort
     apply_context_token_env(settings, context_tokens)
     apply_claudex_hook_env(settings)
-    apply_grok_model_overrides(settings)
+    apply_external_model_overrides(settings)
     merge_claudex_tool_policy_hooks(settings)
     isolated_settings_path.write_text(
         json.dumps(settings, indent=2, ensure_ascii=False) + "\n",
