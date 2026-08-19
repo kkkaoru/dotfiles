@@ -6,6 +6,8 @@ scripts_dir="${AGMSG_SCRIPTS_DIR:-${HOME}/.agents/skills/agmsg/scripts}"
 export AGMSG_SCRIPTS_DIR="$scripts_dir"
 
 python3 - <<'PY'
+from __future__ import annotations
+
 import os
 import re
 import stat
