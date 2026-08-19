@@ -206,7 +206,7 @@
         "../../tools/pi-my-cursor-provider/index.ts"
       ],
       "effort": "max",
-      "maxContextTokens": 800000,
+      "maxContextTokens": 217600,
       "enabled": true,
       "usageProvider": "cursor",
       "modelPrefixes": [

@@ -15,7 +15,8 @@ user instruction may narrow those permissions. For related follow-ups delivered 
 agent, build on the existing context and re-inspect only changed evidence unless full revalidation
 is necessary.
 This route uses the Claudex PiGateway Cursor provider. The model is fixed as
-`cursor/gpt-5.6-luna`; do not replace it with `auto`, another provider, or a fallback model.
+`cursor/gpt-5.6-luna`; the provider selects its 272K context variant with `fast=true`. Do not
+replace it with `auto`, another provider, or a fallback model.
 For web research, label evidence precisely. `fetch_verified` requires a completed provider fetch
 with the cited page content; `search_result_only` is a discovery lead from a native search title,
 URL, or snippet and cannot verify a material fact. Provider-owned tools may not appear as Claude

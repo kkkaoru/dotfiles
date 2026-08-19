@@ -22,12 +22,13 @@ class ResolveContextTokensTests(unittest.TestCase):
     def test_fugu_uses_one_million_window(self) -> None:
         self.assertEqual(self.resolve(str(PROVIDERS), "fugu"), "1000000")
 
-    def test_cursor_models_use_eight_hundred_thousand_window(self) -> None:
-        for model in [
-            "cursor/gpt-5.6-luna",
-            "cursor/gpt-5.6-sol",
-            "cursor/gpt-5.6-terra",
-        ]:
+    def test_cursor_luna_uses_two_hundred_seventeen_thousand_six_hundred_window(self) -> None:
+        self.assertEqual(
+            self.resolve(str(PROVIDERS), "cursor/gpt-5.6-luna"), "217600"
+        )
+
+    def test_cursor_one_million_models_use_eight_hundred_thousand_window(self) -> None:
+        for model in ["cursor/gpt-5.6-sol", "cursor/gpt-5.6-terra"]:
             self.assertEqual(self.resolve(str(PROVIDERS), model), "800000", model)
 
     def test_command_code_luna_uses_eight_hundred_thousand_window(self) -> None:

@@ -58,7 +58,7 @@ flowchart LR
 | DeepSeek Flash worker | `claudex-deepseek-flash` | `opencode-go/deepseek-v4-flash` | `max` | CodexBarのOpenCode Go枠に空きがあり、denylistに無い場合（このマシンでは無効化維持） |
 | OpenCode GPT Luna worker | `claudex-opencode-gpt` | `opencode-go/gpt-5.6-luna` | `max` | CodexBarのOpenCode Go枠に空きがある場合。Codexの `gpt-5.6-luna` / `claudex-gpt` とは別route |
 | Cursor worker | `claudex-cursor` | `auto` | `high` | CodexBarのCursor枠に空きがある場合。`cursor-agent --model auto --yolo acp`。modelはCLI+session/newで固定し、毎turnの `set_session_model` 再選択はしない |
-| Cursor Luna worker | `claudex-cursor-luna` | `cursor/gpt-5.6-luna` | `max` | Cursor PiGateway の GPT-5.6 Luna。Cursorの1M variantに合わせ、80%（`800000`）を入力上限として安全側に広告 |
+| Cursor Luna worker | `claudex-cursor-luna` | `cursor/gpt-5.6-luna` | `max` | Cursor PiGateway の GPT-5.6 Luna。272K variantを選び、fastを有効化。80%（`217600`）を入力上限として安全側に広告 |
 | Cursor Sol worker | `claudex-cursor-sol` | `cursor/gpt-5.6-sol` | `high` | Cursor PiGateway の GPT-5.6 Sol。1M variantに合わせ、80%（`800000`）を入力上限として安全側に広告 |
 | Cursor Terra worker | `claudex-cursor-terra` | `cursor/gpt-5.6-terra` | `high` | Cursor PiGateway の GPT-5.6 Terra。1M variantに合わせ、80%（`800000`）を入力上限として安全側に広告 |
 | Cline DeepSeek Flash worker | `claudex-cline-deepseek-flash` | `cline-pass/deepseek-v4-flash` | `xhigh` | ClinePass枠（CodexBar `clinepass` weekly left）。`--thinking xhigh`。OpenCode Go DeepSeekとは別 |
@@ -120,8 +120,9 @@ DeepSeek / OpenCode GPT Luna workerは独立した調査をまとめて実行し
 長い処理のフェーズ間で短い進捗を返すよう定義しています。
 Cursor routeはすべて PiGateway の `cursor` providerへ `piModel` を渡します。既存routeの既定modelは
 `auto`、追加した明示routeは `cursor/gpt-5.6-luna`、`cursor/gpt-5.6-sol`、
-`cursor/gpt-5.6-terra` です。Cursor SDKの実カタログでは3モデルとも1M variantが確認できるため、
-Claudexは安全側の `800000` を `maxContextTokens` に設定します。ACP-nativeの
+`cursor/gpt-5.6-terra` です。Cursor SDKの実カタログではLunaにも272K/1M variantがあるため、
+Lunaは272K variantとfast=trueを選び、安全側の `217600` を `maxContextTokens` に設定します。
+Sol/Terraは1M variantのまま、安全側の `800000` を設定します。ACP-nativeの
 `cursor-agent acp` はClaudex routeでは使用しません。
 Command Code Muse Sparkは `command-code-acp --model {model} --effort {effort}` を起動し、
 内部で公式 headless `cmd -p --output-format json --yolo --trust --skip-onboarding --no-skills --no-session` を回します。SubAgent は常に one-shot（`--resume` しない）で、Claudex の ACP_NATIVE / routing dump / 再構成 transcript も `cmd` に載せません。
@@ -745,7 +746,8 @@ main は実装せず、実質作業は Agent/Task で worker へ委譲します�
 `/model` で `claude-claudex-gpt-5.6-terra` を選ぶか、上記の `CLAUDEX_MODEL` を使います。
 Claude Code は `gpt-5.6-terra` や `auto`、`grok-4.6` を未知モデルとして 200k compact 前提にするため、launcher は
 provider の `maxContextTokens`（Codex は `110000`、Cursor `auto` は `200000`、Cursorの
-GPT-5.6 Luna/Sol/Terra は安全側の `800000`、Grok は xAI 公表の `500000`）を
+GPT-5.6 Lunaは272K variantの安全側 `217600`、Sol/Terraは1M variantの安全側 `800000`、
+Grok は xAI 公表の `500000`）を
 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` へ渡します。加えて `prepare-claude-config.py` は隔離
 `settings.json` の `modelOverrides` に `grok-4.6` の identity map を書き、
 Claude Code の unrecognized-model 警告が求めるマッピングを isolated 側だけに残します。
@@ -966,6 +968,9 @@ threadを先に開始し、`contextWindowExceeded` を事前回避します。�
 `fugu` はCodex catalogの1M context windowに合わせて
 `1000000` を指定しています。Cursor `auto` は Claude Code が未知モデルに仮定する
 200k と同じ `200000` を指定し、起動時の unrecognized-model 警告を env で明示します。
+Cursor Lunaは272K variantを使用し、fastを有効化するため、
+`217600`（実ウィンドウの80%）を指定します。Cursor Sol/Terraは1M variantのため、
+`800000` を指定します。
 Grok `grok-4.6` は xAI が公表する 500k context window に合わせて
 `500000` を指定します。いずれもproviderが実際の上限を先に返した場合は、
 非streaming turnを新規threadで1回だけ自動再試行します。

@@ -13,7 +13,8 @@ Minimal Cursor agent bridge for pi and Claudex. It preserves the existing `curso
 - Allows Cursor `mcp`, `webSearch`, `semSearch`, and `shell`. `mcp` keeps the pi custom-tool bridge; `webSearch` and `semSearch` have no pi equivalent; `shell` keeps Cursor-native command execution. Native `task` and `await` stay disabled so those SDK-internal tools cannot stall the TUI on Working...
 - Discovers the authenticated Cursor model catalog and provides a multi-model fallback catalog when discovery is unavailable.
 - Uses pi's supplied system prompt and tools without reloading ambient Cursor setting sources, avoiding duplicate rules and SDK bootstrap logs in standalone TUI use.
-- Advertises Cursor models to pi at 80% of their real context window (256k models report 204.8k) so pi's native auto-compaction fires before requests can reach Cursor's hard limit, where Cursor returns usage-guideline blocks instead of recognizable overflow errors.
+- Selects Cursor GPT-5.6 Luna's 272K context variant and enables its `fast` parameter.
+- Advertises Cursor models to pi at 80% of their real context window (256k models report 204.8k; Luna's 272K variant reports 217.6K) so pi's native auto-compaction fires before requests can reach Cursor's hard limit, where Cursor returns usage-guideline blocks instead of recognizable overflow errors.
 - Compaction summaries are routed through an off-Cursor fallback chain — `ollama-cloud/kimi-k3` → `github-copilot/gemini-3.7-flash` → `commandcode/gemini-3.7-flash` — because Cursor's moderation frequently blocks pi's whole-conversation summarization payloads. Each candidate is checked for configured auth and retried down the chain on failure; when the whole chain is unavailable, pi's default compaction runs instead.
 
 A Cursor API key must be available through pi `/login`, `CURSOR_API_KEY`, or request-level `--api-key` resolution.
@@ -27,6 +28,7 @@ pi --model cursor/auto
 pi --model cursor/composer-2.5
 pi --model cursor/claude-sonnet-4-6
 pi --model cursor/gpt-5.6-sol
+pi --model cursor/gpt-5.6-luna
 pi --model cursor/gemini-3.1-pro
 ```
 
@@ -42,7 +44,7 @@ Behavior with `@cursor/sdk` 1.0.28:
 | Pi tools                                          | Converted to Cursor custom tools with names, descriptions, and JSON schemas; results return to the same live run.                                                                                                                                                                       |
 | System prompt and message history                 | Transformed into one role-labelled transcript because each independent request uses a fresh Cursor agent.                                                                                                                                                                               |
 | Images                                            | Every user and tool-result image in the history is attached again in transcript order. Numbered placeholders such as `[image 2 attached: image/jpeg]` associate transcript positions with the SDK image array. Duplicate images are preserved.                                          |
-| Reasoning level                                   | Mapped to the live catalog's `effort` or `reasoning` parameter for explicitly selected capable models. Cursor Auto and models without such a parameter emit a warning and retain their SDK defaults.                                                                                    |
+| Reasoning level                                   | Mapped to the live catalog's `effort` or `reasoning` parameter for explicitly selected capable models. Cursor GPT-5.6 Luna also forces `context=272k` and `fast=true`. Cursor Auto and models without such a parameter emit a warning and retain their SDK defaults.                    |
 | Maximum output tokens and temperature             | Not configurable through the Cursor Agent SDK. Pi model values are descriptive metadata only.                                                                                                                                                                                           |
 | Session ID, cache retention, and request metadata | Not configurable through the Cursor Agent SDK. Independent requests intentionally create fresh agents.                                                                                                                                                                                  |
 | Compaction summarization model                    | Never Cursor. `session_before_compact` intercepts compaction for cursor models and summarizes via the off-Cursor chain `ollama-cloud/kimi-k3` → `github-copilot/gemini-3.7-flash` → `commandcode/gemini-3.7-flash`, deferring to pi's default compaction when no chain model is usable. |

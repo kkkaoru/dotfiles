@@ -48,6 +48,49 @@ const CATALOG: SDKModel[] = [
   },
 ];
 
+const LUNA_CATALOG_MODEL: SDKModel = {
+  id: "gpt-5.6-luna",
+  displayName: "GPT-5.6 Luna",
+  parameters: [
+    {
+      id: "context",
+      displayName: "Context",
+      values: [{ value: "272k" }, { value: "1m" }],
+    },
+    {
+      id: "reasoning",
+      displayName: "Reasoning",
+      values: ["none", "low", "medium", "high", "xhigh", "max"].map((value) => ({
+        value,
+      })),
+    },
+    {
+      id: "fast",
+      displayName: "Fast",
+      values: [{ value: "false" }, { value: "true" }],
+    },
+  ],
+  variants: [
+    {
+      params: [
+        { id: "context", value: "272k" },
+        { id: "reasoning", value: "medium" },
+        { id: "fast", value: "false" },
+      ],
+      displayName: "GPT-5.6 Luna",
+    },
+    {
+      params: [
+        { id: "context", value: "1m" },
+        { id: "reasoning", value: "medium" },
+        { id: "fast", value: "false" },
+      ],
+      displayName: "GPT-5.6 Luna",
+      isDefault: true,
+    },
+  ],
+};
+
 function refreshContext(overrides: Partial<RefreshModelsContext> = {}): RefreshModelsContext {
   return {
     allowNetwork: false,
@@ -88,7 +131,7 @@ test("provides multiple useful fallback models", () => {
     expect.objectContaining({
       id: "gpt-5.6-luna",
       name: "GPT-5.6 Luna",
-      contextWindow: 800_000,
+      contextWindow: 217_600,
       reasoning: true,
     }),
   );
@@ -114,6 +157,42 @@ test("converts the live Cursor catalog and context variants with a safety margin
   ]);
 });
 
+test("uses Luna's 272K variant and enables Cursor fast", async () => {
+  const catalog = [...CATALOG, LUNA_CATALOG_MODEL];
+
+  expect(cursorCatalogToModels(catalog)).toContainEqual(
+    expect.objectContaining({
+      id: "gpt-5.6-luna",
+      name: "GPT-5.6 Luna",
+      contextWindow: 217_600,
+      reasoning: true,
+    }),
+  );
+
+  recordCursorCatalog(catalog);
+  await expect(cursorModelSelection("gpt-5.6-luna", "max", "key")).resolves.toStrictEqual({
+    id: "gpt-5.6-luna",
+    params: [
+      { id: "context", value: "272k" },
+      { id: "reasoning", value: "max" },
+      { id: "fast", value: "true" },
+    ],
+  });
+});
+
+test("applies Luna's context and fast overrides without an explicit effort", async () => {
+  recordCursorCatalog([...CATALOG, LUNA_CATALOG_MODEL]);
+
+  await expect(cursorModelSelection("gpt-5.6-luna", undefined, "key")).resolves.toStrictEqual({
+    id: "gpt-5.6-luna",
+    params: [
+      { id: "context", value: "272k" },
+      { id: "reasoning", value: "medium" },
+      { id: "fast", value: "true" },
+    ],
+  });
+});
+
 test("adds auto when a live catalog omits it", () => {
   expect(cursorCatalogToModels(CATALOG.slice(1)).map((model) => model.id)).toStrictEqual([
     "auto",
@@ -132,7 +211,7 @@ test("loads live effort capability on the first explicit-model request", async (
   expect(list).toHaveBeenCalledWith({ apiKey: "key" });
 });
 
-test("maps requested effort while preserving live default parameters", async () => {
+test("maps requested effort and enables Cursor fast in live default parameters", async () => {
   recordCursorCatalog(CATALOG);
 
   await expect(cursorModelSelection("gpt-5.6-sol", "max", "key")).resolves.toStrictEqual({
@@ -140,7 +219,7 @@ test("maps requested effort while preserving live default parameters", async () 
     params: [
       { id: "context", value: "272k" },
       { id: "reasoning", value: "max" },
-      { id: "fast", value: "false" },
+      { id: "fast", value: "true" },
     ],
   });
 });

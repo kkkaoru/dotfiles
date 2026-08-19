@@ -9,6 +9,10 @@ import { join } from "node:path";
 const DEFAULT_CONTEXT_WINDOW = 256_000;
 const DEFAULT_MAX_TOKENS = 16_384;
 const CONTEXT_SUFFIX = /^([1-9][0-9]*)(k|m)$/i;
+const CURSOR_FAST_PARAMETER_ID = "fast";
+const CURSOR_FAST_VALUE = "true";
+const LUNA_MODEL_ID = "gpt-5.6-luna";
+const LUNA_CONTEXT_VALUE = "272k";
 /**
  * Cursor reports oversized requests as usage-guideline blocks instead of
  * recognizable overflow errors, so overflow recovery cannot rescue a session
@@ -55,6 +59,7 @@ interface CatalogCache {
   catalog: SDKModel[];
 }
 
+const modelDefaults = new Map<string, readonly ModelParameterValue[]>();
 const effortCapabilities = new Map<string, EffortCapability>();
 const warnedUnsupportedEffort = new Set<string>();
 const catalogState: CatalogState = { loaded: false, load: undefined };
@@ -71,9 +76,9 @@ const FALLBACK_MODELS: readonly FallbackModel[] = [
     reasoning: true,
   },
   {
-    id: "gpt-5.6-luna",
+    id: LUNA_MODEL_ID,
     name: "GPT-5.6 Luna",
-    contextWindow: 1_000_000,
+    contextWindow: 272_000,
     reasoning: true,
   },
   {
@@ -130,17 +135,25 @@ function contextWindowFor(model: SDKModel): number {
       .map((parameter) => parseContextWindow(parameter.value))
       .filter((value): value is number => value !== undefined),
   );
+  if (model.id === LUNA_MODEL_ID) {
+    const lunaWindow = parseContextWindow(LUNA_CONTEXT_VALUE);
+    if (lunaWindow !== undefined && windows.includes(lunaWindow)) return lunaWindow;
+  }
   return windows.length > 0 ? Math.max(...windows) : DEFAULT_CONTEXT_WINDOW;
 }
 
 export function recordCursorCatalog(catalog: readonly SDKModel[]): void {
+  modelDefaults.clear();
   effortCapabilities.clear();
   catalogState.loaded = true;
   for (const model of catalog) {
+    const modelId = model.id === "default" ? "auto" : model.id;
+    const defaults = model.variants?.find(({ isDefault }) => isDefault)?.params ?? [];
+    modelDefaults.set(modelId, defaults);
     const parameter = model.parameters?.find(({ id }) => EFFORT_PARAMETER_IDS.has(id));
     if (!parameter) continue;
-    effortCapabilities.set(model.id === "default" ? "auto" : model.id, {
-      defaults: model.variants?.find(({ isDefault }) => isDefault)?.params ?? [],
+    effortCapabilities.set(modelId, {
+      defaults,
       parameterId: parameter.id,
       values: new Set(parameter.values.map(({ value }) => value)),
     });
@@ -154,6 +167,24 @@ function warnUnsupportedEffort(modelId: string, effort: ThinkingLevel): void {
   console.warn(
     `Cursor model ${modelId} does not expose a compatible effort parameter; requested ${effort} was not forwarded.`,
   );
+}
+
+function applyCursorParameterOverrides(
+  modelId: string,
+  defaults: readonly ModelParameterValue[],
+): ModelParameterValue[] {
+  const isLuna = modelId === LUNA_MODEL_ID;
+  const params = defaults.map((parameter) => {
+    if (parameter.id === CURSOR_FAST_PARAMETER_ID) {
+      return { id: parameter.id, value: CURSOR_FAST_VALUE };
+    }
+    if (isLuna && parameter.id === "context") {
+      return { id: parameter.id, value: LUNA_CONTEXT_VALUE };
+    }
+    return parameter;
+  });
+
+  return params;
 }
 
 function hashApiKey(apiKey: string): string {
@@ -210,9 +241,15 @@ export async function cursorModelSelection(
   effort: ThinkingLevel | undefined,
   apiKey?: string,
 ): Promise<ModelSelection> {
-  if (!effort) return { id: modelId };
+  if (!effort && modelId !== LUNA_MODEL_ID) return { id: modelId };
   await ensureCursorCatalog(apiKey);
   const capability = effortCapabilities.get(modelId);
+  const defaults = modelDefaults.get(modelId) ?? capability?.defaults;
+  if (!effort) {
+    if (!defaults) return { id: modelId };
+    return { id: modelId, params: applyCursorParameterOverrides(modelId, defaults) };
+  }
+
   const value = EFFORT_PREFERENCES[effort].find((candidate) => capability?.values.has(candidate));
   if (!capability || !value) {
     warnUnsupportedEffort(modelId, effort);
@@ -225,7 +262,7 @@ export async function cursorModelSelection(
         parameter.id === capability.parameterId ? { id: capability.parameterId, value } : parameter,
       )
     : [...capability.defaults, { id: capability.parameterId, value }];
-  return { id: modelId, params };
+  return { id: modelId, params: applyCursorParameterOverrides(modelId, params) };
 }
 
 export function cursorCatalogToModels(catalog: readonly SDKModel[]): ProviderModelConfig[] {
@@ -272,6 +309,7 @@ export const cursorModelsTestApi = {
   async resetCache(): Promise<void> {
     catalogState.loaded = false;
     catalogState.load = undefined;
+    modelDefaults.clear();
     effortCapabilities.clear();
     warnedUnsupportedEffort.clear();
     await rm(CATALOG_CACHE_PATH, { force: true });
