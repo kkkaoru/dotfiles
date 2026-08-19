@@ -3,7 +3,8 @@
 //! SubAgent TUI hides `text_delta` until `end_turn`. Closing thinking mid-turn
 //! collapses Claude Code 2.1 to "Thought for Xs". ACP progress therefore stays
 //! on one native thinking block (▶/✓) before `finish` / `message_stop`. Command
-//! Code still uses display-only `server_tool_use`; Codex paints via `tool_use`.
+//! Code still uses display-only `server_tool_use`; Codex and Pi/Grok paint via
+//! native `tool_use` cards. ACP workers keep ▶ chrome on thinking.
 
 use axum::body::Bytes;
 use serde_json::Value;
@@ -18,6 +19,8 @@ pub(super) struct SubAgentLiveView {
     pub hidden_text: String,
     /// Display-only `server_tool_use` cards painted mid-turn (web_search / web_fetch).
     pub visible_server_tools: Vec<String>,
+    /// Native Anthropic `tool_use` cards painted mid-turn (Pi/Grok Read/Bash).
+    pub visible_tool_use: Vec<String>,
     pub saw_end_turn: bool,
     pub saw_message_stop: bool,
 }
@@ -40,13 +43,14 @@ impl SubAgentLiveView {
     }
 
     fn ingest_block_start(&mut self, payload: &Value) {
-        if payload["content_block"]["type"].as_str() != Some("server_tool_use") {
-            return;
-        }
         let Some(name) = payload["content_block"]["name"].as_str() else {
             return;
         };
-        self.visible_server_tools.push(name.to_owned());
+        match payload["content_block"]["type"].as_str() {
+            Some("server_tool_use") => self.visible_server_tools.push(name.to_owned()),
+            Some("tool_use") => self.visible_tool_use.push(name.to_owned()),
+            _ => {}
+        }
     }
 
     fn ingest_block_delta(&mut self, payload: &Value) {
@@ -113,11 +117,17 @@ mod tests {
         assert_eq!(view.hidden_text, "Phase 1.\n");
         assert_eq!(view.visible_thinking, "\n▶ ReadFile\n");
         assert!(view.visible_server_tools.is_empty());
+        assert!(view.visible_tool_use.is_empty());
         view.ingest_sse(
             "event: content_block_start\n\
              data: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"server_tool_use\",\"id\":\"srvtoolu_1\",\"name\":\"web_search\",\"input\":{}}}\n\n",
         );
         assert_eq!(view.visible_server_tools, vec!["web_search".to_owned()]);
+        view.ingest_sse(
+            "event: content_block_start\n\
+             data: {\"type\":\"content_block_start\",\"index\":3,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"Read\",\"input\":{}}}\n\n",
+        );
+        assert_eq!(view.visible_tool_use, vec!["Read".to_owned()]);
         view.ingest_sse(
             "event: message_delta\n\
              data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null}}\n\n\

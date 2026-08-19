@@ -3357,6 +3357,286 @@ async fn fugu_codex_closes_thinking_before_native_read() {
 }
 
 #[tokio::test]
+async fn pi_tool_start_emits_native_tool_use_before_tool_call() {
+    let (_root, _app, bridge, mut session) = disconnect_fixture().await;
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .external_tool_names
+        .insert("cc_Read_0".to_owned(), "Read".to_owned());
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::for_turn(1, true, "grok-4.5").with_primed_thinking();
+    let mut live = super::subagent_live_view::SubAgentLiveView::default();
+    let mut output = String::new();
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":"call-1",
+                "method":"item/tool/start",
+                "params":{"callId":"call-1","tool":"Read"}
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("Pi tool start");
+    drain_sse_into(&mut receiver, &mut output, &mut live);
+    assert_pi_read_card_before_end(&live, &builder, &output);
+    feed_pi_read_delta_and_call(&bridge, &session, &mut builder, &sender).await;
+    drop(sender);
+    let rest = collect_sse_frames(&mut receiver).await;
+    live.ingest_sse(&rest);
+    output.push_str(&rest);
+    assert_eq!(builder.blocks.last().unwrap()["input"]["path"], "CLAUDE.md");
+    assert_pi_read_sse_order(&output);
+}
+
+#[tokio::test]
+async fn agent_message_after_tool_does_not_grow_one_thought() {
+    let (_root, _app, bridge, mut session) = disconnect_fixture().await;
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .external_tool_names
+        .insert("cc_Read_0".to_owned(), "Read".to_owned());
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::for_turn(1, true, "grok-4.5").with_primed_thinking();
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":"call-1",
+                "method":"item/tool/start",
+                "params":{"callId":"call-1","tool":"Read"}
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("Pi tool start");
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "method":"item/agentMessage/delta",
+                "params":{"delta":"I'll inspect the sidecar layout next."}
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("prose after tool");
+    drop(sender);
+    let output = collect_sse_frames(&mut receiver).await;
+    assert!(
+        !output.contains("I'll inspect the sidecar layout next."),
+        "post-tool AgentMessage must not grow one Thought: {output}"
+    );
+    assert_eq!(
+        builder.pending_answer,
+        "I'll inspect the sidecar layout next."
+    );
+}
+
+#[tokio::test]
+async fn reasoning_complete_closes_open_thinking() {
+    let (_root, _app, bridge, session) = disconnect_fixture().await;
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::for_turn(1, true, "grok-4.5").with_primed_thinking();
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "method":"item/reasoning/summaryTextDelta",
+                "params":{"itemId":"r1","summaryIndex":0,"delta":"plan A"}
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("reasoning");
+    assert!(builder.thinking.is_open());
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({"method":"item/reasoning/complete","params":{"threadId":"t"}}),
+            Some(&sender),
+        )
+        .await
+        .expect("complete");
+    drop(sender);
+    let _output = collect_sse_frames(&mut receiver).await;
+    assert!(!builder.thinking.is_open());
+}
+
+async fn feed_pi_read_delta_and_call(
+    bridge: &Bridge,
+    session: &Session,
+    builder: &mut SegmentBuilder,
+    sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+) {
+    let _ = builder
+        .handle_event(
+            bridge,
+            session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":"call-1",
+                "method":"item/tool/delta",
+                "params":{"callId":"call-1","delta":"{\"path\":\"CLAUDE.md\"}"}
+            }),
+            Some(sender),
+        )
+        .await
+        .expect("Pi tool delta");
+    let _ = builder
+        .handle_event(
+            bridge,
+            session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":"call-1",
+                "method":"item/tool/call",
+                "params":{
+                    "callId":"call-1",
+                    "tool":"Read",
+                    "arguments":{"path":"CLAUDE.md"}
+                }
+            }),
+            Some(sender),
+        )
+        .await
+        .expect("Pi tool call");
+}
+
+fn assert_pi_read_card_before_end(
+    live: &super::subagent_live_view::SubAgentLiveView,
+    builder: &SegmentBuilder,
+    output: &str,
+) {
+    assert!(live.turn_still_open());
+    assert_eq!(live.visible_tool_use, vec!["Read".to_owned()]);
+    assert!(!live.visible_thinking.contains('▶'));
+    assert!(builder.has_external_tool_calls());
+    assert!(builder.streaming_tool.is_some());
+    assert!(
+        output.contains("\"type\":\"tool_use\""),
+        "toolcall_start must emit native tool_use before toolcall_end: {output}"
+    );
+}
+
+fn assert_pi_read_sse_order(output: &str) {
+    assert!(
+        !output.contains("▶ Read"),
+        "must not dual-paint ▶ thinking: {output}"
+    );
+    let start = output.find("content_block_start").expect("start");
+    let delta = output.find("input_json_delta").expect("delta");
+    let stop = output.find("content_block_stop").expect("stop");
+    assert!(start < delta, "start must precede argument delta: {output}");
+    assert!(delta < stop, "delta must precede stop: {output}");
+}
+
+fn drain_sse_into(
+    receiver: &mut mpsc::Receiver<Result<Bytes, Infallible>>,
+    output: &mut String,
+    live: &mut super::subagent_live_view::SubAgentLiveView,
+) {
+    let mut chunk = String::new();
+    while let Ok(frame) = receiver.try_recv() {
+        chunk.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    live.ingest_sse(&chunk);
+    output.push_str(&chunk);
+}
+
+#[tokio::test]
+async fn pi_tool_start_skips_unrequested_tools() {
+    let (_root, _app, bridge, session) = disconnect_fixture().await;
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":"call-x",
+                "method":"item/tool/start",
+                "params":{"callId":"call-x","tool":"NotATool"}
+            }),
+            None,
+        )
+        .await
+        .expect("unmapped start");
+    assert!(builder.streaming_tool.is_none());
+    assert!(!builder.has_external_tool_calls());
+}
+
+#[tokio::test]
+async fn pi_tool_call_after_start_without_delta_sends_input_json() {
+    let (_root, _app, bridge, mut session) = disconnect_fixture().await;
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .external_tool_names
+        .insert("Read".to_owned(), "Read".to_owned());
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::for_turn(1, true, "grok-4.5");
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":"call-2",
+                "method":"item/tool/start",
+                "params":{"callId":"call-2","tool":"Read"}
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("start");
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":"call-2",
+                "method":"item/tool/call",
+                "params":{
+                    "callId":"call-2",
+                    "tool":"Read",
+                    "arguments":{"path":"Cargo.toml"}
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("call without prior delta");
+    drop(sender);
+    let output = collect_sse_frames(&mut receiver).await;
+    assert!(
+        output.contains("input_json_delta") && output.contains("Cargo.toml"),
+        "empty partial_json must flush final input: {output}"
+    );
+}
+
+#[tokio::test]
 async fn subagent_codex_external_batch_finish_does_not_reopen_thinking() {
     // Inverted: close thinking before native Read/Bash so CC 2.1 does not
     // Slithering-hide the tool card. Keep-open was the bug.

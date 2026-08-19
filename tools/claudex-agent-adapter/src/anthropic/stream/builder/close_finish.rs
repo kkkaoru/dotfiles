@@ -5,7 +5,7 @@ use super::batch::estimated_output_tokens;
 use super::{SegmentBuilder, batch, external_tool};
 use crate::anthropic::stream::{
     ToolCall,
-    protocol::{StreamSender, send_stream_frame},
+    protocol::{StreamSender, send_content_block_stop, send_stream_frame},
     sanitize::sanitize_committed_blocks,
 };
 use crate::anthropic::{Bridge, Segment, Session, WebEvidenceSummary};
@@ -107,6 +107,7 @@ impl SegmentBuilder {
             self.commit_pending_reasoning_for_transcript(None).await?;
             self.flush_pending_answer(None).await?;
             self.close_text_block(stream).await?;
+            self.stop_open_streaming_tool(stream).await?;
             return self
                 .thinking
                 .close_before_executable_tool_use(&mut self.blocks, stream)
@@ -114,6 +115,13 @@ impl SegmentBuilder {
         }
         self.commit_pending_reasoning_for_transcript(stream).await?;
         self.close_open_blocks(stream).await
+    }
+
+    async fn stop_open_streaming_tool(&mut self, stream: Option<&StreamSender>) -> Result<()> {
+        let Some(open) = self.streaming_tool.take() else {
+            return Ok(());
+        };
+        send_content_block_stop(stream, open.index).await
     }
 
     pub(in crate::anthropic::stream) fn update_provider_stop_reason(

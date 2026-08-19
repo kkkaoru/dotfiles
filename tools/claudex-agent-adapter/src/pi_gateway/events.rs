@@ -5,15 +5,15 @@ use serde_json::{Value, json};
 
 use super::{PiGateway, protocol};
 
-const PROVIDER_TOOL_CALL_METHOD: &str = "item/providerTool/call";
-const TOOL_IN_PROGRESS: &str = "in_progress";
+const TOOL_START_METHOD: &str = "item/tool/start";
+const TOOL_DELTA_METHOD: &str = "item/tool/delta";
 
 #[derive(Default)]
 pub(super) struct ToolCallBuffer {
     id: String,
     name: String,
     arguments: String,
-    progress_emitted: bool,
+    start_emitted: bool,
 }
 
 #[derive(Default)]
@@ -39,6 +39,13 @@ impl PiGateway {
             }
             "thinking_end" => {
                 self.dispatch_end_content(thread_id, request_id, event, true, state)?;
+                self.events.dispatch_to(
+                    request_id,
+                    json!({
+                        "method":"item/reasoning/complete",
+                        "params":{"threadId":thread_id}
+                    }),
+                );
             }
             "text_delta" => {
                 mark_streamed(state, event);
@@ -50,11 +57,12 @@ impl PiGateway {
             }
             "toolcall_start" => {
                 start_tool_call(event, &mut state.tools)?;
-                self.emit_tool_progress_if_ready(thread_id, request_id, event, &mut state.tools)?;
+                self.emit_tool_start_if_ready(thread_id, request_id, event, &mut state.tools)?;
             }
             "toolcall_delta" => {
                 append_tool_call(event, &mut state.tools)?;
-                self.emit_tool_progress_if_ready(thread_id, request_id, event, &mut state.tools)?;
+                self.emit_tool_start_if_ready(thread_id, request_id, event, &mut state.tools)?;
+                self.emit_tool_delta(thread_id, request_id, event, &state.tools)?;
             }
             "toolcall_end" => {
                 self.finish_tool_call(thread_id, request_id, event, &mut state.tools)?;
@@ -147,7 +155,7 @@ impl PiGateway {
         )
     }
 
-    fn emit_tool_progress_if_ready(
+    fn emit_tool_start_if_ready(
         &self,
         thread_id: &str,
         request_id: &str,
@@ -164,20 +172,55 @@ impl PiGateway {
         if let Some(name) = tool_name(event).filter(|name| !name.is_empty()) {
             tool.name = name.to_owned();
         }
-        if tool.progress_emitted || tool.id.is_empty() || tool.name.is_empty() {
+        if tool.start_emitted || tool.id.is_empty() || tool.name.is_empty() {
             return Ok(());
         }
-        tool.progress_emitted = true;
+        tool.start_emitted = true;
         self.events.dispatch_to(
             request_id,
             json!({
-                "method":PROVIDER_TOOL_CALL_METHOD,
+                "id":tool.id,
+                "method":TOOL_START_METHOD,
                 "params":{
                     "threadId":thread_id,
                     "callId":tool.id,
-                    "tool":tool.name,
-                    "title":tool.name,
-                    "status":TOOL_IN_PROGRESS
+                    "tool":tool.name
+                }
+            }),
+        );
+        Ok(())
+    }
+
+    fn emit_tool_delta(
+        &self,
+        thread_id: &str,
+        request_id: &str,
+        event: &Value,
+        tools: &HashMap<u64, ToolCallBuffer>,
+    ) -> Result<()> {
+        let index = event_index(event)?;
+        let Some(tool) = tools.get(&index) else {
+            return Ok(());
+        };
+        if !tool.start_emitted {
+            return Ok(());
+        }
+        let Some(delta) = event
+            .get("delta")
+            .and_then(Value::as_str)
+            .filter(|delta| !delta.is_empty())
+        else {
+            return Ok(());
+        };
+        self.events.dispatch_to(
+            request_id,
+            json!({
+                "id":tool.id,
+                "method":TOOL_DELTA_METHOD,
+                "params":{
+                    "threadId":thread_id,
+                    "callId":tool.id,
+                    "delta":delta
                 }
             }),
         );
@@ -319,7 +362,7 @@ fn start_tool_call(event: &Value, tools: &mut HashMap<u64, ToolCallBuffer>) -> R
             id: tool_id(event).unwrap_or_default().to_owned(),
             name: tool_name(event).unwrap_or_default().to_owned(),
             arguments: String::new(),
-            progress_emitted: false,
+            start_emitted: false,
         },
     );
     Ok(())

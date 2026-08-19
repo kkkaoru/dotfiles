@@ -189,6 +189,20 @@ impl PiGateway {
                     if cancel.is_some() {
                         write_line(&mut writer, &protocol::cancel(request_id, &self.token)).await?;
                     }
+                    // Do not wait for Pi to emit a later terminal event. User
+                    // follow-ups must preempt the in-flight turn immediately.
+                    self.events.dispatch_to(
+                        request_id,
+                        json!({
+                            "method":"turn/completed",
+                            "params":{"threadId":thread_id,"turn":{
+                                "threadId":thread_id,
+                                "status":"completed",
+                                "providerStopReason":"end_turn"
+                            }}
+                        }),
+                    );
+                    return Ok(());
                 }
                 line = lines.next_line() => {
                     let line = line.context("read Pi gateway event")?

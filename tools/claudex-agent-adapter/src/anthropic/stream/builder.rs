@@ -16,11 +16,12 @@ mod external_tool_reject;
 mod progress;
 mod progress_keepalive;
 mod provider_launch;
+mod streaming_tool;
 mod visibility;
 #[path = "web_provenance.rs"]
 mod web_provenance;
 
-pub(super) use super::tool_call_parser::parse_tool_call;
+pub(super) use super::tool_call_parser::{parse_tool_call, parse_tool_delta, parse_tool_start};
 
 pub(in crate::anthropic) struct SegmentBuilder {
     pub(super) blocks: Vec<Value>,
@@ -81,6 +82,16 @@ pub(in crate::anthropic) struct SegmentBuilder {
     suppressed_tool_use: bool,
     usage: Usage,
     pub(super) last_turn_progress: Vec<crate::anthropic::TurnProgressEvent>,
+    /// Pi `toolcall_start` card that is already on the SSE wire. Completed by
+    /// `item/tool/call` so Claude Code does not get a second tool_use block.
+    pub(super) streaming_tool: Option<StreamingToolUse>,
+}
+
+pub(super) struct StreamingToolUse {
+    pub(super) call_id: String,
+    pub(super) tool_use_id: String,
+    pub(super) index: usize,
+    pub(super) partial_json: String,
 }
 
 impl SegmentBuilder {
@@ -102,6 +113,15 @@ impl SegmentBuilder {
                 let call = parse_tool_call(event)?;
                 self.tool_call(bridge, session, current_messages, system, call, stream)
                     .await?;
+            }
+            Some("item/tool/start") => {
+                self.start_native_tool_use(session, event, stream).await?;
+            }
+            Some("item/reasoning/complete") => {
+                self.thinking.close(&mut self.blocks, stream).await?;
+            }
+            Some("item/tool/delta") => {
+                self.delta_native_tool_use(event, stream).await?;
             }
             Some("item/providerTool/call") | Some("item/providerTool/update") => {
                 self.provider_launch_event(

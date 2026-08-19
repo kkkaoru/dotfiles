@@ -122,9 +122,11 @@ async fn send_terminal_stop(sender: &StreamSender, stop_reason: &'static str) {
 #[path = "protocol_frames.rs"]
 mod frames;
 pub(in crate::anthropic) use frames::send_stream_frame;
-pub(super) use frames::send_tool_use;
 #[allow(unused_imports)] // re-exported via stream.rs
 pub(in crate::anthropic) use frames::tool_use_frames;
+pub(super) use frames::{
+    send_content_block_stop, send_input_json_delta, send_tool_use, send_tool_use_start,
+};
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

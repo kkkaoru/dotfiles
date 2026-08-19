@@ -42,6 +42,11 @@ impl SegmentBuilder {
         if !dump_hint {
             self.pending_answer.push_str(&committed);
         }
+        if self.external_tool_calls > 0 {
+            // Tool cards already carry live progress. Do not grow one Thought
+            // with more AgentMessage prose after the first executable tool.
+            return Ok(());
+        }
         // Close ZWSP/keepalive prime first so compact prose and ▶ tools land on
         // a new thinking index. Tip-only `▶ Working…` hid ACP chrome in CC 2.1.
         self.close_collapsed_prime_before_visible(stream).await?;

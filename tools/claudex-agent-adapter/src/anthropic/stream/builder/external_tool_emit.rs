@@ -15,6 +15,11 @@ impl SegmentBuilder {
         request_id: Value,
         arguments: Value,
     ) -> Result<()> {
+        if let Some(open) = self.take_streaming_tool(&call_id) {
+            return self
+                .finish_native_tool_use(context, original_name, open, request_id, arguments)
+                .await;
+        }
         let tool_use_id = format!("toolu_{}", Uuid::new_v4().simple());
         let (intent_arguments, claude_arguments) =
             crate::anthropic::agent_effort::prepare_arguments_for_user(
@@ -63,7 +68,7 @@ impl SegmentBuilder {
         Ok(())
     }
 
-    pub(super) async fn prepare_blocks_for_external_tool(
+    pub(in crate::anthropic::stream::builder) async fn prepare_blocks_for_external_tool(
         &mut self,
         original_name: &str,
         call_id: &str,

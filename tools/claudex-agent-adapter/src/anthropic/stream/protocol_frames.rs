@@ -28,13 +28,54 @@ pub(in crate::anthropic) async fn send_tool_use(
     index: usize,
     block: &Value,
 ) -> Result<()> {
-    let Some(sender) = stream else {
-        return Ok(());
-    };
     for (event, frame) in tool_use_frames(index, block) {
-        send_stream_frame(Some(sender), event, || frame).await?;
+        send_stream_frame(stream, event, || frame).await?;
     }
     Ok(())
+}
+
+pub(in crate::anthropic) async fn send_tool_use_start(
+    stream: Option<&StreamSender>,
+    index: usize,
+    id: &str,
+    name: &str,
+) -> Result<()> {
+    send_stream_frame(stream, "content_block_start", || {
+        json!({
+            "type":"content_block_start", "index":index,
+            "content_block":{"type":"tool_use","id":id,"name":name,"input":{}}
+        })
+    })
+    .await
+}
+
+pub(in crate::anthropic) async fn send_input_json_delta(
+    stream: Option<&StreamSender>,
+    index: usize,
+    partial_json: &str,
+) -> Result<()> {
+    if partial_json.is_empty() {
+        return Ok(());
+    }
+    send_stream_frame(stream, "content_block_delta", || {
+        json!({
+            "type":"content_block_delta", "index":index,
+            "delta":{"type":"input_json_delta","partial_json":partial_json}
+        })
+    })
+    .await
+}
+
+pub(in crate::anthropic) async fn send_content_block_stop(
+    stream: Option<&StreamSender>,
+    index: usize,
+) -> Result<()> {
+    send_stream_frame(
+        stream,
+        "content_block_stop",
+        || json!({"type":"content_block_stop","index":index}),
+    )
+    .await
 }
 
 pub(in crate::anthropic) fn tool_use_frames(

@@ -1,8 +1,10 @@
 //! Live SubAgent viewer progress across provider models.
 //!
 //! ACP workers stream real CoT / compact prose plus ▶ tool chrome in native
-//! thinking blocks. Codex cases stream CoT then native
-//! `tool_use` (see `fugu_codex_*` in tests.rs). Canned filler is still dropped.
+//! thinking blocks. Pi/Grok stream CoT then native `tool_use` on
+//! `toolcall_start` (not ACP `providerTool` ▶). Codex cases also stream CoT
+//! then native `tool_use` (see `fugu_codex_*` in tests.rs). Canned filler is
+//! still dropped.
 
 use axum::body::Bytes;
 use serde_json::{Value, json};
@@ -100,6 +102,25 @@ const CASES: &[Case] = &[
         }),
         // Reasoning body + Bash title (not tip-only ▶ Thinking).
         expect_visible: &["Plan the per-race cache seed", "▶ ls"],
+    },
+    Case {
+        name: "grok-pi",
+        prose: Some("Investigating the adapter stream path next.\n"),
+        prose_item_id: "grok-pi:message",
+        reasoning: Some("Open Read before arguments finish streaming.\n"),
+        reasoning_kind: ReasoningKind::Summary,
+        tool: Some(Tool {
+            call_id: "grok-pi-read",
+            name: "Read",
+            title: "Read CLAUDE.md",
+            arg_key: "path",
+            arg_value: "CLAUDE.md",
+        }),
+        expect_visible: &[
+            "Investigating the adapter stream",
+            "Open Read before arguments",
+            "Read",
+        ],
     },
     Case {
         name: "copilot-acp",
@@ -364,6 +385,18 @@ async fn run_case(case: &Case) {
         "{}: silent prime/keepalive must not add synthetic wire chrome: {sse}",
         case.name
     );
+    if case.name == "grok-pi" {
+        assert!(
+            sse.contains("\"type\":\"tool_use\"") && sse.contains("input_json_delta"),
+            "{}: Pi/Grok must stream native tool_use SSE before toolcall_end: {sse}",
+            case.name
+        );
+        assert!(
+            !sse.contains("▶ Read") && !sse.contains("item/providerTool"),
+            "{}: Pi/Grok must not dual-paint ACP ▶ chrome: {sse}",
+            case.name
+        );
+    }
     assert_live_progress(case, &live, command_code);
     assert_finished_transcript(case, &mut builder).await;
     drop(sender);
@@ -391,10 +424,14 @@ async fn feed_case_events(
             .unwrap_or_else(|error| panic!("{} prose: {error}", case.name));
     }
     if let Some(tool) = &case.tool {
-        builder
-            .provider_tool_call(&provider_tool(tool), Some(sender))
-            .await
-            .unwrap_or_else(|error| panic!("{} tool: {error}", case.name));
+        if case.name == "grok-pi" {
+            feed_native_tool(builder, tool, sender).await;
+        } else {
+            builder
+                .provider_tool_call(&provider_tool(tool), Some(sender))
+                .await
+                .unwrap_or_else(|error| panic!("{} tool: {error}", case.name));
+        }
     }
     builder
         .activity_keepalive(Some(sender))
@@ -438,15 +475,22 @@ fn assert_live_progress(case: &Case, live: &SubAgentLiveView, command_code: bool
                 || live
                     .visible_server_tools
                     .iter()
+                    .any(|name| name.contains(needle))
+                || live
+                    .visible_tool_use
+                    .iter()
                     .any(|name| name.contains(needle)),
-            "{}: missing `{needle}` in live viewer: thinking={:?} text={:?} server_tools={:?}",
+            "{}: missing `{needle}` in live viewer: thinking={:?} text={:?} server_tools={:?} tool_use={:?}",
             case.name,
             live.visible_thinking,
             live.hidden_text,
-            live.visible_server_tools
+            live.visible_server_tools,
+            live.visible_tool_use
         );
     }
-    if case.tool.is_some() {
+    if case.name == "grok-pi" {
+        assert_native_tool_progress(case, live);
+    } else if case.tool.is_some() {
         assert!(
             live.visible_server_tools.is_empty(),
             "{}: ACP SubAgent tools stay on native thinking, not server_tool_use: thinking={:?} server_tools={:?}",
@@ -461,6 +505,28 @@ fn assert_live_progress(case: &Case, live: &SubAgentLiveView, command_code: bool
             live.visible_thinking
         );
     }
+}
+
+fn assert_native_tool_progress(case: &Case, live: &SubAgentLiveView) {
+    assert_eq!(
+        live.visible_tool_use,
+        vec!["Read".to_owned()],
+        "{}: Pi/Grok must paint a native tool_use card before toolcall_end: {:?}",
+        case.name,
+        live.visible_tool_use
+    );
+    assert!(
+        live.visible_server_tools.is_empty(),
+        "{}: Pi/Grok must not paint server_tool_use: {:?}",
+        case.name,
+        live.visible_server_tools
+    );
+    assert!(
+        !live.visible_thinking.contains('▶'),
+        "{}: native tool_use must not dual-paint ▶ thinking for the same Read: {:?}",
+        case.name,
+        live.visible_thinking
+    );
 }
 
 async fn assert_finished_transcript(case: &Case, builder: &mut SegmentBuilder) {
@@ -531,6 +597,22 @@ fn raw_reasoning_delta(case: &str, delta: &str) -> Value {
         "method":"item/reasoning/textDelta",
         "params":{"itemId":format!("{case}:reasoning"),"contentIndex":0,"delta":delta}
     })
+}
+
+async fn feed_native_tool(
+    builder: &mut SegmentBuilder,
+    tool: &Tool,
+    sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+) {
+    builder
+        .start_executable_tool_use_card(tool.call_id, tool.name, Some(sender))
+        .await
+        .unwrap_or_else(|error| panic!("grok-pi tool start: {error}"));
+    let delta = format!("{{\"{}\":\"{}\"}}", tool.arg_key, tool.arg_value);
+    builder
+        .append_native_tool_use_delta(tool.call_id, &delta, Some(sender))
+        .await
+        .unwrap_or_else(|error| panic!("grok-pi tool delta: {error}"));
 }
 
 fn provider_tool(tool: &Tool) -> Value {

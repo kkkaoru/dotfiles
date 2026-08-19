@@ -37,6 +37,7 @@ impl SegmentBuilder {
                 ..Usage::default()
             },
             last_turn_progress: Vec::new(),
+            streaming_tool: None,
         }
     }
 
@@ -91,6 +92,7 @@ impl SegmentBuilder {
     /// drop after live work is treated as user stop/interrupt.
     pub(in crate::anthropic::stream) fn has_live_provider_work(&self) -> bool {
         self.external_tool_calls > 0
+            || self.streaming_tool.is_some()
             || !self.provider_tool_calls.is_empty()
             || self.saw_provider_turn_activity
     }
