@@ -6,11 +6,21 @@
 //!   while routing says delegation is required. Atomic
 //!   Read/Grep/Glob/LS/WebSearch/WebFetch may stay in main. SubAgents keep the
 //!   full tool set.
-//! * SubAgent identity is detected via `agent_id` / `agent_type` / subagent transcript
-//!   path so main-session denials never apply to workers.
-//! * PreToolUse Write/Edit acquires a per-path lock for the calling `agent_id` so
-//!   parallel SubAgents cannot mutate the same file at once.
-//! * PostToolUse, SubagentStop, and SessionEnd release those locks.
+//! * SubAgent identity is detected via `agent_id` / `agentId` / `agent_type` /
+//!   `agentType` / subagent transcript path so main-session denials never apply
+//!   to workers.
+//! * PreToolUse Write/Edit acquires a per-path lock for the calling `agent_id`
+//!   or `agentId` so parallel SubAgents cannot mutate the same file at once.
+//! * PostToolUse, SubagentStop, and SessionEnd release those locks. Release
+//!   accepts `agentId` as well as `agent_id`.
+//! * Same-session leftover leases (sequential same-slot relaunch) are stolen
+//!   after 90 seconds only when the holder is no longer live. A live sibling is
+//!   never stolen just because 90 seconds passed or the TUI shows 1 agent.
+//!   Cross-session stale locks still expire after 5 minutes for holders that
+//!   are no longer live.
+//! * Isolated SubAgent worktrees: a mutating tool whose target is outside
+//!   `cwd` when `cwd` contains `/.claude/worktrees/` is denied with the
+//!   worktree path. Claude Code otherwise reports only `Error writing file`.
 //! * Lock-store failures fail open. Real conflicts name the holder, never
 //!   "another agent". A group-readable lock directory is repaired to 0700.
 
@@ -18,6 +28,7 @@ mod env;
 mod locks;
 mod policy;
 mod state;
+mod worktree;
 
 pub use policy::{PolicyContext, handle_event, handle_event_with_context};
 
@@ -54,17 +65,21 @@ pub fn run() -> io::Result<i32> {
 }
 
 pub(crate) fn deny(event_name: &str, reason: &str) -> Value {
-    Value::Object(Map::from_iter([(
-        "hookSpecificOutput".into(),
-        Value::Object(Map::from_iter([
-            ("hookEventName".into(), Value::String(event_name.into())),
-            ("permissionDecision".into(), Value::String("deny".into())),
-            (
-                "permissionDecisionReason".into(),
-                Value::String(reason.into()),
-            ),
-        ])),
-    )]))
+    Value::Object(Map::from_iter([
+        ("decision".into(), Value::String("block".into())),
+        ("reason".into(), Value::String(reason.into())),
+        (
+            "hookSpecificOutput".into(),
+            Value::Object(Map::from_iter([
+                ("hookEventName".into(), Value::String(event_name.into())),
+                ("permissionDecision".into(), Value::String("deny".into())),
+                (
+                    "permissionDecisionReason".into(),
+                    Value::String(reason.into()),
+                ),
+            ])),
+        ),
+    ]))
 }
 
 pub(crate) fn allow(event_name: Option<&str>, reason: Option<&str>) -> Value {

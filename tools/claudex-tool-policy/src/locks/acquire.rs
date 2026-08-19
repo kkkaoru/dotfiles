@@ -1,10 +1,10 @@
+use super::live::{holder_is_live, mark_live, unmark_agent, unmark_session};
 use super::store::{
     LockIdentity, RecordGuard, RecordPaths, atomic_write_record, claim_id, directory_entries,
-    ensure_lock_dir, holder_display, is_stale, lock_record, owner_matches, read_record,
-    record_paths, session_matches, sync_remove,
+    ensure_lock_dir, holder_display, is_stale, is_stealable, lock_record, owner_matches,
+    read_record, record_paths, session_matches, sync_remove,
 };
 use super::{deny_lock_busy, deny_lock_unsafe, deny_locked, resolve_absolute};
-use crate::env::nonempty_str;
 use crate::policy::PolicyContext;
 use serde_json::Value;
 use std::fs::File;
@@ -17,9 +17,9 @@ struct AcquiredClaim {
 
 fn identity_from_payload(payload: &serde_json::Map<String, Value>) -> Option<LockIdentity<'_>> {
     Some(LockIdentity {
-        agent_id: nonempty_str(payload.get("agent_id"))?,
+        agent_id: crate::state::agent_id(payload)?,
         session_id: crate::state::session_id(payload)?,
-        agent_type: nonempty_str(payload.get("agent_type")),
+        agent_type: crate::state::agent_type(payload),
     })
 }
 
@@ -85,7 +85,8 @@ fn claim_or_refresh(
         if owner_matches(record, identity.agent_id, identity.session_id) {
             return Ok(refresh_owned(&paths, record, identity, absolute, now));
         }
-        if !is_stale(record, now) {
+        let holder_live = holder_is_live(&paths.directory, record);
+        if !is_stealable(record, identity.session_id, now, holder_live) {
             return Err(deny_locked(absolute, &holder_display(record)));
         }
     }
@@ -141,17 +142,14 @@ pub(crate) fn acquire_locks(
     let Ok(directory) = ensure_lock_dir(context) else {
         return None;
     };
+    let now = context.now_seconds();
     let mut claims = Vec::new();
     for file_path in paths {
-        match acquire_one(
-            &directory,
-            file_path,
-            &identity,
-            context.now_seconds(),
-            context.home_dir(),
-        ) {
-            Ok(Some(claim)) => claims.push(claim),
-            Ok(None) => {}
+        match acquire_one(&directory, file_path, &identity, now, context.home_dir()) {
+            Ok(claim) => {
+                mark_live(&directory, &identity, now);
+                claims.extend(claim);
+            }
             Err(denied) => {
                 rollback(&claims);
                 return Some(denied);
@@ -250,6 +248,9 @@ pub(crate) fn release_agent_locks(
     release_matching(context, |record| {
         is_stale(record, now) || owner_matches(record, identity.agent_id, identity.session_id)
     });
+    if let Ok(directory) = ensure_lock_dir(context) {
+        unmark_agent(&directory, &identity);
+    }
 }
 
 pub(crate) fn release_session_locks(
@@ -263,4 +264,7 @@ pub(crate) fn release_session_locks(
     release_matching(context, |record| {
         is_stale(record, now) || session_matches(record, session_id)
     });
+    if let Ok(directory) = ensure_lock_dir(context) {
+        unmark_session(&directory, session_id);
+    }
 }

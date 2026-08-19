@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 pub(super) const LOCK_TTL_SECONDS: f64 = 5.0 * 60.0;
+pub(super) const SAME_SESSION_STEAL_TTL_SECONDS: f64 = 90.0;
 const MAX_LOCK_BYTES: u64 = 16 * 1024;
 const GUARD_WAIT: Duration = Duration::from_millis(100);
 pub(super) const UNKNOWN_HOLDER: &str = "unknown holder";
@@ -282,7 +283,7 @@ pub(super) fn directory_entries(directory: &File) -> Option<Vec<String>> {
     Some(names)
 }
 
-fn lock_is_stale(record: &Value, now: f64) -> bool {
+fn expired_after(record: &Value, now: f64, ttl: f64) -> bool {
     record
         .get("acquired_at")
         .and_then(Value::as_f64)
@@ -291,8 +292,22 @@ fn lock_is_stale(record: &Value, now: f64) -> bool {
                 && acquired >= 0.0
                 && now.is_finite()
                 && now >= acquired
-                && now - acquired > LOCK_TTL_SECONDS
+                && now - acquired > ttl
         })
+}
+
+fn lock_is_stale(record: &Value, now: f64) -> bool {
+    expired_after(record, now, LOCK_TTL_SECONDS)
+}
+
+pub(super) fn is_same_session_expired(record: &Value, now: f64) -> bool {
+    expired_after(record, now, SAME_SESSION_STEAL_TTL_SECONDS)
+}
+
+pub(super) fn is_stealable(record: &Value, session_id: &str, now: f64, holder_live: bool) -> bool {
+    !holder_live
+        && (is_stale(record, now)
+            || (session_matches(record, session_id) && is_same_session_expired(record, now)))
 }
 
 fn record_holder(record: &Value) -> Option<&str> {
@@ -393,6 +408,19 @@ mod tests {
         let record = json!({"acquired_at": 1_000.0});
         assert!(!lock_is_stale(&record, 1_300.0));
         assert!(lock_is_stale(&record, 1_301.0));
+    }
+
+    #[test]
+    fn same_session_expiry_uses_shorter_ttl() {
+        let record = json!({"acquired_at": 1_000.0, "session_id": "sess-a"});
+        assert!(!is_same_session_expired(&record, 1_090.0));
+        assert!(is_same_session_expired(&record, 1_091.0));
+        assert!(!is_stale(&record, 1_091.0));
+        assert!(is_stealable(&record, "sess-a", 1_091.0, false));
+        assert!(!is_stealable(&record, "sess-a", 1_091.0, true));
+        assert!(!is_stealable(&record, "sess-b", 1_091.0, false));
+        assert!(!is_stealable(&record, "sess-a", 1_301.0, true));
+        assert!(is_stealable(&record, "sess-b", 1_301.0, false));
     }
 
     #[test]

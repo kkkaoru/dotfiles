@@ -29,6 +29,18 @@ const STATE_KEYS: &[&str] = &[
     "direct_main_execution",
 ];
 
+fn aliased_str<'a>(
+    payload: &'a Map<String, Value>,
+    current: &str,
+    legacy: &str,
+) -> Option<&'a str> {
+    let value = match payload.get(current) {
+        Some(value) => value,
+        None => payload.get(legacy)?,
+    };
+    crate::env::nonempty_str(Some(value))
+}
+
 /// Prefer the current snake-case field. Its presence prevents fallback to the
 /// legacy camel-case field even when its value is malformed.
 pub(crate) fn session_id(payload: &Map<String, Value>) -> Option<&str> {
@@ -39,6 +51,16 @@ pub(crate) fn session_id(payload: &Map<String, Value>) -> Option<&str> {
     let id = value.as_str()?.trim();
     (!id.is_empty() && id.len() <= MAX_SESSION_ID_BYTES && !id.chars().any(char::is_control))
         .then_some(id)
+}
+
+/// Claude Code SubAgent hooks send `agent_id` or `agentId`.
+pub(crate) fn agent_id(payload: &Map<String, Value>) -> Option<&str> {
+    aliased_str(payload, "agent_id", "agentId")
+}
+
+/// Claude Code SubAgent hooks send `agent_type` or `agentType`.
+pub(crate) fn agent_type(payload: &Map<String, Value>) -> Option<&str> {
+    aliased_str(payload, "agent_type", "agentType")
 }
 
 fn session_key(id: &str) -> String {
@@ -311,6 +333,18 @@ mod tests {
         let multibyte = "é".repeat((MAX_SESSION_ID_BYTES / 2) + 1);
         let oversized = serde_json::json!({"session_id":multibyte});
         assert_eq!(session_id(oversized.as_object().unwrap()), None);
+    }
+
+    #[test]
+    fn agent_id_accepts_camel_case_when_snake_case_is_absent() {
+        let camel = serde_json::json!({"agentId":"agent-camel"});
+        assert_eq!(agent_id(camel.as_object().unwrap()), Some("agent-camel"));
+        let snake = serde_json::json!({"agent_id":"agent-snake", "agentId":"agent-camel"});
+        assert_eq!(agent_id(snake.as_object().unwrap()), Some("agent-snake"));
+        let empty = serde_json::json!({"agent_id":"", "agentId":"agent-camel"});
+        assert_eq!(agent_id(empty.as_object().unwrap()), None);
+        let typed = serde_json::json!({"agentType":"claudex-grok"});
+        assert_eq!(agent_type(typed.as_object().unwrap()), Some("claudex-grok"));
     }
 
     #[test]

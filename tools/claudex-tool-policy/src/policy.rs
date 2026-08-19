@@ -88,12 +88,12 @@ fn transcript_marks_subagent(payload: &Map<String, Value>) -> bool {
 }
 
 fn is_subagent_session(payload: &Map<String, Value>) -> bool {
-    nonempty_str(payload.get("agent_id")).is_some()
-        || nonempty_str(payload.get("agent_type")).is_some()
+    crate::state::agent_id(payload).is_some()
+        || crate::state::agent_type(payload).is_some()
         || transcript_marks_subagent(payload)
 }
 
-fn maybe_acquire_file_locks(
+fn deny_mutating_file_write(
     payload: &Map<String, Value>,
     tool_input: &Map<String, Value>,
     context: &PolicyContext,
@@ -102,7 +102,8 @@ fn maybe_acquire_file_locks(
     if paths.is_empty() {
         return None;
     }
-    acquire_locks(payload, &paths, context)
+    crate::worktree::deny_outside_isolated_worktree(payload, &paths, context.home_dir())
+        .or_else(|| acquire_locks(payload, &paths, context))
 }
 
 fn handle_subagent_pre_tool_use(
@@ -112,7 +113,7 @@ fn handle_subagent_pre_tool_use(
     context: &PolicyContext,
 ) -> Value {
     if MUTATING_FILE_TOOLS.contains(tool_name)
-        && let Some(denied) = maybe_acquire_file_locks(payload, tool_input, context)
+        && let Some(denied) = deny_mutating_file_write(payload, tool_input, context)
     {
         return denied;
     }
@@ -168,7 +169,7 @@ fn handle_post_tool_use(payload: &Map<String, Value>, context: &PolicyContext) -
     let tool_input = payload.get("tool_input").and_then(Value::as_object);
     if let (Some(tool_name), Some(tool_input)) = (tool_name, tool_input)
         && MUTATING_FILE_TOOLS.contains(tool_name)
-        && nonempty_str(payload.get("agent_id")).is_some()
+        && crate::state::agent_id(payload).is_some()
     {
         release_paths(payload, &tool_file_paths(tool_name, tool_input), context);
     }
@@ -186,7 +187,7 @@ fn handle_subagent_stop(payload: &Map<String, Value>, context: &PolicyContext) -
     {
         return allow(None, None);
     }
-    if nonempty_str(payload.get("agent_id")).is_some() {
+    if crate::state::agent_id(payload).is_some() {
         release_agent_locks(payload, context);
     }
     allow(None, None)

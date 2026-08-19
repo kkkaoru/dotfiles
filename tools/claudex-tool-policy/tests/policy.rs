@@ -92,6 +92,13 @@ fn file_lock_path(cache: &Path, target: &Path) -> std::path::PathBuf {
     cache.join("file-locks").join(format!("{digest}.lock.json"))
 }
 
+fn live_agent_path(cache: &Path, session_id: &str, agent_id: &str) -> std::path::PathBuf {
+    let digest = hex::encode(Sha256::digest(
+        format!("{session_id}\0{agent_id}").as_bytes(),
+    ));
+    cache.join("file-locks").join(format!("{digest}.live.json"))
+}
+
 fn session_state_path(cache: &Path, session_id: &str) -> std::path::PathBuf {
     let digest = hex::encode(Sha256::digest(session_id.as_bytes()));
     cache
@@ -393,6 +400,7 @@ fn stale_file_lock_is_reclaimed_under_guard_after_ttl() {
             .and_then(Value::as_str),
         Some("deny")
     );
+    fs::remove_file(live_agent_path(tmp.path(), "session-a", "agent-a")).unwrap();
 
     let second = json!({
         "hook_event_name": "PreToolUse",
@@ -641,6 +649,7 @@ fn stale_file_lock_in_group_readable_dir_is_reclaimed() {
         fs::Permissions::from_mode(0o755),
     )
     .unwrap();
+    fs::remove_file(live_agent_path(tmp.path(), "session-a", "agent-a")).unwrap();
     let second = handle_event_with_context(
         json!({
             "hook_event_name": "PreToolUse",
@@ -962,6 +971,479 @@ fn post_tool_use_releases_path_lock() {
             .and_then(Value::as_str),
         Some("deny")
     );
+}
+
+#[test]
+fn same_session_sequential_agent_id_steals_after_short_ttl() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("shared.rs");
+    fs::write(&target, "source\n").unwrap();
+    let first = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "first"},
+            "session_id": "sess",
+            "agent_id": "af5487f972ca0b958",
+            "agent_type": "claudex-grok"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert_ne!(
+        first
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+    let blocked = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "second"},
+            "session_id": "sess",
+            "agent_id": "agent-b",
+            "agent_type": "claudex-grok"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_090.0),
+    );
+    assert_eq!(
+        blocked
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+    let reason = blocked["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap();
+    assert!(reason.contains("claudex-grok (af5487f972ca0b958)"));
+    assert!(
+        blocked["reason"]
+            .as_str()
+            .unwrap()
+            .contains("claudex-grok (af5487f972ca0b958)")
+    );
+    fs::remove_file(live_agent_path(tmp.path(), "sess", "af5487f972ca0b958")).unwrap();
+    let stolen = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "second"},
+            "session_id": "sess",
+            "agent_id": "agent-b",
+            "agent_type": "claudex-grok"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_091.0),
+    );
+    assert_ne!(
+        stolen
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+    let record: Value = serde_json::from_slice(
+        &fs::read(file_lock_path(tmp.path(), &tmp.path().join("shared.rs"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["agent_id"], "agent-b");
+}
+
+#[test]
+fn same_session_live_sibling_is_not_stolen_after_short_ttl() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("shared.rs");
+    fs::write(&target, "source\n").unwrap();
+    let first = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "first"},
+            "session_id": "sess",
+            "agent_id": "agent-a",
+            "agent_type": "claudex-grok"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert_ne!(
+        first
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+    assert!(live_agent_path(tmp.path(), "sess", "agent-a").is_file());
+    let blocked = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "second"},
+            "session_id": "sess",
+            "agent_id": "agent-b",
+            "agent_type": "claudex-grok"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_091.0),
+    );
+    assert_eq!(
+        blocked
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+    let reason = blocked["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap();
+    assert!(reason.contains("claudex-grok (agent-a)"));
+    assert!(!reason.contains("another agent"));
+    let record: Value = serde_json::from_slice(
+        &fs::read(file_lock_path(tmp.path(), &tmp.path().join("shared.rs"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["agent_id"], "agent-a");
+}
+
+#[test]
+fn stale_live_holder_is_not_reclaimed() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("shared.rs");
+    fs::write(&target, "source\n").unwrap();
+    let first = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "first"},
+            "session_id": "session-a",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert_ne!(
+        first
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+    let blocked = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "second"},
+            "session_id": "session-b",
+            "agent_id": "agent-b"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0 + 5.0 * 60.0 + 1.0),
+    );
+    assert_eq!(
+        blocked
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+    let reason = blocked["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap();
+    assert!(reason.contains("agent-a"));
+}
+
+#[test]
+fn subagent_stop_clears_live_holder_mark() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("owned.rs");
+    fs::write(&target, "ok\n").unwrap();
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "ok"},
+            "session_id": "sess",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert!(live_agent_path(tmp.path(), "sess", "agent-a").is_file());
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "SubagentStop",
+            "agent_id": "agent-a",
+            "session_id": "sess"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_001.0),
+    );
+    assert!(!live_agent_path(tmp.path(), "sess", "agent-a").exists());
+}
+
+#[test]
+fn session_end_clears_live_holder_mark() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("owned.rs");
+    fs::write(&target, "ok\n").unwrap();
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "ok"},
+            "session_id": "sess",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert!(live_agent_path(tmp.path(), "sess", "agent-a").is_file());
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "SessionEnd",
+            "session_id": "sess"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_001.0),
+    );
+    assert!(!live_agent_path(tmp.path(), "sess", "agent-a").exists());
+}
+
+#[test]
+fn cross_session_lock_is_not_stolen_at_same_session_ttl() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("shared.rs");
+    fs::write(&target, "source\n").unwrap();
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "first"},
+            "session_id": "session-a",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    let blocked = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "second"},
+            "session_id": "session-b",
+            "agent_id": "agent-b"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_091.0),
+    );
+    assert_eq!(blocked["hookSpecificOutput"]["permissionDecision"], "deny");
+    let reason = blocked["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap();
+    assert!(reason.contains("agent-a"));
+}
+
+#[test]
+fn post_tool_use_releases_with_camel_case_agent_id() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("owned.rs");
+    fs::write(&target, "ok\n").unwrap();
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "ok"},
+            "session_id": "sess",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "PostToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "ok"},
+            "session_id": "sess",
+            "agentId": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_001.0),
+    );
+    let allowed = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "next"},
+            "session_id": "sess",
+            "agent_id": "agent-b"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_002.0),
+    );
+    assert_ne!(
+        allowed
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+}
+
+#[test]
+fn subagent_stop_releases_with_camel_case_agent_id() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("owned.rs");
+    fs::write(&target, "ok\n").unwrap();
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "ok"},
+            "session_id": "sess",
+            "agent_id": "agent-a"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    let _ = handle_event_with_context(
+        json!({
+            "hook_event_name": "SubagentStop",
+            "agentId": "agent-a",
+            "session_id": "sess"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_001.0),
+    );
+    let allowed = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "next"},
+            "session_id": "sess",
+            "agent_id": "agent-b"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_002.0),
+    );
+    assert_ne!(
+        allowed
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+}
+
+#[test]
+fn isolated_worktree_relative_write_is_denied_with_worktree_reason() {
+    let tmp = TempDir::new().unwrap();
+    let cwd = tmp.path().join(".claude/worktrees/agent-a84548284e9a5613b");
+    fs::create_dir_all(&cwd).unwrap();
+    let output = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": "scripts/install-macos-native-app.mjs",
+                "content": "ok"
+            },
+            "session_id": "sess",
+            "agent_id": "agent-a",
+            "cwd": cwd
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
+    let reason = output["hookSpecificOutput"]["permissionDecisionReason"]
+        .as_str()
+        .unwrap();
+    assert!(reason.contains("Error writing file"));
+    assert!(reason.contains(".claude/worktrees/agent-a84548284e9a5613b"));
+    assert!(!reason.contains("locked by"));
+    assert!(
+        output["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Error writing file")
+    );
+}
+
+#[test]
+fn isolated_worktree_write_inside_worktree_is_allowed() {
+    let tmp = TempDir::new().unwrap();
+    let cwd = tmp.path().join(".claude/worktrees/agent-a84548284e9a5613b");
+    fs::create_dir_all(&cwd).unwrap();
+    let target = cwd.join("scripts/install-macos-native-app.mjs");
+    fs::create_dir_all(target.parent().unwrap()).unwrap();
+    fs::write(&target, "ok\n").unwrap();
+    let output = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "next"},
+            "session_id": "sess",
+            "agent_id": "agent-a",
+            "cwd": cwd
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert_ne!(
+        output
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+}
+
+#[test]
+fn camel_case_agent_id_keeps_subagent_write_tools() {
+    let tmp = TempDir::new().unwrap();
+    write_session_delegation(tmp.path(), "sess-main", true, 1_000.0);
+    let target = tmp.path().join("owned.rs");
+    fs::write(&target, "ok\n").unwrap();
+    let output = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "ok"},
+            "session_id": "sess-main",
+            "agentId": "agent-worker",
+            "agentType": "claudex-grok"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert_ne!(
+        output
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+    let reason = output
+        .pointer("/hookSpecificOutput/permissionDecisionReason")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    assert!(!reason.contains("Agent/Task"));
 }
 
 #[test]
