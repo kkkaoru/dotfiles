@@ -1,15 +1,25 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 
 use super::{PiGateway, protocol};
 
+const PROVIDER_TOOL_CALL_METHOD: &str = "item/providerTool/call";
+const TOOL_IN_PROGRESS: &str = "in_progress";
+
 #[derive(Default)]
 pub(super) struct ToolCallBuffer {
     id: String,
     name: String,
     arguments: String,
+    progress_emitted: bool,
+}
+
+#[derive(Default)]
+pub(super) struct EventTranslateState {
+    tools: HashMap<u64, ToolCallBuffer>,
+    streamed_content: HashSet<u64>,
 }
 
 impl PiGateway {
@@ -18,17 +28,37 @@ impl PiGateway {
         thread_id: &str,
         request_id: &str,
         event: &Value,
-        tools: &mut HashMap<u64, ToolCallBuffer>,
+        state: &mut EventTranslateState,
     ) -> Result<bool> {
         let event_type = protocol::validate_event(event, request_id)?;
         tracing::debug!(thread_id, request_id, event_type, event = %event, "received Pi gateway event");
         match event_type {
-            "start" | "text_start" | "text_end" | "thinking_start" | "thinking_end" => {}
-            "text_delta" => self.dispatch_delta(thread_id, request_id, event, false)?,
-            "thinking_delta" => self.dispatch_delta(thread_id, request_id, event, true)?,
-            "toolcall_start" => start_tool_call(event, tools)?,
-            "toolcall_delta" => append_tool_call(event, tools)?,
-            "toolcall_end" => self.finish_tool_call(thread_id, request_id, event, tools)?,
+            "start" | "text_start" | "thinking_start" => {}
+            "text_end" => {
+                self.dispatch_end_content(thread_id, request_id, event, false, state)?;
+            }
+            "thinking_end" => {
+                self.dispatch_end_content(thread_id, request_id, event, true, state)?;
+            }
+            "text_delta" => {
+                mark_streamed(state, event);
+                self.dispatch_delta(thread_id, request_id, event, false)?;
+            }
+            "thinking_delta" => {
+                mark_streamed(state, event);
+                self.dispatch_delta(thread_id, request_id, event, true)?;
+            }
+            "toolcall_start" => {
+                start_tool_call(event, &mut state.tools)?;
+                self.emit_tool_progress_if_ready(thread_id, request_id, event, &mut state.tools)?;
+            }
+            "toolcall_delta" => {
+                append_tool_call(event, &mut state.tools)?;
+                self.emit_tool_progress_if_ready(thread_id, request_id, event, &mut state.tools)?;
+            }
+            "toolcall_end" => {
+                self.finish_tool_call(thread_id, request_id, event, &mut state.tools)?;
+            }
             "done" => {
                 let stop_reason = anthropic_stop_reason(event)?;
                 self.dispatch_usage(thread_id, request_id, event);
@@ -87,6 +117,70 @@ impl PiGateway {
         }
         self.events
             .dispatch_to(request_id, json!({"method":method,"params":params}));
+        Ok(())
+    }
+
+    fn dispatch_end_content(
+        &self,
+        thread_id: &str,
+        request_id: &str,
+        event: &Value,
+        thinking: bool,
+        state: &mut EventTranslateState,
+    ) -> Result<()> {
+        let index = event_index(event)?;
+        if !state.streamed_content.insert(index) {
+            return Ok(());
+        }
+        let Some(content) = event
+            .get("content")
+            .and_then(Value::as_str)
+            .filter(|content| !content.is_empty())
+        else {
+            return Ok(());
+        };
+        self.dispatch_delta(
+            thread_id,
+            request_id,
+            &json!({"index":index,"delta":content}),
+            thinking,
+        )
+    }
+
+    fn emit_tool_progress_if_ready(
+        &self,
+        thread_id: &str,
+        request_id: &str,
+        event: &Value,
+        tools: &mut HashMap<u64, ToolCallBuffer>,
+    ) -> Result<()> {
+        let index = event_index(event)?;
+        let Some(tool) = tools.get_mut(&index) else {
+            return Ok(());
+        };
+        if let Some(id) = tool_id(event).filter(|id| !id.is_empty()) {
+            tool.id = id.to_owned();
+        }
+        if let Some(name) = tool_name(event).filter(|name| !name.is_empty()) {
+            tool.name = name.to_owned();
+        }
+        if tool.progress_emitted || tool.id.is_empty() || tool.name.is_empty() {
+            return Ok(());
+        }
+        tool.progress_emitted = true;
+        self.events.dispatch_to(
+            request_id,
+            json!({
+                "method":PROVIDER_TOOL_CALL_METHOD,
+                "params":{
+                    "threadId":thread_id,
+                    "callId":tool.id,
+                    "tool":tool.name,
+                    "title":tool.name,
+                    "status":TOOL_IN_PROGRESS
+                }
+            }),
+        );
         Ok(())
     }
 
@@ -225,9 +319,16 @@ fn start_tool_call(event: &Value, tools: &mut HashMap<u64, ToolCallBuffer>) -> R
             id: tool_id(event).unwrap_or_default().to_owned(),
             name: tool_name(event).unwrap_or_default().to_owned(),
             arguments: String::new(),
+            progress_emitted: false,
         },
     );
     Ok(())
+}
+
+fn mark_streamed(state: &mut EventTranslateState, event: &Value) {
+    if let Ok(index) = event_index(event) {
+        state.streamed_content.insert(index);
+    }
 }
 
 fn append_tool_call(event: &Value, tools: &mut HashMap<u64, ToolCallBuffer>) -> Result<()> {

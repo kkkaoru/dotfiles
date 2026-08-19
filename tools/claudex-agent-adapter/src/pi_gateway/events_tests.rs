@@ -35,7 +35,7 @@ fn gateway() -> PiGateway {
 async fn translates_text_thinking_tool_usage_and_terminal_events() {
     let gateway = gateway();
     let receiver = gateway.events.subscribe("request");
-    let mut tools = HashMap::new();
+    let mut state = super::EventTranslateState::default();
 
     assert!(
         !gateway
@@ -45,7 +45,7 @@ async fn translates_text_thinking_tool_usage_and_terminal_events() {
                 &event(json!({
                     "type":"text_delta","index":0,"delta":"hello"
                 })),
-                &mut tools
+                &mut state
             )
             .expect("text delta")
     );
@@ -57,7 +57,7 @@ async fn translates_text_thinking_tool_usage_and_terminal_events() {
                 &event(json!({
                     "type":"thinking_delta","index":1,"delta":"reason"
                 })),
-                &mut tools
+                &mut state
             )
             .expect("thinking delta")
     );
@@ -69,7 +69,7 @@ async fn translates_text_thinking_tool_usage_and_terminal_events() {
                 &event(json!({
                     "type":"toolcall_start","index":2,"toolCallId":"call-1","name":"Read"
                 })),
-                &mut tools
+                &mut state
             )
             .expect("tool start")
     );
@@ -81,7 +81,7 @@ async fn translates_text_thinking_tool_usage_and_terminal_events() {
                 &event(json!({
                     "type":"toolcall_delta","index":2,"delta":"{\"path\":\"a\"}"
                 })),
-                &mut tools
+                &mut state
             )
             .expect("tool delta")
     );
@@ -94,7 +94,7 @@ async fn translates_text_thinking_tool_usage_and_terminal_events() {
                     "type":"toolcall_end","index":2,"toolCallId":"call-1","name":"Read",
                     "arguments":{"path":"a"}
                 })),
-                &mut tools
+                &mut state
             )
             .expect("tool end")
     );
@@ -112,19 +112,22 @@ async fn translates_text_thinking_tool_usage_and_terminal_events() {
                             "cacheWrite":0.2,"total":3.3}
                     }}
                 })),
-                &mut tools
+                &mut state
             )
             .expect("done")
     );
 
     let text = receiver.recv().await.expect("text event");
     let thinking = receiver.recv().await.expect("thinking event");
+    let progress = receiver.recv().await.expect("tool progress");
     let tool = receiver.recv().await.expect("tool event");
     let usage = receiver.recv().await.expect("usage event");
     let done = receiver.recv().await.expect("done event");
     assert_eq!(text["method"], "item/agentMessage/delta");
     assert_eq!(thinking["method"], "item/reasoning/summaryTextDelta");
     assert_eq!(thinking["params"]["summaryIndex"], 0);
+    assert_eq!(progress["method"], "item/providerTool/call");
+    assert_eq!(progress["params"]["status"], "in_progress");
     assert_eq!(tool["params"]["arguments"], json!({"path":"a"}));
     let usage = &usage["params"]["tokenUsage"]["last"];
     assert_eq!(usage["inputTokens"], 11);
@@ -145,6 +148,180 @@ async fn translates_text_thinking_tool_usage_and_terminal_events() {
 }
 
 #[tokio::test]
+async fn toolcall_start_emits_live_progress_before_arguments_complete() {
+    // Pi streamSimple emits toolcall_start as soon as grok begins a tool.
+    // SubAgent TUI only paints live ▶ chrome from item/providerTool/* (or
+    // thinking_delta). Buffering until toolcall_end drops mid-run progress.
+    let gateway = gateway();
+    let receiver = gateway.events.subscribe("request");
+    let mut state = super::EventTranslateState::default();
+
+    assert!(
+        !gateway
+            .handle_event(
+                "thread",
+                "request",
+                &event(json!({
+                    "type":"toolcall_start","index":0,"toolCallId":"call-1","name":"Read"
+                })),
+                &mut state
+            )
+            .expect("tool start")
+    );
+
+    let progress = tokio::time::timeout(std::time::Duration::from_millis(50), receiver.recv())
+        .await
+        .expect("toolcall_start must dispatch live progress, not wait for toolcall_end")
+        .expect("progress event");
+    assert_eq!(progress["method"], "item/providerTool/call");
+    assert_eq!(progress["params"]["callId"], "call-1");
+    assert_eq!(progress["params"]["tool"], "Read");
+    assert_eq!(progress["params"]["status"], "in_progress");
+}
+
+#[tokio::test]
+async fn toolcall_progress_waits_for_name_then_emits_once() {
+    let gateway = gateway();
+    let receiver = gateway.events.subscribe("request");
+    let mut state = super::EventTranslateState::default();
+
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({"type":"toolcall_start","index":0,"toolCallId":"call-late"})),
+            &mut state,
+        )
+        .expect("start without name");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(20), receiver.recv())
+            .await
+            .is_err(),
+        "progress must wait until the tool name arrives"
+    );
+
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_delta","index":0,"name":"Bash","delta":"{"
+            })),
+            &mut state,
+        )
+        .expect("name arrives on first delta");
+    let progress = receiver.recv().await.expect("late name progress");
+    assert_eq!(progress["method"], "item/providerTool/call");
+    assert_eq!(progress["params"]["callId"], "call-late");
+    assert_eq!(progress["params"]["tool"], "Bash");
+
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_delta","index":0,"name":"Bash","delta":"}"
+            })),
+            &mut state,
+        )
+        .expect("later delta");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(20), receiver.recv())
+            .await
+            .is_err(),
+        "the same tool must not emit a second progress card"
+    );
+}
+
+#[tokio::test]
+async fn delta_less_thinking_end_and_text_end_still_stream() {
+    let gateway = gateway();
+    let receiver = gateway.events.subscribe("request");
+    let mut state = super::EventTranslateState::default();
+
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"thinking_end","index":0,"content":"plan the edit"
+            })),
+            &mut state,
+        )
+        .expect("thinking_end");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"text_end","index":1,"content":"done"
+            })),
+            &mut state,
+        )
+        .expect("text_end");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"thinking_end","index":0,"content":"plan the edit"
+            })),
+            &mut state,
+        )
+        .expect("duplicate thinking_end");
+
+    let thinking = receiver.recv().await.expect("thinking from end");
+    let text = receiver.recv().await.expect("text from end");
+    assert_eq!(thinking["method"], "item/reasoning/summaryTextDelta");
+    assert_eq!(thinking["params"]["delta"], "plan the edit");
+    assert_eq!(text["method"], "item/agentMessage/delta");
+    assert_eq!(text["params"]["delta"], "done");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(20), receiver.recv())
+            .await
+            .is_err(),
+        "a later thinking_end must not replay already streamed content"
+    );
+}
+
+#[tokio::test]
+async fn thinking_delta_prevents_thinking_end_replay() {
+    let gateway = gateway();
+    let receiver = gateway.events.subscribe("request");
+    let mut state = super::EventTranslateState::default();
+
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"thinking_delta","index":3,"delta":"why"
+            })),
+            &mut state,
+        )
+        .expect("thinking_delta");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"thinking_end","index":3,"content":"why extra"
+            })),
+            &mut state,
+        )
+        .expect("thinking_end after delta");
+
+    let thinking = receiver.recv().await.expect("delta thinking");
+    assert_eq!(thinking["params"]["delta"], "why");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(20), receiver.recv())
+            .await
+            .is_err(),
+        "thinking_end must not append after a streamed delta"
+    );
+}
+
+#[tokio::test]
 async fn omits_unreported_one_hour_cache_usage() {
     let gateway = gateway();
     let receiver = gateway.events.subscribe("request");
@@ -156,7 +333,7 @@ async fn omits_unreported_one_hour_cache_usage() {
                 "type":"done","reason":"stop",
                 "message":{"usage":{"input":1,"output":2,"cacheWrite":3}}
             })),
-            &mut HashMap::new(),
+            &mut super::EventTranslateState::default(),
         )
         .expect("done");
 
@@ -180,7 +357,7 @@ async fn clamps_invalid_usage_subsets_without_underflow() {
                     "output":3,"reasoning":5,"cacheWrite":2,"cacheWrite1h":4
                 }}
             })),
-            &mut HashMap::new(),
+            &mut super::EventTranslateState::default(),
         )
         .expect("done");
 

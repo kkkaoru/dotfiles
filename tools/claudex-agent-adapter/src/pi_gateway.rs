@@ -182,7 +182,7 @@ impl PiGateway {
         let ready = read_json_line(&mut lines).await?;
         protocol::validate_ready(&ready)?;
         write_line(&mut writer, &request).await?;
-        let mut tools = HashMap::new();
+        let mut state = events::EventTranslateState::default();
         loop {
             tokio::select! {
                 cancel = cancel_rx.recv() => {
@@ -195,7 +195,7 @@ impl PiGateway {
                         .context("Pi gateway closed before a terminal event")?;
                     let event: Value = serde_json::from_str(&line)
                         .context("decode Pi gateway event JSON")?;
-                    if self.handle_event(thread_id, request_id, &event, &mut tools)? {
+                    if self.handle_event(thread_id, request_id, &event, &mut state)? {
                         return Ok(());
                     }
                 }
