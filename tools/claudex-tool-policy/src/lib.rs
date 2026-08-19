@@ -14,13 +14,16 @@
 //! * PostToolUse, SubagentStop, and SessionEnd release those locks. Release
 //!   accepts `agentId` as well as `agent_id`.
 //! * Same-session leftover leases (sequential same-slot relaunch) are stolen
-//!   after 90 seconds only when the holder is no longer live. A live sibling is
-//!   never stolen just because 90 seconds passed or the TUI shows 1 agent.
-//!   Cross-session stale locks still expire after 5 minutes for holders that
-//!   are no longer live.
-//! * Isolated SubAgent worktrees: a mutating tool whose target is outside
-//!   `cwd` when `cwd` contains `/.claude/worktrees/` is denied with the
-//!   worktree path. Claude Code otherwise reports only `Error writing file`.
+//!   after 90 seconds only when the holder is no longer live. A live mark that
+//!   has not been refreshed by a mutating PreToolUse for 90 seconds is leftover
+//!   (SubagentStop is often missing). A live sibling is never stolen just
+//!   because the TUI shows 1 agent. Cross-session stale locks still expire
+//!   after 5 minutes for holders that are no longer live.
+//! * Isolated SubAgent worktrees: a mutating tool whose target is in the
+//!   parent checkout but outside `cwd` is denied with the worktree path.
+//!   Writes outside the repository (`~/Applications`, `/tmp`) stay allowed.
+//!   Claude Code otherwise reports only `Error writing file` for parent-checkout
+//!   writes.
 //! * Lock-store failures fail open. Real conflicts name the holder, never
 //!   "another agent". A group-readable lock directory is repaired to 0700.
 

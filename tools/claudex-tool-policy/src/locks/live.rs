@@ -1,6 +1,6 @@
 use super::store::{
-    LockIdentity, RecordGuard, RecordPaths, atomic_write_record, directory_entries, owner_matches,
-    read_record, session_matches, sync_remove,
+    LockIdentity, RecordGuard, RecordPaths, SAME_SESSION_STEAL_TTL_SECONDS, atomic_write_record,
+    directory_entries, owner_matches, read_record, session_matches, sync_remove,
 };
 use crate::env::nonempty_str;
 use serde_json::Value;
@@ -47,12 +47,23 @@ fn remove_if(paths: &RecordPaths, should_remove: impl Fn(&Value) -> bool) {
     }
 }
 
-fn live_record_is_present(directory: &File, session_id: &str, agent_id: &str) -> bool {
+fn live_mark_is_fresh(record: &Value, now: f64) -> bool {
+    let Some(updated) = record.get("updated_at").and_then(Value::as_f64) else {
+        return false;
+    };
+    updated.is_finite()
+        && updated >= 0.0
+        && now.is_finite()
+        && now >= updated
+        && now - updated <= SAME_SESSION_STEAL_TTL_SECONDS
+}
+
+fn live_record_is_fresh(directory: &File, session_id: &str, agent_id: &str, now: f64) -> bool {
     let Ok(paths) = live_paths(directory, session_id, agent_id) else {
         return true;
     };
     match read_record(&paths.directory, &paths.record_name) {
-        Ok(Some(_)) => true,
+        Ok(Some(live)) => live_mark_is_fresh(&live, now),
         Ok(None) => false,
         Err(_) => true,
     }
@@ -103,14 +114,29 @@ pub(super) fn unmark_session(directory: &File, session_id: &str) {
     }
 }
 
-/// Missing identity is leftover. Unreadable live state fails closed so a
-/// live sibling is not stolen.
-pub(super) fn holder_is_live(directory: &File, record: &Value) -> bool {
+/// Missing identity is leftover. A live mark older than the same-session
+/// steal window is leftover too (SubagentStop often never arrives). Unreadable
+/// live state fails closed so a live sibling is not stolen.
+pub(super) fn holder_is_live(directory: &File, record: &Value, now: f64) -> bool {
     let Some(agent_id) = nonempty_str(record.get("agent_id")) else {
         return false;
     };
     let Some(session_id) = nonempty_str(record.get("session_id")) else {
         return false;
     };
-    live_record_is_present(directory, session_id, agent_id)
+    live_record_is_fresh(directory, session_id, agent_id, now)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::live_mark_is_fresh;
+    use serde_json::json;
+
+    #[test]
+    fn live_mark_is_fresh_within_same_session_ttl() {
+        assert!(live_mark_is_fresh(&json!({"updated_at": 1000.0}), 1090.0));
+        assert!(!live_mark_is_fresh(&json!({"updated_at": 1000.0}), 1091.0));
+        assert!(!live_mark_is_fresh(&json!({}), 1000.0));
+        assert!(!live_mark_is_fresh(&json!({"updated_at": -1.0}), 1000.0));
+    }
 }

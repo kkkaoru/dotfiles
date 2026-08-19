@@ -85,7 +85,7 @@ fn claim_or_refresh(
         if owner_matches(record, identity.agent_id, identity.session_id) {
             return Ok(refresh_owned(&paths, record, identity, absolute, now));
         }
-        let holder_live = holder_is_live(&paths.directory, record);
+        let holder_live = holder_is_live(&paths.directory, record, now);
         if !is_stealable(record, identity.session_id, now, holder_live) {
             return Err(deny_locked(absolute, &holder_display(record)));
         }

@@ -1089,7 +1089,7 @@ fn same_session_live_sibling_is_not_stolen_after_short_ttl() {
         })
         .as_object()
         .unwrap(),
-        &explicit_context(tmp.path(), 1_091.0),
+        &explicit_context(tmp.path(), 1_090.0),
     );
     assert_eq!(
         blocked
@@ -1110,7 +1110,7 @@ fn same_session_live_sibling_is_not_stolen_after_short_ttl() {
 }
 
 #[test]
-fn stale_live_holder_is_not_reclaimed() {
+fn stale_expired_live_holder_is_reclaimed() {
     let tmp = TempDir::new().unwrap();
     let target = tmp.path().join("shared.rs");
     fs::write(&target, "source\n").unwrap();
@@ -1132,7 +1132,7 @@ fn stale_live_holder_is_not_reclaimed() {
             .and_then(Value::as_str),
         Some("deny")
     );
-    let blocked = handle_event_with_context(
+    let stolen = handle_event_with_context(
         json!({
             "hook_event_name": "PreToolUse",
             "tool_name": "Write",
@@ -1144,16 +1144,75 @@ fn stale_live_holder_is_not_reclaimed() {
         .unwrap(),
         &explicit_context(tmp.path(), 1_000.0 + 5.0 * 60.0 + 1.0),
     );
-    assert_eq!(
-        blocked
+    assert_ne!(
+        stolen
             .pointer("/hookSpecificOutput/permissionDecision")
             .and_then(Value::as_str),
         Some("deny")
     );
-    let reason = blocked["hookSpecificOutput"]["permissionDecisionReason"]
-        .as_str()
-        .unwrap();
-    assert!(reason.contains("agent-a"));
+    let record: Value = serde_json::from_slice(
+        &fs::read(file_lock_path(tmp.path(), &tmp.path().join("shared.rs"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["agent_id"], "agent-b");
+}
+
+#[test]
+fn same_session_expired_live_mark_steals_without_subagent_stop() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("shared.rs");
+    fs::write(&target, "source\n").unwrap();
+    let first = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "first"},
+            "session_id": "427981c6-df94-4cb6-8b0b-f1600ba9ee22",
+            "agent_id": "a27bba95e1215064c",
+            "agent_type": "claudex-grok"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert_ne!(
+        first
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+    assert!(
+        live_agent_path(
+            tmp.path(),
+            "427981c6-df94-4cb6-8b0b-f1600ba9ee22",
+            "a27bba95e1215064c"
+        )
+        .is_file()
+    );
+    let stolen = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "second"},
+            "session_id": "427981c6-df94-4cb6-8b0b-f1600ba9ee22",
+            "agent_id": "ab23df8e78bba01b6",
+            "agent_type": "claudex-grok"
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_091.0),
+    );
+    assert_ne!(
+        stolen
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+    let record: Value = serde_json::from_slice(
+        &fs::read(file_lock_path(tmp.path(), &tmp.path().join("shared.rs"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["agent_id"], "ab23df8e78bba01b6");
 }
 
 #[test]
@@ -1350,7 +1409,7 @@ fn subagent_stop_releases_with_camel_case_agent_id() {
 }
 
 #[test]
-fn isolated_worktree_relative_write_is_denied_with_worktree_reason() {
+fn isolated_worktree_relative_write_is_allowed() {
     let tmp = TempDir::new().unwrap();
     let cwd = tmp.path().join(".claude/worktrees/agent-a84548284e9a5613b");
     fs::create_dir_all(&cwd).unwrap();
@@ -1370,18 +1429,79 @@ fn isolated_worktree_relative_write_is_denied_with_worktree_reason() {
         .unwrap(),
         &explicit_context(tmp.path(), 1_000.0),
     );
+    assert_ne!(
+        output
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+}
+
+#[test]
+fn isolated_worktree_parent_checkout_write_is_denied_with_worktree_reason() {
+    let tmp = TempDir::new().unwrap();
+    let cwd = tmp.path().join(".claude/worktrees/agent-a84548284e9a5613b");
+    fs::create_dir_all(&cwd).unwrap();
+    let parent = tmp.path().join("scripts/install-macos-native-app.mjs");
+    let output = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": parent,
+                "content": "ok"
+            },
+            "session_id": "sess",
+            "agent_id": "agent-a",
+            "cwd": cwd
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
     assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
     let reason = output["hookSpecificOutput"]["permissionDecisionReason"]
         .as_str()
         .unwrap();
     assert!(reason.contains("Error writing file"));
+    assert!(reason.contains("parent checkout"));
     assert!(reason.contains(".claude/worktrees/agent-a84548284e9a5613b"));
+    assert!(reason.contains("~/Applications"));
     assert!(!reason.contains("locked by"));
     assert!(
         output["reason"]
             .as_str()
             .unwrap()
             .contains("Error writing file")
+    );
+}
+
+#[test]
+fn isolated_worktree_applications_install_is_allowed() {
+    let tmp = TempDir::new().unwrap();
+    let cwd = tmp.path().join(".claude/worktrees/agent-a84548284e9a5613b");
+    fs::create_dir_all(&cwd).unwrap();
+    let output = handle_event_with_context(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": "/Users/kkk4oru/Applications/Kotoba Beacon Native.app.89784.new/Contents/Info.plist",
+                "content": "ok"
+            },
+            "session_id": "sess",
+            "agent_id": "agent-a",
+            "cwd": cwd
+        })
+        .as_object()
+        .unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert_ne!(
+        output
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
     );
 }
 

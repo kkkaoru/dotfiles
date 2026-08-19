@@ -14,7 +14,7 @@ fn isolated_worktree_cwd(payload: &Map<String, Value>) -> Option<(&str, &str)> {
     Some((repo, cwd))
 }
 
-fn target_path(path: &str, repo: &str, home: &Path) -> PathBuf {
+fn target_path(path: &str, cwd: &str, home: &Path) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
         return home.join(rest);
     }
@@ -25,27 +25,33 @@ fn target_path(path: &str, repo: &str, home: &Path) -> PathBuf {
     if raw.is_absolute() {
         return raw;
     }
-    PathBuf::from(format!("{repo}/{path}"))
+    Path::new(cwd).join(path)
 }
 
-fn is_inside_worktree(target: &Path, worktree: &Path) -> bool {
-    target == worktree || target.starts_with(worktree)
+fn is_inside(path: &Path, root: &Path) -> bool {
+    path == root || path.starts_with(root)
 }
 
-fn deny_outside(path: &str, target: &Path, cwd: &str) -> Value {
+fn is_parent_checkout_outside_worktree(target: &Path, repo: &str, worktree: &Path) -> bool {
+    is_inside(target, Path::new(repo)) && !is_inside(target, worktree)
+}
+
+fn deny_parent_checkout(path: &str, target: &Path, cwd: &str) -> Value {
     deny(
         "PreToolUse",
         &format!(
-            "Write target `{path}` resolves to `{}` outside this SubAgent worktree `{cwd}`. \
-             Claude Code worktree isolation rejects that as `Error writing file` with no lock \
-             holder. Rewrite the path so it is inside `{cwd}`.",
+            "Write target `{path}` resolves to `{}` in the parent checkout, outside this \
+             SubAgent worktree `{cwd}`. Claude Code isolation rejects that as `Error writing \
+             file`. Write the worktree copy of that file, or a path outside the repository \
+             such as /tmp or ~/Applications.",
             target.display()
         ),
     )
 }
 
-/// Deny mutating tools that Claude Code isolated worktrees will reject as a
-/// bare `Error writing file`.
+/// Deny writes into the parent git checkout that Claude Code isolated
+/// worktrees reject as a bare `Error writing file`. Paths outside the
+/// repository (`~/Applications`, `/tmp`, …) are allowed.
 pub(crate) fn deny_outside_isolated_worktree(
     payload: &Map<String, Value>,
     paths: &[String],
@@ -54,10 +60,14 @@ pub(crate) fn deny_outside_isolated_worktree(
     let (repo, cwd) = isolated_worktree_cwd(payload)?;
     let worktree = Path::new(cwd);
     let path = paths.iter().find(|path| {
-        let target = target_path(path, repo, home);
-        !is_inside_worktree(&target, worktree)
+        let target = target_path(path, cwd, home);
+        is_parent_checkout_outside_worktree(&target, repo, worktree)
     })?;
-    Some(deny_outside(path, &target_path(path, repo, home), cwd))
+    Some(deny_parent_checkout(
+        path,
+        &target_path(path, cwd, home),
+        cwd,
+    ))
 }
 
 #[cfg(test)]
@@ -71,10 +81,20 @@ mod tests {
     }
 
     #[test]
-    fn relative_repo_path_is_outside_worktree() {
+    fn relative_path_is_inside_worktree_cwd() {
         let denied = deny_outside_isolated_worktree(
             &payload("/Users/me/repo/.claude/worktrees/agent-a"),
             &["scripts/install.mjs".to_owned()],
+            Path::new("/Users/me"),
+        );
+        assert!(denied.is_none());
+    }
+
+    #[test]
+    fn parent_checkout_absolute_path_is_denied() {
+        let denied = deny_outside_isolated_worktree(
+            &payload("/Users/me/repo/.claude/worktrees/agent-a"),
+            &["/Users/me/repo/scripts/install.mjs".to_owned()],
             Path::new("/Users/me"),
         )
         .unwrap();
@@ -82,7 +102,9 @@ mod tests {
             .as_str()
             .unwrap();
         assert!(reason.contains("Error writing file"));
-        assert!(reason.contains(".claude/worktrees/agent-a"));
+        assert!(reason.contains("parent checkout"));
+        assert!(reason.contains("/Users/me/repo/.claude/worktrees/agent-a"));
+        assert!(reason.contains("~/Applications"));
         assert!(!reason.contains("locked by"));
         assert!(
             denied["reason"]
@@ -113,6 +135,26 @@ mod tests {
     }
 
     #[test]
+    fn applications_install_path_is_allowed() {
+        let denied = deny_outside_isolated_worktree(
+            &payload("/Users/me/repo/.claude/worktrees/agent-a"),
+            &["~/Applications/Kotoba Beacon Native.app.89784.new/Contents/Info.plist".to_owned()],
+            Path::new("/Users/me"),
+        );
+        assert!(denied.is_none());
+    }
+
+    #[test]
+    fn tmp_absolute_path_is_allowed() {
+        let denied = deny_outside_isolated_worktree(
+            &payload("/Users/me/repo/.claude/worktrees/agent-a"),
+            &["/tmp/kotoba-beacon/Info.plist".to_owned()],
+            Path::new("/Users/me"),
+        );
+        assert!(denied.is_none());
+    }
+
+    #[test]
     fn non_worktree_cwd_is_ignored() {
         let denied = deny_outside_isolated_worktree(
             &payload("/Users/me/repo"),
@@ -133,34 +175,22 @@ mod tests {
     }
 
     #[test]
-    fn home_relative_path_outside_worktree_is_denied() {
+    fn home_relative_path_outside_repository_is_allowed() {
         let denied = deny_outside_isolated_worktree(
             &payload("/Users/me/repo/.claude/worktrees/agent-a"),
             &["~/other.rs".to_owned()],
             Path::new("/Users/me"),
-        )
-        .unwrap();
-        assert!(
-            denied["hookSpecificOutput"]["permissionDecisionReason"]
-                .as_str()
-                .unwrap()
-                .contains("Error writing file")
         );
+        assert!(denied.is_none());
     }
 
     #[test]
-    fn home_path_outside_worktree_is_denied() {
+    fn home_path_outside_repository_is_allowed() {
         let denied = deny_outside_isolated_worktree(
             &payload("/Users/me/repo/.claude/worktrees/agent-a"),
             &["~".to_owned()],
             Path::new("/Users/me"),
-        )
-        .unwrap();
-        assert!(
-            denied["hookSpecificOutput"]["permissionDecisionReason"]
-                .as_str()
-                .unwrap()
-                .contains("Error writing file")
         );
+        assert!(denied.is_none());
     }
 }
