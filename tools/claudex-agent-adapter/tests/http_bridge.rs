@@ -234,6 +234,57 @@ async fn rejects_malformed_message_payloads_and_identities() {
 }
 
 #[tokio::test]
+async fn missing_denylist_file_does_not_400_messages() {
+    let adapter = Adapter::start().await;
+    let root = tempfile::tempdir().expect("missing denylist fixture");
+    let missing = root.path().join("missing-disabled-subagent-models.json");
+    let previous_config = std::env::var_os("CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG");
+    unsafe {
+        std::env::set_var("CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG", &missing);
+    }
+    let response = Client::new()
+        .post(messages_url(&adapter))
+        .json(&base_request())
+        .send()
+        .await
+        .expect("send with missing denylist");
+    match previous_config {
+        Some(value) => unsafe {
+            std::env::set_var("CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG", value)
+        },
+        None => unsafe { std::env::remove_var("CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG") },
+    }
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+}
+
+#[tokio::test]
+async fn torn_denylist_json_at_cold_start_does_not_400_messages() {
+    let adapter = Adapter::start().await;
+    let root = tempfile::tempdir().expect("torn denylist fixture");
+    let torn = root
+        .path()
+        .join("disabled-subagent-models.kkk4oru.local.json");
+    std::fs::write(&torn, "{").expect("write torn denylist");
+    let previous_config = std::env::var_os("CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG");
+    unsafe {
+        std::env::set_var("CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG", &torn);
+    }
+    let response = Client::new()
+        .post(messages_url(&adapter))
+        .json(&base_request())
+        .send()
+        .await
+        .expect("send with torn denylist");
+    match previous_config {
+        Some(value) => unsafe {
+            std::env::set_var("CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG", value)
+        },
+        None => unsafe { std::env::remove_var("CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG") },
+    }
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+}
+
+#[tokio::test]
 async fn reports_denylist_errors_and_attaches_load_warnings_to_metadata() {
     let adapter = Adapter::start().await;
     let client = Client::new();

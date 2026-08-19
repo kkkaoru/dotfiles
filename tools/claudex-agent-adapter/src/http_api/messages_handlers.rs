@@ -56,10 +56,7 @@ pub(super) async fn messages(
     if let Err(error) = attach_provider_origin(&headers, &mut request) {
         return error_response(StatusCode::BAD_REQUEST, error);
     }
-    let mut disabled_subagent_models = match subagent_policy::active_models() {
-        Ok(models) => models,
-        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
-    };
+    let mut disabled_subagent_models = subagent_policy::active_models();
     match subagent_policy::request_models(&headers) {
         Ok(models) => disabled_subagent_models.extend(models),
         Err(error) => return error_response(StatusCode::BAD_REQUEST, error),

@@ -79,7 +79,8 @@ fn apply_disabled_model_policy(
     request: &MessagesRequest,
     is_subagent: bool,
 ) -> std::result::Result<(), BlockedSubagentError> {
-    if !request.disabled_subagent_models.contains(&request.model) {
+    if !crate::subagent_policy::model_is_disabled(&request.disabled_subagent_models, &request.model)
+    {
         return Ok(());
     }
     if !is_subagent {

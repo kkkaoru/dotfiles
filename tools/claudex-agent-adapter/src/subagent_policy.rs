@@ -11,6 +11,7 @@ pub(super) const CONFIG_VERSION: u64 = 1;
 pub(super) const CONFIG_DIR_RELATIVE: &str = ".config/claudex";
 pub(super) const CONFIG_RELATIVE_PATH: &str = ".config/claudex/disabled-subagent-models.json";
 pub(super) const LOCAL_CONFIG_NAME: &str = "disabled-subagent-models.local.json";
+pub(crate) const DENY_ALL_SENTINEL: &str = "__claudex_deny_all_subagent_models__";
 pub(super) const LOAD_ATTEMPTS: usize = 3;
 #[cfg(not(test))]
 pub(super) const LOAD_RETRY: Duration = Duration::from_millis(10);
@@ -21,16 +22,30 @@ pub(super) const LOAD_RETRY: Duration = Duration::ZERO;
 mod load;
 pub(crate) use load::denylist_load_warning;
 #[cfg(test)]
-use load::{clear_denylist_cache, load_config_from_reader, short_hostname};
-use load::{config_path, load_config};
+use load::{
+    clear_denylist_cache, clear_memory_keep_disk_last_good, load_config_from_reader, short_hostname,
+};
+use load::{config_path, load_config, surface_denylist_error};
 
-pub(crate) fn active_header() -> Result<Option<String>> {
+pub(crate) fn active_header() -> Option<String> {
+    match configured_header() {
+        Ok(header) => header,
+        Err(error) => Some(
+            surface_denylist_error(error)
+                .into_iter()
+                .collect::<Vec<_>>()
+                .join(","),
+        ),
+    }
+}
+
+fn configured_header() -> Result<Option<String>> {
     let path = config_path(
         std::env::var_os(CONFIG_ENV_NAME).as_deref(),
         std::env::var_os("HOME").as_deref(),
     )?;
     merged_header(
-        &load_config(path.as_deref())?,
+        &load_config(path.as_deref()),
         std::env::var_os(ENV_NAME).as_deref(),
     )
 }
@@ -39,11 +54,20 @@ pub(crate) fn active_header() -> Result<Option<String>> {
 /// snapshots this value into Claude's environment, but an already-running
 /// Claude process may not have that snapshot; the HTTP boundary must still
 /// enforce the current denylist.
-pub(crate) fn active_models() -> Result<BTreeSet<String>> {
-    active_header()?
-        .map(|header| parse(&header))
-        .transpose()
-        .map(Option::unwrap_or_default)
+pub(crate) fn active_models() -> BTreeSet<String> {
+    match configured_header().and_then(|header| {
+        header
+            .map(|header| parse(&header))
+            .transpose()
+            .map(Option::unwrap_or_default)
+    }) {
+        Ok(models) => models,
+        Err(error) => surface_denylist_error(error),
+    }
+}
+
+pub(crate) fn model_is_disabled(disabled: &BTreeSet<String>, model: &str) -> bool {
+    disabled.contains(DENY_ALL_SENTINEL) || disabled.contains(model)
 }
 
 pub(crate) fn header_value(header: &Option<String>) -> &str {

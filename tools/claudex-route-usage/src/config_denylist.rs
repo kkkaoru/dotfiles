@@ -119,6 +119,7 @@ fn load_disabled_models_strict(path: &Path) -> Result<Option<BTreeSet<String>>> 
     let text = match std::fs::read_to_string(path) {
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
+        Ok(text) if text.trim().is_empty() => return Ok(None),
         Ok(text) => text,
     };
     Ok(Some(parse_disabled_models(&text)?))
@@ -238,6 +239,19 @@ mod tests {
             load_disabled_models_policy(&path),
             DisabledModelsPolicy::Unset
         );
+    }
+
+    #[test]
+    fn blank_denylist_file_without_last_good_is_optional_unset() {
+        clear_last_good();
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("disabled-subagent-models.json");
+        std::fs::write(&path, " \n").unwrap();
+        let policy = load_disabled_models_policy(&path);
+        assert_eq!(policy, DisabledModelsPolicy::Unset);
+        assert!(policy.models().is_empty());
+        assert!(policy.load_error().is_none());
+        assert!(load_disabled_models(&path).unwrap().is_empty());
     }
 
     #[test]

@@ -50,7 +50,7 @@ pub async fn run_claude(
     reject_model_override(&arguments)?;
     let config = ServiceConfig::new(options)?;
     // Reject invalid launch policy before creating a reusable daemon.
-    let policy_header = policy::active_header()?;
+    let policy_header = policy::active_header();
     let cwd = std::env::current_dir().context("resolve Claude Code working directory")?;
     let arguments = prepare_arguments(arguments, &cwd);
     let _session_lock = acquire_resume_session_lock(&config, &arguments)?;

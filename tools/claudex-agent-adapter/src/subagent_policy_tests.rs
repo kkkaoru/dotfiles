@@ -49,10 +49,7 @@ mod tests {
             Some(default.clone())
         );
         assert_eq!(
-            load_config(Some(&default))
-                .unwrap()
-                .into_iter()
-                .collect::<Vec<_>>(),
+            load_config(Some(&default)).into_iter().collect::<Vec<_>>(),
             ["gpt-5.6-sol", "grok-4.6"]
         );
 
@@ -98,8 +95,98 @@ mod tests {
         );
         assert_eq!(config_path(None, None).unwrap(), None);
         assert!(config_path(Some(OsStr::new("")), None).is_err());
-        assert!(config_path(Some(root.path().join("missing").as_os_str()), None).is_err());
-        assert!(load_config(None).unwrap().is_empty());
+        assert!(config_path(Some(root.path().as_os_str()), None).is_err());
+        assert!(load_config(None).is_empty());
+        clear_last_good();
+        let missing = root.path().join("missing-disabled-subagent-models.json");
+        assert_eq!(
+            config_path(Some(missing.as_os_str()), None).unwrap(),
+            Some(missing.clone())
+        );
+        assert_eq!(
+            load_config(Some(&missing)).into_iter().collect::<Vec<_>>(),
+            [DENY_ALL_SENTINEL]
+        );
+        let warning = denylist_load_warning().expect("dedicated missing file is fail-closed");
+        assert!(warning.contains("denylist file missing"), "{warning}");
+        assert!(
+            !missing.exists(),
+            "non-canonical missing denylist must not be created"
+        );
+    }
+
+    #[test]
+    fn missing_canonical_denylist_is_empty_and_creates_default_file() {
+        clear_last_good();
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join(CONFIG_RELATIVE_PATH);
+        assert!(load_config(Some(&path)).is_empty());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{\n  \"version\": 1,\n  \"disabledModels\": []\n}\n"
+        );
+    }
+
+    #[test]
+    fn blank_canonical_denylist_is_empty_and_creates_default_file() {
+        clear_last_good();
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("disabled-subagent-models.json");
+        std::fs::write(&path, "  \n").unwrap();
+        assert!(load_config(Some(&path)).is_empty());
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "{\n  \"version\": 1,\n  \"disabledModels\": []\n}\n"
+        );
+    }
+
+    #[test]
+    fn present_denylist_file_is_loaded() {
+        clear_last_good();
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("disabled-subagent-models.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"disabledModels":["grok-4.6","gpt-5.6-sol"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load_config(Some(&path)).into_iter().collect::<Vec<_>>(),
+            ["gpt-5.6-sol", "grok-4.6"]
+        );
+    }
+
+    #[test]
+    fn malformed_tracked_denylist_is_empty_not_http_fail() {
+        clear_last_good();
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("disabled-subagent-models.json");
+        std::fs::write(&path, "not-json").unwrap();
+        assert!(load_config(Some(&path)).is_empty());
+        let warning = denylist_load_warning().expect("tracked parse failure is visible");
+        assert!(warning.contains(&path.display().to_string()), "{warning}");
+        assert!(!warning.contains(DENY_ALL_SENTINEL), "{warning}");
+    }
+
+    #[test]
+    fn malformed_hostname_local_denylist_is_fail_closed() {
+        clear_last_good();
+        let root = tempfile::tempdir().unwrap();
+        let path = root
+            .path()
+            .join("disabled-subagent-models.kkk4oru.local.json");
+        std::fs::write(&path, "not-json").unwrap();
+        assert_eq!(
+            load_config(Some(&path)).into_iter().collect::<Vec<_>>(),
+            [DENY_ALL_SENTINEL]
+        );
+        let warning = denylist_load_warning().expect("dedicated parse failure is fail-closed");
+        assert!(
+            warning.contains("denylist unavailable at cold start"),
+            "{warning}"
+        );
+        assert!(warning.contains("refusing allow-all"), "{warning}");
+        assert!(warning.contains(&path.display().to_string()), "{warning}");
     }
 
     #[cfg(unix)]
@@ -156,10 +243,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            load_config(Some(&path))
-                .unwrap()
-                .into_iter()
-                .collect::<Vec<_>>(),
+            load_config(Some(&path)).into_iter().collect::<Vec<_>>(),
             [
                 "fugu",
                 "grok-4.6",
@@ -185,13 +269,11 @@ mod tests {
                 Ok(responses[attempt].clone())
             },
             path,
-        )
-        .expect("torn read should retry");
+        );
         assert_eq!(reads.get(), 2);
         assert_eq!(models.into_iter().collect::<Vec<_>>(), ["fugu", "grok-4.6"]);
 
-        let cached = load_config_from_reader(|| Ok("not-json".to_owned()), path)
-            .expect("last good policy should survive a later parse failure");
+        let cached = load_config_from_reader(|| Ok("not-json".to_owned()), path);
         assert_eq!(cached.into_iter().collect::<Vec<_>>(), ["fugu", "grok-4.6"]);
         let warning = denylist_load_warning().expect("stale denylist must be user-visible");
         assert!(
@@ -204,15 +286,14 @@ mod tests {
     fn uninitialized_denylist_read_failure_is_fail_closed() {
         clear_last_good();
         let path = Path::new("/tmp/disabled-subagent-models.uninitialized.json");
-        let error = load_config_from_reader(|| Ok("not-json".to_owned()), path)
-            .expect_err("uninitialized denylist must fail closed");
+        let models = load_config_from_reader(|| Ok("not-json".to_owned()), path);
+        assert_eq!(models.into_iter().collect::<Vec<_>>(), [DENY_ALL_SENTINEL]);
+        let warning = denylist_load_warning().expect("uninitialized dedicated is fail-closed");
         assert!(
-            error
-                .to_string()
-                .contains("denylist unavailable at cold start"),
-            "{error}"
+            warning.contains("denylist unavailable at cold start"),
+            "{warning}"
         );
-        assert!(error.to_string().contains("refusing allow-all"), "{error}");
+        assert!(warning.contains("refusing allow-all"), "{warning}");
     }
 
     #[test]
@@ -222,11 +303,9 @@ mod tests {
         let unset = load_config_from_reader(
             || Ok(r#"{"version":1,"disabledModels":[]}"#.to_owned()),
             path,
-        )
-        .expect("explicit empty denylist is unset, not uninitialized");
+        );
         assert!(unset.is_empty());
-        let cached = load_config_from_reader(|| Ok("not-json".to_owned()), path)
-            .expect("unset last-good must survive a later parse failure");
+        let cached = load_config_from_reader(|| Ok("not-json".to_owned()), path);
         assert!(cached.is_empty());
         let warning = denylist_load_warning().expect("stale empty last-good must still surface");
         assert!(warning.contains("last-known-good"), "{warning}");
@@ -236,24 +315,103 @@ mod tests {
     fn rejects_invalid_dedicated_policy_files_until_retries_exhaust() {
         clear_last_good();
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("policy.json");
-        for contents in [
-            r#"{"version":2,"disabledModels":[]}"#,
-            r#"{"version":1,"disabledModels":["invalid model"]}"#,
+        let version_path = root.path().join("policy-version.json");
+        std::fs::write(&version_path, r#"{"version":2,"disabledModels":[]}"#).unwrap();
+        assert_eq!(
+            load_config(Some(&version_path))
+                .into_iter()
+                .collect::<Vec<_>>(),
+            [DENY_ALL_SENTINEL]
+        );
+        clear_last_good();
+        let duplicate_path = root.path().join("policy-duplicate.json");
+        std::fs::write(
+            &duplicate_path,
             r#"{"version":1,"disabledModels":["same","same"]}"#,
-            r#"{"version":1,"disabledModels":[],"extra":true}"#,
-            "not-json",
-        ] {
-            std::fs::write(&path, contents).unwrap();
-            let error = load_config(Some(&path))
-                .expect_err("invalid policy is fail-closed when uninitialized");
-            assert!(
-                error
-                    .to_string()
-                    .contains("denylist unavailable at cold start"),
-                "cold start must not allow-all: {contents}: {error}"
-            );
-        }
+        )
+        .unwrap();
+        assert_eq!(
+            load_config(Some(&duplicate_path))
+                .into_iter()
+                .collect::<Vec<_>>(),
+            [DENY_ALL_SENTINEL]
+        );
+        let warning = denylist_load_warning().expect("invalid dedicated policy is fail-closed");
+        assert!(
+            warning.contains("denylist unavailable at cold start"),
+            "{warning}"
+        );
+    }
+
+    #[test]
+    fn retries_transient_io_then_loads_dedicated_policy() {
+        clear_last_good();
+        let path = Path::new("/tmp/disabled-subagent-models.emfile.json");
+        let reads = Cell::new(0);
+        let models = load_config_from_reader(
+            || {
+                let attempt = reads.get();
+                reads.set(attempt + 1);
+                if attempt == 0 {
+                    return Err(std::io::Error::from(std::io::ErrorKind::Interrupted).into());
+                }
+                Ok(r#"{"version":1,"disabledModels":["grok-4.6"]}"#.to_owned())
+            },
+            path,
+        );
+        assert_eq!(reads.get(), 2);
+        assert_eq!(models.into_iter().collect::<Vec<_>>(), ["grok-4.6"]);
+    }
+
+    #[test]
+    fn last_good_survives_process_restart_from_disk() {
+        clear_last_good();
+        let root = tempfile::tempdir().unwrap();
+        let path = root
+            .path()
+            .join("disabled-subagent-models.kkk4oru.local.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"disabledModels":["hostname-local-model"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            load_config(Some(&path)).into_iter().collect::<Vec<_>>(),
+            ["hostname-local-model"]
+        );
+        clear_memory_keep_disk_last_good();
+        std::fs::write(&path, "{").unwrap();
+        assert_eq!(
+            load_config(Some(&path)).into_iter().collect::<Vec<_>>(),
+            ["hostname-local-model"]
+        );
+        let warning = denylist_load_warning().expect("stale disk last-good must be visible");
+        assert!(warning.contains("last-known-good"), "{warning}");
+    }
+
+    #[test]
+    fn hostname_local_still_disables_when_tracked_file_is_missing() {
+        clear_last_good();
+        let root = tempfile::tempdir().unwrap();
+        let config_dir = root.path().join(CONFIG_DIR_RELATIVE);
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let hostname = short_hostname().expect("hostname");
+        let hostname_local =
+            config_dir.join(format!("disabled-subagent-models.{hostname}.local.json"));
+        std::fs::write(
+            &hostname_local,
+            r#"{"version":1,"disabledModels":["hostname-local-model"]}"#,
+        )
+        .unwrap();
+        let selected = config_path(None, Some(root.path().as_os_str()))
+            .unwrap()
+            .expect("hostname-local is preferred over missing tracked file");
+        assert_eq!(selected, hostname_local);
+        assert!(!root.path().join(CONFIG_RELATIVE_PATH).exists());
+        assert_eq!(
+            load_config(Some(&selected)).into_iter().collect::<Vec<_>>(),
+            ["hostname-local-model"]
+        );
     }
 
     #[test]
@@ -274,6 +432,18 @@ mod tests {
         assert!(!valid_model_id(""));
         assert!(!valid_model_id("モデル"));
         assert!(!valid_model_id("model\n"));
+    }
+
+    #[test]
+    fn fail_closed_sentinel_disables_every_subagent_model() {
+        let disabled = BTreeSet::from([DENY_ALL_SENTINEL.to_owned()]);
+        assert!(model_is_disabled(&disabled, "grok-4.6"));
+        assert!(model_is_disabled(&disabled, "gpt-5.6-sol"));
+        assert!(!model_is_disabled(&BTreeSet::new(), "grok-4.6"));
+        assert!(model_is_disabled(
+            &BTreeSet::from(["grok-4.6".to_owned()]),
+            "grok-4.6"
+        ));
     }
 
     #[test]

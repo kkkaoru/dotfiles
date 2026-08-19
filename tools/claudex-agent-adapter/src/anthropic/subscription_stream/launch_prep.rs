@@ -31,7 +31,7 @@ pub(super) fn reject_unavailable_subagent_model(
     let Some(model) = crate::anthropic::agent_effort::requested_model(routed_input) else {
         return Ok(());
     };
-    if context.disabled_subagent_models.contains(model) {
+    if crate::subagent_policy::model_is_disabled(&context.disabled_subagent_models, model) {
         return Err(BlockedSubagentError::policy_disabled(model));
     }
     let exhausted = crate::anthropic::agent_routing::routing_disables_subagent_model(

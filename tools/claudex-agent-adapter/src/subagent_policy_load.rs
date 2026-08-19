@@ -2,6 +2,7 @@ use std::{
     collections::BTreeSet,
     ffi::OsStr,
     fs,
+    io::{ErrorKind, Write},
     path::{Path, PathBuf},
     process::Command,
 };
@@ -10,15 +11,28 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use super::{
-    CONFIG_DIR_RELATIVE, CONFIG_ENV_NAME, CONFIG_RELATIVE_PATH, CONFIG_VERSION, LOAD_ATTEMPTS,
-    LOAD_RETRY, LOCAL_CONFIG_NAME, valid_model_id,
+    CONFIG_DIR_RELATIVE, CONFIG_ENV_NAME, CONFIG_RELATIVE_PATH, CONFIG_VERSION, DENY_ALL_SENTINEL,
+    LOAD_ATTEMPTS, LOAD_RETRY, LOCAL_CONFIG_NAME, valid_model_id,
 };
+
+const DEFAULT_DENYLIST_FILE_NAME: &str = "disabled-subagent-models.json";
+const DEFAULT_DENYLIST_JSON: &str = "{\n  \"version\": 1,\n  \"disabledModels\": []\n}\n";
+
+#[path = "subagent_policy_last_good.rs"]
+mod last_good;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub(super) struct ModelPolicy {
     version: u64,
     disabled_models: Vec<String>,
+}
+
+enum FileProbe {
+    File,
+    Missing,
+    NotFile,
+    Unreadable,
 }
 
 pub(super) fn short_hostname() -> Option<String> {
@@ -40,7 +54,7 @@ pub(super) fn config_path(
             bail!("{CONFIG_ENV_NAME} must not be empty");
         }
         let path = PathBuf::from(explicit);
-        if !path.is_file() {
+        if matches!(probe_file(&path), FileProbe::NotFile) {
             bail!("{CONFIG_ENV_NAME} does not name a readable file");
         }
         return Ok(Some(path));
@@ -52,24 +66,49 @@ pub(super) fn config_path(
     if let Some(hostname) = short_hostname() {
         let hostname_local =
             config_dir.join(format!("disabled-subagent-models.{hostname}.local.json"));
-        if hostname_local.is_file() {
+        if prefer_dedicated(&hostname_local) {
             return Ok(Some(hostname_local));
         }
     }
     let shared_local = config_dir.join(LOCAL_CONFIG_NAME);
-    if shared_local.is_file() {
+    if prefer_dedicated(&shared_local) {
         return Ok(Some(shared_local));
     }
     Ok(Some(PathBuf::from(home).join(CONFIG_RELATIVE_PATH)))
 }
 
-pub(super) fn load_config(path: Option<&Path>) -> Result<BTreeSet<String>> {
-    let Some(path) = path else {
-        return Ok(BTreeSet::new());
-    };
-    if !path.is_file() {
-        return missing_optional_denylist(path);
+fn prefer_dedicated(path: &Path) -> bool {
+    match probe_file(path) {
+        FileProbe::File | FileProbe::Unreadable => true,
+        FileProbe::Missing | FileProbe::NotFile => false,
     }
+}
+
+fn probe_file(path: &Path) -> FileProbe {
+    let mut last_unreadable = false;
+    for attempt in 0..LOAD_ATTEMPTS {
+        match fs::metadata(path) {
+            Ok(metadata) if metadata.is_file() => return FileProbe::File,
+            Ok(_) => return FileProbe::NotFile,
+            Err(error) if error.kind() == ErrorKind::NotFound => return FileProbe::Missing,
+            Err(error) if io_error_is_transient(&error) => {
+                last_unreadable = true;
+                sleep_before_policy_retry(attempt);
+            }
+            Err(_) => return FileProbe::Unreadable,
+        }
+    }
+    if last_unreadable {
+        FileProbe::Unreadable
+    } else {
+        FileProbe::Missing
+    }
+}
+
+pub(super) fn load_config(path: Option<&Path>) -> BTreeSet<String> {
+    let Some(path) = path else {
+        return BTreeSet::new();
+    };
     load_config_from_reader(
         || {
             fs::read_to_string(path)
@@ -79,32 +118,119 @@ pub(super) fn load_config(path: Option<&Path>) -> Result<BTreeSet<String>> {
     )
 }
 
-fn missing_optional_denylist(path: &Path) -> Result<BTreeSet<String>> {
-    match with_last_good(|slot| slot.clone()) {
-        Some(models) => {
-            remember_warning(format!(
-                "denylist file missing; using last-known-good for {}",
-                path.display()
-            ));
-            Ok(models)
+fn is_optional_tracked(path: &Path) -> bool {
+    path.file_name() == Some(OsStr::new(DEFAULT_DENYLIST_FILE_NAME))
+        && std::env::var_os(CONFIG_ENV_NAME).is_none()
+}
+
+fn missing_denylist(path: &Path) -> BTreeSet<String> {
+    if let Some(models) = cached_last_good(path) {
+        remember_warning(format!(
+            "denylist file missing; using last-known-good for {}",
+            path.display()
+        ));
+        return models;
+    }
+    if is_optional_tracked(path) {
+        seed_canonical_denylist(path);
+        return BTreeSet::new();
+    }
+    fail_closed(
+        path,
+        format!("denylist file missing for {}", path.display()),
+    )
+}
+
+fn cached_last_good(path: &Path) -> Option<BTreeSet<String>> {
+    let memory = with_cache(|cache| {
+        if cache.last_good_source.as_deref() == Some(path) {
+            cache.last_good.clone()
+        } else {
+            None
         }
-        None => Ok(BTreeSet::new()),
+    });
+    memory.or_else(|| last_good::restore(path))
+}
+
+fn io_not_found(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io| io.kind() == ErrorKind::NotFound)
+    })
+}
+
+fn io_error_is_transient(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        ErrorKind::Interrupted | ErrorKind::WouldBlock | ErrorKind::TimedOut
+    ) || os_emfile(error.raw_os_error())
+}
+
+fn os_emfile(code: Option<i32>) -> bool {
+    #[cfg(unix)]
+    {
+        matches!(code, Some(libc::EMFILE | libc::ENFILE | libc::EAGAIN))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = code;
+        false
+    }
+}
+
+fn seed_canonical_denylist(path: &Path) {
+    if path.file_name() != Some(OsStr::new(DEFAULT_DENYLIST_FILE_NAME)) {
+        return;
+    }
+    if let Err(error) = write_canonical_denylist(path) {
+        remember_warning(format!(
+            "could not create default denylist {}: {error}",
+            path.display()
+        ));
+    }
+}
+
+fn write_canonical_denylist(path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    match fs::read_to_string(path) {
+        Ok(text) if !text.trim().is_empty() => Ok(()),
+        Ok(_) => Ok(fs::write(path, DEFAULT_DENYLIST_JSON)?),
+        Err(error) if error.kind() == ErrorKind::NotFound => write_new_canonical_denylist(path),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn write_new_canonical_denylist(path: &Path) -> Result<()> {
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(mut file) => Ok(file.write_all(DEFAULT_DENYLIST_JSON.as_bytes())?),
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(error.into()),
     }
 }
 
 pub(super) fn load_config_from_reader(
     read: impl Fn() -> Result<String>,
     path: &Path,
-) -> Result<BTreeSet<String>> {
+) -> BTreeSet<String> {
     let mut last_error = None;
     for attempt in 0..LOAD_ATTEMPTS {
-        match read().and_then(|contents| parse_policy_text(&contents, path)) {
-            Ok(models) => return remember_last_good(models),
-            Err(error) => {
-                last_error = Some(error);
-                sleep_before_policy_retry(attempt);
-            }
+        match read() {
+            Err(error) if io_not_found(&error) => return missing_denylist(path),
+            Ok(contents) if contents.trim().is_empty() => return missing_denylist(path),
+            Ok(contents) => match parse_policy_text(&contents, path) {
+                Ok(models) => return remember_last_good(path, models),
+                Err(error) => last_error = Some(error),
+            },
+            Err(error) => last_error = Some(error),
         }
+        sleep_before_policy_retry(attempt);
     }
     fallback_last_good(path, last_error.expect("load attempts produce an error"))
 }
@@ -131,30 +257,50 @@ pub(super) fn parse_policy_text(contents: &str, path: &Path) -> Result<BTreeSet<
     Ok(policy.disabled_models.into_iter().collect())
 }
 
-pub(super) fn remember_last_good(models: BTreeSet<String>) -> Result<BTreeSet<String>> {
+pub(super) fn remember_last_good(path: &Path, models: BTreeSet<String>) -> BTreeSet<String> {
     with_cache(|cache| {
+        cache.last_good_source = Some(path.to_path_buf());
         cache.last_good = Some(models.clone());
         cache.warning = None;
     });
-    Ok(models)
+    if !models.contains(DENY_ALL_SENTINEL) {
+        last_good::persist(path, &models);
+    }
+    models
 }
 
-pub(super) fn fallback_last_good(path: &Path, error: anyhow::Error) -> Result<BTreeSet<String>> {
-    let cached = with_cache(|cache| cache.last_good.clone());
-    if let Some(models) = cached {
+pub(super) fn fallback_last_good(path: &Path, error: anyhow::Error) -> BTreeSet<String> {
+    if let Some(models) = cached_last_good(path) {
         remember_warning(format!(
             "{error}; using last-known-good denylist for {}",
             path.display()
         ));
-        return Ok(models);
+        return models;
     }
-    Err(error.context(format!(
-        "denylist unavailable at cold start for {}; refusing allow-all",
-        path.display()
-    )))
+    if is_optional_tracked(path) {
+        remember_warning(format!(
+            "{error}; optional tracked denylist unavailable for {}",
+            path.display()
+        ));
+        return BTreeSet::new();
+    }
+    fail_closed(
+        path,
+        format!(
+            "{error}; denylist unavailable at cold start for {}; refusing allow-all",
+            path.display()
+        ),
+    )
+}
+
+fn fail_closed(path: &Path, message: String) -> BTreeSet<String> {
+    let _ = path;
+    remember_warning(message);
+    BTreeSet::from([DENY_ALL_SENTINEL.to_owned()])
 }
 
 struct DenylistCache {
+    last_good_source: Option<PathBuf>,
     last_good: Option<BTreeSet<String>>,
     warning: Option<String>,
 }
@@ -162,6 +308,7 @@ struct DenylistCache {
 impl DenylistCache {
     const fn empty() -> Self {
         Self {
+            last_good_source: None,
             last_good: None,
             warning: None,
         }
@@ -173,17 +320,25 @@ fn remember_warning(message: String) {
     with_cache(|cache| cache.warning = Some(message));
 }
 
-pub(crate) fn denylist_load_warning() -> Option<String> {
-    with_cache(|cache| cache.warning.clone())
+pub(crate) fn surface_denylist_error(error: anyhow::Error) -> BTreeSet<String> {
+    remember_warning(error.to_string());
+    BTreeSet::from([DENY_ALL_SENTINEL.to_owned()])
 }
 
-pub(super) fn with_last_good<R>(update: impl FnOnce(&mut Option<BTreeSet<String>>) -> R) -> R {
-    with_cache(|cache| update(&mut cache.last_good))
+pub(crate) fn denylist_load_warning() -> Option<String> {
+    with_cache(|cache| cache.warning.clone())
 }
 
 #[cfg(test)]
 pub(super) fn clear_denylist_cache() {
     with_cache(|cache| *cache = DenylistCache::empty());
+    last_good::reset_test_file();
+}
+
+#[cfg(test)]
+pub(super) fn clear_memory_keep_disk_last_good() {
+    with_cache(|cache| *cache = DenylistCache::empty());
+    last_good::keep_test_file();
 }
 
 fn with_cache<R>(update: impl FnOnce(&mut DenylistCache) -> R) -> R {
