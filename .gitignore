@@ -189,3 +189,5 @@ tmp
 tools/claudex-agent-adapter/grok-acp-mock.jsonl
 .codex/thread-writer-locks/
 .codex/queue_*
+
+.cursor/plugins/cache/
