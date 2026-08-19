@@ -25,6 +25,12 @@ export interface DirectStreamInput {
   onEvent: (event: AssistantMessageEvent) => Promise<void>;
 }
 
+interface StreamReadState {
+  terminal: boolean;
+}
+
+const CANCELLED_MESSAGE = "Cancelled by Claudex";
+
 function resolveAvailableModel(registry: ModelRegistry, request: StreamRequestMessage): Model<Api> {
   let model: Model<Api> | null = null;
   for (const candidate of registry.getAll()) {
@@ -95,6 +101,57 @@ function buildOptions(
   return options;
 }
 
+function throwIfAborted(signal: AbortSignal, requestId: string): void {
+  if (signal.aborted) {
+    throw new GatewayError(CANCELLED_MESSAGE, requestId);
+  }
+}
+
+async function abortError(signal: AbortSignal, requestId: string): Promise<never> {
+  await new Promise<never>((_resolve, rejectError) => {
+    const rejectCancelled = (): void => {
+      rejectError(new GatewayError(CANCELLED_MESSAGE, requestId));
+    };
+    if (signal.aborted) {
+      rejectCancelled();
+      return;
+    }
+    signal.addEventListener("abort", rejectCancelled, { once: true });
+  });
+  throw new GatewayError(CANCELLED_MESSAGE, requestId);
+}
+
+async function nextEvent(
+  iterator: AsyncIterator<AssistantMessageEvent>,
+  signal: AbortSignal,
+  requestId: string,
+): Promise<IteratorResult<AssistantMessageEvent>> {
+  throwIfAborted(signal, requestId);
+  return Promise.race([iterator.next(), abortError(signal, requestId)]);
+}
+
+function abortableEvents(
+  stream: AsyncIterable<AssistantMessageEvent>,
+  signal: AbortSignal,
+  requestId: string,
+): AsyncIterable<AssistantMessageEvent> {
+  return {
+    [Symbol.asyncIterator](): AsyncIterator<AssistantMessageEvent> {
+      const iterator = stream[Symbol.asyncIterator]();
+      return {
+        next: async (): Promise<IteratorResult<AssistantMessageEvent>> =>
+          nextEvent(iterator, signal, requestId),
+        return: async (): Promise<IteratorResult<AssistantMessageEvent>> => {
+          if (iterator.return === undefined) {
+            return { done: true, value: undefined };
+          }
+          return iterator.return();
+        },
+      };
+    },
+  };
+}
+
 export async function streamDirectModel(input: DirectStreamInput): Promise<void> {
   const { request, registry, signal, onEvent } = input;
   const model = resolveAvailableModel(registry, request);
@@ -109,14 +166,20 @@ export async function streamDirectModel(input: DirectStreamInput): Promise<void>
   const resolvedModel = auth.baseUrl === undefined ? model : { ...model, baseUrl: auth.baseUrl };
   const context = toPiContext(request, resolvedModel);
   const options = buildOptions(request, signal, auth);
-  let terminal = false;
-  for await (const event of provider.streamSimple(resolvedModel, context, options)) {
+  const state: StreamReadState = { terminal: false };
+  const stream = abortableEvents(
+    provider.streamSimple(resolvedModel, context, options),
+    signal,
+    request.id,
+  );
+  for await (const event of stream) {
     await onEvent(event);
     if (event.type === "done" || event.type === "error") {
-      terminal = true;
+      state.terminal = true;
     }
+    throwIfAborted(signal, request.id);
   }
-  if (!terminal) {
+  if (!state.terminal) {
     throw new GatewayError("Pi provider stream ended without a terminal event", request.id);
   }
 }

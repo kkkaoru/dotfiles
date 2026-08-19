@@ -1,7 +1,7 @@
 import type { Api, Model, TextContent } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { streamDirectModel } from "./direct-stream.ts";
-import { errorMessage, GatewayError } from "./errors.ts";
+import { errorMessage } from "./errors.ts";
 import { mapAssistantEvent } from "./event-mapper.ts";
 import {
   serverMessage,
@@ -19,6 +19,17 @@ export interface GatewayWriter {
   write: (message: ServerMessage) => Promise<void>;
 }
 
+interface GatewayTerminal {
+  sent: boolean;
+}
+
+interface ActiveRequest {
+  controller: AbortController;
+  terminal: GatewayTerminal;
+}
+
+const CANCELLED_MESSAGE = "Cancelled by Claudex";
+
 function observe(promise: Promise<unknown>): void {
   promise.catch(() => null);
 }
@@ -26,7 +37,7 @@ function observe(promise: Promise<unknown>): void {
 export class GatewayConnection {
   private readonly registry: ModelRegistry;
   private readonly writer: GatewayWriter;
-  private readonly active = new Map<string, AbortController>();
+  private readonly active = new Map<string, ActiveRequest>();
   private closed = false;
 
   constructor(registry: ModelRegistry, writer: GatewayWriter) {
@@ -55,8 +66,8 @@ export class GatewayConnection {
 
   close(): void {
     this.closed = true;
-    for (const controller of this.active.values()) {
-      controller.abort("Pi gateway connection closed");
+    for (const request of this.active.values()) {
+      request.controller.abort("Pi gateway connection closed");
     }
     this.active.clear();
   }
@@ -67,8 +78,9 @@ export class GatewayConnection {
       return;
     }
     const controller = new AbortController();
-    this.active.set(request.id, controller);
-    const operation = this.runRequest(request, controller).finally(() => {
+    const terminal: GatewayTerminal = { sent: false };
+    this.active.set(request.id, { controller, terminal });
+    const operation = this.runRequest(request, controller, terminal).finally(() => {
       this.active.delete(request.id);
     });
     observe(operation);
@@ -77,35 +89,51 @@ export class GatewayConnection {
   private async runRequest(
     request: StreamRequestMessage,
     controller: AbortController,
+    terminal: GatewayTerminal,
   ): Promise<void> {
-    let terminalSent = false;
     try {
       await streamDirectModel({
         request,
         registry: this.registry,
         signal: controller.signal,
         onEvent: async (event) => {
-          if (terminalSent) {
-            throw new GatewayError("Pi provider emitted an event after termination", request.id);
+          if (terminal.sent) {
+            return;
           }
           await this.writer.write(mapAssistantEvent(request.id, event));
-          terminalSent = event.type === "done" || event.type === "error";
+          terminal.sent = event.type === "done" || event.type === "error";
         },
       });
     } catch (error) {
-      if (!terminalSent) {
+      if (!terminal.sent) {
+        terminal.sent = true;
         await this.writeProtocolError(request.id, errorMessage(error));
       }
     }
   }
 
   private cancel(id: string): void {
-    const controller = this.active.get(id);
-    if (controller === undefined) {
+    const active = this.active.get(id);
+    if (active === undefined) {
       observe(this.writeProtocolError(id, `No active request for cancellation: ${id}`));
       return;
     }
-    controller.abort("Cancelled by Claudex");
+    active.controller.abort(CANCELLED_MESSAGE);
+    observe(this.writeCancelled(id, active.terminal));
+  }
+
+  private async writeCancelled(id: string, terminal: GatewayTerminal): Promise<void> {
+    if (terminal.sent) {
+      return;
+    }
+    terminal.sent = true;
+    await this.writer.write(
+      serverMessage("error", {
+        id,
+        reason: "error",
+        error: { errorMessage: CANCELLED_MESSAGE },
+      }),
+    );
   }
 
   private async listModels(message: ListModelsMessage): Promise<void> {

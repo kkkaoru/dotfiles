@@ -209,4 +209,32 @@ describe("direct Pi provider streaming", () => {
       }),
     ).resolves.toBeUndefined();
   });
+
+  it("stops waiting for the provider iterator when abort fires", async () => {
+    const received: string[] = [];
+    const controller = new AbortController();
+    const hanging = registry({
+      getProvider: () => ({
+        streamSimple: () =>
+          (async function* hangingStream() {
+            yield { type: "start", partial: FINAL };
+            await new Promise<void>(() => {});
+            yield { type: "done", reason: "stop", message: FINAL };
+          })(),
+      }),
+    });
+    const run = streamDirectModel({
+      request: request(),
+      registry: hanging.value,
+      signal: controller.signal,
+      onEvent: async (event) => {
+        received.push(event.type);
+        if (event.type === "start") {
+          controller.abort();
+        }
+      },
+    });
+    await expect(run).rejects.toThrow("Cancelled by Claudex");
+    expect(received).toStrictEqual(["start"]);
+  });
 });
