@@ -226,6 +226,29 @@ if [ -d "${DOTPATH}/.config" ]; then
           link_path "$app_path" "$dest"
         fi
         ;;
+      claudex)
+        # prepare-claude-config may mkdir ~/.config/claudex as a real directory
+        # before this installer runs. Merge tracked files so the denylist is
+        # installed instead of skipping the whole tree.
+        if [ -d "$dest" ] && [ ! -L "$dest" ]; then
+          mkdir -p "$dest"
+          for src in "$app_path"/*; do
+            [ -e "$src" ] || continue
+            name=$(basename "$src")
+            case "$name" in
+              claude-config|tests|__pycache__)
+                continue
+                ;;
+              *.local.json)
+                continue
+                ;;
+            esac
+            link_path "$src" "${dest}/${name}"
+          done
+        else
+          link_path "$app_path" "$dest"
+        fi
+        ;;
       hunk|herdr)
         mkdir -p "$dest"
         if [ -f "${app_path}/config.toml" ]; then

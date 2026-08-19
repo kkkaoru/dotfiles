@@ -36,6 +36,12 @@ CLAUDEX_EXTERNAL_MODEL_IDS = (
     "cursor/gpt-5.6-sol",
     "cursor/gpt-5.6-terra",
 )
+DISABLED_SUBAGENT_MODELS_NAME = "disabled-subagent-models.json"
+ISOLATED_CONFIG_DIR_NAME = "claude-config"
+EMPTY_DISABLED_SUBAGENT_MODELS: dict[str, object] = {
+    "version": 1,
+    "disabledModels": [],
+}
 # Registered only on the claudex-isolated settings.json. Plain `claude` keeps
 # using ~/.claude/settings.json without these mechanical tool limits.
 CLAUDEX_TOOL_POLICY_HOOKS: dict[str, list[dict[str, Any]]] = {
@@ -94,6 +100,33 @@ def plain_claude_model(model: str) -> str:
     if is_claudex_discovery_model(model):
         return PLAIN_CLAUDE_FALLBACK_MODEL
     return model
+
+
+def write_empty_disabled_subagent_models(path: Path) -> None:
+    path.write_text(
+        json.dumps(EMPTY_DISABLED_SUBAGENT_MODELS, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def ensure_disabled_subagent_models(path: Path) -> None:
+    if path.is_file():
+        if path.read_text(encoding="utf-8").strip():
+            return
+    elif path.exists():
+        raise ValueError(f"{path} exists and is not a file")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    source = Path(__file__).resolve().parent / DISABLED_SUBAGENT_MODELS_NAME
+    if source.is_file() and source.resolve() != path.resolve():
+        path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        return
+    write_empty_disabled_subagent_models(path)
+
+
+def ensure_isolated_denylist(isolated: Path) -> None:
+    if isolated.name != ISOLATED_CONFIG_DIR_NAME:
+        return
+    ensure_disabled_subagent_models(isolated.parent / DISABLED_SUBAGENT_MODELS_NAME)
 
 
 def ensure_symlink(target: Path, link: Path) -> None:
@@ -232,6 +265,7 @@ def main() -> int:
     # Keep plain `claude` free of claudex discovery model ids.
     sanitize_shared_settings(user_settings)
     mirror_shared_entries(user_claude, isolated)
+    ensure_isolated_denylist(isolated)
     write_isolated_settings(
         user_settings, isolated / "settings.json", model, effort, context_tokens
     )

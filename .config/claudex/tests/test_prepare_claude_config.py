@@ -2,15 +2,26 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import ModuleType
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PREPARE = ROOT / "prepare-claude-config.py"
+
+
+def load_prepare_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("prepare_claude_config", PREPARE)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load prepare-claude-config.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class PrepareClaudeConfigTests(unittest.TestCase):
@@ -82,6 +93,88 @@ class PrepareClaudeConfigTests(unittest.TestCase):
             self.assertTrue(agents_link.is_symlink())
             self.assertEqual(agents_link.resolve(), (user_claude / "agents").resolve())
             self.assertFalse((isolated / "settings.local.json").exists())
+            denylist = home / ".config/claudex/disabled-subagent-models.json"
+            self.assertTrue(denylist.is_file())
+            self.assertEqual(
+                json.loads(denylist.read_text(encoding="utf-8")),
+                {"version": 1, "disabledModels": []},
+            )
+
+    def test_does_not_overwrite_existing_denylist(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="claudex-prepare-denylist-") as temporary:
+            home = Path(temporary)
+            user_claude = home / ".claude"
+            isolated = home / ".config/claudex/claude-config"
+            user_claude.mkdir(parents=True)
+            (user_claude / "settings.json").write_text(
+                '{"model":"opus","effortLevel":"high"}',
+                encoding="utf-8",
+            )
+            denylist = home / ".config/claudex/disabled-subagent-models.json"
+            denylist.parent.mkdir(parents=True)
+            denylist.write_text(
+                '{"version":1,"disabledModels":["grok-4.6"]}\n',
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(PREPARE),
+                    str(user_claude),
+                    str(isolated),
+                    "grok-4.6",
+                    "high",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                json.loads(denylist.read_text(encoding="utf-8")),
+                {"version": 1, "disabledModels": ["grok-4.6"]},
+            )
+
+    def test_seeds_blank_denylist_beside_isolated_config(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="claudex-prepare-blank-denylist-") as temporary:
+            home = Path(temporary)
+            user_claude = home / ".claude"
+            isolated = home / ".config/claudex/claude-config"
+            user_claude.mkdir(parents=True)
+            (user_claude / "settings.json").write_text(
+                '{"model":"opus","effortLevel":"high"}',
+                encoding="utf-8",
+            )
+            denylist = home / ".config/claudex/disabled-subagent-models.json"
+            denylist.parent.mkdir(parents=True)
+            denylist.write_text(" \n", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(PREPARE),
+                    str(user_claude),
+                    str(isolated),
+                    "grok-4.6",
+                    "high",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                json.loads(denylist.read_text(encoding="utf-8")),
+                {"version": 1, "disabledModels": []},
+            )
+
+    def test_rejects_denylist_path_that_is_a_directory(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="claudex-prepare-dir-denylist-") as temporary:
+            path = Path(temporary) / "disabled-subagent-models.json"
+            path.mkdir()
+            module = load_prepare_module()
+            with self.assertRaises(ValueError) as raised:
+                module.ensure_disabled_subagent_models(path)
+            self.assertIn(str(path), str(raised.exception))
 
     def test_leaves_native_shared_model_untouched(self) -> None:
         with tempfile.TemporaryDirectory(prefix="claudex-prepare-native-") as temporary:
@@ -121,6 +214,7 @@ class PrepareClaudeConfigTests(unittest.TestCase):
             self.assertEqual(
                 isolated_settings["env"]["CLAUDE_CODE_STOP_HOOK_BLOCK_CAP"], "64"
             )
+            self.assertFalse((home / "disabled-subagent-models.json").exists())
 
     def test_writes_and_clears_unknown_model_context_window(self) -> None:
         with tempfile.TemporaryDirectory(prefix="claudex-prepare-window-") as temporary:
