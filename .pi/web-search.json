@@ -1,0 +1,5 @@
+{
+  "exaApiKey": "$EXA_API_KEY",
+  "braveApiKey": "$BRAVE_API_KEY",
+  "workflow": "auto-summary"
+}

@@ -81,8 +81,10 @@ coverage_out/
 !.pi/agent/
 !.pi/agent/models.json
 !.pi/agent/settings.json
+!.pi/agent/ollama-cloud.json
 !.pi/agent/themes/
 !.pi/agent/themes/**
+!.pi/web-search.json
 
 # oMLX is repository-managed like .pi. Track DFlash/server config only.
 # Never commit weights, caches, logs, binaries, or the live settings.json

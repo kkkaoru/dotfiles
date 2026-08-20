@@ -1,9 +1,9 @@
 {
   "lastChangelogVersion": "0.84.2",
   "theme": "dracula",
-  "defaultProvider": "devin",
-  "defaultModel": "swe-1-7",
-  "defaultThinkingLevel": "high",
+  "defaultProvider": "omlx",
+  "defaultModel": "Qwen3.8-27B-4bit",
+  "defaultThinkingLevel": "low",
   "packages": [
     "npm:pi-effort",
     "./packages/pi-my-clinepass-provider",
@@ -12,6 +12,7 @@
     "./packages/pi-my-devin-cli-provider",
     "./packages/pi-claudex-provider",
     "npm:pi-commandcode-provider",
-    "npm:pi-antigravity"
+    "npm:pi-antigravity",
+    "npm:pi-web-access"
   ]
 }
