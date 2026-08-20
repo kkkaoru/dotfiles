@@ -58,7 +58,8 @@ pub(super) async fn ensure_current_generation(
         let listen = reserve_loopback_listen(config.options.listen)?;
         let fallback = config.with_listen(listen);
         let started = daemon_start::StartedDaemon::new(
-            daemon_start::start_adapter(&fallback).context("start current-build fallback")?,
+            daemon_start::start_adapter_for_service(&fallback, config)
+                .context("start current-build fallback")?,
         );
         match wait_until_ready(client, &fallback).await {
             Ok(()) => {

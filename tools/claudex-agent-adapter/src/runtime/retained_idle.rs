@@ -74,4 +74,16 @@ mod tests {
             0
         ));
     }
+
+    #[test]
+    fn fallback_listener_retires_when_its_service_is_idle() {
+        let fallback = "127.0.0.1:61915".parse().unwrap();
+        let service = "127.0.0.1:8318".parse().unwrap();
+        assert!(rebound_generation_should_exit(
+            fallback,
+            service,
+            STICKY_IDLE_GRACE,
+            0
+        ));
+    }
 }

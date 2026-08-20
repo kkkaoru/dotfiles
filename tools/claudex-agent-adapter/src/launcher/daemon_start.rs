@@ -64,6 +64,16 @@ pub(super) fn start_adapter(config: &ServiceConfig) -> Result<u32> {
     start_with_retained(config, None, config)
 }
 
+/// Start a listener on a temporary address while retaining the configured
+/// service address as its lifecycle target. This makes the runtime treat the
+/// listener as a fallback generation and retire it after the sticky idle grace.
+pub(super) fn start_adapter_for_service(
+    listen_config: &ServiceConfig,
+    service_config: &ServiceConfig,
+) -> Result<u32> {
+    start_with_retained(listen_config, None, service_config)
+}
+
 pub(super) fn start_adapter_with_retained(
     listen_config: &ServiceConfig,
     retained_path: &Path,
