@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 use super::{SegmentBuilder, ToolCall};
 use crate::anthropic::stream::protocol::StreamSender;
@@ -87,6 +88,92 @@ fn hydrate_external_tool_arguments(
     arguments
 }
 
+fn rewrite_reused_subagent_launch(
+    context: ExternalToolContext<'_>,
+    original_name: &str,
+    arguments: &mut Value,
+) {
+    if !crate::anthropic::agent_effort::is_agent_tool(original_name) {
+        return;
+    }
+    let Some(session_id) = context
+        .session
+        .claude_session_id
+        .as_deref()
+        .filter(|session_id| !session_id.is_empty())
+    else {
+        return;
+    };
+    let Some(recipient) = context
+        .bridge
+        .subagent_reuse
+        .rewrite_launch_input(session_id, arguments)
+    else {
+        return;
+    };
+    tracing::info!(
+        session_id,
+        recipient,
+        tool = original_name,
+        "provider Agent/Task launch reused an existing SubAgent"
+    );
+}
+
+fn skip_duplicate_subagent_launch(
+    context: ExternalToolContext<'_>,
+    original_name: &str,
+    arguments: &Value,
+    tool_use_id: &str,
+) -> bool {
+    if !crate::anthropic::agent_effort::is_agent_tool(original_name)
+        || !crate::anthropic::subagent_reuse::reuse_enabled()
+    {
+        return false;
+    }
+    let Some(session_id) = context
+        .session
+        .claude_session_id
+        .as_deref()
+        .filter(|session_id| !session_id.is_empty())
+    else {
+        return false;
+    };
+    if arguments
+        .get("resume")
+        .and_then(Value::as_str)
+        .is_some_and(|resume| !resume.is_empty())
+    {
+        return false;
+    }
+    if context
+        .bridge
+        .subagent_reuse
+        .scope_is_occupied(session_id, arguments)
+    {
+        tracing::info!(
+            session_id,
+            tool = original_name,
+            tool_use_id,
+            "skipped duplicate same-scope same-model provider SubAgent launch"
+        );
+        return true;
+    }
+    if context
+        .bridge
+        .subagent_reuse
+        .note_inflight_launch(session_id, arguments, tool_use_id)
+    {
+        return false;
+    }
+    tracing::info!(
+        session_id,
+        tool = original_name,
+        tool_use_id,
+        "skipped provider SubAgent launch because admission claim was taken"
+    );
+    true
+}
+
 impl SegmentBuilder {
     pub(super) async fn external_tool_call(
         &mut self,
@@ -102,6 +189,7 @@ impl SegmentBuilder {
         } = call;
         let reject_request_id = request_id.clone();
         let mut arguments = hydrate_external_tool_arguments(&context, original_name, arguments);
+        rewrite_reused_subagent_launch(context, original_name, &mut arguments);
         // Apply the exact denylist before failover as well as after it.  The
         // first check prevents a stale exhausted launch from being rewritten
         // at all when the caller explicitly disabled that source model.  The
@@ -166,8 +254,21 @@ impl SegmentBuilder {
         {
             return Ok(());
         }
-        self.emit_external_tool_use(context, original_name, call_id, request_id, arguments)
-            .await
+        let tool_use_id = format!("toolu_{}", Uuid::new_v4().simple());
+        if skip_duplicate_subagent_launch(context, original_name, &arguments, &tool_use_id) {
+            return self
+                .reject_duplicate_subagent(context, original_name, request_id)
+                .await;
+        }
+        self.emit_external_tool_use(
+            context,
+            original_name,
+            call_id,
+            tool_use_id,
+            request_id,
+            arguments,
+        )
+        .await
     }
 }
 

@@ -6,6 +6,8 @@ use super::{
 };
 use crate::anthropic::agent_routing;
 
+const ASSIGNED_WORKTREE_PROMPT_GUARD: &str = "Runtime worktree rule: the worktree and cwd assigned by Claude Code are authoritative. Do not switch to a preferred or existing worktree path named in the task. Do not call EnterWorktree or ExitWorktree, use git -C, or cd outside the assigned directory. If the requested target differs, report the conflict to the parent instead of changing directories.";
+
 #[cfg(test)]
 pub(in crate::anthropic) fn prepare_arguments(
     tool_name: &str,
@@ -37,8 +39,10 @@ pub(in crate::anthropic) fn prepare_arguments_for_user(
         );
     };
     agent_routing::hydrate_routing_fields(&mut correlated);
+    let prompt = super::super::agent_effort_matching::strip_correlation_suffix(prompt);
+    let prompt = prompt_with_worktree_guard(prompt, arguments);
     correlated["prompt"] = Value::String(super::super::agent_effort_matching::correlated_prompt(
-        prompt,
+        &prompt,
         tool_use_id,
         requested_model(arguments),
     ));
@@ -57,6 +61,25 @@ pub(in crate::anthropic) fn prepare_arguments_for_user(
         public.remove("name");
     }
     (Some(correlated), claude_arguments)
+}
+
+fn prompt_with_worktree_guard(prompt: &str, arguments: &Value) -> String {
+    if has_runtime_worktree_override(arguments) {
+        format!("{prompt}\n\n{ASSIGNED_WORKTREE_PROMPT_GUARD}")
+    } else {
+        prompt.to_owned()
+    }
+}
+
+fn has_runtime_worktree_override(arguments: &Value) -> bool {
+    arguments
+        .get("isolation")
+        .and_then(Value::as_str)
+        .is_some_and(|isolation| isolation == "worktree")
+        || arguments
+            .get("cwd")
+            .and_then(Value::as_str)
+            .is_some_and(|cwd| !cwd.trim().is_empty())
 }
 
 fn sanitize_public_tool_arguments(

@@ -212,6 +212,66 @@ mod tests {
     }
 
     #[test]
+    fn isolated_agent_prompt_keeps_the_runtime_worktree_authoritative() {
+        let (internal, public) = prepare_arguments(
+            "Agent",
+            "tool-worktree",
+            &json!({
+                "prompt":"work in the preferred existing worktree\n\nclaudex_launch_id: tool-old\n\n<claudex-agent-id>tool-old</claudex-agent-id>",
+                "isolation":"worktree",
+                "cwd":"/tmp/preferred-worktree"
+            }),
+        );
+        let internal_arguments = internal.expect("Agent intent");
+        let internal_prompt = internal_arguments
+            .get("prompt")
+            .and_then(Value::as_str)
+            .expect("correlated prompt");
+        assert!(internal_prompt.contains("work in the preferred existing worktree"));
+        assert!(internal_prompt.contains("Runtime worktree rule:"));
+        assert!(internal_prompt.contains("Do not call EnterWorktree or ExitWorktree"));
+        assert!(internal_prompt.contains("report the conflict to the parent"));
+        assert!(!internal_prompt.contains("tool-old"));
+        assert_eq!(internal_prompt.matches("claudex_launch_id:").count(), 1);
+        assert_eq!(public["isolation"], "worktree");
+        assert_eq!(public["cwd"], "/tmp/preferred-worktree");
+    }
+
+    #[test]
+    fn ordinary_agent_prompt_does_not_add_a_worktree_guard() {
+        let (internal, _) = prepare_arguments(
+            "Agent",
+            "tool-ordinary",
+            &json!({"prompt":"inspect the assigned files"}),
+        );
+        let internal_arguments = internal.expect("Agent intent");
+        let internal_prompt = internal_arguments
+            .get("prompt")
+            .and_then(Value::as_str)
+            .expect("correlated prompt");
+        assert!(!internal_prompt.contains("Runtime worktree rule:"));
+    }
+
+    #[test]
+    fn explicit_cwd_agent_prompt_keeps_the_runtime_worktree_authoritative() {
+        let (internal, public) = prepare_arguments(
+            "Agent",
+            "tool-cwd",
+            &json!({
+                "prompt":"inspect the assigned directory",
+                "cwd":"/tmp/assigned-worktree"
+            }),
+        );
+        let internal_arguments = internal.expect("Agent intent");
+        let internal_prompt = internal_arguments
+            .get("prompt")
+            .and_then(Value::as_str)
+            .expect("correlated prompt");
+        assert!(internal_prompt.contains("Runtime worktree rule:"));
+        assert_eq!(public["cwd"], "/tmp/assigned-worktree");
+    }
+
+    #[test]
     fn an_agent_without_explicit_effort_uses_configured_default() {
         let intents = AgentEffortIntents::default();
         intents.record(

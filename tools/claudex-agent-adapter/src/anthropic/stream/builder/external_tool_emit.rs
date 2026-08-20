@@ -1,6 +1,5 @@
 use anyhow::Result;
 use serde_json::{Value, json};
-use uuid::Uuid;
 
 use super::{ExternalToolContext, SegmentBuilder};
 use crate::anthropic::retention::record_pending_tool;
@@ -12,6 +11,7 @@ impl SegmentBuilder {
         context: ExternalToolContext<'_>,
         original_name: &str,
         call_id: String,
+        tool_use_id: String,
         request_id: Value,
         arguments: Value,
     ) -> Result<()> {
@@ -20,7 +20,6 @@ impl SegmentBuilder {
                 .finish_native_tool_use(context, original_name, open, request_id, arguments)
                 .await;
         }
-        let tool_use_id = format!("toolu_{}", Uuid::new_v4().simple());
         let (intent_arguments, claude_arguments) =
             crate::anthropic::agent_effort::prepare_arguments_for_user(
                 original_name,

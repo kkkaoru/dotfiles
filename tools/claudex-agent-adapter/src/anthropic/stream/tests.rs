@@ -3101,6 +3101,111 @@ async fn expands_valid_parallel_agent_batches_and_rejects_short_batches() {
 }
 
 #[tokio::test]
+async fn deduplicates_same_scope_provider_agent_batch_launches() {
+    let (_root, _app, bridge, mut session) = disconnect_fixture().await;
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .claude_session_id = Some("provider-batch-dedup".to_owned());
+    let routing = json!(
+        r#"Claudex routing for this turn: {"providers":{},"selected_workers":[{"agent":"worker","model":"worker-model"}]}"#
+    );
+    let messages = [json!({"role":"user","content":"fold the pull request"})];
+    let duplicate_tasks = [
+        json!({
+            "description":"Fold 1790 into 1780",
+            "prompt":"inspect the PR",
+            "subagent_type":"worker",
+            "claudex_model":"worker-model"
+        }),
+        json!({
+            "description":"Fold 1790 into 1780",
+            "prompt":"implement the PR",
+            "subagent_type":"worker",
+            "claudex_model":"worker-model"
+        }),
+        json!({
+            "description":"Fold 1790 into 1780",
+            "prompt":"verify the PR",
+            "subagent_type":"worker",
+            "claudex_model":"worker-model"
+        }),
+    ];
+    let mut builder = SegmentBuilder::new(1);
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &messages,
+            &routing,
+            &agent_batch_event("duplicate-batch", duplicate_tasks),
+            None,
+        )
+        .await
+        .expect("duplicate provider batch");
+
+    assert!(
+        builder.has_external_tool_calls(),
+        "one same-scope provider launch should be forwarded"
+    );
+    assert_eq!(
+        builder
+            .blocks
+            .iter()
+            .filter(|block| block["type"] == "tool_use")
+            .count(),
+        1
+    );
+    assert!(
+        builder
+            .blocks
+            .iter()
+            .all(|block| block["type"] == "tool_use"),
+        "duplicate batch members should not add assistant text when one launch remains"
+    );
+
+    let mut duplicate = SegmentBuilder::new(1);
+    let _ = duplicate
+        .handle_event(
+            &bridge,
+            &session,
+            &messages,
+            &routing,
+            &json!({
+                "method":"item/providerTool/call",
+                "params":{
+                    "callId":"duplicate-follow-up",
+                    "tool":"cc_Agent_0",
+                    "status":"pending",
+                    "arguments":{
+                        "description":"Fold 1790 into 1780",
+                        "prompt":"continue the PR",
+                        "subagent_type":"worker",
+                        "claudex_model":"worker-model"
+                    }
+                }
+            }),
+            None,
+        )
+        .await
+        .expect("duplicate provider follow-up");
+    assert!(!duplicate.has_external_tool_calls());
+    assert_eq!(duplicate.blocks[0]["type"], "text");
+    duplicate
+        .update_provider_stop_reason(&json!({
+            "params":{"turn":{"providerStopReason":"tool_use"}}
+        }))
+        .expect("duplicate provider stop reason");
+    assert_eq!(
+        duplicate
+            .finish(None)
+            .await
+            .expect("duplicate provider finish")
+            .stop_reason,
+        "end_turn"
+    );
+}
+
+#[tokio::test]
 async fn forwards_generic_tools_and_blocks_disabled_subagent_models() {
     let (_root, _app, bridge, session) = disconnect_fixture().await;
     let mut generic = SegmentBuilder::new(1);

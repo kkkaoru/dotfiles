@@ -5,6 +5,30 @@ use serde_json::json;
 use super::*;
 
 #[test]
+fn replaces_repeated_correlation_suffixes_before_adding_a_new_launch_id() {
+    let prompt = concat!(
+        "Add avatar-admin deploy prep",
+        "\n\nclaudex_launch_id: tool-first",
+        "\nclaudex_model: grok-4.6",
+        "\n\n<claudex-agent-id>tool-first</claudex-agent-id>",
+        "\n\nclaudex_launch_id: tool-second",
+        "\nclaudex_model: grok-4.6",
+        "\n\n<claudex-agent-id>tool-second</claudex-agent-id>",
+    );
+    let correlated = correlated_prompt(prompt, "tool-current", Some("grok-4.6"));
+
+    assert_eq!(
+        correlated,
+        concat!(
+            "Add avatar-admin deploy prep",
+            "\n\nclaudex_launch_id: tool-current",
+            "\nclaudex_model: grok-4.6",
+            "\n\n<claudex-agent-id>tool-current</claudex-agent-id>",
+        )
+    );
+}
+
+#[test]
 fn matches_a_correlation_marker_in_system_content() {
     let intent = AgentEffortIntent {
         client_user_id: None,

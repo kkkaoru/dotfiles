@@ -20,6 +20,10 @@ pub(in crate::anthropic) fn build_developer_instructions(
         developer_instructions
             .push_str(crate::anthropic::subscription_request::SHARED_WORKSPACE_INSTRUCTIONS);
         developer_instructions.push_str("\n\n");
+        developer_instructions.push_str(super::super::WORKTREE_LIFECYCLE_INSTRUCTIONS);
+        developer_instructions.push_str("\n\n");
+        developer_instructions.push_str(super::super::WORKTREE_TARGET_INSTRUCTIONS);
+        developer_instructions.push_str("\n\n");
         // ACP providers execute their own tools; forcing Claude Code Agent/Task causes silence.
         if is_subagent {
             developer_instructions.push_str(super::super::ACP_NATIVE_WORKER_INSTRUCTIONS);
@@ -39,6 +43,10 @@ pub(in crate::anthropic) fn build_developer_instructions(
     }
     developer_instructions
         .push_str(crate::anthropic::subscription_request::SHARED_WORKSPACE_INSTRUCTIONS);
+    developer_instructions.push_str("\n\n");
+    developer_instructions.push_str(super::super::WORKTREE_LIFECYCLE_INSTRUCTIONS);
+    developer_instructions.push_str("\n\n");
+    developer_instructions.push_str(super::super::WORKTREE_TARGET_INSTRUCTIONS);
     developer_instructions.push_str("\n\n");
     developer_instructions.push_str(&super::super::parallel_scheduler_instructions(request));
     developer_instructions.push_str("\n\n");

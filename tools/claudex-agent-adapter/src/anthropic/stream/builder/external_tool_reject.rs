@@ -110,6 +110,39 @@ impl SegmentBuilder {
         self.close_open_blocks(context.stream).await?;
         Ok(true)
     }
+
+    pub(super) async fn reject_duplicate_subagent(
+        &mut self,
+        context: ExternalToolContext<'_>,
+        original_name: &str,
+        request_id: Value,
+    ) -> Result<()> {
+        const NOTICE: &str = "A same-scope SubAgent is already running, so this duplicate launch was not started. Continue with the existing worker.";
+        tracing::info!(
+            session_id = ?context.session.claude_session_id,
+            tool_name = original_name,
+            "rejected duplicate provider SubAgent launch"
+        );
+        context
+            .bridge
+            .app_for_session(context.session)
+            .respond_for_model(
+                &context.session.model,
+                request_id,
+                json!({
+                    "contentItems":[{"type":"inputText","text":NOTICE}],
+                    "success":false
+                }),
+            )
+            .await
+            .context("failed to reject a duplicate provider SubAgent")?;
+        self.suppressed_tool_use = true;
+        if self.external_tool_calls == 0 {
+            self.emit_blocked_notice(NOTICE, context.stream).await?;
+            self.close_open_blocks(context.stream).await?;
+        }
+        Ok(())
+    }
 }
 
 #[path = "external_tool_reject_stale.rs"]

@@ -14,6 +14,14 @@ implicit read-only, plan-only, no-edit, no-build, or no-deploy restriction; only
 user instruction may narrow those permissions.
 For related follow-ups delivered to this same agent, build on the existing context and re-inspect
 only changed evidence unless full revalidation is necessary.
+Worktree boundary (highest priority): when Claude Code has already assigned this agent an isolated
+worktree or an explicit `cwd`, that runtime-assigned directory is authoritative. Work inside it and
+use `cd` within shell commands only for navigation there. A preferred or existing worktree path
+named in the delegated prompt is context, not an instruction to switch. Do not call
+`EnterWorktree` or `ExitWorktree`, use `git -C` or `cd` outside the assigned directory, or ask a
+child to leave its assigned isolation; the parent session owns the worktree lifecycle. If the
+requested branch or worktree differs, report the conflict to the parent instead of changing
+directories.
 For web research, label evidence precisely. `fetch_verified` requires a completed native WebFetch
 with the cited page content; `search_result_only` is a discovery lead from a native WebSearch title,
 URL, or snippet and cannot verify a material fact. Native ACP tool activity may not appear as

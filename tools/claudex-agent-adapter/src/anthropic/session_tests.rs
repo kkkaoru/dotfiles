@@ -1099,6 +1099,8 @@ fn acp_native_modes_use_provider_native_instructions_instead_of_agent_orchestrat
     assert!(developer.contains("spawn_subagent"));
     assert!(developer.contains("end the turn promptly"));
     assert!(developer.contains("never block the same turn with get_command_or_subagent_output"));
+    assert!(developer.contains("do not call `EnterWorktree` or `ExitWorktree`"));
+    assert!(developer.contains("runtime-assigned worktree and cwd remain authoritative"));
     assert!(developer.contains("stop remaining SubAgents in this session"));
     assert!(developer.contains("do not kill the claudex serve daemon"));
     assert!(!developer.contains("call a routed Agent/Task worker by default"));
@@ -1125,6 +1127,8 @@ fn acp_native_workers_omit_end_turn_status_and_keep_tool_completion() {
     assert!(developer.contains("You are a provider-native ACP worker"));
     assert!(developer.contains("never a complete answer"));
     assert!(developer.contains("toolless status-only message"));
+    assert!(developer.contains("do not call `EnterWorktree` or `ExitWorktree`"));
+    assert!(developer.contains("runtime-assigned worktree and cwd remain authoritative"));
     assert!(!developer.contains("end the turn promptly"));
     assert!(!developer.contains("post a brief status"));
     assert!(!developer.contains("Return the answer directly when no tool is needed"));
@@ -1213,6 +1217,11 @@ fn assert_developer_guidance(developer: &str) {
         "stop remaining SubAgents in this session",
         "do not kill the claudex serve daemon",
         "Do not inspect OS processes",
+        "already isolated with `isolation: \"worktree\"`",
+        "do not call `EnterWorktree` or `ExitWorktree`",
+        "parent session owns the worktree lifecycle",
+        "runtime-assigned worktree and cwd remain authoritative",
+        "report the conflict to the parent instead of changing directories",
         "ACP driver dropped its response",
         "exception to never cascading stops",
     ];

@@ -108,6 +108,7 @@ pub(super) fn has_correlation_marker(prompt: &str) -> bool {
 }
 
 pub(super) fn correlated_prompt(prompt: &str, tool_use_id: &str, model: Option<&str>) -> String {
+    let prompt = strip_correlation_suffix(prompt);
     let model_header = model.map_or_else(String::new, |model| {
         format!(
             "\nclaudex_model: {}",
@@ -117,6 +118,52 @@ pub(super) fn correlated_prompt(prompt: &str, tool_use_id: &str, model: Option<&
     format!(
         "{prompt}\n\nclaudex_launch_id: {tool_use_id}{model_header}\n\n<{CORRELATION_TAG}>{tool_use_id}</{CORRELATION_TAG}>"
     )
+}
+
+pub(super) fn strip_correlation_suffix(prompt: &str) -> &str {
+    let mut end = prompt.trim_end();
+    while let Some(marker_start) = end.rfind("<claudex-agent-id>") {
+        let Some(marker_offset) = end[marker_start..].find("</claudex-agent-id>") else {
+            break;
+        };
+        let marker_end = marker_start + marker_offset + "</claudex-agent-id>".len();
+        if !end[marker_end..].trim().is_empty() {
+            break;
+        }
+        let metadata_end = end[..marker_start].trim_end();
+        let Some(block_start) = metadata_end.rfind("\n\nclaudex_launch_id:") else {
+            break;
+        };
+        let metadata = &metadata_end[block_start + 2..];
+        let launch_id = metadata
+            .lines()
+            .next()
+            .and_then(|line| line.strip_prefix("claudex_launch_id:"))
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let marker_id =
+            &end[marker_start + "<claudex-agent-id>".len()..marker_start + marker_offset];
+        if launch_id != Some(marker_id) || !is_correlation_metadata(metadata) {
+            break;
+        }
+        end = metadata_end[..block_start].trim_end();
+    }
+    end
+}
+
+fn is_correlation_metadata(metadata: &str) -> bool {
+    let mut lines = metadata.lines();
+    let Some(first) = lines.next() else {
+        return false;
+    };
+    if !first.trim_start().starts_with("claudex_launch_id:") {
+        return false;
+    }
+    lines.all(|line| {
+        line.trim_start()
+            .strip_prefix("claudex_model:")
+            .is_some_and(|model| !model.trim().is_empty())
+    })
 }
 
 pub(super) fn is_subagent_request(request: &MessagesRequest) -> bool {
