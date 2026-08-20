@@ -18,6 +18,20 @@ Grok config is managed the same way as Pi: only an allowlisted set of files
 under `.grok/` is tracked. `create-symlinks.sh` merges those into `~/.grok`
 and leaves sessions, auth, caches, and binaries on the machine.
 
+oMLX is managed like Pi: `~/.omlx` is a symlink into this repository.
+`model_settings.json` and `settings.json.example` are tracked. Model weights
+under `.omlx/models/` are gitignored. After cloning:
+
+```sh
+./create-symlinks.sh
+./scripts/setup-omlx.sh
+```
+
+That downloads `mlx-community/Qwen3.8-27B-4bit` and `incoai/Qwen3.8-27B-DFlash2`
+and restarts oMLX. See `.omlx/README.md`. `create-symlinks.sh` also installs
+`~/.local/bin/pi` (starts oMLX on demand) and an idle-stop LaunchAgent so
+`omlx-server` does not stay resident after the model unloads.
+
 ## Node.js
 
 Use nodenv from anyenv

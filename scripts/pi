@@ -1,0 +1,42 @@
+#!/bin/bash
+# Start oMLX on demand when this pi invocation will talk to the local provider.
+
+set -euo pipefail
+
+REAL_PI=""
+for candidate in "${HOME}/.bun/bin/pi" /opt/homebrew/bin/pi; do
+  if [ -x "$candidate" ] && [ "$candidate" != "$0" ]; then
+    REAL_PI="$candidate"
+    break
+  fi
+done
+if [ -z "$REAL_PI" ]; then
+  echo "pi wrapper: could not find the real pi binary" >&2
+  exit 127
+fi
+
+needs_omlx=1
+case "${1-}" in
+  install|remove|uninstall|update|list|config|auth|--help|-h|--version|-v)
+    needs_omlx=0
+    ;;
+esac
+
+provider=""
+prev=""
+for arg in "$@"; do
+  if [ "$prev" = "--provider" ]; then
+    provider="$arg"
+  fi
+  prev="$arg"
+done
+
+if [ -n "$provider" ] && [ "$provider" != "omlx" ]; then
+  needs_omlx=0
+fi
+
+if [ "$needs_omlx" -eq 1 ]; then
+  "$(cd "$(dirname "$0")" && pwd)/ensure-omlx.sh" || true
+fi
+
+exec "$REAL_PI" "$@"

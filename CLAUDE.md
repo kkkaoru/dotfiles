@@ -6,6 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Setup Commands
 - `./create-symlinks.sh` - Create symlinks for all dotfiles to $HOME directory (skips .git and .tool-versions)
+- `./scripts/setup-omlx.sh` - Download Qwen3.8-27B-4bit + DFlash2 and restart oMLX (`~/.omlx` is a repo symlink)
 - `./init-ssh.sh` - Initialize SSH configuration
 - `bun install` - Install Node.js dependencies including MCP servers
 

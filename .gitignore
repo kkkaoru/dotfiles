@@ -84,6 +84,14 @@ coverage_out/
 !.pi/agent/themes/
 !.pi/agent/themes/**
 
+# oMLX is repository-managed like .pi. Track DFlash/server config only.
+# Never commit weights, caches, logs, binaries, or the live settings.json
+# (it holds a generated secret_key).
+.omlx/**
+!.omlx/README.md
+!.omlx/model_settings.json
+!.omlx/settings.json.example
+
 # Grok keeps sessions, auth, caches, and binaries beside config. Track only
 # the files this repository manages; ignore everything else so credentials
 # and machine-local state cannot leak into git.

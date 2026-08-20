@@ -64,6 +64,12 @@ if [ -e "${HOME}/.pi" ] && [ ! -L "${HOME}/.pi" ]; then
   exit 1
 fi
 
+# ~/.omlx is the same pattern. Weights stay in the checkout but are gitignored.
+if [ -e "${HOME}/.omlx" ] && [ ! -L "${HOME}/.omlx" ]; then
+  echo "refuse: ${HOME}/.omlx exists and is not a symlink; move it into ${DOTPATH}/.omlx first" >&2
+  exit 1
+fi
+
 # Top-level dotfiles (stateful agent/config directories are merged below)
 for f in .??*; do
   [ "$f" = ".git" ] && continue
@@ -219,6 +225,12 @@ link_path "${DOTPATH}/scripts/ensure-agmsg-claudex-guard.sh" \
   "${HOME}/.local/bin/ensure-agmsg-claudex-guard"
 link_path "${DOTPATH}/scripts/claudex-install-adapter" "${HOME}/.local/bin/claudex-install-adapter"
 link_path "${DOTPATH}/scripts/serena-dotfiles-mcp" "${HOME}/.local/bin/serena-dotfiles-mcp"
+link_path "${DOTPATH}/scripts/ensure-omlx.sh" "${HOME}/.local/bin/ensure-omlx"
+link_path "${DOTPATH}/scripts/omlx-idle-stop.sh" "${HOME}/.local/bin/omlx-idle-stop"
+link_path "${DOTPATH}/scripts/pi" "${HOME}/.local/bin/pi"
+if [ -x "${DOTPATH}/scripts/omlx-idle-stop.sh" ]; then
+  "${DOTPATH}/scripts/omlx-idle-stop.sh" --install
+fi
 
 # .config apps
 mkdir -p "${HOME}/.config"
