@@ -11,7 +11,9 @@ link_path() {
 
   if [ -L "$dest" ]; then
     # Already a symlink: refresh target if it drifted
-    ln -snfv "$src" "$dest"
+    rm -f "$dest"
+    ln -s "$src" "$dest"
+    printf '%s -> %s\n' "$dest" "$src"
     return
   fi
 
@@ -93,6 +95,10 @@ cp "${DOTPATH}/.config/serena/serena_config.yml" \
 
 # Claude Code keeps history, sessions, plugins, and caches under ~/.claude.
 # Link only repository-managed definitions so those runtime paths remain local.
+if [ -L "${HOME}/.claude" ]; then
+  echo "refuse: ${HOME}/.claude is a symlink; keep it as a real directory and merge managed files" >&2
+  exit 1
+fi
 mkdir -p "${HOME}/.claude"
 for file in CLAUDE.md settings.json; do
   if [ -f "${DOTPATH}/.claude/${file}" ]; then
@@ -112,6 +118,10 @@ if [ -d "${DOTPATH}/.agents/skills" ]; then
 fi
 
 # Cursor keeps runtime state beside user skills, so merge only skills.
+if [ -L "${HOME}/.cursor" ]; then
+  echo "refuse: ${HOME}/.cursor is a symlink; keep it as a real directory and merge managed files" >&2
+  exit 1
+fi
 if [ -d "${DOTPATH}/.cursor/skills" ]; then
   link_tree "${DOTPATH}/.cursor/skills" "${HOME}/.cursor/skills"
 fi
@@ -199,7 +209,11 @@ adapter_target="${HOME}/.cargo/bin/claudex-agent-adapter"
 if [ -e "$adapter_link" ] && [ ! -L "$adapter_link" ]; then
   mv -f "$adapter_link" "${adapter_link}.legacy"
 fi
-ln -snfv "$adapter_target" "$adapter_link"
+if [ -L "$adapter_link" ]; then
+  rm -f "$adapter_link"
+fi
+ln -s "$adapter_target" "$adapter_link"
+printf '%s -> %s\n' "$adapter_link" "$adapter_target"
 link_path "${DOTPATH}/scripts/claudex-hot-swap" "${HOME}/.local/bin/claudex-hot-swap"
 link_path "${DOTPATH}/scripts/ensure-agmsg-claudex-guard.sh" \
   "${HOME}/.local/bin/ensure-agmsg-claudex-guard"
