@@ -39,3 +39,10 @@ enabled = true
 
 [privacy]
 privacy_banner_acked = "2026-08-16T14:11:47Z"
+
+[models]
+default = "grok-4.6"
+default_reasoning_effort = "medium"
+
+[model.grok-4.6]
+reasoning_effort = "medium"
