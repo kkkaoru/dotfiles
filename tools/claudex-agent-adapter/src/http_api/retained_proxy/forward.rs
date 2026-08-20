@@ -12,6 +12,15 @@ use serde_json::json;
 use super::super::retained_health::RetainedHealthProbe;
 
 pub(in crate::http_api) const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_millis(400);
+pub(in crate::http_api) const HANDOVER_HOP_HEADER: &str = "x-claudex-handover-hop";
+
+pub(in crate::http_api) fn handover_hop_count(headers: &axum::http::HeaderMap) -> u32 {
+    headers
+        .get(HANDOVER_HOP_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0)
+}
 
 pub(in crate::http_api) enum ListenHealth {
     Ready(RetainedHealthProbe),
@@ -87,13 +96,15 @@ pub(in crate::http_api) async fn proxy_request(
         .map(|value| value.as_str())
         .unwrap_or(request.uri().path());
     let url = format!("http://{listen}{path}");
+    let hop = handover_hop_count(request.headers()).saturating_add(1);
     let mut upstream = client.request(request.method().clone(), url);
     for (name, value) in request.headers() {
-        if is_hop_by_hop_header(name) {
+        if is_hop_by_hop_header(name) || name.as_str() == HANDOVER_HOP_HEADER {
             continue;
         }
         upstream = upstream.header(name, value);
     }
+    upstream = upstream.header(HANDOVER_HOP_HEADER, hop.to_string());
     let body = match axum::body::to_bytes(request.into_body(), 32 * 1024 * 1024).await {
         Ok(body) => body,
         Err(error) => {

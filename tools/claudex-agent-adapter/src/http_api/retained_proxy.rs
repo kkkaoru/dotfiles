@@ -1,9 +1,11 @@
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
-    sync::RwLock,
+    sync::{Arc, RwLock},
     time::Instant,
 };
+
+use tokio::sync::Semaphore;
 
 use axum::extract::Request;
 #[cfg(test)]
@@ -17,8 +19,12 @@ mod memory;
 mod sticky;
 
 #[cfg(test)]
+pub(super) use forward::HANDOVER_HOP_HEADER;
+#[cfg(test)]
 pub(super) use forward::is_hop_by_hop_header;
-pub(super) use forward::{ProxyOutcome, listen_accepts_health, proxy_request};
+pub(super) use forward::{ProxyOutcome, handover_hop_count, listen_accepts_health, proxy_request};
+
+pub(super) const MAX_PROXY_IN_FLIGHT: usize = 32;
 
 pub(super) struct RetainedProxy {
     path: PathBuf,
@@ -28,12 +34,15 @@ pub(super) struct RetainedProxy {
     last_work_at: RwLock<Option<Instant>>,
     recent_agents: RwLock<HashMap<String, Instant>>,
     client: reqwest::Client,
+    slots: Arc<Semaphore>,
 }
 
 pub(super) fn proxy_http_client() -> reqwest::Client {
-    // Keep a normal idle pool: sticky proxy /health and SSE reuse the same
-    // retained listen for the life of a parent session.
-    reqwest::Client::new()
+    reqwest::Client::builder()
+        .pool_max_idle_per_host(32)
+        .pool_idle_timeout(std::time::Duration::from_secs(15))
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
 }
 
 impl RetainedProxy {
@@ -51,7 +60,17 @@ impl RetainedProxy {
                 now,
             )),
             client: proxy_http_client(),
+            slots: Arc::new(Semaphore::new(MAX_PROXY_IN_FLIGHT)),
         }
+    }
+
+    pub(super) fn with_proxy_slots(mut self, slots: Arc<Semaphore>) -> Self {
+        self.slots = slots;
+        self
+    }
+
+    pub(super) fn try_proxy_slot(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
+        Arc::clone(&self.slots).try_acquire_owned().ok()
     }
 
     pub(super) fn targets(&self, listen: std::net::SocketAddr) -> bool {

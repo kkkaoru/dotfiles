@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use tokio::sync::Semaphore;
+
 use axum::{
     Router,
     extract::{Request, State},
@@ -16,7 +18,8 @@ use crate::listen_handover::ListenHandover;
 use super::CLAUDE_CODE_SESSION_ID_HEADER;
 use super::handover_circuit::{self, HandoverCircuit};
 use super::retained_proxy::{
-    ProxyOutcome, RetainedProxy, listen_accepts_health, proxy_http_client, proxy_request,
+    MAX_PROXY_IN_FLIGHT, ProxyOutcome, RetainedProxy, handover_hop_count, listen_accepts_health,
+    proxy_http_client, proxy_request,
 };
 
 const CLAUDE_CODE_AGENT_ID_HEADER: &str = "x-claude-code-agent-id";
@@ -31,6 +34,7 @@ pub(super) struct HandoverState {
     pub advertised: Option<ListenHandover>,
     client: reqwest::Client,
     circuit: Arc<HandoverCircuit>,
+    slots: Arc<Semaphore>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,14 +49,18 @@ pub(super) fn layer(handover: Option<ListenHandover>) -> (Option<HandoverState>,
     let Some(listen) = handover else {
         return (None, Router::new());
     };
+    let slots = Arc::new(Semaphore::new(MAX_PROXY_IN_FLIGHT));
     let retained = load_retained_from_env()
-        .map(|(path, generation)| RetainedProxy::from_path(path, generation))
+        .map(|(path, generation)| {
+            RetainedProxy::from_path(path, generation).with_proxy_slots(Arc::clone(&slots))
+        })
         .map(Arc::new);
     let state = HandoverState {
         retained,
         advertised: Some(listen.clone()),
         client: proxy_http_client(),
         circuit: Arc::new(HandoverCircuit::default()),
+        slots,
     };
     let router = Router::new()
         .route("/admin/rebind-listener", post(rebind_listener))
@@ -69,6 +77,12 @@ pub(super) async fn proxy_retained_sessions(
     let Some(state) = state.as_ref() else {
         return next.run(request).await;
     };
+    // Sticky proxy sets this hop. A rebound daemon that still diverts idle
+    // keep-alives to :8318 must not bounce that hop back, or the two listeners
+    // open a TCP loop until EMFILE.
+    if handover_hop_count(&headers) >= 1 {
+        return next.run(request).await;
+    }
     let session_id = headers
         .get(CLAUDE_CODE_SESSION_ID_HEADER)
         .and_then(|value| value.to_str().ok())
@@ -118,6 +132,9 @@ async fn diverted_service_action(
     if recover_open_circuit(state, session_id) {
         return DivertedService::RunLocal(request);
     }
+    let Ok(_slot) = state.slots.try_acquire() else {
+        return DivertedService::RunLocal(request);
+    };
     if !listen_accepts_health(&state.client, service).await {
         return DivertedService::RunLocal(request);
     }
@@ -154,6 +171,9 @@ async fn proxy_or_run_retained(
     if retained_targets_advertised(retained, state.advertised.as_ref()) {
         return next.run(request).await;
     }
+    let Some(_slot) = retained.try_proxy_slot() else {
+        return next.run(request).await;
+    };
     if !retained.should_proxy_session(session_id, agent_id).await {
         return next.run(request).await;
     }
