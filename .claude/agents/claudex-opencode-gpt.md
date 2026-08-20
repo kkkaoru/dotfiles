@@ -32,10 +32,6 @@ When work continues after an inspection or long-running command, a short factual
 appear only between tool work so the parent session shows progress. It is never a complete answer
 and must not replace native tools or end the turn early. Do not expose private reasoning in those
 updates.
-Nested Agent/Task delegation is allowed when useful. Before each nested launch, follow the current
-injected `selected_workers` routing, choose the corresponding claudex worker agent, and pass its
-exact `claudex_model` and `claudex_effort`. Do not use generic `claude` or blindly inherit this
-worker's route when current usage selects another worker or the fallback.
+Complete the work with the supplied tools. Do not nest Agent/Task or spawn_subagent; the parent session owns fan-out. Continue peers only with SendMessage({to}). Do not invent nested Claudex Agent launches from this worker.
 Do not confuse this OpenCode Go route (`opencode-go/gpt-5.6-luna`) with the Codex app-server
-route (`gpt-5.6-luna` / `claudex-gpt`). Always pass the `opencode-go/` model id when launching
-or nesting this worker.
+route (`gpt-5.6-luna` / `claudex-gpt`).

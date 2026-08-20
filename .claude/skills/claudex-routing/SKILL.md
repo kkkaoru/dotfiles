@@ -61,8 +61,8 @@ retained.
    `disabled_subagent_models` and its exact `model_concurrency` entry is not unavailable. A missing
    dynamic entry inherits the provider's `max_concurrency` and means the daemon observed no active
    request for that exact model. The denylist, merged from the dedicated config and terminal overrides,
-   is absolute and takes precedence over explicit requests, inheritance, prior
-   recipients, and capacity. The adapter resolves an allowed matching backend lazily. If no allowed
+   is absolute and takes precedence over explicit requests, inheritance, parent-issued
+   launches, prior recipients, and capacity. The adapter resolves an allowed matching backend lazily. If no allowed
    worker remains, continue in the main session and report that SubAgent routing is unavailable.
 3. The main session must control parallel distribution across multiple SubAgents for independent
    work or complementary review. Use multiple selected workers only when useful; start exactly
@@ -74,9 +74,12 @@ retained.
    boundary. `custom-advisor`
    is a separate logical session singleton/capacity channel, not one of these implementation
    workstreams; built-in `advisor()` remains independent of worker capacity.
-   Apply this selection to every Agent/Task launch, including nested launches made by an existing
-   worker. A nested launch must use the current selected worker's agent and exact model/effort; it
-   must not default to generic `claude` or blindly inherit its parent's provider route.
+   Apply this selection to every Agent/Task launch the parent session issues. Workers must not
+   nest Agent/Task fan-out; the parent owns fan-out. Continue a same-path worker with
+   `SendMessage({to: the exact prior Agent/Task recipient})`; never launch a new Agent for the
+   same path and never Agent({resume}). A parent-issued launch must use the current selected
+   worker's agent and exact model/effort; it must not default to generic `claude` or blindly
+   inherit a parent worker's provider route.
    During delegated work, keep Claude Code native thinking streaming for the whole turn. Do not
    emit repeated factual status chrome, launch-metadata echoes, or Thought-for placeholders.
    Never copy end-the-turn-with-status or emit-short-status-after-each-phase into Agent/Task
@@ -132,11 +135,12 @@ retained.
      failure rather than advisor success.
    - Account for `custom-advisor` separately from `selected_workers` and provider quota headroom. Do
      not spend worker slots on it and do not treat its presence as capacity pressure against workers.
-   - Prefer one logical custom-advisor per session (reuse via native Agent/Task results and `TaskOutput`; not a hard process=1
-     OS cap): resume the first compatible instance with the exact Agent/Task recipient, including
-     after completion. Start another custom advisor only for true parallel or clean-room review,
-     incompatible context, or an unavailable recipient. Workers should retrieve that advisor's result through the native task lifecycle
-     when material guidance would change their work.
+   - Prefer one logical custom-advisor per session (reuse via `SendMessage({to: agentId})` then
+     `TaskOutput`; not a hard process=1 OS cap): continue the first compatible instance with
+     SendMessage using the exact Agent/Task recipient, including after completion. Start another
+     custom advisor only for true parallel or clean-room review, incompatible context, or an
+     unavailable recipient. Workers should retrieve that advisor's result through the native task
+     lifecycle when material guidance would change their work.
    - When `CLAUDEX_CUSTOM_ADVISOR` is `0`, `false`, or `off` (case-insensitive), skip only
      custom-advisor launches; built-in `advisor()` remains available. Unset or any other value leaves
      custom-advisor enabled.
@@ -161,14 +165,15 @@ retained.
    after an actual worker reply or completion notification. Never fabricate a selected worker
    response; if execution is unavailable, continue safely in the main session and report it.
 8. Treat worker and custom-advisor lifecycle as a deliberate decision:
-   - For related follow-ups, reuse compatible workers through native Agent/Task results and `TaskOutput` instead of churning
-     processes with fresh launches. Prefer a prior instance when the exact native Agent/Task recipient
-     specified
-     by its Agent/Task result (agent ID or teammate name as applicable) is available in the current
-     main-session transcript and its agent, model, effort, role, scope, and authorization remain
-     compatible with the current routing context. Send the smallest sufficient, self-contained
-     delta, including new evidence the recipient has not seen, so the existing context and prompt
-     prefix remain reusable.
+   - For related follow-ups, continue compatible workers with `SendMessage({to: the exact prior
+     Agent/Task recipient})`, then retrieve results with `TaskOutput`, instead of churning processes
+     with fresh launches. SendMessage to a subagent is official Claude Code resume and does not
+     require Agent Teams. Do not set Agent/Task resume. Prefer a prior instance when the exact native
+     Agent/Task recipient specified by its Agent/Task result (agent ID or teammate name as applicable)
+     is available in the current main-session transcript and its agent, model, effort, role, scope,
+     and authorization remain compatible with the current routing context. Send the smallest
+     sufficient, self-contained delta, including new evidence the recipient has not seen, so the
+     existing context and prompt prefix remain reusable.
    - Do not guess a recipient, persist it to memory, or call task-list tools solely to rediscover
      it. A delivery acknowledgement is not completion evidence; wait for the actual
      reply or completion notification. The TUI's `N queued` is pending main-session input, which may
@@ -251,7 +256,8 @@ The routing context is loaded into subagent sessions as well. Claude Code inject
 registered on `SubagentStart` (`claudex-route-usage --event SubagentStart`): Claude Code places that
 event's `additionalContext` at the start of the subagent conversation, giving every routed worker
 the identical sanitized context — `selected_workers`, `disabled_subagent_models`, memory policy,
-and `worker_capacity` — for its own nested Agent/Task launches. The 5-minute usage cache keeps the
+and `worker_capacity` — for denylist and capacity awareness, not to nest Agent/Task fan-out;
+the parent session owns fan-out. The 5-minute usage cache keeps the
 per-spawn cost small, and the daemon denylist remains the authoritative hard enforcement at the
 API boundary regardless of what a worker sees.
 

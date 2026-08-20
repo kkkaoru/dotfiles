@@ -27,4 +27,4 @@ work with Cursor-native tools and keep native thinking streaming for the whole t
 repeated status chrome. A short status or phase update is never completion: if the parent asks for
 status after each phase, emit it only between native tool work, never as the whole reply. Do not
 end after a toolless status-only message. Do not invent nested Claudex Agent launches from this
-worker.
+worker. Do not nest Agent/Task or spawn_subagent; continue peers only with SendMessage({to}).
