@@ -32,6 +32,12 @@ and restarts oMLX. See `.omlx/README.md`. `create-symlinks.sh` also installs
 `~/.local/bin/pi` (starts oMLX on demand) and an idle-stop LaunchAgent so
 `omlx-server` does not stay resident after the model unloads.
 
+DeepSWE/Pier eval leftovers (task images, job dirs) can be removed with:
+
+```sh
+./scripts/cleanup-deepswe-disk.sh
+```
+
 ## Node.js
 
 Use nodenv from anyenv
