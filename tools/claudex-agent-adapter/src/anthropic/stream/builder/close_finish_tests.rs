@@ -81,7 +81,7 @@ async fn commit_pending_reasoning_skips_a_transcript_already_holding_the_same_te
 }
 
 #[tokio::test]
-async fn commit_pending_reasoning_writes_when_transcript_does_not_already_hold_it() {
+async fn commit_pending_reasoning_does_not_invent_an_unstarted_sse_block() {
     let mut builder = SegmentBuilder::new(1);
     builder
         .blocks
@@ -89,6 +89,34 @@ async fn commit_pending_reasoning_writes_when_transcript_does_not_already_hold_i
     builder.pending_reasoning = "fresh reasoning text".to_owned();
     builder
         .commit_pending_reasoning_for_transcript(None)
+        .await
+        .expect("commit without a live stream");
+    assert!(builder.pending_reasoning.is_empty());
+    assert!(
+        builder
+            .blocks
+            .iter()
+            .all(|block| block.get("type").and_then(serde_json::Value::as_str) != Some("thinking")),
+        "stream=None must not append a thinking block Claude Code never started: {:?}",
+        builder.blocks
+    );
+}
+
+#[tokio::test]
+async fn commit_pending_reasoning_writes_when_transcript_does_not_already_hold_it() {
+    use std::convert::Infallible;
+
+    use axum::body::Bytes;
+    use tokio::sync::mpsc;
+
+    let (sender, _receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let mut builder = SegmentBuilder::new(1);
+    builder
+        .blocks
+        .push(json!({"type":"text","text":"unrelated"}));
+    builder.pending_reasoning = "fresh reasoning text".to_owned();
+    builder
+        .commit_pending_reasoning_for_transcript(Some(&sender))
         .await
         .expect("commit fresh reasoning");
     assert!(builder.pending_reasoning.is_empty());

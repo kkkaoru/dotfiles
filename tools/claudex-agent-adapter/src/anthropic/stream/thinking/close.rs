@@ -14,6 +14,9 @@ impl ThinkingState {
         };
         blocks[open.index]["thinking"] = json!(open.text);
         blocks[open.index]["signature"] = json!(open.signature);
+        if !open.streamed {
+            return Ok(());
+        }
         send_stream_frame(stream, "content_block_delta", || {
             json!({
                 "type":"content_block_delta", "index":open.index,
@@ -69,6 +72,13 @@ impl ThinkingState {
         stream: Option<&StreamSender>,
     ) -> Result<()> {
         if text.trim().is_empty() {
+            return Ok(());
+        }
+        // A None stream cannot emit content_block_start. Inventing a block
+        // here would make the next tool_use skip an SSE index, and a later
+        // close would send content_block_stop for a block Claude Code never
+        // started ("API Error: Content block not found").
+        if self.open.is_none() && stream.is_none() {
             return Ok(());
         }
         if self.open.is_none() {

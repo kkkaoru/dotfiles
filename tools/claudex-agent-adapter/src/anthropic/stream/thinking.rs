@@ -19,6 +19,9 @@ pub(super) struct OpenThinking {
     summary_index: i64,
     signature: String,
     text: String,
+    /// False when the block was appended to `blocks` without a matching
+    /// `content_block_start` (stream was `None`). Closing must not emit a stop.
+    streamed: bool,
 }
 impl ThinkingState {
     fn promote_keepalive_progress(&mut self, item_id: &str) {
@@ -180,6 +183,7 @@ impl ThinkingState {
             summary_index,
             signature: thinking_signature(item_id),
             text: first_delta.to_owned(),
+            streamed: stream.is_some(),
         });
         Ok(())
     }

@@ -4,6 +4,7 @@ mod tests {
     use std::convert::Infallible;
 
     use axum::body::Bytes;
+    use tokio::sync::mpsc;
 
     use super::*;
 
@@ -15,6 +16,7 @@ mod tests {
                 summary_index: 0,
                 signature: "sig".to_owned(),
                 text: text.to_owned(),
+                streamed: true,
             }),
         }
     }
@@ -128,6 +130,7 @@ mod tests {
                 summary_index: 0,
                 signature: "sig".to_owned(),
                 text: String::new(),
+                streamed: true,
             }),
         };
         let mut blocks = vec![json!({"type":"thinking","thinking":"","signature":""})];
@@ -151,6 +154,7 @@ mod tests {
                 summary_index: 0,
                 signature: "sig".to_owned(),
                 text: "already thinking".to_owned(),
+                streamed: true,
             }),
         };
         let mut blocks = vec![json!({
@@ -183,6 +187,7 @@ mod tests {
                 summary_index: 0,
                 signature: thinking_signature("claudex_activity_keepalive"),
                 text: String::new(),
+                streamed: true,
             }),
         };
         let mut blocks = vec![json!({"type":"thinking","thinking":"","signature":""})];
@@ -213,6 +218,7 @@ mod tests {
                 summary_index: 0,
                 signature: "sig".to_owned(),
                 text: "Status: old line\n".to_owned(), // trailing \n from rewrite
+                streamed: true,
             }),
         };
         let mut blocks = vec![json!({
@@ -290,6 +296,7 @@ mod tests {
                 signature: "sig".to_owned(),
                 text: "SubAgent starting: auto (effort=high); preparing provider session…"
                     .to_owned(),
+                streamed: true,
             }),
         };
         let mut blocks = vec![json!({
@@ -323,6 +330,7 @@ mod tests {
                 summary_index: 0,
                 signature: "sig".to_owned(),
                 text: HEARTBEAT.to_owned(),
+                streamed: true,
             }),
         };
         assert!(state.open_holds_collapsed_subagent_launch());
@@ -356,6 +364,7 @@ mod tests {
                 summary_index: 0,
                 signature: "sig".to_owned(),
                 text: "▶ Thinking… · 1s\n".to_owned(),
+                streamed: true,
             }),
         };
         let mut blocks = vec![json!({
@@ -441,6 +450,7 @@ mod tests {
 
     #[tokio::test]
     async fn commit_buffered_reasoning_ignores_empty_and_opens_when_closed() {
+        let (sender, _receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
         let mut state = ThinkingState::default();
         let mut blocks = Vec::new();
         state
@@ -450,6 +460,19 @@ mod tests {
         assert!(blocks.is_empty());
         state
             .commit_buffered_reasoning(&mut blocks, "subagent:reasoning", "visible CoT", None)
+            .await
+            .expect("no stream means no unstarted block");
+        assert!(
+            blocks.is_empty(),
+            "stream=None must not invent a thinking index"
+        );
+        state
+            .commit_buffered_reasoning(
+                &mut blocks,
+                "subagent:reasoning",
+                "visible CoT",
+                Some(&sender),
+            )
             .await
             .expect("open a thinking block for CoT");
         assert_eq!(blocks.len(), 1);
@@ -510,6 +533,7 @@ mod tests {
                 summary_index: 0,
                 signature: "sig".to_owned(),
                 text: "kept".to_owned(),
+                streamed: true,
             }),
         };
         foreign.promote_keepalive_progress("subagent:reasoning");
@@ -672,6 +696,41 @@ mod tests {
         assert!(
             committed_thinking(&blocks).is_empty(),
             "unsigned adapter thinking must not be committed: {blocks:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn close_does_not_stop_a_thinking_block_that_was_never_streamed() {
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+        let mut state = ThinkingState::default();
+        let mut blocks = Vec::new();
+        state
+            .progress_status_keep_open(&mut blocks, "memory only\n", None)
+            .await
+            .expect("open without SSE");
+        state
+            .close(&mut blocks, Some(&sender))
+            .await
+            .expect("close unstreamed thinking");
+        drop(sender);
+        assert!(
+            receiver.try_recv().is_err(),
+            "content_block_stop without content_block_start is Claude Code Content block not found"
+        );
+    }
+
+    #[tokio::test]
+    async fn commit_buffered_reasoning_without_stream_does_not_invent_a_block() {
+        let mut state = ThinkingState::default();
+        let mut blocks = Vec::new();
+        state
+            .commit_buffered_reasoning(&mut blocks, "subagent:reasoning", "fresh CoT", None)
+            .await
+            .expect("skip unstarted commit");
+        assert!(state.open.is_none());
+        assert!(
+            blocks.is_empty(),
+            "a None stream must not reserve an SSE index: {blocks:?}"
         );
     }
 }

@@ -74,6 +74,81 @@ async fn second_start_is_ignored_while_a_card_is_open() {
 }
 
 #[tokio::test]
+async fn tool_after_closed_thinking_does_not_skip_or_stop_an_unstarted_index() {
+    let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    builder
+        .thinking
+        .progress_status_keep_open(&mut builder.blocks, "plan the edit\n", Some(&sender))
+        .await
+        .expect("stream thinking");
+    builder
+        .thinking
+        .close(&mut builder.blocks, Some(&sender))
+        .await
+        .expect("close thinking on reasoning/complete");
+    assert!(
+        !builder.thinking.is_open(),
+        "thinking_end must close the live thought before the tool card"
+    );
+    builder.pending_reasoning =
+        "plan the edit\nand extra CoT that is not a substring of the live block".to_owned();
+    builder
+        .start_executable_tool_use_card("call-1", "Read", Some(&sender))
+        .await
+        .expect("start Read after closed thinking");
+    drop(sender);
+
+    let mut next_index = 0_u64;
+    let mut open: Option<u64> = None;
+    let mut started = Vec::new();
+    let mut frames = Vec::new();
+    let mut drain = receiver;
+    while let Some(frame) = drain.recv().await {
+        let raw = String::from_utf8(frame.expect("frame").to_vec()).expect("utf8");
+        frames.push(raw.clone());
+        for chunk in raw.split("\n\n") {
+            let Some(data) = chunk.lines().find_map(|line| line.strip_prefix("data: ")) else {
+                continue;
+            };
+            let Ok(payload) = serde_json::from_str::<serde_json::Value>(data) else {
+                continue;
+            };
+            match payload.get("type").and_then(serde_json::Value::as_str) {
+                Some("content_block_start") => {
+                    let index = payload["index"].as_u64().expect("start index");
+                    assert_eq!(
+                        index, next_index,
+                        "SSE indexes must stay contiguous: {frames:?}"
+                    );
+                    assert!(open.replace(index).is_none(), "nested start: {frames:?}");
+                    next_index += 1;
+                    started.push(payload["content_block"]["type"].clone());
+                }
+                Some("content_block_delta") => {
+                    let index = payload["index"].as_u64().expect("delta index");
+                    assert_eq!(open, Some(index), "delta for missing block: {frames:?}");
+                }
+                Some("content_block_stop") => {
+                    let index = payload["index"].as_u64().expect("stop index");
+                    assert_eq!(
+                        open.take(),
+                        Some(index),
+                        "content_block_stop without start: {frames:?}"
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(
+        started,
+        vec![json!("thinking"), json!("tool_use")],
+        "Read must follow the closed thought at the next index: {frames:?}"
+    );
+}
+
+#[tokio::test]
 async fn unmatched_delta_is_ignored() {
     let mut builder = SegmentBuilder::new(1).with_subagent(true);
     builder
