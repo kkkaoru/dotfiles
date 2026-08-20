@@ -1342,10 +1342,7 @@ fn command_code_pi_luna_omits_claude_system_and_keeps_latest_user() {
     );
     assert_eq!(
         pi["tools"],
-        json!([
-            {"name":"Read","input_schema":{"type":"object"}},
-            {"name":"SendMessage","input_schema":{"type":"object"}}
-        ])
+        json!([{"name":"Read","input_schema":{"type":"object"}}])
     );
 }
 
@@ -1371,7 +1368,7 @@ fn command_code_pi_flattens_tool_results_for_a_stateless_provider_turn() {
         pi["messages"],
         json!([{
             "role":"user",
-            "content":"run pwd and report it\n\nUse the result and finish the task.\n\n[Claude tool result toolu_pwd]\n/tmp/project"
+            "content":"run pwd and report it\n\nUse the result and finish the task.\n\n[Claude tool result toolu_pwd]\n/tmp/project\n\n[Tool execution status]\nDo not repeat a tool call whose result is listed above. Use the listed results. If the requested task is satisfied, return the final answer now; call only tools required for missing information."
         }])
     );
     assert_eq!(pi["tools"], json!(request.tools));

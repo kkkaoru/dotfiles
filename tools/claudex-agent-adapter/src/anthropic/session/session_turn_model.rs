@@ -117,10 +117,12 @@ fn command_code_pi_claude_request(request: &MessagesRequest) -> Result<Value> {
     claude_request["system"] = json!(developer_instructions);
     claude_request["messages"] = json!(command_code_messages(&request.messages));
     // Pi gateway turns are stateless. Keep Claude Code's ordinary worker tools,
-    // but hide nested launch tools; command_code_messages converts returned
+    // but hide coordination tools; command_code_messages converts returned
     // tool_result blocks into plain user context so a fresh provider thread
     // never receives a provider-owned tool call ID that it cannot recognize.
-    omit_hidden_launch_tools(&mut claude_request, true);
+    // The outer coordinator owns SendMessage. Exposing it here makes a fresh
+    // Command Code turn repeatedly notify main instead of reaching end_turn.
+    omit_command_code_coordination_tools(&mut claude_request);
     Ok(claude_request)
 }
 
@@ -134,6 +136,7 @@ fn command_code_messages(messages: &[Value]) -> Vec<Value> {
         return vec![json!({"role":"user", "content":command_code_result_context(messages)})];
     };
     let mut parts = Vec::new();
+    let mut has_tool_results = false;
     for message in &messages[start..] {
         if message.get("role").and_then(Value::as_str) != Some("user") {
             continue;
@@ -142,7 +145,14 @@ fn command_code_messages(messages: &[Value]) -> Vec<Value> {
         if !text.is_empty() {
             parts.push(text);
         }
+        has_tool_results |= content_has_tool_result(&message["content"]);
         append_tool_result_context(&message["content"], &mut parts);
+    }
+    if has_tool_results {
+        parts.push(
+            "[Tool execution status]\nDo not repeat a tool call whose result is listed above. Use the listed results. If the requested task is satisfied, return the final answer now; call only tools required for missing information."
+                .to_owned(),
+        );
     }
     vec![json!({"role":"user", "content":parts.join("\n\n")})]
 }
@@ -187,6 +197,17 @@ fn append_tool_result_context(content: &Value, parts: &mut Vec<String>) {
         };
         parts.push(format!("[Claude tool result {id}]\n{result}"));
     }
+}
+
+fn omit_command_code_coordination_tools(claude_request: &mut Value) {
+    omit_hidden_launch_tools(claude_request, true);
+    let Some(tools) = claude_request
+        .get_mut("tools")
+        .and_then(Value::as_array_mut)
+    else {
+        return;
+    };
+    tools.retain(|tool| tool.get("name").and_then(Value::as_str) != Some("SendMessage"));
 }
 
 fn omit_hidden_launch_tools(claude_request: &mut Value, hide_launch_tools: bool) {
