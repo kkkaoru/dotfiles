@@ -3,12 +3,22 @@ use std::future::Future;
 use anyhow::{Context, Result};
 use axum::Router;
 
-pub(super) async fn serve<L>(listener: L, router: Router) -> Result<()>
+pub(super) async fn serve_with_extra_shutdown<L>(
+    listener: L,
+    router: Router,
+    extra: impl Future<Output = ()> + Send + 'static,
+) -> Result<()>
 where
     L: axum::serve::Listener + Send + 'static,
     L::Addr: std::fmt::Debug + Send + Sync + 'static,
 {
-    serve_until(listener, router, termination_signal()).await
+    serve_until(listener, router, async {
+        tokio::select! {
+            () = termination_signal() => {}
+            () = extra => {}
+        }
+    })
+    .await
 }
 
 async fn serve_until<L>(

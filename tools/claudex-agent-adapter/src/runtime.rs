@@ -13,6 +13,7 @@ mod hard_timeout;
 #[path = "runtime_parse_command.rs"]
 mod parse_command;
 mod parse_options;
+mod retained_idle;
 mod shutdown;
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -122,14 +123,15 @@ async fn serve_on_listener(
     let (handover, rx) =
         crate::listen_handover::ListenHandover::from_runtime_bind(options.listen, cache);
     let handover_listener = crate::listen_handover::HandoverListener::new(listener, &handover, rx);
-    let result = shutdown::serve(
+    let result = shutdown::serve_with_extra_shutdown(
         handover_listener,
         http_router_with_handover(
             Arc::clone(&bridge),
             options.model,
             auth_token,
-            Some(handover),
+            Some(handover.clone()),
         ),
+        retained_idle::rebound_idle_exit(handover, Arc::clone(&bridge)),
     )
     .await;
     backend.shutdown().await;
