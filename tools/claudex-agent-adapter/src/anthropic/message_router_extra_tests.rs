@@ -212,3 +212,66 @@ async fn messages_with_identity_acknowledges_notifications_and_counts_tokens() {
         "identity notifications must not start a provider turn"
     );
 }
+
+#[tokio::test]
+async fn launch_ack_only_does_not_start_a_second_provider_turn() {
+    let (_root, log, bridge) = tests::message_fixture().await;
+    let before = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        tests::wait_for_log_marker(&log, "\"method\":\"initialized\""),
+    )
+    .await
+    .expect("provider fixture should finish initialization");
+
+    let request = MessagesRequest {
+        model: "main".to_owned(),
+        system: Value::Null,
+        messages: vec![
+            json!({"role":"user","content":"Implement the authentication cache."}),
+            json!({
+                "role":"assistant",
+                "content":[
+                    {"type":"text","text":"Launching background work."},
+                    {"type":"tool_use","id":"background","name":"Agent","input":{}}
+                ]
+            }),
+            json!({
+                "role":"user",
+                "content":[{
+                    "type":"tool_result",
+                    "tool_use_id":"background",
+                    "content":[{
+                        "type":"text",
+                        "text":"Async agent launched successfully.\nagentId: internal\nThe agent is working in the background."
+                    }]
+                }]
+            }),
+        ],
+        tools: Vec::new(),
+        stream: false,
+        output_config: Value::Null,
+        metadata: Value::Null,
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+    let response =
+        tokio::time::timeout(std::time::Duration::from_secs(2), bridge.messages(request))
+            .await
+            .expect("launch-ack-only should return immediately")
+            .expect("launch-ack-only response");
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read launch-ack-only response");
+    let body: Value = serde_json::from_slice(&body).expect("JSON launch-ack-only response");
+    assert_eq!(body["stop_reason"], "end_turn");
+    assert_eq!(
+        body["content"][0]["text"],
+        "Background agent launched; the main prompt is ready."
+    );
+    let after = std::fs::read_to_string(&log).unwrap_or_default();
+    assert_eq!(
+        before, after,
+        "launch-ack-only must not start a provider turn"
+    );
+}

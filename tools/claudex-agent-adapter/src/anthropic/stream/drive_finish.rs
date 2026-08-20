@@ -128,9 +128,13 @@ impl Bridge {
         }
         tracing::warn!(?error, "streaming turn failed before message_stop");
         self.note_provider_exhaustion(&error, Some(&turn.session.model));
-        let _ = self
-            .disconnect_stream(&turn.session, Arc::clone(&turn.events))
-            .await;
+        let _ = if run_in_background {
+            self.disconnect_stream_for_async_handoff(&turn.session, Arc::clone(&turn.events))
+                .await
+        } else {
+            self.disconnect_stream(&turn.session, Arc::clone(&turn.events))
+                .await
+        };
         send_stream_graceful_stop(&sender).await;
     }
 }

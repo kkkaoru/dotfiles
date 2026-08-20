@@ -182,7 +182,7 @@ impl PiGateway {
         let ready = read_json_line(&mut lines).await?;
         protocol::validate_ready(&ready)?;
         write_line(&mut writer, &request).await?;
-        let mut state = events::EventTranslateState::default();
+        let mut state = events::event_translate_state(&request);
         loop {
             tokio::select! {
                 cancel = cancel_rx.recv() => {

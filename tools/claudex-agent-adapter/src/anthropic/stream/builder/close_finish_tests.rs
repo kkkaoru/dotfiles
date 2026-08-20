@@ -206,3 +206,18 @@ async fn blocked_subagent_notice_streams_message_stop_after_finish() {
     assert!(!output.contains("Server error"));
     assert!(!output.contains("without emitting a tool call"));
 }
+
+#[tokio::test]
+async fn finish_ends_the_turn_after_three_consecutive_unusable_tools() {
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    builder.consecutive_invalid_tool_json = 3;
+    builder.provider_stop_reason = Some("tool_use");
+    let segment = builder.finish(None).await.expect("finish after circuit");
+    assert_eq!(segment.stop_reason, "end_turn");
+    assert!(
+        segment
+            .blocks
+            .iter()
+            .all(|block| block.get("type").and_then(serde_json::Value::as_str) != Some("tool_use"))
+    );
+}

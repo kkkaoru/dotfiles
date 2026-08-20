@@ -57,9 +57,6 @@ impl Bridge {
     fn transcript_input(&self, request: &MessagesRequest) -> Vec<Value> {
         let model = self.request_model(request);
         let provider = self.app_for(request_identity::claude_session_id(request).as_deref());
-        if crate::command_code_acp::is_command_code_model(&model) {
-            return provider_user_turn_input(&model, &request.messages);
-        }
         let Some(limit) = provider.max_context_tokens_for_model(&model) else {
             return provider_turn_input(&model, &request.messages);
         };

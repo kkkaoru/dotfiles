@@ -3,8 +3,8 @@ use std::time::Duration;
 use super::{
     super::{ParallelScheduler, SchedulerConfig},
     actions::count_for_content,
-    declines_delegation, has_classifiable_user_turn, independent_scope_count, is_substantive_work,
-    needs_single_worker,
+    declines_delegation, has_classifiable_user_turn, has_parallel_scope, independent_scope_count,
+    is_substantive_work, needs_single_worker,
     test_support::{messages_request, real_three_scope_message},
 };
 
@@ -251,6 +251,13 @@ fn old_atomic_lookup_does_not_force_latest_substantive_turn_to_one() {
     ]);
     assert!(!needs_single_worker(&request));
     assert!(is_substantive_work(&request));
+}
+
+#[test]
+fn missing_user_text_does_not_invent_parallel_scopes() {
+    let request = messages_request(vec![serde_json::json!({"role":"assistant", "content":[]})]);
+    assert_eq!(independent_scope_count(&request), 0);
+    assert!(!has_parallel_scope(&request));
 }
 
 #[test]

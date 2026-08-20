@@ -79,11 +79,14 @@ impl Bridge {
         }
         tracing::warn!(
             tool_result_count = tool_results.len(),
+            incomplete_tool_use = recover::incomplete_tool_use_count(&request.messages),
             "recovering Claude tool results after adapter session loss"
         );
         let session = self
             .create_session(request, signature, advisor_model, collaborator_model)
             .await?;
+        // Mark these IDs consumed so a retry cannot storm recovered sessions.
+        recover::remember_recovered_tool_results(&session, tool_results).await;
         let gate = Arc::clone(&session.gate).lock_owned().await;
         Ok(SelectedSession {
             session,
@@ -134,3 +137,6 @@ impl Bridge {
 
 #[path = "select_create.rs"]
 mod create;
+#[path = "select_recover.rs"]
+mod recover;
+pub(in crate::anthropic::session) use recover::maybe_sanitize_recovered_request;

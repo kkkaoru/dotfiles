@@ -15,7 +15,7 @@ fn serializes_pending_request_id_keys_without_reordering_tools() {
 #[tokio::test]
 async fn rejects_each_request_id_once_and_reports_provider_errors() {
     let app =
-        crate::agent_backend::AgentBackend::Grok(crate::grok_acp::GrokAcp::stopped_for_test());
+        crate::agent_backend::AgentBackend::Pi(crate::pi_gateway::PiGateway::stopped_for_test());
     let mut rejected = HashSet::new();
     assert!(
         reject_disconnected_tool_once(&app, "model", &mut rejected, json!(41))

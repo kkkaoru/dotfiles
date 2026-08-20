@@ -27,6 +27,7 @@ use helpers::{
     validate_tool_result_ownership,
 };
 pub(in crate::anthropic) use session_turn::is_context_window_exceeded;
+#[allow(unused_imports)]
 pub(crate) use session_turn::is_unknown_session_text;
 #[cfg(test)]
 pub(super) use session_turn::pi_claude_request;

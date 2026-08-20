@@ -325,26 +325,27 @@ dropped.
 Idle provider threads are retained for two hours to support related provider-backed worker
 continuations and prompt-prefix reuse; capacity pressure may evict the oldest idle thread sooner.
 This backend-thread retention is separate from Claude Code's logical agent lifecycle. The main
-session reuses a compatible logical worker by setting `resume` to the exact prior Agent/Task
-recipient (Agent Teams still uses `SendMessage`), while starting new instances when the prior
-worker failed/stopped or the scope is independent. Prefer one continuing custom-advisor per session
-and account for it separately from `selected_workers` / provider quota headroom.
+session reuses a compatible logical worker with `SendMessage({to: the exact prior Agent/Task
+recipient})`. `SendMessage` to a subagent is official Claude Code resume and does not require
+Agent Teams, while starting new instances when the prior worker failed/stopped or the scope is
+independent. Prefer one continuing custom-advisor per session and account for it separately from
+`selected_workers` / provider quota headroom.
 Claude subscription workers and advisors still use a new `--no-session-persistence` subprocess per
 provider call. Settled provider-backed SubAgent sessions stay registered after `message_stop` so a
-follow-up Task `resume` can match the transcript and reuse the provider thread (prompt-cache /
+follow-up `SendMessage` can match the transcript and reuse the provider thread (prompt-cache /
 prefix reuse). Capacity pressure and the idle TTL still reclaim those sessions. Logical-agent reuse
-via `resume` injection is complementary: it points Claude Code at the prior recipient while the
-adapter keeps the matching idle backend thread when possible.
+via `SendMessage({to: agentId})` is complementary: it points Claude Code at the prior recipient while
+the adapter keeps the matching idle backend thread when possible.
 
 Claude Code's UI and Agent `resolvedModel` metadata describe the native custom-agent profile. Every
 claudex worker fixes the same model in its frontmatter and the shared provider config. The adapter
 still treats the correlated `claudex_model` as the effective provider route. Verify
 the effective model from the SubAgent JSONL assistant `message.model`, provider sampling logs, or
-adapter routing logs. Nested Agent/Task calls remain supported and must apply the current injected
-`selected_workers` selection rather than defaulting to generic `claude` or blindly inheriting the
-parent provider. Their `subagent_type` must be one of the current `selected_agents`, and their
-`claudex_model` must match the same selected worker entry unless the active user explicitly requested
-that exact model. Nested work created natively inside Grok remains in the Grok ACP
+adapter routing logs. Nested Agent/Task launches from an already delegated SubAgent are rejected
+with an English notice. The parent session owns fan-out. `SendMessage({to})` remains available so a
+nested worker can continue an existing recipient. Parent-issued Agent/Task launches still apply the
+current injected `selected_workers` selection rather than defaulting to generic `claude` or blindly
+inheriting the parent provider. Nested work created natively inside Grok remains in the Grok ACP
 session. Cross-provider work is initiated by main orchestration as an explicit routed
 Agent/Task, then returns to the main session for integration.
 

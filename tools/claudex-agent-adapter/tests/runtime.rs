@@ -23,22 +23,15 @@ async fn starts_each_provider_once_only_after_its_first_parallel_request() {
         r#"{"auth_mode":"chatgpt","tokens":{"access_token":"test"}}"#,
     )
     .expect("write mock auth");
-    let codex_count = home.path().join("codex-starts");
-    let grok_count = home.path().join("grok-starts");
-    let codex = provider_wrapper(
+    let gpt_count = home.path().join("gpt-starts");
+    let gpt = provider_wrapper(
         home.path(),
-        "codex-wrapper",
+        "gpt-wrapper",
         &coverage_profile::wrapped_program_string(
             home.path(),
             env!("CARGO_BIN_EXE_routing-codex-mock"),
         ),
-        &codex_count,
-    );
-    let grok = provider_wrapper(
-        home.path(),
-        "grok-wrapper",
-        &coverage_profile::wrapped_program_string(home.path(), env!("CARGO_BIN_EXE_grok-acp-mock")),
-        &grok_count,
+        &gpt_count,
     );
     let port = unused_port();
     let listen = format!("127.0.0.1:{port}");
@@ -48,16 +41,13 @@ async fn starts_each_provider_once_only_after_its_first_parallel_request() {
         "gpt-model",
         "--backend-route",
         "gpt-model=codex-app-server",
-        "--backend-route",
-        "grok-model=grok-acp",
         "--listen",
         &listen,
     ])
     .current_dir(home.path())
     .env("HOME", home.path())
     .env("ANTHROPIC_AUTH_TOKEN", "runtime-token")
-    .env("CLAUDEX_CODEX_PROGRAM", codex)
-    .env("CLAUDEX_GROK_PROGRAM", grok)
+    .env("CLAUDEX_CODEX_PROGRAM", gpt)
     .stdout(Stdio::null())
     .stderr(Stdio::null())
     .spawn()
@@ -66,24 +56,14 @@ async fn starts_each_provider_once_only_after_its_first_parallel_request() {
     let base_url = format!("http://127.0.0.1:{port}");
     let initial = read_health(&client, &base_url).await;
     assert_eq!(initial["started_models"], json!([]));
-    assert_eq!(start_count(&codex_count), 0);
-    assert_eq!(start_count(&grok_count), 0);
+    assert_eq!(start_count(&gpt_count), 0);
 
     request_burst(&base_url, "gpt-model", "CODEX_ROUTED_OK").await;
     assert_eq!(
         read_health(&client, &base_url).await["started_models"],
         json!(["gpt-model"])
     );
-    assert_eq!(start_count(&codex_count), 1);
-    assert_eq!(start_count(&grok_count), 0);
-
-    request_burst(&base_url, "grok-model", "GROK_ACP_STREAM_OK").await;
-    assert_eq!(
-        read_health(&client, &base_url).await["started_models"],
-        json!(["gpt-model", "grok-model"])
-    );
-    assert_eq!(start_count(&codex_count), 1);
-    assert_eq!(start_count(&grok_count), 1);
+    assert_eq!(start_count(&gpt_count), 1);
     stop(&mut server);
 }
 

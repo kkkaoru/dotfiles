@@ -885,7 +885,7 @@ fn handles_zero_counts_and_test_source_names() {
         "src/stream/tests.rs"
     )));
     assert!(is_test_only_source(std::path::Path::new(
-        "src/grok_acp/test_support.rs"
+        "src/parallel_scheduler/scope_count/test_support.rs"
     )));
     assert!(!is_test_only_source(std::path::Path::new("src/module.rs")));
     assert!(!is_test_only_source(std::path::Path::new(
@@ -914,12 +914,7 @@ fn assert_non_executable_sources() {
     assert!(!is_non_executable_source(std::path::Path::new(
         "src/web_search/parse.rs"
     )));
-    for executable in [
-        "src/lib.rs",
-        "src/command_code_acp/agent_acp.rs",
-        "src/command_code_acp/mod.rs",
-        "src/grok_acp/test_support.rs",
-    ] {
+    for executable in ["src/lib.rs", "src/pi_gateway.rs", "src/claude_launch.rs"] {
         assert!(!is_non_executable_source(std::path::Path::new(executable)));
     }
 }
@@ -992,7 +987,7 @@ fn assert_inventory_annotations(root: &std::path::Path, production_files: &[std:
 }
 
 fn assert_exception_manifest(root: &std::path::Path, production_files: &[std::path::PathBuf]) {
-    assert_eq!(INSTRUMENTATION_EXCEPTIONS.len(), 4);
+    assert_eq!(INSTRUMENTATION_EXCEPTIONS.len(), 2);
     assert_eq!(
         INSTRUMENTATION_EXCEPTIONS
             .iter()

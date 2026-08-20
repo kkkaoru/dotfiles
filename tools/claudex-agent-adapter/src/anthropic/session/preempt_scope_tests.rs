@@ -36,7 +36,7 @@ async fn multi_tui_preempt_requires_the_owning_claude_session_pool() {
         "tui-b",
         AgentBackend::routed(vec![(
             "other".to_owned(),
-            Arc::new(AgentBackend::Grok(crate::grok_acp::GrokAcp::stopped_for_test())),
+            Arc::new(AgentBackend::Pi(crate::pi_gateway::PiGateway::stopped_for_test())),
         )]),
     );
     let _ = scopes.scope(None);

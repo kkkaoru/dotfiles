@@ -43,6 +43,36 @@ pub(in crate::anthropic) fn live_agent_task_ids(messages: &[Value]) -> Vec<Strin
     ids
 }
 
+pub(in crate::anthropic::subagent_reuse) fn unique_live_agent_count(
+    launches: &[LaunchRecord],
+    messages: &[Value],
+) -> usize {
+    let mut ids = HashSet::new();
+    collect_live_launch_ids(&mut ids, launches);
+    ids.extend(
+        live_agent_task_ids(messages)
+            .into_iter()
+            .map(|id| id.to_ascii_lowercase()),
+    );
+    ids.len()
+}
+
+fn collect_live_launch_ids(ids: &mut HashSet<String>, launches: &[LaunchRecord]) {
+    for launch in launches {
+        if terminal_status(&launch.status) {
+            continue;
+        }
+        let id = if launch.recipient.is_empty() {
+            launch.key.as_str()
+        } else {
+            launch.recipient.as_str()
+        };
+        if !id.is_empty() {
+            ids.insert(id.to_ascii_lowercase());
+        }
+    }
+}
+
 pub(super) fn push_live_candidates(
     ids: &mut Vec<String>,
     seen: &mut HashSet<String>,

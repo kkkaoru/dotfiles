@@ -6,12 +6,6 @@ use super::{BackendKind, WebSearchMode};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct AcpLaunch {
-    pub program: String,
-    pub arguments: Vec<String>,
-}
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct BackendRoute {
     pub model: String,
     pub backend: BackendKind,
@@ -33,8 +27,6 @@ pub struct BackendRoute {
     pub max_concurrency: Option<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub model_prefixes: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub acp: Option<AcpLaunch>,
     #[serde(default, skip_serializing_if = "WebSearchMode::is_default")]
     pub web_search_mode: WebSearchMode,
 }
@@ -52,7 +44,6 @@ impl BackendRoute {
             max_context_tokens: None,
             max_concurrency: None,
             model_prefixes: Vec::new(),
-            acp: None,
             web_search_mode: WebSearchMode::default(),
         }
     }
@@ -66,7 +57,6 @@ impl BackendRoute {
             && self.max_context_tokens.is_none()
             && self.max_concurrency.is_none()
             && self.model_prefixes.is_empty()
-            && self.acp.is_none()
             && self.web_search_mode.is_default()
         {
             return format!("{}={}", self.model, self.backend);

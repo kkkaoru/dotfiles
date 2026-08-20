@@ -85,13 +85,19 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// Pi `toolcall_start` card that is already on the SSE wire. Completed by
     /// `item/tool/call` so Claude Code does not get a second tool_use block.
     pub(super) streaming_tool: Option<StreamingToolUse>,
+    /// Consecutive empty, unparsed, or invalid tool JSON payloads on this
+    /// stream. Reset when a tool JSON payload is complete and usable.
+    pub(super) consecutive_invalid_tool_json: u8,
 }
 
 pub(super) struct StreamingToolUse {
     pub(super) call_id: String,
     pub(super) tool_use_id: String,
     pub(super) index: usize,
+    pub(super) name: String,
     pub(super) partial_json: String,
+    pub(super) json_emitted: bool,
+    pub(super) sse_started: bool,
 }
 
 impl SegmentBuilder {

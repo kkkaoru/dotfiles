@@ -17,23 +17,12 @@ async fn abort_routed_provider(routes: &RoutedBackends, thread_id: &str) -> Resu
         .ready_backend()
         .context("thread route backend is unavailable during provider abort")?;
     // Shared provider children must survive a single target's failed
-    // cancellation. ACP cancellation is session-targeted; killing this leaf
-    // would also terminate clean sibling sessions sharing the persistent
-    // configured/Grok/Copilot child. Codex has the same invariant because its
-    // app-server owns the shared prompt cache. The target turn is already
-    // invalidated by the ACP cancellation path, so leave the child alive for
+    // cancellation. Codex app-server owns the shared prompt cache, and Pi
+    // gateway sessions are request-scoped. Leave the child alive for
     // unrelated turns and future reuse.
-    // Every backend reachable through `RoutedBackends` is a provider leaf:
-    // `RoutedBackend::ready` requires `backend.kind()`, and `spawn_route`
-    // constructs only Codex/ACP/Copilot/Grok leaves. A routed/session-scoped
-    // backend cannot be installed as a route without violating that contract.
     debug_assert!(matches!(
         backend.as_ref(),
-        AgentBackend::Codex(_)
-            | AgentBackend::ConfiguredAcp(_)
-            | AgentBackend::Copilot(_)
-            | AgentBackend::Grok(_)
-            | AgentBackend::Pi(_)
+        AgentBackend::Codex(_) | AgentBackend::Pi(_)
     ));
     tracing::debug!(
         thread_id,
@@ -47,18 +36,6 @@ impl AgentBackend {
     pub(crate) async fn cancel_turn(&self, thread_id: &str) -> Result<TurnCancellation> {
         match self {
             Self::Codex(_) => Ok(TurnCancellation::Unsupported),
-            Self::Copilot(agent) => {
-                agent.cancel_turn(thread_id).await?;
-                Ok(TurnCancellation::Settled)
-            }
-            Self::ConfiguredAcp(agent) => {
-                agent.cancel_turn(thread_id).await?;
-                Ok(TurnCancellation::Settled)
-            }
-            Self::Grok(agent) => {
-                agent.cancel_turn(thread_id).await?;
-                Ok(TurnCancellation::Settled)
-            }
             Self::Pi(gateway) => {
                 gateway.cancel_turn(thread_id)?;
                 Ok(TurnCancellation::Settled)
@@ -71,18 +48,13 @@ impl AgentBackend {
     }
 
     /// Recover a turn whose provider has no settled per-turn cancellation
-    /// primitive. Routed ACP/Codex pools retain their child because the abort
+    /// primitive. Routed Codex/Pi pools retain their child because the abort
     /// identifies one target session, not every clean sibling using that
     /// persistent child. Standalone leaves still shut down below.
     pub(crate) async fn abort_turn_provider(&self, thread_id: &str) -> Result<()> {
         match self {
-            // A routed ACP pool can retain the provider above so a failed
-            // target cancellation cannot take down a clean sibling. A leaf
-            // provider has no sibling ownership context, so shut it down.
             Self::Codex(_) => {}
-            Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) | Self::Pi(_) => {
-                self.shutdown_leaf().await
-            }
+            Self::Pi(_) => self.shutdown_leaf().await,
             Self::Routed(routes) => abort_routed_provider(routes, thread_id).await?,
             Self::SessionScoped(scopes) => {
                 Box::pin(scopes.unguarded_scope().abort_turn_provider(thread_id)).await?;
@@ -94,8 +66,6 @@ impl AgentBackend {
     pub(super) async fn shutdown_leaf(&self) {
         match self {
             Self::Codex(server) => server.shutdown().await,
-            Self::Copilot(agent) => agent.shutdown().await,
-            Self::ConfiguredAcp(agent) | Self::Grok(agent) => agent.shutdown().await,
             Self::Pi(gateway) => gateway.shutdown().await,
             Self::Routed(routes) => Box::pin(routes.shutdown()).await,
             Self::SessionScoped(scopes) => Box::pin(scopes.shutdown_all()).await,
@@ -114,7 +84,6 @@ impl AgentBackend {
 }
 
 #[cfg(test)]
-// Coverage gates measure production code; test implementations are excluded.
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[path = "lifecycle_tests.rs"]
 mod tests;

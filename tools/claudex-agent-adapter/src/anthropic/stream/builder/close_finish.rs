@@ -3,9 +3,12 @@ use serde_json::{Value, json};
 
 use super::batch::estimated_output_tokens;
 use super::{SegmentBuilder, batch, external_tool};
+
+#[path = "unusable_tool.rs"]
+mod unusable_tool;
 use crate::anthropic::stream::{
     ToolCall,
-    protocol::{StreamSender, send_content_block_stop, send_stream_frame},
+    protocol::{StreamSender, send_stream_frame},
     sanitize::sanitize_committed_blocks,
 };
 use crate::anthropic::{Bridge, Segment, Session, WebEvidenceSummary};
@@ -38,18 +41,32 @@ impl SegmentBuilder {
         call: ToolCall,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        let Some(original_name) =
-            external_tool::requested_external_tool_name(&session.external_tool_names, &call.name)
-        else {
-            external_tool::reject_unrequested_tool(bridge, session, call).await?;
-            return Ok(());
-        };
         let context = external_tool::ExternalToolContext {
             bridge,
             session,
             current_messages,
             system,
             stream,
+        };
+        if self.skip_unusable_or_tripped_tool(context, &call).await? {
+            return Ok(());
+        }
+        if self
+            .reject_nested_subagent_launch(
+                context,
+                &call.name,
+                &call.arguments,
+                call.request_id.clone(),
+            )
+            .await?
+        {
+            return Ok(());
+        }
+        let Some(original_name) =
+            external_tool::requested_external_tool_name(&session.external_tool_names, &call.name)
+        else {
+            external_tool::reject_unrequested_tool(bridge, session, call).await?;
+            return Ok(());
         };
         if let Some(original_name) = crate::anthropic::agent_batch::original_name(original_name) {
             return batch::dispatch(self, context, original_name, call).await;
@@ -114,14 +131,12 @@ impl SegmentBuilder {
                 .await;
         }
         self.commit_pending_reasoning_for_transcript(stream).await?;
+        self.stop_open_streaming_tool(stream).await?;
         self.close_open_blocks(stream).await
     }
 
     async fn stop_open_streaming_tool(&mut self, stream: Option<&StreamSender>) -> Result<()> {
-        let Some(open) = self.streaming_tool.take() else {
-            return Ok(());
-        };
-        send_content_block_stop(stream, open.index).await
+        self.stop_or_reject_open_streaming_tool(stream).await
     }
 
     pub(in crate::anthropic::stream) fn update_provider_stop_reason(
@@ -182,6 +197,9 @@ impl SegmentBuilder {
     ) -> Result<Segment> {
         self.report_incomplete_launches(stream).await?;
         self.report_no_subagent_action(stream).await?;
+        if crate::anthropic::token_efficiency::circuit_is_open(self.consecutive_invalid_tool_json) {
+            self.suppressed_tool_use = true;
+        }
         let tool_handoff = self.is_subagent && self.external_tool_calls > 0;
         self.close_blocks_for_finish(tool_handoff, stream).await?;
         sanitize_committed_blocks(&mut self.blocks);

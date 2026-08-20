@@ -38,6 +38,7 @@ impl SegmentBuilder {
             },
             last_turn_progress: Vec::new(),
             streaming_tool: None,
+            consecutive_invalid_tool_json: 0,
         }
     }
 
@@ -64,11 +65,10 @@ impl SegmentBuilder {
         is_subagent: bool,
         model: &str,
     ) -> Self {
+        let _ = model;
         Self::new(input_tokens)
             .with_subagent(is_subagent)
-            .with_command_code_progress(
-                is_subagent && crate::command_code_acp::is_command_code_model(model),
-            )
+            .with_command_code_progress(false)
     }
 
     pub(in crate::anthropic::stream) fn is_command_code_subagent(&self) -> bool {
@@ -107,6 +107,7 @@ impl SegmentBuilder {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(in crate::anthropic::stream) fn backdate_last_visible_provider_activity(
         &mut self,
         elapsed: std::time::Duration,

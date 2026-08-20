@@ -319,7 +319,9 @@ async fn proxy_middleware_forwards_owned_sessions_and_passes_through_others() {
         advertised: Some(advertised),
         client: proxy_http_client(),
         circuit: Default::default(),
-        slots: std::sync::Arc::new(tokio::sync::Semaphore::new(32)),
+        slots: crate::http_api::retained_proxy::ProxySlotPool::new(
+            crate::http_api::retained_proxy::MAX_PROXY_IN_FLIGHT,
+        ),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "local" }))
@@ -380,7 +382,9 @@ async fn proxy_middleware_serves_locally_when_retained_is_unreachable() {
         advertised: Some(advertised),
         client: proxy_http_client(),
         circuit: Default::default(),
-        slots: std::sync::Arc::new(tokio::sync::Semaphore::new(32)),
+        slots: crate::http_api::retained_proxy::ProxySlotPool::new(
+            crate::http_api::retained_proxy::MAX_PROXY_IN_FLIGHT,
+        ),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "live-local" }))
@@ -458,7 +462,9 @@ async fn retained_proxy_application_503_keeps_session_until_circuit_opens() {
         advertised: Some(advertised),
         client: proxy_http_client(),
         circuit: Default::default(),
-        slots: std::sync::Arc::new(tokio::sync::Semaphore::new(32)),
+        slots: crate::http_api::retained_proxy::ProxySlotPool::new(
+            crate::http_api::retained_proxy::MAX_PROXY_IN_FLIGHT,
+        ),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "live-after-circuit" }))
@@ -560,7 +566,9 @@ async fn proxy_middleware_keeps_retained_when_health_probe_times_out() {
         advertised: Some(advertised),
         client: proxy_http_client(),
         circuit: Default::default(),
-        slots: std::sync::Arc::new(tokio::sync::Semaphore::new(32)),
+        slots: crate::http_api::retained_proxy::ProxySlotPool::new(
+            crate::http_api::retained_proxy::MAX_PROXY_IN_FLIGHT,
+        ),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "live-after-slow-health" }))
@@ -620,7 +628,9 @@ async fn proxy_middleware_serves_locally_when_retained_session_is_idle() {
         advertised: Some(advertised),
         client: proxy_http_client(),
         circuit: Default::default(),
-        slots: std::sync::Arc::new(tokio::sync::Semaphore::new(32)),
+        slots: crate::http_api::retained_proxy::ProxySlotPool::new(
+            crate::http_api::retained_proxy::MAX_PROXY_IN_FLIGHT,
+        ),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "live-after-idle" }))
@@ -680,7 +690,9 @@ async fn proxy_middleware_serves_locally_when_busy_list_is_stale_without_work() 
         advertised: Some(advertised),
         client: proxy_http_client(),
         circuit: Default::default(),
-        slots: std::sync::Arc::new(tokio::sync::Semaphore::new(32)),
+        slots: crate::http_api::retained_proxy::ProxySlotPool::new(
+            crate::http_api::retained_proxy::MAX_PROXY_IN_FLIGHT,
+        ),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "live-after-stale-busy" }))
@@ -1075,7 +1087,9 @@ async fn rebound_daemon_forwards_idle_keepalive_to_canonical() {
         advertised: Some(advertised),
         client: proxy_http_client(),
         circuit: Default::default(),
-        slots: std::sync::Arc::new(tokio::sync::Semaphore::new(32)),
+        slots: crate::http_api::retained_proxy::ProxySlotPool::new(
+            crate::http_api::retained_proxy::MAX_PROXY_IN_FLIGHT,
+        ),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "old-binary" }))
@@ -1116,7 +1130,9 @@ async fn rebound_daemon_keeps_a_sticky_hop_local_instead_of_looping() {
         advertised: Some(advertised),
         client: proxy_http_client(),
         circuit: Default::default(),
-        slots: std::sync::Arc::new(tokio::sync::Semaphore::new(32)),
+        slots: crate::http_api::retained_proxy::ProxySlotPool::new(
+            crate::http_api::retained_proxy::MAX_PROXY_IN_FLIGHT,
+        ),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "old-binary" }))
@@ -1175,7 +1191,9 @@ async fn promoted_warm_start_does_not_proxy_to_dead_ephemeral() {
         advertised: Some(advertised),
         client: proxy_http_client(),
         circuit: Default::default(),
-        slots: std::sync::Arc::new(tokio::sync::Semaphore::new(32)),
+        slots: crate::http_api::retained_proxy::ProxySlotPool::new(
+            crate::http_api::retained_proxy::MAX_PROXY_IN_FLIGHT,
+        ),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "promoted-primary" }))
@@ -1289,7 +1307,9 @@ async fn retained_transport_failure_drops_generation() {
         advertised: Some(advertised),
         client: proxy_http_client(),
         circuit: Default::default(),
-        slots: std::sync::Arc::new(tokio::sync::Semaphore::new(32)),
+        slots: crate::http_api::retained_proxy::ProxySlotPool::new(
+            crate::http_api::retained_proxy::MAX_PROXY_IN_FLIGHT,
+        ),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "live-after-drop" }))
@@ -1616,7 +1636,9 @@ async fn rebound_daemon_keeps_in_flight_retained_sessions_local() {
         advertised: Some(advertised),
         client: proxy_http_client(),
         circuit: Default::default(),
-        slots: std::sync::Arc::new(tokio::sync::Semaphore::new(32)),
+        slots: crate::http_api::retained_proxy::ProxySlotPool::new(
+            crate::http_api::retained_proxy::MAX_PROXY_IN_FLIGHT,
+        ),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "old-inflight" }))
@@ -1662,7 +1684,9 @@ async fn proxy_middleware_serves_locally_when_retained_listen_is_self() {
         advertised: Some(handover),
         client: proxy_http_client(),
         circuit: Default::default(),
-        slots: std::sync::Arc::new(tokio::sync::Semaphore::new(32)),
+        slots: crate::http_api::retained_proxy::ProxySlotPool::new(
+            crate::http_api::retained_proxy::MAX_PROXY_IN_FLIGHT,
+        ),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "local" }))
@@ -1794,7 +1818,9 @@ async fn proxy_middleware_without_advertised_listen_uses_retained_only() {
         advertised: None,
         client: proxy_http_client(),
         circuit: Default::default(),
-        slots: std::sync::Arc::new(tokio::sync::Semaphore::new(32)),
+        slots: crate::http_api::retained_proxy::ProxySlotPool::new(
+            crate::http_api::retained_proxy::MAX_PROXY_IN_FLIGHT,
+        ),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "local" }))
@@ -1949,7 +1975,9 @@ async fn serve_rebound_proxy(
         advertised: Some(advertised),
         client: proxy_http_client(),
         circuit: Default::default(),
-        slots: std::sync::Arc::new(tokio::sync::Semaphore::new(32)),
+        slots: crate::http_api::retained_proxy::ProxySlotPool::new(
+            crate::http_api::retained_proxy::MAX_PROXY_IN_FLIGHT,
+        ),
     });
     let app = Router::new()
         .route(
@@ -2267,7 +2295,9 @@ async fn open_circuit_short_circuits_diverted_proxy_without_another_upstream_cal
         advertised: Some(advertised),
         client: proxy_http_client(),
         circuit: Default::default(),
-        slots: std::sync::Arc::new(tokio::sync::Semaphore::new(32)),
+        slots: crate::http_api::retained_proxy::ProxySlotPool::new(
+            crate::http_api::retained_proxy::MAX_PROXY_IN_FLIGHT,
+        ),
     };
     assert!(!state.circuit.note_failure("session-open"));
     assert!(!state.circuit.note_failure("session-open"));
@@ -2290,6 +2320,85 @@ async fn open_circuit_short_circuits_diverted_proxy_without_another_upstream_cal
     assert_eq!(retry.status(), StatusCode::SERVICE_UNAVAILABLE);
 }
 
+async fn serve_health_ok_messages_hold() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("hold messages listener");
+    let listen = listener.local_addr().expect("hold messages address");
+    tokio::spawn(run_health_ok_messages_hold(listener));
+    listen
+}
+
+async fn run_health_ok_messages_hold(listener: TcpListener) {
+    while let Some(stream) = accept_stream(&listener).await {
+        tokio::spawn(hold_non_health_connection(stream));
+    }
+}
+
+async fn hold_non_health_connection(mut held: tokio::net::TcpStream) {
+    let mut buf = vec![0; 4096];
+    let n = held.read(&mut buf).await.unwrap_or(0);
+    let request = String::from_utf8_lossy(&buf[..n]);
+    if !request.starts_with("GET /health") {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        return;
+    }
+    write_http_response(&mut held, "HTTP/1.1 200 OK", br#"{"status":"ok","pid":1}"#).await;
+}
+
+#[tokio::test]
+async fn over_capacity_handover_proxy_evicts_the_oldest_in_flight_request() {
+    let service = serve_health_ok_messages_hold().await;
+    let cache = tempfile::tempdir().expect("evict cache");
+    let (advertised, _rx) = ListenHandover::new(service, cache.path().to_path_buf());
+    advertised.set_advertised_for_test("127.0.0.1:61915".parse().unwrap());
+    let state = Some(HandoverState {
+        retained: None,
+        advertised: Some(advertised),
+        client: proxy_http_client(),
+        circuit: Default::default(),
+        slots: crate::http_api::retained_proxy::ProxySlotPool::new(1),
+    });
+    let app = Router::new()
+        .route("/v1/messages", post(|| async { "old-binary" }))
+        .layer(middleware::from_fn_with_state(
+            state,
+            proxy_retained_sessions,
+        ));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("evict listener");
+    let addr = listener.local_addr().expect("evict address");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let url = format!("http://{addr}/v1/messages");
+    let first = tokio::spawn(
+        reqwest::Client::new()
+            .post(url.clone())
+            .header("x-claude-code-session-id", "session-old")
+            .body("{}")
+            .send(),
+    );
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    let _second = tokio::spawn(
+        reqwest::Client::new()
+            .post(url)
+            .header("x-claude-code-session-id", "session-new")
+            .body("{}")
+            .send(),
+    );
+    let first_response = tokio::time::timeout(Duration::from_secs(3), first)
+        .await
+        .expect("oldest proxy should finish after eviction")
+        .expect("oldest proxy task")
+        .expect("oldest proxy http");
+    assert_eq!(first_response.status().as_u16(), 503);
+    let body = first_response.text().await.expect("evicted body");
+    assert!(body.contains("oldest handover proxy was evicted"));
+}
+
 #[tokio::test]
 async fn open_circuit_short_circuits_retained_proxy_when_listen_matches() {
     let cache = tempfile::tempdir().expect("retained circuit cache");
@@ -2310,7 +2419,9 @@ async fn open_circuit_short_circuits_retained_proxy_when_listen_matches() {
         advertised: Some(handover),
         client: proxy_http_client(),
         circuit,
-        slots: std::sync::Arc::new(tokio::sync::Semaphore::new(32)),
+        slots: crate::http_api::retained_proxy::ProxySlotPool::new(
+            crate::http_api::retained_proxy::MAX_PROXY_IN_FLIGHT,
+        ),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "recovered-local" }))

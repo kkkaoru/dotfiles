@@ -95,8 +95,7 @@ impl Bridge {
         }
         internal_notification::remove_from_transcript(&mut request);
         trace_request(&request);
-        if let Some(response) = self.async_agent_launch_handoff(&request).await {
-            message_router_dispatch::log_native_background_handoff();
+        if let Some(response) = self.launch_ack_without_provider_turn(&request) {
             return Ok(response);
         }
         let intent = self

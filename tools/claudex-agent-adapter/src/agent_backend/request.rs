@@ -1,68 +1,18 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use serde_json::Value;
 use std::sync::Arc;
 
 use crate::app_server::ThreadEvents;
 
-use super::{BackendKind, RoutedBackend};
-
-const ACP_SESSION_RESTART_ERROR: &str = "ACP session creation failed after provider restart";
+use super::RoutedBackend;
 
 pub(super) async fn request_session(
     route: &Arc<RoutedBackend>,
     method: &str,
     params: Value,
 ) -> Result<Value> {
-    if matches!(
-        route.kind,
-        BackendKind::CodexAppServer | BackendKind::PiGateway
-    ) {
-        let backend = route.get().await?;
-        return Box::pin(backend.request(method, params)).await;
-    }
-    request_acp_session(route, method, params).await
-}
-
-async fn request_acp_session(
-    route: &Arc<RoutedBackend>,
-    method: &str,
-    params: Value,
-) -> Result<Value> {
     let backend = route.get().await?;
-    let first = Box::pin(backend.request(method, params.clone())).await;
-    let Err(error) = first else {
-        return first;
-    };
-    if backend.is_alive() {
-        return Err(error);
-    }
-    tracing::warn!(
-        ?error,
-        "restarting ACP provider after session creation failed"
-    );
-    route.retire();
-    let restarted = match route.get().await {
-        Ok(restarted) => restarted,
-        Err(restart_error) => {
-            return Err(acp_session_restart_error(&error, &restart_error));
-        }
-    };
-    match Box::pin(restarted.request(method, params)).await {
-        Ok(response) => Ok(response),
-        Err(retry_error) => Err(acp_session_restart_error(&error, &retry_error)),
-    }
-}
-
-fn acp_session_restart_error(
-    initial_error: &anyhow::Error,
-    restart_error: &anyhow::Error,
-) -> anyhow::Error {
-    tracing::error!(
-        ?initial_error,
-        ?restart_error,
-        "ACP provider restart failed while creating a session"
-    );
-    anyhow!(ACP_SESSION_RESTART_ERROR)
+    Box::pin(backend.request(method, params)).await
 }
 
 pub(super) fn routed_thread(thread_id: &str) -> (usize, &str) {

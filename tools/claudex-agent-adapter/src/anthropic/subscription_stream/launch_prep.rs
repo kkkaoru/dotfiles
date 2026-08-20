@@ -1,15 +1,14 @@
 use serde_json::Value;
 
 use crate::anthropic::agent_route_validation::BlockedSubagentError;
+use crate::anthropic::nested_subagent_launch::reject_if_nested_agent_launch;
 
 pub(super) fn note_reused_subagent_launch(
     context: &crate::anthropic::subscription::SubscriptionToolContext,
     name: &str,
     routed_input: &mut Value,
 ) {
-    let Some(session_id) = context.session_id.as_deref() else {
-        return;
-    };
+    let session_id = context.session_id.as_deref().unwrap_or("");
     let Some(recipient) = context
         .subagent_reuse
         .rewrite_launch_input(session_id, routed_input)
@@ -22,6 +21,13 @@ pub(super) fn note_reused_subagent_launch(
         tool = name,
         "subscription Agent/Task launch reused an existing SubAgent"
     );
+}
+
+pub(super) fn reject_nested_or_capped_agent_launch(
+    context: &crate::anthropic::subscription::SubscriptionToolContext,
+    routed_input: &Value,
+) -> std::result::Result<(), BlockedSubagentError> {
+    reject_if_nested_agent_launch(context, routed_input)
 }
 
 pub(super) fn reject_unavailable_subagent_model(

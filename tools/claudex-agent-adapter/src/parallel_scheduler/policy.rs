@@ -64,7 +64,8 @@ pub(crate) fn apply_replenishment_target(
     config: &SchedulerConfig,
     should_reassess: bool,
 ) {
-    if !snapshot.has_any_workers()
+    if skip_floor_on_launch_ack(request)
+        || !snapshot.has_any_workers()
         || !has_parallel_scope(request)
         || (decision.completed_recently == 0 && !should_reassess)
     {
@@ -85,11 +86,12 @@ pub(crate) fn apply_capacity_actions(
     decision: &mut SchedulerDecision,
     target_workers: usize,
     config: &SchedulerConfig,
+    skip_additional_launches: bool,
 ) {
     let (_, upper_bound) = worker_bounds(config);
     let effective_target = target_workers.min(upper_bound);
     decision.target_workers = effective_target;
-    if decision.active_workers >= effective_target {
+    if skip_additional_launches || decision.active_workers >= effective_target {
         return;
     }
     let target_gap = effective_target - decision.active_workers;
@@ -118,7 +120,8 @@ pub(crate) fn apply_floor_action(
             .actions
             .iter()
             .any(|action| action.contains("Re-evaluate active set"));
-    if !has_parallel_scope(request)
+    if skip_floor_on_launch_ack(request)
+        || !has_parallel_scope(request)
         || !decision.has_work()
         || decision.active_workers >= config.active_floor
         || !rebalance_due
@@ -136,6 +139,10 @@ pub(crate) fn apply_floor_action(
         }
     };
     decision.actions.push(action.to_owned());
+}
+
+pub(crate) fn skip_floor_on_launch_ack(request: &MessagesRequest) -> bool {
+    super::core::has_exact_async_launch_ack(&request.messages)
 }
 
 pub(crate) use super::scope_count::independent_scope_count;

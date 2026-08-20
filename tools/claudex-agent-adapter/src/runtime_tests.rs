@@ -282,7 +282,7 @@ fn rejects_an_invalid_backend_route_concurrency_limit() {
         "--model",
         "m",
         "--backend-route-json",
-        r#"{"model":"m","backend":"grok-acp","maxConcurrency":0}"#,
+        r#"{"model":"m","backend":"pi-gateway","piProvider":"xai","piModel":"m","maxConcurrency":0}"#,
     ]
     .into_iter()
     .map(OsString::from)
@@ -470,7 +470,7 @@ fn parses_provider_defaults_and_rejects_non_utf8_option_names() {
     let path = root.path().join("providers.json");
     std::fs::write(
         &path,
-        r#"{"version":1,"mainProviders":["vendor"],"providers":[{"id":"vendor","agent":"worker","defaultModel":"vendor-default","effort":"high","modelPrefixes":["vendor-"],"backend":"configured-acp","acp":{"program":"vendor","arguments":["--model","{model}"]}}],"fallback":{"agent":"fallback","model":"sonnet","effort":"high"}}"#,
+        r#"{"version":1,"mainProviders":["vendor"],"providers":[{"id":"vendor","agent":"worker","defaultModel":"vendor-default","effort":"high","modelPrefixes":["vendor-"],"piProvider":"vendor","piModel":"vendor-default","backend":"pi-gateway"}],"fallback":{"agent":"fallback","model":"sonnet","effort":"high"}}"#,
     )
     .expect("provider config");
     let command = parse_command(
@@ -532,7 +532,7 @@ fn expands_provider_config_and_internal_route_json() {
     let path = root.path().join("providers.json");
     std::fs::write(
         &path,
-        r#"{"version":1,"mainProviders":["vendor"],"providers":[{"id":"vendor","agent":"worker","defaultModel":"vendor-default","effort":"high","modelPrefixes":["vendor-"],"selectableModels":["vendor-terra"],"backend":"configured-acp","acp":{"program":"vendor","arguments":["--model","{model}"]}}],"fallback":{"agent":"fallback","model":"sonnet","effort":"high"}}"#,
+        r#"{"version":1,"mainProviders":["vendor"],"providers":[{"id":"vendor","agent":"worker","defaultModel":"vendor-default","effort":"high","modelPrefixes":["vendor-"],"selectableModels":["vendor-terra"],"piProvider":"vendor","piModel":"vendor-default","backend":"pi-gateway"}],"fallback":{"agent":"fallback","model":"sonnet","effort":"high"}}"#,
     )
     .expect("provider config");
     let command = parse_command(
@@ -551,7 +551,7 @@ fn expands_provider_config_and_internal_route_json() {
         panic!("serve command expected");
     };
     assert_eq!(options.model, "vendor-next");
-    assert_eq!(options.routes[0].backend, BackendKind::ConfiguredAcp);
+    assert_eq!(options.routes[0].backend, BackendKind::PiGateway);
     assert_eq!(
         options.model_catalog.selectable_models(),
         &["vendor-terra".to_owned()]
@@ -781,16 +781,6 @@ async fn dispatches_external_runtime_commands_before_starting_a_service() {
     .await
     .expect_err("serve must fail closed before binding a public listener");
     assert!(error.to_string().contains("ANTHROPIC_AUTH_TOKEN"));
-}
-
-#[tokio::test]
-async fn dispatches_the_mcp_command_when_stdin_is_at_eof() {
-    assert_eq!(
-        run(["adapter".into(), "mcp-claudex-launch".into()])
-            .await
-            .expect("MCP stdio command at EOF"),
-        0
-    );
 }
 
 #[tokio::test]

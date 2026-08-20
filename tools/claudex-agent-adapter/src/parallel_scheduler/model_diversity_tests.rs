@@ -72,7 +72,7 @@ fn does_not_inflate_a_lone_reconstructed_worker_to_the_active_floor() {
     let decision =
         scheduler.decision_for_request(&request(vec![agent("only-worker", "gpt-5.6-luna")]));
 
-    assert_eq!(decision.target_workers, 1);
+    assert_eq!(decision.target_workers, 0);
     assert_eq!(decision.active_workers, 1);
     assert_eq!(decision.needs_more_workers, 0);
     assert!(!decision.active_floor_breached);
@@ -93,20 +93,33 @@ fn keeps_the_ten_minute_default_and_reassesses_after_a_completion() {
     );
 
     let scheduler = ParallelScheduler::new(config());
-    let initial = request(vec![
+    let mut initial = request(vec![
         agent("luna", "gpt-5.6-luna"),
         agent("grok", "grok-4.6"),
         agent("spark", "gpt-5.3-codex-spark"),
     ]);
+    initial.messages.insert(
+        0,
+        serde_json::json!({
+            "role":"user",
+            "content":"Tasks:\n- implement parser\n- verify renderer\n- test integration"
+        }),
+    );
     let after_completion = MessagesRequest {
-        messages: vec![serde_json::json!({
-            "role": "assistant",
-            "content": [
-                {"type": "tool_result", "tool_use_id": "spark", "content": "done"},
-                agent("luna", "gpt-5.6-luna"),
-                agent("grok", "grok-4.6"),
-            ],
-        })],
+        messages: vec![
+            serde_json::json!({
+                "role":"user",
+                "content":"Tasks:\n- implement parser\n- verify renderer\n- test integration"
+            }),
+            serde_json::json!({
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "spark", "content": "done"},
+                    agent("luna", "gpt-5.6-luna"),
+                    agent("grok", "grok-4.6"),
+                ],
+            }),
+        ],
         ..initial.clone()
     };
 
@@ -125,15 +138,23 @@ fn keeps_the_ten_minute_default_and_reassesses_after_a_completion() {
 #[test]
 fn reuses_an_active_compatible_worker_instead_of_churning_sessions() {
     let scheduler = ParallelScheduler::new(config());
-    let decision = scheduler.decision_for_request(&request(vec![
+    let mut request = request(vec![
         agent("luna", "gpt-5.6-luna"),
         agent("grok", "grok-4.6"),
-    ]));
+    ]);
+    request.messages.insert(
+        0,
+        serde_json::json!({
+            "role":"user",
+            "content":"Tasks:\n- implement parser\n- verify renderer"
+        }),
+    );
+    let decision = scheduler.decision_for_request(&request);
 
     assert!(
-        decision.guidance(&scheduler.config()).contains(
-            "Prefer reusing compatible completed workers via Agent/Task resume=<agentId>"
-        )
+        decision
+            .guidance(&scheduler.config())
+            .contains("Prefer reusing compatible completed workers via SendMessage({to: agentId})")
     );
 }
 

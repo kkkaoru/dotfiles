@@ -31,6 +31,87 @@ impl SegmentBuilder {
         self.close_text_block(stream).await
     }
 
+    pub(super) async fn reject_nested_subagent_launch(
+        &mut self,
+        context: ExternalToolContext<'_>,
+        original_name: &str,
+        arguments: &Value,
+        request_id: Value,
+    ) -> Result<bool> {
+        if crate::anthropic::subagent_reuse::is_send_message_follow_up(arguments) {
+            return Ok(false);
+        }
+        let Some(notice) = crate::anthropic::subagent_reuse::nested_subagent_launch_notice(
+            original_name,
+            self.is_subagent,
+        ) else {
+            return Ok(false);
+        };
+        tracing::warn!(
+            tool_name = original_name,
+            "rejected nested SubAgent Agent/Task launch"
+        );
+        self.close_open_blocks(context.stream).await?;
+        context
+            .bridge
+            .app_for_session(context.session)
+            .respond_for_model(
+                &context.session.model,
+                request_id,
+                json!({
+                    "contentItems":[{"type":"inputText","text":notice}],
+                    "success":false
+                }),
+            )
+            .await
+            .context("failed to reject a nested SubAgent Agent/Task launch")?;
+        self.emit_blocked_notice(notice, context.stream).await?;
+        self.close_open_blocks(context.stream).await?;
+        Ok(true)
+    }
+
+    pub(super) async fn reject_capped_subagent_launch(
+        &mut self,
+        context: ExternalToolContext<'_>,
+        original_name: &str,
+        request_id: Value,
+    ) -> Result<bool> {
+        if !crate::anthropic::subagent_reuse::is_launch_tool(original_name) {
+            return Ok(false);
+        }
+        let session_id = context.session.claude_session_id.as_deref().unwrap_or("");
+        if !context
+            .bridge
+            .subagent_reuse
+            .session_at_live_capacity(session_id, context.current_messages)
+        {
+            return Ok(false);
+        }
+        let notice = BlockedSubagentError::live_cap().notice();
+        tracing::warn!(
+            tool_name = original_name,
+            session_id,
+            "rejected SubAgent launch because the live Agent cap was reached"
+        );
+        self.close_open_blocks(context.stream).await?;
+        context
+            .bridge
+            .app_for_session(context.session)
+            .respond_for_model(
+                &context.session.model,
+                request_id,
+                json!({
+                    "contentItems":[{"type":"inputText","text":notice}],
+                    "success":false
+                }),
+            )
+            .await
+            .context("failed to reject a capped SubAgent launch")?;
+        self.emit_blocked_notice(&notice, context.stream).await?;
+        self.close_open_blocks(context.stream).await?;
+        Ok(true)
+    }
+
     pub(super) async fn reject_disabled_subagent(
         &mut self,
         context: ExternalToolContext<'_>,
@@ -137,10 +218,8 @@ impl SegmentBuilder {
             .await
             .context("failed to reject a duplicate provider SubAgent")?;
         self.suppressed_tool_use = true;
-        if self.external_tool_calls == 0 {
-            self.emit_blocked_notice(NOTICE, context.stream).await?;
-            self.close_open_blocks(context.stream).await?;
-        }
+        self.emit_blocked_notice(NOTICE, context.stream).await?;
+        self.close_open_blocks(context.stream).await?;
         Ok(())
     }
 }

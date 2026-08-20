@@ -86,6 +86,23 @@ pub(crate) fn analyze_subagent_work(messages: &[Value]) -> SubagentSnapshot {
     snapshot
 }
 
+pub(crate) fn has_exact_async_launch_ack(messages: &[Value]) -> bool {
+    let mut latest_agent_tool_round: Option<Vec<String>> = None;
+    let mut acknowledged = false;
+    for message in messages {
+        acknowledged = latest_agent_tool_round.as_deref().is_some_and(|expected| {
+            exact_async_launch_acknowledgement(message, expected).is_some()
+        });
+        if message.get("role").and_then(Value::as_str) == Some("assistant")
+            && let Some(ids) =
+                agent_tool_round_ids(message).or_else(|| legacy_cc_agent_round_ids(message))
+        {
+            latest_agent_tool_round = Some(ids);
+        }
+    }
+    acknowledged
+}
+
 pub(crate) fn previous_completed(
     previous: &LiveThreadState,
     current_active: &HashSet<String>,

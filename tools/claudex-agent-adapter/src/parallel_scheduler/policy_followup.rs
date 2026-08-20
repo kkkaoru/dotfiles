@@ -20,7 +20,10 @@ pub(crate) fn apply_diversity_action(
     request: &MessagesRequest,
     config: &SchedulerConfig,
 ) {
-    if !has_parallel_scope(request) || decision.active_workers == 0 {
+    if super::skip_floor_on_launch_ack(request)
+        || !has_parallel_scope(request)
+        || decision.active_workers == 0
+    {
         return;
     }
     let required_families = diversity_family_cap(decision, config);
@@ -38,12 +41,12 @@ pub(crate) fn apply_reuse_actions(
     request: &MessagesRequest,
     config: &SchedulerConfig,
 ) {
-    if !has_parallel_scope(request) {
+    if super::skip_floor_on_launch_ack(request) || !has_parallel_scope(request) {
         return;
     }
     if config.allow_reuse && decision.has_work() {
         decision.actions.push(
-            "Prefer reusing compatible completed workers via Agent/Task resume=<agentId>; add new tasks to the same workers when their context fits. Independent scopes still need distinct launches."
+            "Prefer reusing compatible completed workers via SendMessage({to: agentId}); add new tasks to the same workers when their context fits. Independent scopes still need distinct launches. Never replay the same path on a fresh Agent after launch chrome."
                 .to_owned(),
         );
     }
@@ -51,11 +54,7 @@ pub(crate) fn apply_reuse_actions(
         return;
     }
     decision.actions.push(
-        "After each completion, audit unfinished scopes, send completion-aware follow-ups to remaining workers, then launch replacements for the still-open branches."
-            .to_owned(),
-    );
-    decision.actions.push(
-        "If scope remains weak, replay the same high-value subtask on fresh workers and expand scope on surviving active workers."
+        "After each completion, audit unfinished scopes and send completion-aware follow-ups to remaining workers via SendMessage({to}). Do not replay the same scope on a fresh Agent."
             .to_owned(),
     );
     if config.cleanup_on_exit {

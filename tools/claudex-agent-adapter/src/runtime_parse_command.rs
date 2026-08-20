@@ -39,10 +39,6 @@ pub(super) fn parse_command(mut arguments: VecDeque<OsString>) -> Result<Runtime
                 inherit_claude_model,
             ))
         }
-        "mcp-claudex-launch" => {
-            reject_remaining(&arguments)?;
-            Ok(RuntimeCommand::McpClaudexLaunch)
-        }
         "prune-cache" => {
             let root = arguments
                 .pop_front()
@@ -58,7 +54,7 @@ pub(super) fn parse_command(mut arguments: VecDeque<OsString>) -> Result<Runtime
             Ok(RuntimeCommand::Serve(options.adapter))
         }
         _ => bail!(
-            "unknown command `{command}`; expected build-id, ensure, hot-swap, launch, mcp-claudex-launch, prune-cache, or serve"
+            "unknown command `{command}`; expected build-id, ensure, hot-swap, launch, prune-cache, or serve"
         ),
     }
 }

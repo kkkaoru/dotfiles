@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 
+#[derive(Debug)]
 pub(super) struct Segment {
     pub(super) blocks: Vec<Value>,
     pub(super) stop_reason: &'static str,
@@ -7,7 +8,7 @@ pub(super) struct Segment {
     pub(super) web_evidence: WebEvidenceSummary,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(super) struct Usage {
     pub(super) input_tokens: u64,
     pub(super) output_tokens: u64,
@@ -36,7 +37,7 @@ impl Usage {
 /// Immutable, aggregate-only evidence record carried from the stream builder
 /// to the Anthropic response serializers. It deliberately excludes provider
 /// URLs, result text, and model prose.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct WebEvidenceSummary {
     verified_count: u64,
 }

@@ -234,7 +234,7 @@ mod tests {
         assert!(!internal_prompt.contains("tool-old"));
         assert_eq!(internal_prompt.matches("claudex_launch_id:").count(), 1);
         assert_eq!(public["isolation"], "worktree");
-        assert_eq!(public["cwd"], "/tmp/preferred-worktree");
+        assert!(public.get("cwd").is_none());
     }
 
     #[test]
@@ -268,7 +268,7 @@ mod tests {
             .and_then(Value::as_str)
             .expect("correlated prompt");
         assert!(internal_prompt.contains("Runtime worktree rule:"));
-        assert_eq!(public["cwd"], "/tmp/assigned-worktree");
+        assert!(public.get("cwd").is_none());
     }
 
     #[test]
@@ -841,6 +841,107 @@ mod tests {
     }
 
     #[test]
+    fn strips_removed_resume_fields_from_public_agent_arguments() {
+        let (_, public) = prepare_arguments(
+            "Agent",
+            "tool-resume",
+            &json!({
+                "prompt":"task",
+                "resume":"a0123456789abcdef0",
+                "resume_from":"a0123456789abcdef0"
+            }),
+        );
+        assert!(public.get("resume").is_none());
+        assert!(public.get("resume_from").is_none());
+        let prompt = public["prompt"].as_str().expect("prompt");
+        assert!(prompt.starts_with("task"));
+    }
+
+    #[test]
+    fn strips_provider_only_launch_fields_from_public_agent_arguments() {
+        let (_, public) = prepare_arguments(
+            "Agent",
+            "tool-cwd",
+            &json!({
+                "prompt":"task",
+                "cwd":"/tmp/assigned-worktree",
+                "background":true,
+                "capability_mode":"all"
+            }),
+        );
+        assert!(public.get("cwd").is_none());
+        assert!(public.get("background").is_none());
+        assert!(public.get("capability_mode").is_none());
+        assert_eq!(public["run_in_background"], true);
+    }
+
+    #[test]
+    fn maps_bash_cmd_alias_to_command() {
+        let (_, public) = prepare_arguments("Bash", "tool-bash", &json!({"cmd":"ls -la"}));
+        assert_eq!(public["command"], "ls -la");
+        assert!(public.get("cmd").is_none());
+    }
+
+    #[test]
+    fn strips_unknown_keys_from_new_agent_launches_only() {
+        let (_, public) = prepare_arguments(
+            "Agent",
+            "tool-extra",
+            &json!({
+                "prompt":"task",
+                "subagent_type":"general-purpose",
+                "isolation":"worktree",
+                "unknown_provider_field":"drop-me",
+                "cwd":"/tmp/assigned-worktree",
+                "resume":"a0123456789abcdef0"
+            }),
+        );
+        assert!(public.get("unknown_provider_field").is_none());
+        assert!(public.get("cwd").is_none());
+        assert!(public.get("resume").is_none());
+        assert_eq!(public["isolation"], "worktree");
+        assert_eq!(public["subagent_type"], "general-purpose");
+        assert_eq!(public["run_in_background"], true);
+
+        let (_, send) = prepare_arguments(
+            "SendMessage",
+            "tool-send",
+            &json!({
+                "to":"a0123456789abcdef0",
+                "message":"continue",
+                "summary":"follow-up",
+                "prompt":"should-drop",
+                "run_in_background":true,
+                "unknown_provider_field":"drop-me"
+            }),
+        );
+        assert_eq!(send["to"], "a0123456789abcdef0");
+        assert_eq!(send["message"], "continue");
+        assert_eq!(send["summary"], "follow-up");
+        assert!(send.get("prompt").is_none());
+        assert!(send.get("run_in_background").is_none());
+        assert!(send.get("unknown_provider_field").is_none());
+    }
+
+    #[test]
+    fn send_message_public_arguments_keep_only_to_and_message() {
+        let (_, public) = prepare_arguments(
+            "SendMessage",
+            "tool-send",
+            &json!({
+                "to":"worker-a",
+                "message":"continue the review",
+                "prompt":"ignored",
+                "resume":"stale"
+            }),
+        );
+        assert_eq!(
+            public,
+            json!({"to":"worker-a","message":"continue the review"})
+        );
+    }
+
+    #[test]
     fn recovers_subscription_routing_headers_from_task_prompts() {
         let arguments = json!({
             "prompt":"claudex_model: gpt-5.6-sol\nclaudex_effort: high\n\nDo the task",
@@ -906,7 +1007,7 @@ mod tests {
         let path = root.path().join("providers.json");
         std::fs::write(
             &path,
-            r#"{"version":1,"mainProviders":["grok"],"providers":[{"id":"grok","agent":"claudex-grok","defaultModel":"grok-4.6","effort":"medium","backend":"grok-acp"}],"fallback":{"agent":"claudex-sonnet","model":"claude-sonnet-5","effort":"high"}}"#,
+            r#"{"version":1,"mainProviders":["grok"],"providers":[{"id":"grok","agent":"claudex-grok","defaultModel":"grok-4.6","effort":"medium","piProvider":"xai","piModel":"grok-4.6","backend":"pi-gateway"}],"fallback":{"agent":"claudex-sonnet","model":"claude-sonnet-5","effort":"high"}}"#,
         )
         .expect("write provider config");
         let catalog = crate::provider_config::load(&path)

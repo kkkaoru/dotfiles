@@ -54,8 +54,7 @@ impl Bridge {
             is_subagent,
         );
         let _active_subagent = self.track_active_subagent(is_subagent, &request);
-        let paint_command_code_progress =
-            is_subagent && crate::command_code_acp::is_command_code_model(&request.model);
+        let paint_command_code_progress = false;
         let start_status = (!primed_thinking)
             .then(|| subagent_start_status(is_subagent, &request.model, effort.as_deref()))
             .flatten();

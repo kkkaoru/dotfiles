@@ -13,7 +13,8 @@ impl Bridge {
         mut turn: ActiveTurn,
         error: anyhow::Error,
     ) -> Result<ActiveTurn> {
-        if !super::is_provider_stream_closed(&error)
+        if !crate::anthropic::token_efficiency::should_retry_provider_failure(&error)
+            || !super::is_provider_stream_closed(&error)
             || self
                 .app_for_session(&turn.session)
                 .model_is_alive(&turn.session.model)

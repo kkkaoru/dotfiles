@@ -10,6 +10,7 @@ use axum::body::Bytes;
 
 mod drive;
 #[cfg(test)]
+#[allow(unused_imports)]
 pub(in crate::anthropic::stream) use drive::prepare_first_activity_delay;
 
 pub(in crate::anthropic) struct PreparedStream {
@@ -28,9 +29,10 @@ pub(super) fn subagent_start_status(
     model: &str,
     _effort: Option<&str>,
 ) -> Option<String> {
-    if !is_subagent || crate::command_code_acp::is_command_code_model(model) {
+    if !is_subagent {
         return None;
     }
+    let _ = model;
     // Never paint visible launch prose into the first thinking block.
     // Claude Code 2.1 collapses that tip to "Wandering…", and later ▶ Bash /
     // keepalive chrome appended to the same (or follow-on) thinking stream

@@ -48,6 +48,9 @@ impl Bridge {
             collaborator_model,
             allow_context_retry,
         } = args;
+        let sanitized_request =
+            super::select::maybe_sanitize_recovered_request(selected.recovered, request);
+        let request = sanitized_request.as_ref().unwrap_or(request);
         let existing_len = selected.existing_len;
         let extras = request.messages[existing_len..].to_vec();
         let has_tool_results = !tool_results.is_empty();

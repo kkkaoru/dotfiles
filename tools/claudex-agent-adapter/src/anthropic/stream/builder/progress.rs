@@ -24,7 +24,7 @@ impl SegmentBuilder {
         delta: &str,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        if delta.is_empty() || self.should_drop_command_code_progress(delta) {
+        if delta.is_empty() || self.is_command_code_subagent() {
             return Ok(());
         }
         self.note_provider_turn_activity();
@@ -39,10 +39,6 @@ impl SegmentBuilder {
         self.thinking
             .progress_status(&mut self.blocks, delta, stream)
             .await
-    }
-
-    fn should_drop_command_code_progress(&self, delta: &str) -> bool {
-        self.is_command_code_subagent() && crate::command_code_acp::is_canned_progress(delta)
     }
 
     pub(super) async fn close_collapsed_prime_before_visible(

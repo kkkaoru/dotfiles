@@ -41,9 +41,6 @@ impl Bridge {
             return Ok(false);
         }
         let mut backend_submitted = false;
-        let responses = responses.into_iter().filter(|(id, _)| {
-            !crate::anthropic::stream::acp_tool_bridge::is_acp_bridge_request_id(id)
-        });
         for (id, result) in responses {
             let success =
                 !result.is_error || is_idempotent_task_lifecycle_error(&result.content_items);
@@ -101,8 +98,8 @@ mod tests {
             panic!("expected SessionScoped backends");
         };
         for id in ["tui-a", "tui-b"] {
-            let leaf = Arc::new(AgentBackend::Grok(
-                crate::grok_acp::GrokAcp::alive_for_test(),
+            let leaf = Arc::new(AgentBackend::Pi(
+                crate::pi_gateway::PiGateway::alive_for_test(),
             ));
             scopes.insert_scope_for_test(id, AgentBackend::routed(vec![(model.to_owned(), leaf)]));
         }
@@ -114,7 +111,7 @@ mod tests {
             .lock()
             .await
             .insert("tool-1".to_owned(), json!(42));
-        let error = bridge
+        bridge
             .submit_tool_results(
                 &session,
                 vec![ToolResult {
@@ -124,16 +121,11 @@ mod tests {
                 }],
             )
             .await
-            .expect_err("Grok leaf rejects Claude tool results");
-        let message = error.to_string();
-        assert!(
-            !message.contains("not initialized"),
-            "{model}: Bridge must not send tool results to `_anonymous`: {message}"
-        );
-        assert!(
-            message.contains("Grok ACP"),
-            "{model}: expected the owning Claude-session pool: {message}"
-        );
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{model}: Pi leaf must accept Claude tool results on the owning pool: {error}"
+                )
+            });
     }
 
     fn session_for(model: &str, claude_session_id: &str) -> Session {

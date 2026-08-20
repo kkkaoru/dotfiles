@@ -5,17 +5,17 @@ mod tests {
     use std::sync::Arc;
 
     use super::{MAX_DYNAMIC_ROUTES, RoutedBackends, StartupState, startup};
-    use crate::agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute, WebSearchMode};
+    use crate::agent_backend::{AgentBackend, BackendKind, BackendRoute, WebSearchMode};
 
     #[test]
     fn shares_codex_startup_but_keeps_acp_servers_model_specific() {
         let routes = RoutedBackends::lazy(&[
             route_with_prefix("codex-one", BackendKind::CodexAppServer, "codex-"),
             route_with_prefix("codex-two", BackendKind::CodexAppServer, "codex-"),
-            route_with_prefix("copilot-one", BackendKind::CopilotAcp, "copilot-"),
-            route_with_prefix("copilot-two", BackendKind::CopilotAcp, "copilot-"),
-            route_with_prefix("acp-one", BackendKind::GrokAcp, "acp-"),
-            route_with_prefix("acp-two", BackendKind::GrokAcp, "acp-"),
+            route_with_prefix("copilot-one", BackendKind::PiGateway, "copilot-"),
+            route_with_prefix("copilot-two", BackendKind::PiGateway, "copilot-"),
+            route_with_prefix("acp-one", BackendKind::PiGateway, "acp-"),
+            route_with_prefix("acp-two", BackendKind::PiGateway, "acp-"),
         ]);
         let codex_one = routes.route(0);
         let codex_two = routes.route(1);
@@ -35,46 +35,19 @@ mod tests {
     }
 
     #[test]
-    fn shares_a_session_scoped_configured_child_only_for_identical_launches() {
-        let mut first = route("vendor-one", BackendKind::ConfiguredAcp);
+    fn pi_gateway_routes_keep_model_specific_startups() {
+        let mut first = route("vendor-one", BackendKind::PiGateway);
         first.model_prefixes.push("vendor-session-".to_owned());
-        first.acp = Some(AcpLaunch {
-            program: "provider".to_owned(),
-            arguments: vec!["acp".to_owned()],
-        });
         let mut second = first.clone();
         second.model = "vendor-two".to_owned();
-        let mut launch_scoped = first.clone();
-        launch_scoped.model = "vendor-launch".to_owned();
-        launch_scoped.model_prefixes.clear();
-        launch_scoped.acp = Some(AcpLaunch {
-            program: "provider".to_owned(),
-            arguments: vec!["--model".to_owned(), "{model}".to_owned()],
-        });
-        let mut different = first.clone();
-        different.model = "vendor-different".to_owned();
-        different.model_prefixes.clear();
-        different.acp = Some(AcpLaunch {
-            program: "other-provider".to_owned(),
-            arguments: vec!["acp".to_owned()],
-        });
-        let routes = RoutedBackends::lazy(&[first, second, launch_scoped, different]);
+        let routes = RoutedBackends::lazy(&[first, second]);
 
-        assert!(Arc::ptr_eq(
+        assert!(!Arc::ptr_eq(
             &routes.route(0).startup,
             &routes.route(1).startup
         ));
-        assert!(!Arc::ptr_eq(
-            &routes.route(0).startup,
-            &routes.route(2).startup
-        ));
-        assert!(!Arc::ptr_eq(
-            &routes.route(0).startup,
-            &routes.route(3).startup
-        ));
-
         let (_, dynamic) = routes.resolve("vendor-session-dynamic").unwrap();
-        assert!(Arc::ptr_eq(&routes.route(0).startup, &dynamic.startup));
+        assert!(!Arc::ptr_eq(&routes.route(0).startup, &dynamic.startup));
     }
 
     #[test]
@@ -105,20 +78,20 @@ mod tests {
 
     #[test]
     fn configured_prefixes_select_the_most_specific_backend() {
-        let mut broad = route("broad", BackendKind::GrokAcp);
+        let mut broad = route("broad", BackendKind::PiGateway);
         broad.model_prefixes.push("vendor-".to_owned());
-        let mut specific = route("specific", BackendKind::CopilotAcp);
+        let mut specific = route("specific", BackendKind::PiGateway);
         specific.model_prefixes.push("vendor-code-".to_owned());
         let routes = RoutedBackends::lazy(&[broad, specific]);
 
         assert!(routes.supports("vendor-code-new"));
         let (_, selected) = routes.resolve("vendor-code-new").unwrap();
-        assert_eq!(selected.kind, BackendKind::CopilotAcp);
+        assert_eq!(selected.kind, BackendKind::PiGateway);
         assert_eq!(selected.model, "vendor-code-new");
         assert!(routes.supports("vendor-chat-new"));
         assert_eq!(
             routes.resolve("vendor-chat-new").unwrap().1.kind,
-            BackendKind::GrokAcp
+            BackendKind::PiGateway
         );
         assert!(routes.first_ready(BackendKind::CodexAppServer).is_none());
         assert!(!routes.supports("unconfigured-model"));
@@ -127,10 +100,10 @@ mod tests {
 
     #[test]
     fn concurrency_limits_follow_the_exact_or_most_specific_prefix() {
-        let mut broad = route("vendor-default", BackendKind::GrokAcp);
+        let mut broad = route("vendor-default", BackendKind::PiGateway);
         broad.max_concurrency = Some(3);
         broad.model_prefixes.push("vendor-".to_owned());
-        let mut specific = route("vendor-code", BackendKind::GrokAcp);
+        let mut specific = route("vendor-code", BackendKind::PiGateway);
         specific.max_concurrency = Some(7);
         specific.model_prefixes.push("vendor-code-".to_owned());
         let routes = RoutedBackends::lazy(&[broad, specific]);
@@ -152,36 +125,20 @@ mod tests {
     }
 
     #[test]
-    fn launch_scoped_effort_includes_configured_acp_thinking_placeholder() {
-        let mut cline = route("qwen/qwen3.8-max", BackendKind::ConfiguredAcp);
-        cline.effort = Some("high".to_owned());
-        cline.acp = Some(AcpLaunch {
-            program: "cline".to_owned(),
-            arguments: vec![
-                "--thinking".to_owned(),
-                "{effort}".to_owned(),
-                "-m".to_owned(),
-                "{model}".to_owned(),
-                "--acp".to_owned(),
-            ],
-        });
-        let mut cursor = route("auto", BackendKind::ConfiguredAcp);
+    fn launch_scoped_effort_follows_pi_gateway_routes() {
+        let mut qwen = route("qwen/qwen3.8-max", BackendKind::PiGateway);
+        qwen.effort = Some("high".to_owned());
+        let mut cursor = route("auto", BackendKind::PiGateway);
         cursor.effort = Some("high".to_owned());
-        cursor.acp = Some(AcpLaunch {
-            program: "cursor-agent".to_owned(),
-            arguments: vec![
-                "--model".to_owned(),
-                "{model}".to_owned(),
-                "--yolo".to_owned(),
-                "acp".to_owned(),
-            ],
-        });
-        let routes = RoutedBackends::lazy(&[cline, cursor]);
+        let mut codex = route("gpt-5.6-luna", BackendKind::CodexAppServer);
+        codex.effort = Some("max".to_owned());
+        let routes = RoutedBackends::lazy(&[qwen, cursor, codex]);
         assert_eq!(
             routes.launch_scoped_effort("qwen/qwen3.8-max").as_deref(),
             Some("high")
         );
-        assert_eq!(routes.launch_scoped_effort("auto"), None);
+        assert_eq!(routes.launch_scoped_effort("auto").as_deref(), Some("high"));
+        assert_eq!(routes.launch_scoped_effort("gpt-5.6-luna"), None);
     }
 
     #[test]
@@ -299,8 +256,8 @@ mod tests {
 
     #[tokio::test]
     async fn get_does_not_return_a_dead_ready_backend() {
-        let dead = Arc::new(AgentBackend::Grok(
-            crate::grok_acp::GrokAcp::stopped_for_test(),
+        let dead = Arc::new(AgentBackend::Pi(
+            crate::pi_gateway::PiGateway::stopped_for_test(),
         ));
         assert!(!dead.is_alive());
         let route = super::RoutedBackend::ready("dead-grok".into(), dead);
@@ -310,11 +267,7 @@ mod tests {
 
     #[tokio::test]
     async fn retired_startup_cannot_republish_a_stale_backend_to_waiting_get() {
-        let mut template = route("stale-acp", BackendKind::ConfiguredAcp);
-        template.acp = Some(AcpLaunch {
-            program: "/definitely/missing/stale-acp".to_owned(),
-            arguments: vec!["--stdio".to_owned()],
-        });
+        let template = route("stale-acp", BackendKind::PiGateway);
         let startup = Arc::new(super::BackendStartup::default());
         let route = Arc::new(super::RoutedBackend::lazy(template, Arc::clone(&startup)));
         let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
@@ -326,8 +279,8 @@ mod tests {
         tokio::task::yield_now().await;
         route.retire();
 
-        let stale = Arc::new(AgentBackend::Grok(
-            crate::grok_acp::GrokAcp::alive_for_test(),
+        let stale = Arc::new(AgentBackend::Pi(
+            crate::pi_gateway::PiGateway::alive_for_test(),
         ));
         startup::publish_result(sender, Ok(Arc::clone(&stale))).await;
 
@@ -344,11 +297,7 @@ mod tests {
 
     #[tokio::test]
     async fn pool_shutdown_fences_a_waiting_startup_from_a_late_spawn_result() {
-        let mut template = route("shutdown-stale-acp", BackendKind::ConfiguredAcp);
-        template.acp = Some(AcpLaunch {
-            program: "/definitely/missing/shutdown-stale-acp".to_owned(),
-            arguments: vec!["--stdio".to_owned()],
-        });
+        let template = route("shutdown-stale-acp", BackendKind::PiGateway);
         let routes = RoutedBackends::lazy(&[template]);
         let route = routes.route(0);
         let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
@@ -362,8 +311,8 @@ mod tests {
         tokio::task::yield_now().await;
         routes.shutdown().await;
 
-        let stale = Arc::new(AgentBackend::Grok(
-            crate::grok_acp::GrokAcp::alive_for_test(),
+        let stale = Arc::new(AgentBackend::Pi(
+            crate::pi_gateway::PiGateway::alive_for_test(),
         ));
         startup::publish_result(sender, Ok(Arc::clone(&stale))).await;
 
@@ -399,7 +348,7 @@ mod tests {
     async fn failed_startup_is_not_alive() {
         let route = BackendRoute {
             model: "missing-acp".to_owned(),
-            backend: BackendKind::ConfiguredAcp,
+            backend: BackendKind::PiGateway,
             effort: None,
             model_provider: None,
             model_catalog_json: None,
@@ -409,10 +358,6 @@ mod tests {
             max_context_tokens: None,
             model_prefixes: Vec::new(),
             max_concurrency: None,
-            acp: Some(AcpLaunch {
-                program: "/definitely/missing/acp".to_owned(),
-                arguments: vec!["--stdio".to_owned()],
-            }),
             web_search_mode: WebSearchMode::default(),
         };
         let routes = RoutedBackends::lazy(&[route]);
@@ -457,9 +402,9 @@ mod tests {
     #[tokio::test]
     async fn shutdown_skips_routes_without_ready_backends() {
         let routes = RoutedBackends::lazy(&[
-            route("no-startup", BackendKind::GrokAcp),
-            route("starting", BackendKind::GrokAcp),
-            route("failed", BackendKind::GrokAcp),
+            route("no-startup", BackendKind::PiGateway),
+            route("starting", BackendKind::PiGateway),
+            route("failed", BackendKind::PiGateway),
         ]);
         let starting = routes.route(1);
         let (_, starting_receiver) = tokio::sync::watch::channel(StartupState::Starting);
@@ -504,7 +449,7 @@ mod tests {
         let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
         *startup.receiver.lock().expect("backend startup poisoned") = Some(receiver);
         let route = Arc::new(super::RoutedBackend::lazy(
-            route(model, BackendKind::GrokAcp),
+            route(model, BackendKind::PiGateway),
             Arc::clone(&startup),
         ));
         (route, startup, sender)
@@ -522,7 +467,7 @@ mod tests {
 
     #[tokio::test]
     async fn closed_pool_rejects_get_ready_backend_and_is_alive() {
-        let routes = RoutedBackends::lazy(&[route("closed-model", BackendKind::GrokAcp)]);
+        let routes = RoutedBackends::lazy(&[route("closed-model", BackendKind::PiGateway)]);
         routes.shutdown().await;
         let closed = routes.route(0);
         assert!(closed.ready_backend().is_none());
@@ -532,7 +477,7 @@ mod tests {
 
     #[tokio::test]
     async fn retired_route_subscription_is_closed_instead_of_panicking() {
-        let routes = RoutedBackends::lazy(&[route("retired-model", BackendKind::GrokAcp)]);
+        let routes = RoutedBackends::lazy(&[route("retired-model", BackendKind::PiGateway)]);
         routes.route(0).retire();
         let backend = AgentBackend::Routed(routes);
         let events = backend.subscribe_thread("0:target");
@@ -550,8 +495,8 @@ mod tests {
         let (route, _startup, sender) = manual_channel_route("alive-model");
         let waiting = spawn_get(&route);
         tokio::task::yield_now().await;
-        let alive = Arc::new(AgentBackend::Grok(
-            crate::grok_acp::GrokAcp::alive_for_test(),
+        let alive = Arc::new(AgentBackend::Pi(
+            crate::pi_gateway::PiGateway::alive_for_test(),
         ));
         startup::publish_result(sender, Ok(Arc::clone(&alive))).await;
 
@@ -581,8 +526,8 @@ mod tests {
     #[tokio::test]
     async fn retry_stale_backend_detects_a_generation_that_never_advanced() {
         let (route, startup, sender) = manual_channel_route("stable-model");
-        let alive = Arc::new(AgentBackend::Grok(
-            crate::grok_acp::GrokAcp::alive_for_test(),
+        let alive = Arc::new(AgentBackend::Pi(
+            crate::pi_gateway::PiGateway::alive_for_test(),
         ));
         // Publish once so the still-alive backend becomes the reusable state
         // that `startup_receiver` will hand back without bumping generation.
@@ -590,8 +535,8 @@ mod tests {
         let current_generation = startup
             .generation
             .load(std::sync::atomic::Ordering::Acquire);
-        let stale = Arc::new(AgentBackend::Grok(
-            crate::grok_acp::GrokAcp::alive_for_test(),
+        let stale = Arc::new(AgentBackend::Pi(
+            crate::pi_gateway::PiGateway::alive_for_test(),
         ));
 
         let result = route.retry_stale_backend(current_generation, stale).await;
@@ -618,7 +563,7 @@ mod tests {
     #[test]
     fn startup_receiver_rejects_a_pool_closed_while_it_waited_for_the_lock() {
         let route = Arc::new(super::RoutedBackend::lazy(
-            route("late-close", BackendKind::GrokAcp),
+            route("late-close", BackendKind::PiGateway),
             Arc::new(super::BackendStartup::default()),
         ));
         let guard = route

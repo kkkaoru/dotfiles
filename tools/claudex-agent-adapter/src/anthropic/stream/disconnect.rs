@@ -10,6 +10,7 @@ use helpers::reject_disconnected_tool_once;
 #[path = "disconnect_policy.rs"]
 mod policy;
 #[cfg(test)]
+#[allow(unused_imports)]
 pub(super) use helpers::drain_disconnected_turn;
 #[cfg(test)]
 use helpers::request_id_keys;
@@ -30,7 +31,7 @@ impl Bridge {
 }
 
 fn retain_settled_session_activity(session: &Session) {
-    // Keep the idle provider thread so Claude Code Task `resume` can
+    // Keep the idle provider thread so Claude Code SendMessage({to}) can
     // match the transcript and reuse prompt-cache prefixes. Capacity
     // pressure and IDLE_SESSION_TTL still reclaim these sessions.
     if let Ok(mut activity) = session.last_activity.lock() {
@@ -38,7 +39,7 @@ fn retain_settled_session_activity(session: &Session) {
     }
     tracing::debug!(
         thread_id = %session.thread_id,
-        "retaining settled session for SubAgent resume reuse"
+        "retaining settled session for SendMessage continue reuse"
     );
 }
 

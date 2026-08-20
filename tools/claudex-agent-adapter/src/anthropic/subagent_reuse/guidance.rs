@@ -34,10 +34,10 @@ pub(super) fn has_send_message_tool(tools: &[Value]) -> bool {
     })
 }
 
-/// A normal Agent/Task session must not use the mailbox transport for worker
-/// results. Claude exposes SendMessage only for an explicit Agent Teams
-/// session; treating its mere presence as an invitation causes raw
-/// `<agent-message>` attachments to be queued as user input.
+/// Ordinary Agent/Task sessions use SendMessage({to: agentId}) as official
+/// Claude Code resume. Agent Teams mailbox tools are a separate transport:
+/// treating TeamSendMessage or teammate-message markup as ordinary resume
+/// causes raw `<agent-message>` attachments to be queued as user input.
 pub(in crate::anthropic) fn agent_teams_enabled(request: &MessagesRequest) -> bool {
     let team_tool = request.tools.iter().any(|tool| {
         let name = tool.get("name").and_then(Value::as_str).unwrap_or_default();
@@ -71,11 +71,11 @@ pub(super) fn append_reuse_guidance(system: &mut Value, recipients: &[String], t
         .join(", ");
     let guidance = if teams {
         format!(
-            "{REUSE_GUIDANCE_MARKER}\nThis resumed Agent Teams session already has compatible teammates and their recorded scopes: {recipients}. Choose the teammate whose recorded scope best matches the current task, then use TeamSendMessage with that exact recipient. Do not assign unrelated work to a teammate merely because it is available. Do not launch a replacement for the same scope. Create a new Agent/Task only for genuinely independent work or when the existing teammate is unavailable.\n</claudex-subagent-reuse>"
+            "{REUSE_GUIDANCE_MARKER}\nThis resumed Agent Teams session already has compatible teammates and their recorded scopes: {recipients}. Choose the teammate whose recorded scope best matches the current task, then use TeamSendMessage with that exact recipient. Do not assign unrelated work to a teammate merely because it is available. Do not launch a replacement for the same scope. Never Agent({{resume}}). Create a new Agent/Task only from the parent session for genuinely independent work or when the existing teammate is unavailable; workers must not nest Agent fan-out. One writer per file path. Consecutive empty or invalid tool calls are a failure: do not spawn siblings. User 全て中断 is /tasks-style: do not auto-resume via SendMessage.\n</claudex-subagent-reuse>"
         )
     } else {
         format!(
-            "{REUSE_GUIDANCE_MARKER}\nThis session already has compatible SubAgents and their recorded scopes: {recipients}. For same-scope follow-up, call Agent or Task with resume set to that exact agentId and the new prompt. Do not launch a replacement for the same scope. Create a new Agent/Task only for genuinely independent work or when the existing worker failed, was cancelled, stopped, or is unavailable. Retrieve prior results with TaskOutput using the exact task_id from the launch result. SendMessage is reserved for an explicitly active Agent Teams session.\n</claudex-subagent-reuse>"
+            "{REUSE_GUIDANCE_MARKER}\nThis session already has compatible SubAgents and their recorded scopes: {recipients}. For same-scope follow-up, continue with SendMessage({{to: that exact agentId}}). Never launch a new Agent for the same path; never Agent({{resume}}); do not set Agent/Task resume (removed in Claude Code v2.1.77). Do not launch a replacement for the same scope. Create a new Agent/Task only from the parent session for genuinely independent work or when the existing worker failed or is unavailable; workers must not nest Agent fan-out. One writer per file path. Consecutive empty or invalid tool calls are a failure: do not spawn siblings. User 全て中断 is /tasks-style: do not auto-resume via SendMessage. Retrieve prior results with TaskOutput using the exact task_id from the launch result.\n</claudex-subagent-reuse>"
         )
     };
     match system {

@@ -177,6 +177,57 @@ async fn unmatched_delta_is_ignored() {
 }
 
 #[tokio::test]
+async fn incomplete_bash_argument_deltas_are_not_sent_to_claude_code() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    builder
+        .start_executable_tool_use_card("call-1", "Bash", Some(&sender))
+        .await
+        .expect("start Bash");
+    builder
+        .append_native_tool_use_delta("call-1", "{\"command\":\"cat", Some(&sender))
+        .await
+        .expect("incomplete delta");
+    drop(sender);
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert!(
+        !output.contains("tool_use"),
+        "truncated Bash must not start a tool_use card: {output}"
+    );
+    assert!(
+        !output.contains("input_json_delta"),
+        "truncated Bash JSON must not be flushed: {output}"
+    );
+}
+
+#[tokio::test]
+async fn complete_bash_argument_json_is_flushed_before_tool_end() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    builder
+        .start_executable_tool_use_card("call-1", "Bash", Some(&sender))
+        .await
+        .expect("start Bash");
+    builder
+        .append_native_tool_use_delta("call-1", "{\"command\":\"ls\"}", Some(&sender))
+        .await
+        .expect("complete delta");
+    drop(sender);
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert!(output.contains("tool_use"));
+    assert!(output.contains("input_json_delta"));
+    assert!(
+        output.contains("{\\\"command\\\":\\\"ls\\\"}") || output.contains("\"command\":\"ls\"")
+    );
+}
+
+#[tokio::test]
 async fn finish_stops_an_open_streaming_tool_use() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
     let mut builder = SegmentBuilder::new(1).with_subagent(true);
@@ -205,4 +256,163 @@ async fn malformed_delta_event_errors() {
         .await
         .expect_err("missing callId");
     assert!(error.to_string().contains("callId missing"));
+}
+
+#[tokio::test]
+async fn empty_bash_never_starts_a_tool_use_card() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    builder
+        .start_executable_tool_use_card("call-1", "Bash", Some(&sender))
+        .await
+        .expect("hold Bash");
+    builder
+        .append_native_tool_use_delta("call-1", "{}", Some(&sender))
+        .await
+        .expect("empty object held");
+    drop(sender);
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert!(
+        !output.contains("tool_use"),
+        "empty Bash must not start a tool_use card: {output}"
+    );
+    assert!(
+        !output.contains("input_json_delta"),
+        "empty Bash JSON must not be flushed: {output}"
+    );
+    assert!(!builder.has_external_tool_calls());
+}
+
+#[tokio::test]
+async fn empty_send_message_object_is_not_flushed_as_complete_input() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    builder
+        .start_executable_tool_use_card("call-1", "SendMessage", Some(&sender))
+        .await
+        .expect("start SendMessage");
+    builder
+        .append_native_tool_use_delta("call-1", "{}", Some(&sender))
+        .await
+        .expect("empty object held");
+    drop(sender);
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert!(
+        !output.contains("tool_use"),
+        "empty SendMessage must not start a tool_use card: {output}"
+    );
+    assert!(
+        !output.contains("input_json_delta"),
+        "empty SendMessage JSON must not be flushed: {output}"
+    );
+}
+
+#[tokio::test]
+async fn finish_rejects_incomplete_bash_without_flushing_empty_object() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    builder
+        .start_executable_tool_use_card("call-1", "Bash", Some(&sender))
+        .await
+        .expect("start Bash");
+    builder
+        .append_native_tool_use_delta("call-1", "{}", Some(&sender))
+        .await
+        .expect("empty object held");
+    let error = match builder.finish(Some(&sender)).await {
+        Err(error) => error,
+        Ok(_) => panic!("incomplete Bash must fail"),
+    };
+    assert_eq!(
+        error.to_string(),
+        "Incomplete Bash tool JSON was not flushed; a non-empty command is required."
+    );
+    drop(sender);
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert!(
+        !output.contains("tool_use"),
+        "incomplete Bash must not start a tool_use card: {output}"
+    );
+    assert!(
+        !output.contains("input_json_delta"),
+        "empty Bash JSON must not be flushed on finish: {output}"
+    );
+}
+
+#[tokio::test]
+async fn empty_tool_json_circuit_trips_after_three_empty_bash_payloads() {
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    builder
+        .start_executable_tool_use_card("call-1", "Bash", None)
+        .await
+        .expect("start 1");
+    builder
+        .append_native_tool_use_delta("call-1", "{}", None)
+        .await
+        .expect("empty 1 held");
+    assert!(builder.take_streaming_tool("call-1").is_some());
+
+    builder
+        .start_executable_tool_use_card("call-2", "Bash", None)
+        .await
+        .expect("start 2");
+    builder
+        .append_native_tool_use_delta("call-2", "{}", None)
+        .await
+        .expect("empty 2 held");
+    assert!(builder.take_streaming_tool("call-2").is_some());
+
+    builder
+        .start_executable_tool_use_card("call-3", "Bash", None)
+        .await
+        .expect("start 3");
+    let error = builder
+        .append_native_tool_use_delta("call-3", "{}", None)
+        .await
+        .expect_err("circuit");
+    assert_eq!(
+        error.to_string(),
+        "Stopped emitting tool_use after 3 consecutive empty or invalid JSON payloads."
+    );
+}
+
+#[test]
+fn empty_bash_object_is_incomplete_tool_json() {
+    assert!(matches!(
+        super::tool_json_readiness("Bash", "{}"),
+        super::ToolJsonReadiness::Incomplete
+    ));
+}
+
+#[test]
+fn truncated_bash_command_is_truncated_tool_json() {
+    assert!(matches!(
+        super::tool_json_readiness("Bash", "{\"command\":\"cat"),
+        super::ToolJsonReadiness::Truncated
+    ));
+}
+
+#[test]
+fn complete_bash_command_is_ready_tool_json() {
+    assert!(matches!(
+        super::tool_json_readiness("Bash", "{\"command\":\"ls\"}"),
+        super::ToolJsonReadiness::Ready
+    ));
+}
+
+#[test]
+fn empty_send_message_object_is_incomplete_tool_json() {
+    assert!(matches!(
+        super::tool_json_readiness("SendMessage", "{}"),
+        super::ToolJsonReadiness::Incomplete
+    ));
 }

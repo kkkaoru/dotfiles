@@ -1,7 +1,5 @@
 use std::sync::Arc;
 
-use tokio::sync::Semaphore;
-
 use axum::{
     Router,
     extract::{Request, State},
@@ -18,8 +16,8 @@ use crate::listen_handover::ListenHandover;
 use super::CLAUDE_CODE_SESSION_ID_HEADER;
 use super::handover_circuit::{self, HandoverCircuit};
 use super::retained_proxy::{
-    MAX_PROXY_IN_FLIGHT, ProxyOutcome, RetainedProxy, handover_hop_count, listen_accepts_health,
-    proxy_http_client, proxy_request,
+    MAX_PROXY_IN_FLIGHT, ProxyOutcome, ProxySlotPool, RetainedProxy, handover_hop_count,
+    listen_accepts_health, proxy_http_client, proxy_request,
 };
 
 const CLAUDE_CODE_AGENT_ID_HEADER: &str = "x-claude-code-agent-id";
@@ -34,7 +32,7 @@ pub(super) struct HandoverState {
     pub advertised: Option<ListenHandover>,
     client: reqwest::Client,
     circuit: Arc<HandoverCircuit>,
-    slots: Arc<Semaphore>,
+    slots: Arc<ProxySlotPool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,16 +47,19 @@ pub(super) fn layer(handover: Option<ListenHandover>) -> (Option<HandoverState>,
     let Some(listen) = handover else {
         return (None, Router::new());
     };
-    let slots = Arc::new(Semaphore::new(MAX_PROXY_IN_FLIGHT));
+    let client = proxy_http_client();
+    let slots = ProxySlotPool::new(MAX_PROXY_IN_FLIGHT);
     let retained = load_retained_from_env()
         .map(|(path, generation)| {
-            RetainedProxy::from_path(path, generation).with_proxy_slots(Arc::clone(&slots))
+            RetainedProxy::from_path(path, generation)
+                .with_proxy_client(client.clone())
+                .with_proxy_slots(Arc::clone(&slots))
         })
         .map(Arc::new);
     let state = HandoverState {
         retained,
         advertised: Some(listen.clone()),
-        client: proxy_http_client(),
+        client,
         circuit: Arc::new(HandoverCircuit::default()),
         slots,
     };
@@ -132,9 +133,19 @@ async fn diverted_service_action(
     if recover_open_circuit(state, session_id) {
         return DivertedService::RunLocal(request);
     }
-    let Ok(_slot) = state.slots.try_acquire() else {
-        return DivertedService::RunLocal(request);
-    };
+    let mut slot = state.slots.acquire();
+    tokio::select! {
+        () = slot.evicted() => DivertedService::Proxy(evicted_proxy_response()),
+        outcome = forward_diverted(state, session_id, service, request) => outcome,
+    }
+}
+
+async fn forward_diverted(
+    state: &HandoverState,
+    session_id: Option<&str>,
+    service: std::net::SocketAddr,
+    request: Request,
+) -> DivertedService {
     if !listen_accepts_health(&state.client, service).await {
         return DivertedService::RunLocal(request);
     }
@@ -148,6 +159,10 @@ async fn diverted_service_action(
             DivertedService::Proxy(handover_circuit::retry_response(message))
         }
     }
+}
+
+fn evicted_proxy_response() -> Response {
+    handover_circuit::retry_response("oldest handover proxy was evicted".to_owned())
 }
 
 async fn proxy_or_run_retained(
@@ -171,13 +186,27 @@ async fn proxy_or_run_retained(
     if retained_targets_advertised(retained, state.advertised.as_ref()) {
         return next.run(request).await;
     }
-    let Some(_slot) = retained.try_proxy_slot() else {
-        return next.run(request).await;
-    };
-    if !retained.should_proxy_session(session_id, agent_id).await {
+    if recover_open_circuit(state, Some(session_id)) {
         return next.run(request).await;
     }
-    if recover_open_circuit(state, Some(session_id)) {
+    let mut slot = retained.acquire_proxy_slot();
+    tokio::select! {
+        () = slot.evicted() => evicted_proxy_response(),
+        response = forward_retained(state, retained, session_id, agent_id, request, next) => {
+            response
+        }
+    }
+}
+
+async fn forward_retained(
+    state: &HandoverState,
+    retained: &RetainedProxy,
+    session_id: &str,
+    agent_id: Option<&str>,
+    request: Request,
+    next: Next,
+) -> Response {
+    if !retained.should_proxy_session(session_id, agent_id).await {
         return next.run(request).await;
     }
     match retained.proxy_outcome(request).await {

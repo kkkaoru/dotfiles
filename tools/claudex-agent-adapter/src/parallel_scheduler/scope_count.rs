@@ -24,8 +24,8 @@ pub(crate) fn has_parallel_scope(request: &MessagesRequest) -> bool {
 pub(crate) fn independent_scope_count(request: &MessagesRequest) -> usize {
     match last_real_user_text(request) {
         Some(content) => count_for_content(&content),
-        // Reconstructed transcripts keep a parallel baseline for floor/replenishment.
-        None => 2,
+        // Missing user text must not invent a parallel baseline for floor/replenishment.
+        None => 0,
     }
 }
 

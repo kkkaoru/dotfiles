@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use crate::anthropic::MessagesRequest;
+use crate::anthropic::{MessagesRequest, acknowledged_background_launch_count};
 
 use super::{ParallelScheduler, SchedulerDecision, core, policy};
 
@@ -31,15 +31,24 @@ impl ParallelScheduler {
             &config,
             should_reassess,
         );
-        policy::apply_replenishment_target(
-            &mut decision,
-            &snapshot,
-            request,
-            &config,
-            should_reassess,
-        );
+        let launch_ack_met_target = acknowledged_background_launch_count(request)
+            .is_some_and(|count| count >= decision.target_workers);
+        if !launch_ack_met_target {
+            policy::apply_replenishment_target(
+                &mut decision,
+                &snapshot,
+                request,
+                &config,
+                should_reassess,
+            );
+        }
         let effective_target = decision.target_workers;
-        policy::apply_capacity_actions(&mut decision, effective_target, &config);
+        policy::apply_capacity_actions(
+            &mut decision,
+            effective_target,
+            &config,
+            policy::skip_floor_on_launch_ack(request),
+        );
         policy::apply_floor_action(&mut decision, request, &config);
         policy::apply_diversity_action(&mut decision, request, &config);
         policy::apply_reuse_actions(&mut decision, request, &config);

@@ -353,7 +353,7 @@ async fn test_app() -> Arc<AgentBackend> {
 }
 
 fn stopped_acp_app() -> Arc<AgentBackend> {
-    AgentBackend::grok(crate::grok_acp::GrokAcp::stopped_for_test())
+    AgentBackend::pi(crate::pi_gateway::PiGateway::stopped_for_test())
 }
 
 fn request(model: &str) -> MessagesRequest {

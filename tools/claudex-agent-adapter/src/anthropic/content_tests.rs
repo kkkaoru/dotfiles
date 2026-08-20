@@ -12,8 +12,8 @@ mod tests {
     use tokio::sync::{Mutex, Semaphore};
 
     use super::{
-        MAX_CONSUMED_TOOL_IDS, ToolResult, attach_mid_turn_steering, content_text,
-        matching_transcript_len, mid_turn_user_steering, remember_consumed_tool_id,
+        MAX_CONSUMED_TOOL_IDS, ToolResult, attach_mid_turn_steering, collect_tool_results,
+        content_text, matching_transcript_len, mid_turn_user_steering, remember_consumed_tool_id,
         take_pending_results,
     };
     use crate::anthropic::content_batch::{batch_progress, store_batch_result};
@@ -514,6 +514,24 @@ mod tests {
             .as_deref()
             == Some("実作業を続けて"),
             "agent/session chrome must be filtered while real steering remains"
+        );
+    }
+
+    #[test]
+    fn truncates_huge_tool_result_text_before_it_is_re_sent() {
+        let results = collect_tool_results(&[json!({
+            "role":"user",
+            "content":[{
+                "type":"tool_result",
+                "tool_use_id":"huge",
+                "content": "x".repeat(40000)
+            }]
+        })]);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].content_items[0]["text"].as_str().expect("text").len(), 32768);
+        assert_eq!(
+            &results[0].content_items[0]["text"].as_str().expect("text")[32724..],
+            "\n[tool_result truncated to fit token budget]"
         );
     }
 

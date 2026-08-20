@@ -33,12 +33,10 @@ pub(in crate::anthropic) fn tool_configuration_for_mode(
     _collaborator_model: Option<&str>,
     web_search_mode: WebSearchMode,
 ) -> (Vec<Value>, HashMap<String, String>, HashMap<String, String>) {
-    let allow_team_messages = super::super::subagent_reuse::agent_teams_enabled(request);
     let (tools, external_names) = external_tools(
         &request.tools,
         web_search_mode,
         super::super::subagent_reuse::should_expose_launch_tools(request),
-        allow_team_messages,
         super::super::agent_effort::is_subagent_request(request),
     );
     // Provider-side tools must be an exact projection of the schemas supplied by
@@ -78,7 +76,6 @@ fn external_tools(
     tools: &[Value],
     web_search_mode: WebSearchMode,
     expose_launch_tools: bool,
-    allow_team_messages: bool,
     hide_main_only_tools: bool,
 ) -> (Vec<Value>, HashMap<String, String>) {
     let mut specs = Vec::new();
@@ -97,14 +94,9 @@ fn external_tools(
         // The provider may return a tool call using that index, so filtering a
         // cloned list before enumerate() would route TaskUpdate/TaskOutput to
         // the wrong tool.
-        if !allow_team_messages && original_name == "SendMessage" {
-            continue;
-        }
+        // SendMessage is official subagent resume (not Agent Teams-only).
         if !expose_launch_tools && super::super::subagent_reuse::is_launch_tool(original_name) {
-            tracing::warn!(
-                tool = original_name,
-                "hiding native SubAgent launch after session budget"
-            );
+            tracing::warn!(tool = original_name, "hiding native SubAgent launch tool");
             continue;
         }
         let codex_name = codex_tool_name(original_name, index);
@@ -134,10 +126,13 @@ pub(in crate::anthropic) fn dynamic_tool(tool: &Value, codex_name: &str) -> Opti
 fn task_lifecycle_guidance(tool_name: &str) -> &'static str {
     match tool_name {
         "Agent" | "Task" => {
-            " When a compatible SubAgent already exists for this scope, set resume to that exact agentId instead of launching a replacement. Launch a new worker only for independent scope or a failed/cancelled/stopped prior worker."
+            " When a compatible SubAgent already exists for this scope (occupied path), continue it with SendMessage({to: that exact agentId}). Never launch a new Agent for the same path; never Agent({resume}). Do not set Agent/Task resume — Claude Code removed that parameter. Launch a new worker only for independent scope or a failed/cancelled prior worker. Workers must not nest Agent/Task fan-out; the parent owns fan-out."
+        }
+        "SendMessage" => {
+            " Official Claude Code subagent resume: set `to` to the exact agentId (a + 16 hex) from the prior Agent/Task result. Agent Teams is not required. A completed subagent may continue on SendMessage. A subagent the user stopped from /tasks or with 全て中断 does not auto-resume; do not SendMessage to resume those workers. Do not use SendMessage to return worker results to the parent; that is TaskOutput."
         }
         "TaskStop" | "StopTask" | "Stop Task" => {
-            " Task lifecycle: stopping is idempotent; use only the exact active Agent task_id from the current launch (`a` + 16 hex). Never guess IDs, never stop Bash-background nanoids (e.g. b13mjnjlj) or previous-session orphan IDs from `No completion record` notifications, and never cascade stops onto unrelated in-flight workers after one lane fails. When the user asks to stop remaining session SubAgents or leftover cards remain after a mid-response API/ACP error, TaskStop every live `a`+16-hex id from TaskList in the same turn; do not inspect OS processes or kill the claudex serve daemon. A `No task found` response means already stopped/completed; do not retry. ACP unavailable or dropped response is also already stopped."
+            " Task lifecycle: TaskStop stops the SubAgent. Use TaskStop only when the user asks to stop remaining SubAgents or ACP is dead; never TaskStop for progress nudges. A user full-stop (TaskStop from /tasks or 全て中断) does not auto-resume on SendMessage({to: agentId}). stopping is idempotent; use only the exact active Agent task_id from the current launch (`a` + 16 hex). Never guess IDs, never stop Bash-background nanoids (e.g. b13mjnjlj) or previous-session orphan IDs from `No completion record` notifications, and never cascade stops onto unrelated in-flight workers after one lane fails. When the user asks to stop remaining session SubAgents or leftover cards remain after a mid-response API/ACP error, TaskStop every live `a`+16-hex id from TaskList in the same turn; do not inspect OS processes or kill the claudex serve daemon. A `No task found` response means already stopped/completed; do not retry. ACP unavailable or dropped response is also already stopped."
         }
         "TaskOutput" | "TaskGet" => {
             " TaskOutput: use only the exact task_id from that Agent/Task launch result (`a` + 16 hex). Never guess, never pass a display name or agentId unless the launch result said it is the TaskOutput task_id, and never reuse a previous-session orphan. If Claude Code returns `No task found` and lists `Running background agents`, the ID was wrong — retry with one of those live ids. That miss is not completed output."

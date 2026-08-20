@@ -49,6 +49,7 @@ pub(in crate::anthropic) struct SubscriptionToolContext {
         Arc<crate::anthropic::subagent_reuse::SubagentReuseRegistry>,
     pub(in crate::anthropic) auth_cache: Option<PathBuf>,
     pub(in crate::anthropic) disabled_subagent_models: BTreeSet<String>,
+    pub(in crate::anthropic) is_subagent: bool,
 }
 
 impl SubscriptionToolContext {
@@ -74,6 +75,7 @@ impl SubscriptionToolContext {
             ),
             auth_cache: None,
             disabled_subagent_models: BTreeSet::new(),
+            is_subagent: false,
         }
     }
 

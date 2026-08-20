@@ -6,10 +6,7 @@ use crate::anthropic::agent_route_validation::BlockedSubagentError;
 use super::{Bridge, MessagesRequest, model_concurrency::Ticket, request_routing::RouteDecision};
 
 pub(super) fn subagent_failover_target_ok(kind: BackendKind) -> bool {
-    matches!(
-        kind,
-        BackendKind::ConfiguredAcp | BackendKind::GrokAcp | BackendKind::CopilotAcp
-    )
+    matches!(kind, BackendKind::PiGateway)
 }
 
 impl Bridge {

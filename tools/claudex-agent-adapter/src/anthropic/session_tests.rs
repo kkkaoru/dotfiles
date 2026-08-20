@@ -71,7 +71,7 @@ use crate::anthropic::{
     subscription_request::{SHARED_WORKSPACE_INSTRUCTIONS, subscription_request_prompt},
 };
 use crate::{
-    agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute},
+    agent_backend::{AgentBackend, BackendKind, BackendRoute},
     app_server::AppServer,
 };
 
@@ -472,6 +472,43 @@ fn subagent_sessions_hide_main_only_advisor_instead_of_forwarding_it() {
 }
 
 #[test]
+fn documents_official_pause_resume_on_agent_and_task_stop_schemas() {
+    let agent = dynamic_tool(
+        &json!({"name":"Agent","description":"launch a subagent"}),
+        "cc_agent_0",
+    )
+    .expect("agent schema");
+    let agent_description = agent["description"].as_str().expect("agent description");
+    assert!(agent_description.contains("SendMessage({to: that exact agentId})"));
+    assert!(agent_description.contains("occupied path"));
+    assert!(agent_description.contains("Never launch a new Agent for the same path"));
+    assert!(agent_description.contains("never Agent({resume})"));
+    assert!(agent_description.contains("Do not set Agent/Task resume"));
+    let send = dynamic_tool(
+        &json!({"name":"SendMessage","description":"message a subagent"}),
+        "cc_send_0",
+    )
+    .expect("send schema");
+    let send_description = send["description"].as_str().expect("send description");
+    assert!(send_description.contains("set `to` to the exact agentId"));
+    assert!(send_description.contains("Agent Teams is not required"));
+    assert!(send_description.contains("全て中断"));
+    assert!(send_description.contains("does not auto-resume"));
+    let stop = dynamic_tool(
+        &json!({"name":"TaskStop","description":"stop a background task"}),
+        "cc_task_stop_0",
+    )
+    .expect("task-stop schema");
+    let stop_description = stop["description"].as_str().expect("stop description");
+    assert!(stop_description.contains("TaskStop stops the SubAgent"));
+    assert!(stop_description.contains("SendMessage({to: agentId})"));
+    assert!(stop_description.contains("stopping is idempotent"));
+    assert!(stop_description.contains("never TaskStop for progress nudges"));
+    assert!(stop_description.contains("全て中断"));
+    assert!(stop_description.contains("does not auto-resume"));
+}
+
+#[test]
 fn documents_idempotent_task_stop_semantics_in_the_dynamic_schema() {
     for name in ["TaskStop", "StopTask", "Stop Task"] {
         let tool = dynamic_tool(
@@ -517,6 +554,7 @@ fn main_and_worker_sessions_preserve_received_tool_schemas_exactly() {
         json!({"name":"Bash","input_schema":{"type":"object"}}),
         json!({"name":"Edit","input_schema":{"type":"object"}}),
         json!({"name":"Agent","input_schema":{"type":"object","properties":{"subagent_type":{"type":"string"},"prompt":{"type":"string"}}}}),
+        json!({"name":"spawn_subagent","input_schema":{"type":"object"}}),
         json!({"name":"SendMessage","input_schema":{"type":"object"}}),
         json!({"name":"TeamSendMessage","input_schema":{"type":"object"}}),
         json!({"name":"TaskGet","input_schema":{"type":"object"}}),
@@ -528,13 +566,14 @@ fn main_and_worker_sessions_preserve_received_tool_schemas_exactly() {
     );
     let exposed = main.1.values().cloned().collect::<Vec<_>>();
     assert!(exposed.iter().any(|name| name == "Agent"));
+    assert!(exposed.iter().any(|name| name == "spawn_subagent"));
     assert!(!exposed.iter().any(|name| name.ends_with(":Agent")));
     assert!(exposed.iter().any(|name| name == "SendMessage"));
     assert!(exposed.iter().any(|name| name == "TeamSendMessage"));
     assert!(exposed.iter().any(|name| name == "TaskGet"));
-    for tool_name in ["Read", "Bash", "Edit"] {
-        assert!(exposed.iter().any(|name| name == tool_name));
-    }
+    assert!(exposed.iter().any(|name| name == "Read"));
+    assert!(exposed.iter().any(|name| name == "Bash"));
+    assert!(exposed.iter().any(|name| name == "Edit"));
     let agent = main
         .0
         .iter()
@@ -557,15 +596,13 @@ fn main_and_worker_sessions_preserve_received_tool_schemas_exactly() {
     assert!(worker.1.values().any(|name| name == "Read"));
     assert!(worker.1.values().any(|name| name == "Bash"));
     assert!(worker.1.values().any(|name| name == "Edit"));
-    let nested_agent_schemas = worker
-        .0
-        .iter()
-        .filter_map(|tool| {
-            tool.pointer("/inputSchema/properties/subagent_type/enum")
-                .or_else(|| tool.pointer("/inputSchema/properties/subagent_type"))
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(nested_agent_schemas, vec![&json!({"type":"string"})]);
+    assert!(worker.1.values().any(|name| name == "SendMessage"));
+    assert!(!worker.1.values().any(|name| name == "Agent"));
+    assert!(!worker.1.values().any(|name| name == "spawn_subagent"));
+    assert!(worker.0.iter().all(|tool| {
+        tool.pointer("/inputSchema/properties/subagent_type")
+            .is_none()
+    }));
 }
 
 #[test]
@@ -954,12 +991,12 @@ fn hides_only_new_native_launch_tools_after_the_session_budget_is_reached() {
             .any(|name| matches!(name.as_str(), "Agent" | "Task"))
     );
     assert!(names.values().any(|name| name == "Read"));
-    assert!(!names.values().any(|name| name == "SendMessage"));
-    assert_eq!(tools.len(), 1);
+    assert!(names.values().any(|name| name == "SendMessage"));
+    assert_eq!(tools.len(), 2);
 }
 
 #[test]
-fn ordinary_sessions_hide_mailbox_tools_but_explicit_teams_preserve_them() {
+fn ordinary_sessions_expose_send_message_for_subagent_resume() {
     let ordinary = request(
         json!("main session"),
         vec![
@@ -968,7 +1005,7 @@ fn ordinary_sessions_hide_mailbox_tools_but_explicit_teams_preserve_them() {
         ],
     );
     let (_, ordinary_names, _) = tool_configuration(&ordinary, None, None);
-    assert!(!ordinary_names.values().any(|name| name == "SendMessage"));
+    assert!(ordinary_names.values().any(|name| name == "SendMessage"));
 
     let team = request(
         json!("main session"),
@@ -999,10 +1036,10 @@ fn search_worker_preserves_every_received_capability() {
     })];
     let (tools, names, _) =
         tool_configuration_for_mode(&request, None, None, WebSearchMode::CodexNative);
-    assert_eq!(tools.len(), 3, "Read, Agent, and WebFetch remain");
-    for expected in ["Read", "Agent", "WebFetch"] {
-        assert!(names.values().any(|name| name == expected));
-    }
+    assert_eq!(tools.len(), 2, "Read and WebFetch remain; Agent is hidden");
+    assert!(names.values().any(|name| name == "Read"));
+    assert!(names.values().any(|name| name == "WebFetch"));
+    assert!(!names.values().any(|name| name == "Agent"));
     assert!(!names.values().any(|name| name.ends_with(":Agent")));
 }
 
@@ -1011,7 +1048,11 @@ fn assert_empty_thread_configuration() {
     let base = empty["baseInstructions"]
         .as_str()
         .expect("base instructions");
-    assert_eq!(base, empty["developerInstructions"]);
+    assert!(
+        base.is_empty(),
+        "empty Claude system must not copy developer corpus into baseInstructions"
+    );
+    assert_ne!(base, empty["developerInstructions"]);
     assert_eq!(empty["sandbox"], "danger-full-access");
     assert_eq!(empty["config"]["features"]["multi_agent"], false);
     assert_eq!(empty["config"]["features"]["shell_tool"], true);
@@ -1033,7 +1074,8 @@ fn pi_request_uses_the_same_combined_system_as_direct() {
     }));
     let direct = thread_start_params(&request, "main", Vec::new());
     let pi = pi_claude_request(&request, false, false).expect("Pi request");
-    assert_eq!(pi["system"], direct["baseInstructions"]);
+    assert_eq!(direct["baseInstructions"], "outer system");
+    assert_ne!(direct["baseInstructions"], direct["developerInstructions"]);
     assert!(
         pi["system"]
             .as_str()
@@ -1049,7 +1091,16 @@ fn pi_request_uses_the_same_combined_system_as_direct() {
     let direct_acp =
         thread_start_params_for_mode(&request, "auto", Vec::new(), WebSearchMode::AcpNative);
     let pi_acp = pi_claude_request(&request, false, true).expect("Pi ACP request");
-    assert_eq!(pi_acp["system"], direct_acp["baseInstructions"]);
+    assert_eq!(direct_acp["baseInstructions"], "outer system");
+    assert_ne!(
+        direct_acp["baseInstructions"],
+        direct_acp["developerInstructions"]
+    );
+    assert!(
+        pi_acp["system"]
+            .as_str()
+            .is_some_and(|system| system.starts_with("outer system\n\n"))
+    );
 }
 
 #[test]
@@ -1127,6 +1178,9 @@ fn acp_native_workers_omit_end_turn_status_and_keep_tool_completion() {
     assert!(developer.contains("You are a provider-native ACP worker"));
     assert!(developer.contains("never a complete answer"));
     assert!(developer.contains("toolless status-only message"));
+    assert!(developer.contains("Do not nest Agent/Task or spawn_subagent fan-out"));
+    assert!(!developer.contains("if you nest further"));
+    assert!(!developer.contains("if a nested worker is needed"));
     assert!(developer.contains("do not call `EnterWorktree` or `ExitWorktree`"));
     assert!(developer.contains("runtime-assigned worktree and cwd remain authoritative"));
     assert!(!developer.contains("end the turn promptly"));
@@ -1190,27 +1244,31 @@ fn assert_developer_guidance(developer: &str) {
         "never use generic claude or blindly inherit",
         "main session must control parallel distribution across multiple SubAgents",
         "Avoid serial heavy processing by one worker",
-        "native Agent/Task results and TaskOutput",
         "custom-advisor is a separate logical session singleton/capacity channel",
         "built-in advisor remains independent of worker capacity",
         "complex or ambiguous decisions",
         "worker stalls/timeouts",
         "consult one custom-advisor when triggered",
-        "For ordinary follow-ups, reuse the exact Agent/Task recipient through its native result and TaskOutput",
-        "do not leave the instruction queued for the next tool round",
-        "TaskStop the exact active Agent id immediately",
-        "running Command Code or other one-shot ACP worker",
-        "no Claude tool round",
+        "For ordinary related follow-ups, continue the exact prior recipient with SendMessage({to: that agentId})",
+        "never launch a new Agent for the same path",
+        "never Agent({resume})",
+        "Workers must not nest Agent/Task fan-out",
+        "the parent session owns fan-out",
+        "One writer per file path",
+        "Consecutive empty or invalid tool calls are a failure",
+        "User 全て中断 is /tasks-style",
+        "do not auto-resume those workers via SendMessage",
+        "never TaskStop for progress nudges",
+        "Command Code and other one-shot ACP workers",
         "parent Task card often shows tool_uses: 0",
         "do not tell the user the worker did no search or tool work",
         "Human-visible sync is the agents panel",
         "Never copy end-the-turn-with-status",
-        "agents panel shows queued",
         "▶/✓ tool markers",
         "set run_in_background=true on every Agent/Task launch",
         "Keep each launch as an independent native call",
         "never use an adapter-only batch wrapper",
-        "end the current turn promptly instead of reasoning while waiting",
+        "end the current turn promptly with concise user-visible status",
         "never wait for every background task before accepting another user instruction",
         "never automatically poll TaskList or TaskOutput on a timer",
         "never call TaskOutput or TaskGet merely to drain pending notifications",
@@ -1236,6 +1294,12 @@ fn assert_developer_guidance(developer: &str) {
         "that Agent/Task launch must be the first tool call",
         "Do not start with Bash, Edit, Glob",
         "Launch at least 3 ordinary workers",
+        "if you nest further",
+        "if a nested worker is needed",
+        "Nested delegation is allowed",
+        "TaskStop the exact active Agent id immediately",
+        "do not leave the instruction queued for the next tool round",
+        "agents panel shows queued",
     ];
     for phrase in FORBIDDEN {
         assert!(
@@ -1275,9 +1339,28 @@ fn main_session_orchestration_instructions_are_omitted_for_subagents() {
         !developer.contains("You are the orchestrator, not an implementation worker"),
         "workers must not receive main-only Terra/Codex orchestrator guard"
     );
-    assert!(developer.contains(
-        "For ordinary follow-ups, reuse the exact Agent/Task recipient through its native result and TaskOutput"
-    ));
+    assert!(developer.contains("Continue a same-path worker with SendMessage({to: that agentId})"));
+    assert!(
+        developer.contains("Workers must not nest Agent/Task fan-out"),
+        "workers must be told not to nest Agent fan-out"
+    );
+    assert!(
+        !developer.contains("set run_in_background=true on every Agent/Task launch"),
+        "workers must not receive parent launch-how-to"
+    );
+    assert!(
+        !developer.contains("launch fresh Agent/Task workers"),
+        "workers must not be told to replay on fresh workers"
+    );
+    assert!(
+        !developer.contains("These launch and fan-out rules apply only to the parent/main session"),
+        "workers must not receive parent lifecycle launch rules"
+    );
+    assert!(
+        !developer.contains("if you nest further")
+            && !developer.contains("if a nested worker is needed"),
+        "workers must not be taught nested Agent fan-out"
+    );
     assert!(
         !developer.contains("do not leave the instruction queued for the next tool round"),
         "workers must not receive main-only TaskStop follow-up guidance"
@@ -1329,11 +1412,11 @@ fn assert_team_thread_configuration() {
         "main",
         Vec::new(),
     );
-    assert!(
+    assert_eq!(
         with_team["baseInstructions"]
             .as_str()
-            .expect("team base instructions")
-            .starts_with("custom system\n\n")
+            .expect("team base instructions"),
+        "custom system"
     );
     assert!(
         with_team["developerInstructions"]
@@ -1382,11 +1465,19 @@ fn assert_subscription_atomic_launch_contract(prompt: &str) {
     assert!(prompt.contains("run_in_background=true"));
     assert!(prompt.contains("Do not mix foreground and background launches"));
     assert!(prompt.contains("queued to a busy worker does not add parallel capacity"));
+    assert!(prompt.contains("Workers must not nest Agent/Task fan-out"));
+    assert!(prompt.contains("the parent owns fan-out"));
+    assert!(prompt.contains("SendMessage({to: its agentId})"));
+    assert!(prompt.contains("never Agent({resume})"));
+    assert!(prompt.contains("User 全て中断 is /tasks-style"));
+    assert!(prompt.contains("do not auto-resume them via SendMessage"));
+    assert!(prompt.contains("do not TaskStop it as a progress nudge"));
     assert!(prompt.contains("Command Code or another one-shot ACP route"));
     assert!(prompt.contains("no Claude tool round"));
-    assert!(prompt.contains("TaskStop immediately and resume or relaunch"));
-    assert!(prompt.contains("agents panel shows queued"));
-    assert!(prompt.contains("instead of waiting for cmd -p to finish"));
+    assert!(prompt.contains("if the user stopped it from /tasks or 全て中断"));
+    assert!(!prompt.contains("including nested launches from an existing worker"));
+    assert!(!prompt.contains("TaskStop immediately and SendMessage({to: that agentId})"));
+    assert!(!prompt.contains("agents panel shows queued"));
 }
 
 fn assert_subscription_background_drain_contract(prompt: &str) {
@@ -1425,6 +1516,7 @@ fn assert_subscription_workspace_failover_contract(prompt: &str) {
 fn subscription_prompt_preserves_worker_reuse_and_advisor_exception() {
     let prompt = subscription_request_prompt(&request(json!("system"), Vec::new()));
     assert!(prompt.contains("ordinary related follow-up, reuse the exact compatible worker"));
+    assert!(prompt.contains("SendMessage({to: its agentId})"));
     assert!(prompt.contains("A follow-up queued to a busy worker does not add parallel capacity"));
     assert!(
         prompt.contains("custom-advisor is a separate logical session singleton/capacity channel")
@@ -1472,6 +1564,40 @@ fn subscription_and_session_instructions_report_the_default_parallel_contract() 
     assert!(!prompt.contains("prompt injection"));
     assert!(!prompt.contains("do not start with Read"));
     assert!(!prompt.contains("Launch at least 3 ordinary workers"));
+}
+
+#[test]
+fn developer_instructions_keep_turn_varying_scheduler_after_static_suffix() {
+    let params = thread_start_params(
+        &request(json!("cache-prefix"), Vec::new()),
+        "main",
+        Vec::new(),
+    );
+    let base = params["baseInstructions"]
+        .as_str()
+        .expect("base instructions");
+    let developer = params["developerInstructions"]
+        .as_str()
+        .expect("developer instructions");
+    assert_eq!(base, "cache-prefix");
+    assert!(!base.contains("Runtime parallel policy:"));
+    assert!(!base.contains("You are the orchestrator, not an implementation worker"));
+    let shared = developer
+        .find("Shared-workspace safety is mandatory")
+        .expect("shared workspace");
+    let lifecycle = developer
+        .find("These launch and fan-out rules apply only to the parent")
+        .expect("subagent lifecycle");
+    let orchestrator = developer
+        .find("Claudex main-session orchestration mode is active")
+        .expect("orchestrator suffix");
+    let scheduler = developer
+        .find("Runtime parallel policy:")
+        .expect("scheduler policy");
+    assert!(
+        shared < lifecycle && lifecycle < orchestrator && orchestrator < scheduler,
+        "static developer suffix must precede turn-varying scheduler text for prompt-cache"
+    );
 }
 
 #[test]
@@ -1938,7 +2064,7 @@ async fn prepare_turn_recovers_transcript_owned_tool_results_after_session_loss(
     request.messages = vec![
         json!({
             "role":"assistant",
-            "content":[{"type":"tool_use","id":"toolu-recovered","name":"Bash","input":{}}]
+            "content":[{"type":"tool_use","id":"toolu-recovered","name":"Bash","input":{"command":"ls"}}]
         }),
         json!({
             "role":"user",
@@ -1953,6 +2079,13 @@ async fn prepare_turn_recovers_transcript_owned_tool_results_after_session_loss(
 
     assert_eq!(turn.session.thread_id, "recovered");
     assert_eq!(bridge.sessions.lock().await.len(), 1);
+    assert!(
+        turn.session
+            .consumed_tool_ids
+            .lock()
+            .await
+            .contains("toolu-recovered")
+    );
 }
 
 #[tokio::test]
@@ -2024,7 +2157,7 @@ async fn detached_background_sessions_are_not_selected_but_route_one_late_result
 async fn removes_sessions_for_a_failed_model_backend() {
     let backend = AgentBackend::spawn_routes(&[BackendRoute {
         model: "failed".to_owned(),
-        backend: BackendKind::ConfiguredAcp,
+        backend: BackendKind::PiGateway,
         effort: None,
         model_provider: None,
         model_catalog_json: None,
@@ -2034,10 +2167,6 @@ async fn removes_sessions_for_a_failed_model_backend() {
         max_context_tokens: None,
         max_concurrency: None,
         model_prefixes: Vec::new(),
-        acp: Some(AcpLaunch {
-            program: "/definitely/missing/claudex-acp".to_owned(),
-            arguments: Vec::new(),
-        }),
         web_search_mode: WebSearchMode::default(),
     }]);
     assert!(
@@ -2305,6 +2434,190 @@ async fn starts_recovered_tool_results_as_a_full_transcript() {
 }
 
 #[tokio::test]
+async fn recovered_turn_fails_empty_bash_instead_of_replaying_complete_tool_use() {
+    let root = tempfile::tempdir().expect("mock app-server fixture");
+    let trace = root.path().join("empty-bash.jsonl");
+    let script = format!(
+        "#!/bin/sh\nread initialize\nprintf '%s\\n' '{{\"id\":1,\"result\":{{}}}}'\nread initialized\nwhile read line; do printf '%s\\n' \"$line\" >> '{}'; done\n",
+        trace.display()
+    );
+    let (_server_root, app) = mock_app_server(&script).await;
+    let bridge = Bridge::new_with_backend(AgentBackend::codex(app), "main".to_owned());
+    let mut request = request(Value::Null, Vec::new());
+    request.messages = vec![
+        json!({
+            "role":"assistant",
+            "content":[{"type":"tool_use","id":"toolu-empty","name":"Bash","input":{}}]
+        }),
+        json!({
+            "role":"user",
+            "content":[{"type":"tool_result","tool_use_id":"toolu-empty","content":"done"}]
+        }),
+    ];
+    let session = session("signature", Vec::new());
+    let gate = Arc::clone(&session.gate).lock_owned().await;
+
+    bridge
+        .start_selected_turn(StartSelectedTurn {
+            request: &request,
+            input_tokens: 7,
+            effort: None,
+            selected: SelectedSession {
+                session,
+                existing_len: 0,
+                recovered: true,
+                gate,
+            },
+            tool_results: vec![ToolResult {
+                tool_use_id: "toolu-empty".to_owned(),
+                content_items: Vec::new(),
+                is_error: false,
+            }],
+            advisor_model: None,
+            collaborator_model: None,
+            allow_context_retry: true,
+        })
+        .await
+        .expect("start recovered turn");
+
+    let trace = mock_trace(&trace, 1).await;
+    let text = trace[0]["params"]["input"][0]["text"]
+        .as_str()
+        .expect("reconstructed history text");
+    let history = text
+        .strip_prefix("Continue this Claude Code conversation. The role-tagged history follows:\n")
+        .expect("history header");
+    assert_eq!(
+        serde_json::from_str::<Value>(history).expect("history json"),
+        json!([
+            {
+                "role":"assistant",
+                "content":[{
+                    "type":"text",
+                    "text":"Adapter session was lost before tool_use `toolu-empty` (Bash) received complete JSON arguments. The incomplete call was not replayed."
+                }]
+            },
+            {
+                "role":"user",
+                "content":[{
+                    "type":"text",
+                    "text":"Adapter session was lost before tool_use `toolu-empty` received complete JSON arguments. The in-flight tool was failed instead of replaying empty or truncated input."
+                }]
+            }
+        ])
+    );
+}
+
+#[tokio::test]
+async fn recovered_turn_replays_complete_bash_json() {
+    let root = tempfile::tempdir().expect("mock app-server fixture");
+    let trace = root.path().join("complete-bash.jsonl");
+    let script = format!(
+        "#!/bin/sh\nread initialize\nprintf '%s\\n' '{{\"id\":1,\"result\":{{}}}}'\nread initialized\nwhile read line; do printf '%s\\n' \"$line\" >> '{}'; done\n",
+        trace.display()
+    );
+    let (_server_root, app) = mock_app_server(&script).await;
+    let bridge = Bridge::new_with_backend(AgentBackend::codex(app), "main".to_owned());
+    let mut request = request(Value::Null, Vec::new());
+    request.messages = vec![
+        json!({
+            "role":"assistant",
+            "content":[{"type":"tool_use","id":"toolu-ok","name":"Bash","input":{"command":"ls"}}]
+        }),
+        json!({
+            "role":"user",
+            "content":[{"type":"tool_result","tool_use_id":"toolu-ok","content":"done"}]
+        }),
+    ];
+    let session = session("signature", Vec::new());
+    let gate = Arc::clone(&session.gate).lock_owned().await;
+
+    bridge
+        .start_selected_turn(StartSelectedTurn {
+            request: &request,
+            input_tokens: 7,
+            effort: None,
+            selected: SelectedSession {
+                session,
+                existing_len: 0,
+                recovered: true,
+                gate,
+            },
+            tool_results: vec![ToolResult {
+                tool_use_id: "toolu-ok".to_owned(),
+                content_items: Vec::new(),
+                is_error: false,
+            }],
+            advisor_model: None,
+            collaborator_model: None,
+            allow_context_retry: true,
+        })
+        .await
+        .expect("start recovered turn");
+
+    let trace = mock_trace(&trace, 1).await;
+    let text = trace[0]["params"]["input"][0]["text"]
+        .as_str()
+        .expect("reconstructed history text");
+    let history = text
+        .strip_prefix("Continue this Claude Code conversation. The role-tagged history follows:\n")
+        .expect("history header");
+    assert_eq!(
+        serde_json::from_str::<Value>(history).expect("history json"),
+        json!([
+            {
+                "role":"assistant",
+                "content":[{"type":"tool_use","id":"toolu-ok","name":"Bash","input":{"command":"ls"}}]
+            },
+            {
+                "role":"user",
+                "content":[{"type":"tool_result","tool_use_id":"toolu-ok","content":"done"}]
+            }
+        ])
+    );
+}
+
+#[tokio::test]
+async fn recovered_session_reuses_consumed_ids_instead_of_creating_another_session() {
+    enable_warning_logs();
+    let (_root, app) = mock_app_server(
+        "#!/bin/sh\nread initialize\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nread initialized\nread start\nprintf '%s\\n' '{\"id\":2,\"result\":{\"thread\":{\"id\":\"recovered\"}}}'\nwhile read line; do :; done\n",
+    )
+    .await;
+    let bridge = Bridge::new_with_backend(AgentBackend::codex(Arc::clone(&app)), "main".to_owned());
+    let mut request = request(Value::Null, Vec::new());
+    request.messages = vec![
+        json!({
+            "role":"assistant",
+            "content":[{"type":"tool_use","id":"toolu-recovered","name":"Bash","input":{"command":"ls"}}]
+        }),
+        json!({
+            "role":"user",
+            "content":[{"type":"tool_result","tool_use_id":"toolu-recovered","content":"done"}]
+        }),
+    ];
+
+    let first = tokio::time::timeout(
+        Duration::from_secs(2),
+        bridge.prepare_turn(&request, 10, None),
+    )
+    .await
+    .expect("first recovery timeout")
+    .expect("first recovery");
+    let second = tokio::time::timeout(
+        Duration::from_secs(2),
+        bridge.prepare_turn(&request, 10, None),
+    )
+    .await
+    .expect("second recovery timeout")
+    .expect("second recovery");
+
+    assert_eq!(first.session.thread_id, "recovered");
+    assert_eq!(second.session.thread_id, "recovered");
+    assert_eq!(bridge.sessions.lock().await.len(), 1);
+}
+
+#[tokio::test]
 async fn starts_incremental_turn_for_a_replayed_tool_result() {
     let root = tempfile::tempdir().expect("mock app-server fixture");
     let trace = root.path().join("turns.jsonl");
@@ -2520,7 +2833,7 @@ async fn retries_completed_turns_on_a_new_session() {
     let root = tempfile::tempdir().expect("mock app-server fixture");
     let trace = root.path().join("retry.jsonl");
     let script = format!(
-        "#!/bin/sh\nread initialize\nprintf '%s\\n' '{{\"id\":1,\"result\":{{}}}}'\nread initialized\nread create\nprintf '%s\\n' \"$create\" >> '{}'\nprintf '%s\\n' '{{\"id\":2,\"result\":{{\"thread\":{{\"id\":\"retry\"}}}}}}'\nwhile read line; do printf '%s\\n' \"$line\" >> '{}'; done\n",
+        "#!/bin/sh\nread -r initialize\nprintf '%s\\n' '{{\"id\":1,\"result\":{{}}}}'\nread -r initialized\nread -r create\nprintf '%s\\n' \"$create\" >> '{}'\nprintf '%s\\n' '{{\"id\":2,\"result\":{{\"thread\":{{\"id\":\"retry\"}}}}}}'\nwhile read -r line; do printf '%s\\n' \"$line\" >> '{}'; done\n",
         trace.display(),
         trace.display()
     );

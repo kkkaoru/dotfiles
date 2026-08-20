@@ -1976,9 +1976,285 @@ async fn prepare_tool_input_rewrites_same_scope_launch_to_resume() {
                 "claudex_model":"gpt-test"
             }),
         )
-        .expect("same-scope launch should resume");
-    assert_eq!(public["resume"], "worker-a");
-    assert_eq!(public["run_in_background"], true);
+        .expect("same-scope launch should become SendMessage follow-up");
+    assert_eq!(public["to"], "worker-a");
+    assert_eq!(public["message"], "Audit the Rust adapter tests");
+    assert!(public.get("resume").is_none());
+    assert!(public.get("resume_from").is_none());
+    assert!(public.get("prompt").is_none());
+    assert!(public.get("run_in_background").is_none());
+}
+
+#[tokio::test]
+async fn prepare_tool_input_sanitizes_native_send_message() {
+    let stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        launch_fanout_open: false,
+        launch_fanout_deadline: None,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["SendMessage".to_owned()],
+        tool_context: None,
+        activity: SubscriptionActivity::default(),
+    };
+    let public = stream
+        .prepare_tool_input(
+            "SendMessage",
+            "send-a",
+            &json!({
+                "to":"worker-a",
+                "message":"continue the review",
+                "prompt":"ignored"
+            }),
+        )
+        .expect("native SendMessage");
+    assert_eq!(
+        public,
+        json!({"to":"worker-a","message":"continue the review"})
+    );
+}
+
+#[test]
+fn prepare_tool_input_rejects_send_message_without_to() {
+    let stream = bare_subscription_stream(vec!["SendMessage".to_owned()]);
+    let missing = stream
+        .prepare_tool_input(
+            "SendMessage",
+            "send-missing",
+            &json!({"message":"continue the review"}),
+        )
+        .expect_err("SendMessage without to must fail closed");
+    assert_eq!(
+        missing.to_string(),
+        "SendMessage requires `to` with the exact prior Agent/Task agentId; it was not executed."
+    );
+    let empty = stream
+        .prepare_tool_input(
+            "SendMessage",
+            "send-empty",
+            &json!({"to":"","message":"continue the review"}),
+        )
+        .expect_err("SendMessage with empty to must fail closed");
+    assert_eq!(
+        empty.to_string(),
+        "SendMessage requires `to` with the exact prior Agent/Task agentId; it was not executed."
+    );
+    let blank = stream
+        .prepare_tool_input(
+            "SendMessage",
+            "send-blank",
+            &json!({"to":"   ","message":"continue the review"}),
+        )
+        .expect_err("SendMessage with blank to must fail closed");
+    assert_eq!(
+        blank.to_string(),
+        "SendMessage requires `to` with the exact prior Agent/Task agentId; it was not executed."
+    );
+}
+
+#[tokio::test]
+async fn rejects_rewritten_send_message_follow_up_when_the_tool_is_unlisted() {
+    let (sender, mut receiver) = channel();
+    let registry = Arc::new(SubagentReuseRegistry::default());
+    let mut recorded = MessagesRequest {
+        model: "main".to_owned(),
+        system: json!("stable system"),
+        messages: vec![
+            json!({
+                "role":"assistant",
+                "content":[{
+                    "type":"tool_use",
+                    "id":"tool-a",
+                    "name":"Agent",
+                    "input":{
+                        "prompt":"Audit the Rust adapter tests",
+                        "claudex_model":"gpt-test"
+                    }
+                }]
+            }),
+            json!({
+                "role":"user",
+                "content":[{
+                    "type":"tool_result",
+                    "tool_use_id":"tool-a",
+                    "content":[{"type":"text","text":"Async agent launched successfully.\\nagentId: worker-a"}]
+                }]
+            }),
+        ],
+        tools: vec![json!({"name":"Agent"})],
+        stream: false,
+        output_config: Value::Null,
+        metadata: json!({"_claudex_transport_identity":{"session_id":"session-a"}}),
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+    registry.observe_and_restore(&mut recorded);
+    let mut stream = reuse_stream(
+        Arc::clone(&registry),
+        ModelCatalog::default(),
+        "Use gpt-test for this worker",
+    );
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant",
+                "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use",
+                    "id":"agent-reuse",
+                    "name":"Agent",
+                    "input":{
+                        "prompt":"Audit the Rust adapter tests",
+                        "claudex_model":"gpt-test"
+                    }
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("unlisted SendMessage follow-up must not fail the parent stream");
+    assert!(!stream.saw_tool_use);
+    assert!(stream.blocked_subagent);
+    let live_output = output(&mut receiver).await;
+    assert!(live_output.contains(r#""type":"thinking_delta""#));
+    assert!(!live_output.contains(r#""type":"tool_use""#));
+    stream
+        .finish(
+            &sender,
+            &json!({"type":"result","subtype":"success","result":""}),
+        )
+        .await
+        .expect("finish parent stream");
+    let tail_output = output(&mut receiver).await;
+    let mut output = live_output;
+    output.push_str(&tail_output);
+    assert!(
+        output.contains("Tool `SendMessage` was not supplied by Claude Code and was not executed.")
+    );
+    assert!(!output.contains(r#""type":"tool_use""#));
+    assert!(!output.contains(r#""stop_reason":"tool_use""#));
+    assert_valid_stream(&output, Some("end_turn"));
+}
+
+#[tokio::test]
+async fn rejects_native_send_message_when_the_tool_is_unlisted() {
+    let (sender, mut receiver) = channel();
+    let mut stream = bare_subscription_stream(vec!["Agent".to_owned()]);
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant",
+                "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use",
+                    "id":"send-unlisted",
+                    "name":"SendMessage",
+                    "input":{"to":"worker-a","message":"continue the review"}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("unlisted native SendMessage must not fail the parent stream");
+    assert!(!stream.saw_tool_use);
+    assert!(stream.blocked_subagent);
+    let live_output = output(&mut receiver).await;
+    assert!(!live_output.contains(r#""type":"tool_use""#));
+    stream
+        .finish(
+            &sender,
+            &json!({"type":"result","subtype":"success","result":""}),
+        )
+        .await
+        .expect("finish parent stream");
+    let tail_output = output(&mut receiver).await;
+    let mut output = live_output;
+    output.push_str(&tail_output);
+    assert!(
+        output.contains("Tool `SendMessage` was not supplied by Claude Code and was not executed.")
+    );
+    assert!(!output.contains(r#""type":"tool_use""#));
+    assert_valid_stream(&output, Some("end_turn"));
+}
+
+#[tokio::test]
+async fn forwards_native_send_message_when_the_tool_is_listed() {
+    let (sender, mut receiver) = channel();
+    let mut stream = bare_subscription_stream(vec!["SendMessage".to_owned()]);
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant",
+                "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use",
+                    "id":"send-listed",
+                    "name":"SendMessage",
+                    "input":{"to":"worker-a","message":"continue the review"}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("listed SendMessage forwards");
+    assert!(stream.saw_tool_use);
+    assert!(!stream.blocked_subagent);
+    let output = output(&mut receiver).await;
+    assert!(output.contains(r#""type":"tool_use""#));
+    assert!(output.contains(r#""name":"SendMessage""#));
+    assert!(output.contains("worker-a"));
+    assert!(output.contains("continue the review"));
+}
+
+#[tokio::test]
+async fn rejects_native_send_message_without_to() {
+    let (sender, mut receiver) = channel();
+    let mut stream = bare_subscription_stream(vec!["SendMessage".to_owned()]);
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant",
+                "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use",
+                    "id":"send-missing-to",
+                    "name":"SendMessage",
+                    "input":{"message":"continue the review"}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("SendMessage without to must not fail the parent stream");
+    assert!(!stream.saw_tool_use);
+    assert!(stream.blocked_subagent);
+    let live_output = output(&mut receiver).await;
+    assert!(!live_output.contains(r#""type":"tool_use""#));
+    stream
+        .finish(
+            &sender,
+            &json!({"type":"result","subtype":"success","result":""}),
+        )
+        .await
+        .expect("finish parent stream");
+    let tail_output = output(&mut receiver).await;
+    let mut output = live_output;
+    output.push_str(&tail_output);
+    assert!(output.contains(
+        "SendMessage requires `to` with the exact prior Agent/Task agentId; it was not executed."
+    ));
+    assert!(!output.contains(r#""type":"tool_use""#));
+    assert!(!output.contains(r#""stop_reason":"tool_use""#));
+    assert_valid_stream(&output, Some("end_turn"));
 }
 
 fn agent_tool_use(id: &str, input: Value) -> Value {
@@ -1992,6 +2268,49 @@ fn assistant_agent_batch(tools: Vec<Value>) -> String {
         "message":{"content":tools}
     })
     .to_string()
+}
+
+fn restore_session_worker(
+    registry: &SubagentReuseRegistry,
+    description: &str,
+    prompt: &str,
+    recipient: &str,
+) {
+    let mut recorded = MessagesRequest {
+        model: "main".to_owned(),
+        system: json!("stable system"),
+        messages: vec![
+            json!({
+                "role":"assistant",
+                "content":[{
+                    "type":"tool_use",
+                    "id":"tool-a",
+                    "name":"Agent",
+                    "input":{
+                        "description":description,
+                        "prompt":prompt,
+                        "claudex_model":"gpt-test"
+                    }
+                }]
+            }),
+            json!({
+                "role":"user",
+                "content":[{
+                    "type":"tool_result",
+                    "tool_use_id":"tool-a",
+                    "content":[{"type":"text","text":format!("Async agent launched successfully.\\nagentId: {recipient}")}]
+                }]
+            }),
+        ],
+        tools: vec![json!({"name":"Agent"}), json!({"name":"SendMessage"})],
+        stream: false,
+        output_config: Value::Null,
+        metadata: json!({"_claudex_transport_identity":{"session_id":"session-a"}}),
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+    registry.observe_and_restore(&mut recorded);
 }
 
 fn reuse_stream(
@@ -2042,6 +2361,76 @@ fn fanout_worker_catalog() -> ModelCatalog {
 async fn same_turn_duplicate_scope_forwards_only_one_agent() {
     let (sender, mut receiver) = channel();
     let registry = Arc::new(SubagentReuseRegistry::default());
+    restore_session_worker(
+        &registry,
+        "Reproduce azookey conversion bug",
+        "Use gpt to reproduce はしのはじから.",
+        "worker-a",
+    );
+    let mut stream = reuse_stream(
+        Arc::clone(&registry),
+        ModelCatalog::default(),
+        "Use gpt-test for this worker",
+    );
+    stream.tools = vec!["Agent".to_owned(), "SendMessage".to_owned()];
+    let line = assistant_agent_batch(vec![
+        agent_tool_use(
+            "reproduce-gpt",
+            json!({
+                "description":"Reproduce azookey conversion bug",
+                "prompt":"Use gpt to reproduce はしのはじから.",
+                "claudex_model":"gpt-test"
+            }),
+        ),
+        agent_tool_use(
+            "reproduce-cc",
+            json!({
+                "description":"Reproduce azookey conversion bug",
+                "prompt":"Use another provider to reproduce はしのはじから.",
+                "claudex_model":"gpt-test"
+            }),
+        ),
+        agent_tool_use(
+            "trace-cursor",
+            json!({
+                "description":"Trace azookey conversion pipeline",
+                "prompt":"Map Vibrato boundaries across three surfaces.",
+                "claudex_model":"gpt-test"
+            }),
+        ),
+    ]);
+    stream
+        .handle_line(&sender, &line)
+        .await
+        .expect("occupied same-scope launch must become SendMessage");
+    drop(sender);
+    let output = output(&mut receiver).await;
+    assert!(
+        output.contains("reproduce-gpt") && output.contains(r#""name":"SendMessage""#),
+        "occupied same-scope launch must rewrite to SendMessage: {output}"
+    );
+    assert!(
+        output.contains("reproduce-cc") && output.contains("worker-a"),
+        "duplicate same-scope launch must SendMessage the known recipient, not drop: {output}"
+    );
+    assert!(
+        !output.contains(r#""name":"Agent""#) || output.contains("trace-cursor"),
+        "independent scope must still forward: {output}"
+    );
+    assert!(
+        output.contains("trace-cursor"),
+        "independent scope must still forward: {output}"
+    );
+    assert!(
+        !output.contains("A same-scope SubAgent is already running, so this duplicate launch was not started. Continue with the existing worker."),
+        "known recipient must not skip-drop the extra prompt: {output}"
+    );
+}
+
+#[tokio::test]
+async fn same_turn_inflight_duplicate_queues_follow_up_without_dropping() {
+    let (sender, mut receiver) = channel();
+    let registry = Arc::new(SubagentReuseRegistry::default());
     let mut stream = reuse_stream(
         Arc::clone(&registry),
         ModelCatalog::default(),
@@ -2076,7 +2465,7 @@ async fn same_turn_duplicate_scope_forwards_only_one_agent() {
     stream
         .handle_line(&sender, &line)
         .await
-        .expect("forward independent scopes only");
+        .expect("queue inflight duplicate instead of dropping it");
     drop(sender);
     let output = output(&mut receiver).await;
     assert!(
@@ -2085,19 +2474,211 @@ async fn same_turn_duplicate_scope_forwards_only_one_agent() {
     );
     assert!(
         !output.contains("reproduce-cc"),
-        "duplicate same-scope launch must not spawn another worker: {output}"
+        "inflight duplicate must not spawn another worker: {output}"
     );
     assert!(
         output.contains("trace-cursor"),
         "independent scope must still forward: {output}"
     );
-    assert!(registry.scope_is_occupied(
-        "session-a",
-        &json!({
-            "description":"Reproduce azookey conversion bug",
-            "claudex_model":"gpt-test"
-        })
+    assert!(
+        !output.contains("A same-scope SubAgent is already running, so this duplicate launch was not started. Continue with the existing worker."),
+        "inflight duplicate must queue instead of skip-dropping: {output}"
+    );
+    assert_eq!(
+        registry.queued_follow_up_messages("session-a"),
+        vec!["Use another provider to reproduce はしのはじから.".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn same_turn_same_source_path_forwards_only_one_agent() {
+    let (sender, mut receiver) = channel();
+    let registry = Arc::new(SubagentReuseRegistry::default());
+    let mut stream = reuse_stream(
+        Arc::clone(&registry),
+        ModelCatalog::default(),
+        "Use gpt-test for this worker",
+    );
+    let line = assistant_agent_batch(vec![
+        agent_tool_use(
+            "capture-writer",
+            json!({
+                "description":"Implement skip_duplicate notices",
+                "prompt":"Edit capture.rs and keep SendMessage continue.",
+                "claudex_model":"gpt-test"
+            }),
+        ),
+        agent_tool_use(
+            "capture-peer",
+            json!({
+                "description":"Rewrite occupancy matching",
+                "prompt":"The second writer still owns capture.rs.",
+                "claudex_model":"gpt-test"
+            }),
+        ),
+    ]);
+    stream
+        .handle_line(&sender, &line)
+        .await
+        .expect("same source path must not spawn a sibling writer");
+    drop(sender);
+    let output = output(&mut receiver).await;
+    assert!(
+        output.contains("capture-writer"),
+        "first path owner must forward: {output}"
+    );
+    assert!(
+        !output.contains("capture-peer"),
+        "same capture.rs writer must not spawn a sibling Agent: {output}"
+    );
+    assert!(
+        !output.contains("A same-scope SubAgent is already running, so this duplicate launch was not started. Continue with the existing worker."),
+        "path-colliding inflight follow-up must queue instead of skip-dropping: {output}"
+    );
+    assert_eq!(
+        registry.queued_follow_up_messages("session-a"),
+        vec!["The second writer still owns capture.rs.".to_owned()]
+    );
+}
+
+#[tokio::test]
+async fn live_agent_cap_rejects_new_agent_but_allows_send_message() {
+    let _guard = crate::anthropic::subagent_reuse::reuse_env_lock();
+    let previous =
+        std::env::var_os(crate::anthropic::subagent_reuse::MAX_SUBAGENTS_PER_SESSION_ENV);
+    unsafe {
+        std::env::set_var(
+            crate::anthropic::subagent_reuse::MAX_SUBAGENTS_PER_SESSION_ENV,
+            "1",
+        )
+    };
+    let (sender, mut receiver) = channel();
+    let registry = Arc::new(SubagentReuseRegistry::default());
+    let mut recorded = MessagesRequest {
+        model: "main".to_owned(),
+        system: json!("stable system"),
+        messages: vec![
+            json!({
+                "role":"assistant",
+                "content":[{
+                    "type":"tool_use",
+                    "id":"tool-a",
+                    "name":"Agent",
+                    "input":{
+                        "prompt":"Audit the Rust adapter tests",
+                        "claudex_model":"gpt-test"
+                    }
+                }]
+            }),
+            json!({
+                "role":"user",
+                "content":[{
+                    "type":"tool_result",
+                    "tool_use_id":"tool-a",
+                    "content":[{"type":"text","text":"Async agent launched successfully.\\nagentId: worker-a"}]
+                }]
+            }),
+        ],
+        tools: vec![json!({"name":"Agent"}), json!({"name":"SendMessage"})],
+        stream: false,
+        output_config: Value::Null,
+        metadata: json!({"_claudex_transport_identity":{"session_id":"session-a"}}),
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+    registry.observe_and_restore(&mut recorded);
+    let mut stream = reuse_stream(
+        Arc::clone(&registry),
+        ModelCatalog::default(),
+        "Use gpt-test for this worker",
+    );
+    stream.tools = vec!["Agent".to_owned(), "SendMessage".to_owned()];
+    let line = assistant_agent_batch(vec![
+        agent_tool_use(
+            "css-review",
+            json!({
+                "description":"Review CSS layout",
+                "prompt":"Review CSS layout",
+                "claudex_model":"gpt-test"
+            }),
+        ),
+        json!({
+            "type":"tool_use",
+            "id":"continue-worker",
+            "name":"SendMessage",
+            "input":{"to":"worker-a","message":"continue the rust audit"}
+        }),
+    ]);
+    stream
+        .handle_line(&sender, &line)
+        .await
+        .expect("cap must reject a new Agent and still forward SendMessage");
+    drop(sender);
+    let output = output(&mut receiver).await;
+    unsafe {
+        match previous {
+            Some(value) => std::env::set_var(
+                crate::anthropic::subagent_reuse::MAX_SUBAGENTS_PER_SESSION_ENV,
+                value,
+            ),
+            None => std::env::remove_var(
+                crate::anthropic::subagent_reuse::MAX_SUBAGENTS_PER_SESSION_ENV,
+            ),
+        }
+    }
+    assert!(
+        !output.contains("css-review"),
+        "over-cap new Agent must not launch: {output}"
+    );
+    assert!(output.contains(
+        "The live Agent cap was reached, including nested workers, so a new Agent/Task launch was not started. Continue an existing worker with SendMessage({to}) if that tool is listed."
     ));
+    assert!(
+        output.contains("continue-worker") && output.contains(r#""name":"SendMessage""#),
+        "SendMessage continue must still be allowed over the live cap: {output}"
+    );
+}
+
+#[tokio::test]
+async fn nested_session_rejects_agent_and_allows_send_message() {
+    let (sender, mut receiver) = channel();
+    let registry = Arc::new(SubagentReuseRegistry::default());
+    let mut stream = reuse_stream(
+        Arc::clone(&registry),
+        ModelCatalog::default(),
+        "Use gpt-test for this worker",
+    );
+    stream.tools = vec!["Agent".to_owned(), "SendMessage".to_owned()];
+    if let Some(context) = stream.tool_context.as_mut() {
+        context.is_subagent = true;
+    }
+    let line = assistant_agent_batch(vec![agent_tool_use(
+        "nested-agent",
+        json!({
+            "description":"Nested fan-out",
+            "prompt":"Launch another worker.",
+            "claudex_model":"gpt-test"
+        }),
+    )]);
+    stream
+        .handle_line(&sender, &line)
+        .await
+        .expect("nested Agent reject must not fail the parent stream");
+    drop(sender);
+    let output = output(&mut receiver).await;
+    assert!(
+        !output.contains("nested-agent"),
+        "nested Agent/Task launch must not start: {output}"
+    );
+    assert!(
+        output.contains("Nested SubAgent sessions must not launch Agent/Task. The parent session owns fan-out. Continue the delegated task with the tools you have. SendMessage({to}) is still allowed to continue an existing worker."),
+        "nested launch must explain SendMessage continuation: {output}"
+    );
+    assert!(
+        !output.contains(r#""type":"tool_use""#),
+        "nested Agent must not emit tool_use: {output}"
+    );
 }
 
 #[tokio::test]
@@ -3496,7 +4077,11 @@ async fn resumes_an_existing_subscription_agent_without_duplicate_scope_check() 
     let (sender, mut receiver) = channel();
     let mut context = explicit_subscription_tool_context();
     context.session_id = Some("session-resume".to_owned());
-    let mut stream = bare_subscription_stream(vec!["Agent".to_owned(), "Task".to_owned()]);
+    let mut stream = bare_subscription_stream(vec![
+        "Agent".to_owned(),
+        "Task".to_owned(),
+        "SendMessage".to_owned(),
+    ]);
     stream.tool_context = Some(context);
     stream
         .handle_line(
@@ -3611,4 +4196,60 @@ fn prepare_tool_input_without_routing_context_reports_missing_config() {
         super::super::agent_route_validation::BlockedSubagentReason::MissingConfig
     );
     assert!(error.to_string().contains("has no routing context"));
+}
+
+#[test]
+fn prepare_tool_input_rejects_nested_subagent_agent_and_allows_send_message() {
+    let mut context = SubscriptionToolContext::for_tests(
+        Arc::new(AgentEffortIntents::default()),
+        ModelCatalog::default(),
+        None,
+        "parent-model",
+        vec![json!({"role":"user","content":"do the delegated work"})],
+        json!("cc_is_subagent=true"),
+    );
+    context.is_subagent = true;
+    let stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        launch_fanout_open: false,
+        launch_fanout_deadline: None,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["Agent".to_owned(), "SendMessage".to_owned()],
+        tool_context: Some(context),
+        activity: SubscriptionActivity::default(),
+    };
+    let error = stream
+        .prepare_tool_input(
+            "Agent",
+            "nested-agent",
+            &json!({"prompt":"launch another worker","claudex_model":"gpt-test"}),
+        )
+        .expect_err("nested SubAgent Agent/Task must be rejected");
+    let blocked = error
+        .downcast_ref::<super::super::agent_route_validation::BlockedSubagentError>()
+        .expect("nested launch must preserve its typed blocked reason");
+    assert_eq!(
+        blocked.reason(),
+        super::super::agent_route_validation::BlockedSubagentReason::NestedLaunch
+    );
+    assert_eq!(
+        blocked.notice(),
+        "Nested SubAgent sessions must not launch Agent/Task. The parent session owns fan-out. Continue the delegated task with the tools you have. SendMessage({to}) is still allowed to continue an existing worker."
+    );
+    let public = stream
+        .prepare_tool_input(
+            "SendMessage",
+            "nested-send",
+            &json!({"to":"a0123456789abcdef","message":"continue the review"}),
+        )
+        .expect("nested SendMessage({to}) remains allowed");
+    assert_eq!(
+        public,
+        json!({"to":"a0123456789abcdef","message":"continue the review"})
+    );
 }

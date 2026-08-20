@@ -6,7 +6,7 @@ use std::{
 };
 
 use claudex_agent_adapter::{
-    agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute},
+    agent_backend::{AgentBackend, BackendKind, BackendRoute},
     anthropic::Bridge,
     http_router,
 };
@@ -46,120 +46,24 @@ async fn lazy_routes_cover_provider_entry_points_and_failed_startup_state() {
         route_with_prefix("gpt-model", BackendKind::CodexAppServer, "gpt"),
         route("gpt-secondary", BackendKind::CodexAppServer),
         route("gpt-unused", BackendKind::CodexAppServer),
-        route("gpt-copilot", BackendKind::CopilotAcp),
-        route_with_prefix("grok-model", BackendKind::GrokAcp, "grok"),
     ]);
     exercise_initial_provider_routes(&backend, &codex_spawns).await;
 
     // Dynamic models match configured prefixes only (no vendor-name inference).
     assert!(backend.supports_model("gpt-5.6-sol"));
-    assert!(backend.supports_model("grok-4.6"));
     assert!(!backend.supports_model("claude-opus-5"));
     assert!(!backend.supports_model("qwen-unconfigured"));
     exercise_explicit_subagent_routes(Arc::clone(&backend)).await;
     assert_eq!(
         backend.started_models(),
-        [
-            "gpt-5.6-sol",
-            "gpt-copilot",
-            "gpt-model",
-            "gpt-secondary",
-            "grok-4.6",
-            "grok-model"
-        ]
+        ["gpt-5.6-sol", "gpt-model", "gpt-secondary"]
     );
     assert_single_codex_spawn(&codex_spawns);
 
     exercise_dynamic_route().await;
-    exercise_provider_restart(home.path()).await;
-    exercise_provider_restart_startup_failure(home.path()).await;
-    exercise_nonfatal_session_failure(home.path()).await;
     exercise_failed_route_health().await;
     backend.shutdown().await;
     drop(home);
-}
-
-async fn exercise_nonfatal_session_failure(root: &Path) {
-    let backend = AgentBackend::spawn_routes(&[route("fail-session", BackendKind::GrokAcp)]);
-    for _ in 0..2 {
-        assert!(
-            backend
-                .request("thread/start", json!({"model":"fail-session"}))
-                .await
-                .is_err()
-        );
-    }
-    assert_eq!(backend.started_models(), ["fail-session"]);
-    let trace = fs::read_to_string(root.join("grok-acp-mock.jsonl"))
-        .expect("read nonfatal session failure trace");
-    assert_eq!(
-        trace
-            .matches("\"arguments\":[\"--model\",\"fail-session\"")
-            .count(),
-        1,
-        "a session-level failure must not restart its live provider"
-    );
-}
-
-async fn exercise_provider_restart(root: &Path) {
-    let backend = AgentBackend::spawn_routes(&[route("exit-once-session", BackendKind::GrokAcp)]);
-    let recovered = backend
-        .request("thread/start", json!({"model":"exit-once-session"}))
-        .await
-        .expect("restart an exited ACP provider and retry the session");
-    assert!(recovered.pointer("/thread/id").is_some());
-    assert!(backend.is_alive());
-    let trace = fs::read_to_string(root.join("grok-acp-mock.jsonl"))
-        .expect("read restarted provider trace");
-    assert_eq!(
-        trace
-            .matches("\"arguments\":[\"--model\",\"exit-once-session\"")
-            .count(),
-        2
-    );
-}
-
-async fn exercise_provider_restart_startup_failure(root: &Path) {
-    fs::remove_file(root.join("grok-acp-exited-once"))
-        .expect("reset one-shot provider exit marker");
-    let one_shot_wrapper = root.join("one-shot-grok-wrapper");
-    fs::write(
-        &one_shot_wrapper,
-        format!(
-            "#!/bin/sh\nrm -- \"$0\"\nexec \"{}\" \"$@\"\n",
-            coverage_profile::wrapped_program(
-                root,
-                fixture_binary_path(env!("CARGO_BIN_EXE_grok-acp-mock")),
-            )
-            .display()
-        ),
-    )
-    .expect("write one-shot Grok wrapper");
-    fs::set_permissions(&one_shot_wrapper, fs::Permissions::from_mode(0o755))
-        .expect("make one-shot Grok wrapper executable");
-
-    let mut provider = route("exit-once-session", BackendKind::GrokAcp);
-    provider.acp = Some(AcpLaunch {
-        program: one_shot_wrapper.display().to_string(),
-        arguments: vec![
-            "--model".to_owned(),
-            "{model}".to_owned(),
-            "--mode".to_owned(),
-            "{model}".to_owned(),
-        ],
-    });
-    let backend = AgentBackend::spawn_routes(&[provider]);
-    let error = backend
-        .request("thread/start", json!({"model":"exit-once-session"}))
-        .await
-        .expect_err("report provider restart startup failure");
-
-    assert_eq!(
-        error.to_string(),
-        "ACP session creation failed after provider restart"
-    );
-    assert!(!one_shot_wrapper.exists());
-    backend.shutdown().await;
 }
 
 fn provider_home() -> (tempfile::TempDir, PathBuf) {
@@ -186,20 +90,6 @@ fn provider_home() -> (tempfile::TempDir, PathBuf) {
     unsafe {
         std::env::set_var("HOME", home.path());
         std::env::set_var("CLAUDEX_CODEX_PROGRAM", &codex_wrapper);
-        std::env::set_var(
-            "CLAUDEX_COPILOT_PROGRAM",
-            coverage_profile::wrapped_program(
-                home.path(),
-                fixture_binary_path(env!("CARGO_BIN_EXE_grok-acp-mock")),
-            ),
-        );
-        std::env::set_var(
-            "CLAUDEX_GROK_PROGRAM",
-            coverage_profile::wrapped_program(
-                home.path(),
-                fixture_binary_path(env!("CARGO_BIN_EXE_grok-acp-mock")),
-            ),
-        );
     }
     std::env::set_current_dir(home.path()).expect("isolate Grok ACP trace output");
     (home, codex_spawns)
@@ -236,26 +126,13 @@ async fn exercise_initial_provider_routes(backend: &Arc<AgentBackend>, codex_spa
     let (codex, secondary_codex) = tokio::join!(first_codex, second_codex);
     let codex = codex.expect("start first lazy Codex route");
     let secondary_codex = secondary_codex.expect("start second lazy Codex route");
-    let grok = backend
-        .request("thread/start", json!({"model":"grok-model"}))
-        .await
-        .expect("start lazy Grok route");
-    let copilot = backend
-        .request("thread/start", json!({"model":"gpt-copilot"}))
-        .await
-        .expect("start lazy Copilot route");
     assert!(codex.pointer("/thread/id").is_some());
     assert!(secondary_codex.pointer("/thread/id").is_some());
-    assert!(grok.pointer("/thread/id").is_some());
-    assert!(copilot.pointer("/thread/id").is_some());
     assert_eq!(
         fs::read_to_string(codex_spawns).expect("read Codex spawn count"),
         "spawn\n"
     );
-    assert_eq!(
-        backend.started_models(),
-        ["gpt-copilot", "gpt-model", "gpt-secondary", "grok-model"]
-    );
+    assert_eq!(backend.started_models(), ["gpt-model", "gpt-secondary"]);
     assert!(backend.is_alive());
 }
 
@@ -308,7 +185,7 @@ async fn exercise_dynamic_route() {
 }
 
 async fn exercise_failed_route_health() {
-    let failed = AgentBackend::spawn_routes(&[route("bad-version", BackendKind::GrokAcp)]);
+    let failed = AgentBackend::spawn_routes(&[route("bad-version", BackendKind::PiGateway)]);
     assert!(
         failed
             .request("thread/start", json!({"model":"bad-version"}))
@@ -349,10 +226,7 @@ async fn exercise_explicit_subagent_routes(backend: Arc<AgentBackend>) {
             .await
             .unwrap();
     });
-    for (suffix, selected, expected) in [
-        ("GPT", "gpt-5.6-sol", "medium"),
-        ("GROK", "grok-4.6", "GROK_ACP_STREAM_OK"),
-    ] {
+    for (suffix, selected, expected) in [("GPT", "gpt-5.6-sol", "medium")] {
         let user_id = format!("explicit-{suffix}");
         let prompt = launch_agent(&url, &user_id, suffix, selected).await;
         let response = post(

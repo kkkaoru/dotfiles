@@ -60,10 +60,14 @@ fn evaluates_subagent_floor_and_reuse_signals() {
     })]);
     let first = scheduler.decision_for_request(&state);
     assert_eq!(first.active_workers, 1);
-    assert_eq!(first.target_workers, 1);
+    assert_eq!(first.target_workers, 0);
     assert!(!first.active_floor_breached);
     assert_eq!(first.needs_more_workers, 0);
-    assert!(first.guidance(&scheduler.config()).contains("Re-evaluate"));
+    assert!(
+        !first
+            .guidance(&scheduler.config())
+            .contains("Launch at least")
+    );
 }
 
 #[test]
@@ -382,14 +386,20 @@ fn preserves_reassessment_baseline() {
         ..SchedulerConfig::default()
     };
     let scheduler = ParallelScheduler::new(config);
-    let state = messages(&[serde_json::json!({
-        "role":"assistant",
-        "content":[
-            tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
-            tool_use("t2","cc_Agent_0","grok-4.6"),
-            tool_use("t3","cc_Agent_0","gpt-5.6-sol"),
-        ]
-    })]);
+    let state = messages(&[
+        serde_json::json!({
+            "role":"user",
+            "content":"Tasks:\n- implement parser\n- verify renderer"
+        }),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[
+                tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
+                tool_use("t2","cc_Agent_0","grok-4.6"),
+                tool_use("t3","cc_Agent_0","gpt-5.6-sol"),
+            ]
+        }),
+    ]);
     let first = scheduler.decision_for_request(&state);
     assert!(
         first.guidance(&scheduler.config()).contains("Re-evaluate"),
@@ -417,26 +427,38 @@ fn guidance_includes_completion_followup_when_workers_finish() {
         allow_reuse: true,
         cleanup_on_exit: true,
     });
-    let first = messages(&[serde_json::json!({
-        "role":"assistant",
-        "content":[
-            tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
-            tool_use("t2","cc_Agent_0","grok-4.6"),
-            tool_use("t3","cc_Agent_0","gpt-5.6-sol"),
-        ]
-    })]);
-    let second = messages(&[serde_json::json!({
-        "role":"assistant",
-        "content":[
-            {
-                "type":"tool_result",
-                "tool_use_id":"t3",
-                "content":"done",
-            },
-            tool_use("t2","cc_Agent_0","grok-4.6"),
-            tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
-        ]
-    })]);
+    let first = messages(&[
+        serde_json::json!({
+            "role":"user",
+            "content":"Tasks:\n- implement parser\n- verify renderer"
+        }),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[
+                tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
+                tool_use("t2","cc_Agent_0","grok-4.6"),
+                tool_use("t3","cc_Agent_0","gpt-5.6-sol"),
+            ]
+        }),
+    ]);
+    let second = messages(&[
+        serde_json::json!({
+            "role":"user",
+            "content":"Tasks:\n- implement parser\n- verify renderer"
+        }),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[
+                {
+                    "type":"tool_result",
+                    "tool_use_id":"t3",
+                    "content":"done",
+                },
+                tool_use("t2","cc_Agent_0","grok-4.6"),
+                tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
+            ]
+        }),
+    ]);
     let _ = scheduler.decision_for_request(&first);
     let decision = scheduler.decision_for_request(&second);
     assert_eq!(decision.completed_recently, 1);
@@ -464,24 +486,36 @@ fn one_active_worker_triggers_interruption_and_replacement_protocol() {
         allow_reuse: true,
         cleanup_on_exit: true,
     });
-    let first = messages(&[serde_json::json!({
-        "role":"assistant",
-        "content":[
-            tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
-            tool_use("t2","cc_Agent_0","grok-4.6"),
-        ]
-    })]);
-    let second = messages(&[serde_json::json!({
-        "role":"assistant",
-        "content":[
-            {
-                "type":"tool_result",
-                "tool_use_id":"t2",
-                "content":"done",
-            },
-            tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
-        ]
-    })]);
+    let first = messages(&[
+        serde_json::json!({
+            "role":"user",
+            "content":"Tasks:\n- implement parser\n- verify renderer"
+        }),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[
+                tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
+                tool_use("t2","cc_Agent_0","grok-4.6"),
+            ]
+        }),
+    ]);
+    let second = messages(&[
+        serde_json::json!({
+            "role":"user",
+            "content":"Tasks:\n- implement parser\n- verify renderer"
+        }),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[
+                {
+                    "type":"tool_result",
+                    "tool_use_id":"t2",
+                    "content":"done",
+                },
+                tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
+            ]
+        }),
+    ]);
     let _ = scheduler.decision_for_request(&first);
     let decision = scheduler.decision_for_request(&second);
     assert_eq!(decision.active_workers, 1);
@@ -514,12 +548,12 @@ fn stale_single_worker_is_not_inflated_on_reassessment_tick() {
     std::thread::sleep(std::time::Duration::from_millis(220));
     let decision = scheduler.decision_for_request(&steady);
     assert_eq!(decision.active_workers, 1);
-    assert_eq!(decision.target_workers, 1);
+    assert_eq!(decision.target_workers, 0);
     assert!(!decision.active_floor_breached);
     assert_eq!(decision.needs_more_workers, 0);
     let guidance = decision.guidance(&scheduler.config());
-    assert!(guidance.contains("Re-evaluate"));
     assert!(!guidance.contains("interrupt stale work"));
+    assert!(!guidance.contains("Launch at least"));
 }
 
 #[test]
@@ -594,7 +628,7 @@ fn capacity_action_handles_inverted_manual_worker_bounds() {
     let mut decision = SchedulerDecision::no_action();
     decision.active_workers = 0;
 
-    policy::apply_capacity_actions(&mut decision, 6, &config);
+    policy::apply_capacity_actions(&mut decision, 6, &config, false);
 
     assert_eq!(decision.target_workers, 3);
     assert_eq!(decision.needs_more_workers, 3);
@@ -626,36 +660,48 @@ fn when_one_active_worker_remains_prompt_interrupts_and_replaces() {
         allow_reuse: true,
         cleanup_on_exit: true,
     });
-    let first = messages(&[serde_json::json!({
-        "role":"assistant",
-        "content":[
-            tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
-            tool_use("t2","cc_Agent_0","grok-4.6"),
-            tool_use("t3","cc_Agent_0","gpt-5.6-sol"),
-            tool_use("t4","cc_Agent_0","grok-4.6"),
-        ]
-    })]);
-    let second = messages(&[serde_json::json!({
-        "role":"assistant",
-        "content":[
-            {
-                "type":"tool_result",
-                "tool_use_id":"t2",
-                "content":"done"
-            },
-            {
-                "type":"tool_result",
-                "tool_use_id":"t3",
-                "content":"done"
-            },
-            {
-                "type":"tool_result",
-                "tool_use_id":"t4",
-                "content":"done"
-            },
-            tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
-        ]
-    })]);
+    let first = messages(&[
+        serde_json::json!({
+            "role":"user",
+            "content":"Tasks:\n- implement parser\n- verify renderer"
+        }),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[
+                tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
+                tool_use("t2","cc_Agent_0","grok-4.6"),
+                tool_use("t3","cc_Agent_0","gpt-5.6-sol"),
+                tool_use("t4","cc_Agent_0","grok-4.6"),
+            ]
+        }),
+    ]);
+    let second = messages(&[
+        serde_json::json!({
+            "role":"user",
+            "content":"Tasks:\n- implement parser\n- verify renderer"
+        }),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[
+                {
+                    "type":"tool_result",
+                    "tool_use_id":"t2",
+                    "content":"done"
+                },
+                {
+                    "type":"tool_result",
+                    "tool_use_id":"t3",
+                    "content":"done"
+                },
+                {
+                    "type":"tool_result",
+                    "tool_use_id":"t4",
+                    "content":"done"
+                },
+                tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
+            ]
+        }),
+    ]);
     let _ = scheduler.decision_for_request(&first);
     let decision = scheduler.decision_for_request(&second);
     assert_eq!(decision.active_workers, 1);
@@ -874,6 +920,34 @@ fn active_floor_does_not_inflate_a_two_scope_target() {
 }
 
 #[test]
+fn completed_launch_ack_does_not_replenish_a_met_target() {
+    let scheduler = ParallelScheduler::for_tests();
+    let request = messages(&[
+        serde_json::json!({
+            "role":"user",
+            "content":"Implement exactly these 2 independent scopes:\n- implement parser\n- verify renderer",
+        }),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[
+                {"type":"tool_use","id":"one","name":"Agent","input":{}},
+                {"type":"tool_use","id":"two","name":"Agent","input":{}},
+            ],
+        }),
+        serde_json::json!({
+            "role":"user",
+            "content":[
+                {"type":"tool_result","tool_use_id":"one","content":"Async agent launched successfully.\nThe agent is working in the background."},
+                {"type":"tool_result","tool_use_id":"two","content":"Async agent launched successfully.\nThe agent is working in the background."},
+            ],
+        }),
+    ]);
+    let decision = scheduler.decision_for_request(&request);
+    assert_eq!(decision.target_workers, 2);
+    assert_eq!(decision.needs_more_workers, 0);
+}
+
+#[test]
 fn explicit_three_independent_action_items_are_not_collapsed_to_one() {
     let scheduler = ParallelScheduler::for_tests();
     let request = messages(&[
@@ -1034,28 +1108,142 @@ fn multi_scope_completion_reassesses_only_the_unfinished_lanes() {
 #[test]
 fn replenishes_only_to_the_active_floor_after_completion() {
     let scheduler = ParallelScheduler::for_tests();
-    let first = messages(&[serde_json::json!({
-        "role":"assistant",
-        "content":[
-            tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
-            tool_use("t2","cc_Agent_0","grok-4.6"),
-            tool_use("t3","cc_Agent_0","gpt-5.6-sol"),
-        ]
-    })]);
-    let second = messages(&[serde_json::json!({
-        "role":"assistant",
-        "content":[
-            {"type":"tool_result","tool_use_id":"t2","content":"done"},
-            {"type":"tool_result","tool_use_id":"t3","content":"done"},
-            tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
-        ]
-    })]);
+    let first = messages(&[
+        serde_json::json!({
+            "role":"user",
+            "content":"Tasks:\n- implement parser\n- verify renderer"
+        }),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[
+                tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
+                tool_use("t2","cc_Agent_0","grok-4.6"),
+                tool_use("t3","cc_Agent_0","gpt-5.6-sol"),
+            ]
+        }),
+    ]);
+    let second = messages(&[
+        serde_json::json!({
+            "role":"user",
+            "content":"Tasks:\n- implement parser\n- verify renderer"
+        }),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[
+                {"type":"tool_result","tool_use_id":"t2","content":"done"},
+                {"type":"tool_result","tool_use_id":"t3","content":"done"},
+                tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
+            ]
+        }),
+    ]);
     let _ = scheduler.decision_for_request(&first);
     let decision = scheduler.decision_for_request(&second);
     assert_eq!(decision.completed_recently, 2);
     assert_eq!(decision.target_workers, 2);
     assert_eq!(decision.needs_more_workers, 1);
     assert!(decision.active_floor_breached);
+}
+
+#[test]
+fn exact_async_launch_ack_skips_floor_and_diversity() {
+    let scheduler = ParallelScheduler::new(SchedulerConfig {
+        min_parallel_workers: 3,
+        max_parallel_workers: 40,
+        active_floor: 2,
+        reevaluate_on_completion: true,
+        reassess_interval: Duration::from_secs(600),
+        min_model_families: 2,
+        allow_reuse: true,
+        cleanup_on_exit: true,
+    });
+    let request = messages(&[
+        serde_json::json!({
+            "role":"user",
+            "content":"Tasks:\n- implement parser\n- verify renderer"
+        }),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[{
+                "type":"tool_use",
+                "id":"t1",
+                "name":"Agent",
+                "input":{"claudex_model":"gpt-5.6-sol"}
+            }]
+        }),
+        serde_json::json!({
+            "role":"user",
+            "content":[{
+                "type":"tool_result",
+                "tool_use_id":"t1",
+                "content":[{
+                    "type":"text",
+                    "text":"Async agent launched successfully.\nagentId: internal\nThe agent is working in the background."
+                }]
+            }]
+        }),
+    ]);
+    let decision = scheduler.decision_for_request(&request);
+    assert_eq!(decision.active_workers, 1);
+    assert!(!decision.active_floor_breached);
+    assert!(!decision.needs_model_diversity);
+    assert!(
+        decision
+            .actions
+            .iter()
+            .all(|action| !action.contains("Only one active lane remains"))
+    );
+    assert!(
+        decision
+            .actions
+            .iter()
+            .all(|action| !action.contains("Diversify providers"))
+    );
+}
+
+#[test]
+fn completion_follow_up_does_not_replay_on_fresh_workers() {
+    let scheduler = ParallelScheduler::for_tests();
+    let first = messages(&[
+        serde_json::json!({
+            "role":"user",
+            "content":"Tasks:\n- implement parser\n- verify renderer"
+        }),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[
+                tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
+                tool_use("t2","cc_Agent_0","grok-4.6"),
+            ]
+        }),
+    ]);
+    let second = messages(&[
+        serde_json::json!({
+            "role":"user",
+            "content":"Tasks:\n- implement parser\n- verify renderer"
+        }),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[
+                {"type":"tool_result","tool_use_id":"t2","content":"done"},
+                tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
+            ]
+        }),
+    ]);
+    let _ = scheduler.decision_for_request(&first);
+    let decision = scheduler.decision_for_request(&second);
+    assert!(
+        decision
+            .actions
+            .iter()
+            .all(|action| !action.contains("replay the same high-value subtask on fresh workers"))
+    );
+    assert!(
+        decision
+            .actions
+            .iter()
+            .any(|action| action.contains("Do not replay the same scope on a fresh Agent"))
+            || decision.actions.is_empty()
+    );
 }
 
 #[test]
@@ -1158,7 +1346,7 @@ fn policy_helpers_cover_early_returns_and_cleanup_choices() {
 
     let mut decision = SchedulerDecision::no_action();
     decision.active_workers = 3;
-    policy::apply_capacity_actions(&mut decision, 3, &config);
+    policy::apply_capacity_actions(&mut decision, 3, &config, false);
     assert_eq!(decision.needs_more_workers, 0);
 
     let active = core::SubagentSnapshot {
@@ -1425,7 +1613,7 @@ fn covers_malformed_work_units_and_policy_boundaries() {
     assert!(snapshot.active_models.contains_key("batch:2"));
 
     let no_user = messages(&[serde_json::json!({"role":"assistant", "content":[]} )]);
-    assert_eq!(policy::independent_scope_count(&no_user), 2);
+    assert_eq!(policy::independent_scope_count(&no_user), 0);
     let single = messages(&[serde_json::json!({"role":"user", "content":"exactly one worker"})]);
     assert_eq!(policy::independent_scope_count(&single), 1);
     let explicit = messages(&[

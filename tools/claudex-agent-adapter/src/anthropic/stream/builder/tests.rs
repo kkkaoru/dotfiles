@@ -45,3 +45,15 @@ fn invented_advisor_calls_continue_without_a_hard_tool_error() {
     assert!(!other_success);
     assert!(other_text.contains("unrequested"));
 }
+
+#[test]
+fn listed_send_message_is_required_to_emit_follow_up() {
+    let listed = HashMap::from([("cc_SendMessage_3".to_owned(), "SendMessage".to_owned())]);
+    let missing = HashMap::from([("cc_Agent_0".to_owned(), "Agent".to_owned())]);
+    assert!(crate::anthropic::subagent_reuse::has_listed_send_message(
+        listed.values()
+    ));
+    assert!(!crate::anthropic::subagent_reuse::has_listed_send_message(
+        missing.values()
+    ));
+}

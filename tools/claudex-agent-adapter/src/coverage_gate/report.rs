@@ -31,18 +31,6 @@ pub(super) struct InstrumentationException {
 #[cfg(test)]
 pub(super) const INSTRUMENTATION_EXCEPTIONS: &[InstrumentationException] = &[
     InstrumentationException {
-        path: "src/command_code_acp/agent_acp.rs",
-        symbol: "impl acp::Agent for HeadlessAgent",
-        reason_category: "async-trait-codegen",
-        test_evidence: "command_code_acp::agent_tests::serve_io_runs_headless_turn_and_emits_tool_progress",
-    },
-    InstrumentationException {
-        path: "src/grok_acp/client.rs",
-        symbol: "impl acp::Client for AcpClient",
-        reason_category: "async-trait-codegen",
-        test_evidence: "grok_acp::tests::client_inherent_handlers_cover_permissions_and_notifications",
-    },
-    InstrumentationException {
         path: "src/launcher/daemon_start_descriptors.rs",
         symbol: "fn close_inherited_descriptors",
         reason_category: "pre-exec-syscall",

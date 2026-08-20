@@ -5,11 +5,7 @@ impl AgentBackend {
         match self {
             Self::Routed(routes) => routes.max_context_tokens_for_model(model),
             Self::SessionScoped(scopes) => scopes.catalog().max_context_tokens_for_model(model),
-            Self::Codex(_)
-            | Self::ConfiguredAcp(_)
-            | Self::Copilot(_)
-            | Self::Grok(_)
-            | Self::Pi(_) => None,
+            Self::Codex(_) | Self::Pi(_) => None,
         }
     }
 
@@ -17,11 +13,7 @@ impl AgentBackend {
         match self {
             Self::Routed(routes) => routes.max_concurrency_for_model(model),
             Self::SessionScoped(scopes) => scopes.catalog().max_concurrency_for_model(model),
-            Self::Codex(_)
-            | Self::ConfiguredAcp(_)
-            | Self::Copilot(_)
-            | Self::Grok(_)
-            | Self::Pi(_) => None,
+            Self::Codex(_) | Self::Pi(_) => None,
         }
     }
 
@@ -29,11 +21,7 @@ impl AgentBackend {
         match self {
             Self::Routed(routes) => routes.configured_concurrency_limits(),
             Self::SessionScoped(scopes) => scopes.catalog().configured_concurrency_limits(),
-            Self::Codex(_)
-            | Self::ConfiguredAcp(_)
-            | Self::Copilot(_)
-            | Self::Grok(_)
-            | Self::Pi(_) => Vec::new(),
+            Self::Codex(_) | Self::Pi(_) => Vec::new(),
         }
     }
 }

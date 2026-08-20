@@ -8,6 +8,7 @@ use crate::anthropic::{
 
 impl Bridge {
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(in crate::anthropic::stream) async fn drive_stream(
         self: Arc<Self>,
         turn: ActiveTurn,

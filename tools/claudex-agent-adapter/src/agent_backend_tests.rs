@@ -2,61 +2,35 @@
 // Coverage excludes test implementation; production behavior remains measured.
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use super::{AcpLaunch, AgentBackend, BackendKind, BackendRoute, WebSearchMode};
+    use super::{AgentBackend, BackendKind, BackendRoute, WebSearchMode};
 
     #[test]
     fn parses_and_displays_backend_kinds() {
         for (input, expected) in [
             ("codex-app-server", BackendKind::CodexAppServer),
-            ("configured-acp", BackendKind::ConfiguredAcp),
-            ("copilot-acp", BackendKind::CopilotAcp),
-            ("grok-acp", BackendKind::GrokAcp),
+            ("pi-gateway", BackendKind::PiGateway),
         ] {
             assert_eq!(input.parse::<BackendKind>().unwrap(), expected);
             assert_eq!(expected.to_string(), input);
         }
+        for removed in ["configured-acp", "copilot-acp", "grok-acp"] {
+            let error = removed.parse::<BackendKind>().unwrap_err().to_string();
+            assert!(error.contains("ACP backends are removed"), "{error}");
+        }
         assert!("unknown".parse::<BackendKind>().is_err());
-        assert!("=grok-acp".parse::<BackendRoute>().is_err());
+        assert!("=codex-app-server".parse::<BackendRoute>().is_err());
         assert_eq!(
-            "model=grok-acp".parse::<BackendRoute>().unwrap(),
-            BackendRoute::new("model", BackendKind::GrokAcp)
+            "model=codex-app-server".parse::<BackendRoute>().unwrap(),
+            BackendRoute::new("model", BackendKind::CodexAppServer)
         );
         assert!("invalid".parse::<BackendRoute>().is_err());
-        let configured = BackendRoute {
-            model: "configured".to_owned(),
-            backend: BackendKind::ConfiguredAcp,
-            effort: None,
-            model_provider: None,
-            model_catalog_json: None,
-            pi_provider: None,
-            pi_model: None,
-            pi_extensions: Vec::new(),
-            max_context_tokens: None,
-            model_prefixes: Vec::new(),
-            max_concurrency: None,
-            acp: Some(AcpLaunch {
-                program: "provider".to_owned(),
-                arguments: vec!["--stdio".to_owned()],
-            }),
-            web_search_mode: WebSearchMode::default(),
-        };
-        assert!(configured.description().contains("configured-acp"));
         let routes = AgentBackend::spawn_routes(&[
             route_with_prefix("unused-codex", BackendKind::CodexAppServer, "codex-"),
-            route_with_prefix("unused-copilot", BackendKind::CopilotAcp, "copilot-"),
-            route_with_prefix("unused-acp", BackendKind::GrokAcp, "acp-"),
+            route_with_prefix("unused-pi", BackendKind::PiGateway, "pi-"),
         ]);
         assert!(routes.started_models().is_empty());
         assert!(routes.is_alive());
-        // Supports only exact configured models and declared prefixes — never vendor-name inference.
-        for model in [
-            "unused-codex",
-            "codex-extra",
-            "unused-copilot",
-            "copilot-extra",
-            "unused-acp",
-            "acp-extra",
-        ] {
+        for model in ["unused-codex", "codex-extra", "unused-pi", "pi-extra"] {
             assert!(routes.supports_model(model));
         }
         for model in ["", "Codex-extra", "unconfigured", "gpt", "grok", "qwen"] {
@@ -73,7 +47,7 @@ mod tests {
         let mut metadata = BackendRoute::new("model", BackendKind::CodexAppServer);
         metadata.model_provider = Some("provider".to_owned());
         assert!(metadata.description().contains("modelProvider"));
-        let mut effort = BackendRoute::new("model", BackendKind::GrokAcp);
+        let mut effort = BackendRoute::new("model", BackendKind::PiGateway);
         effort.effort = Some("high".to_owned());
         assert!(effort.description().contains("effort"));
 
@@ -89,12 +63,6 @@ mod tests {
         let mut prefix = BackendRoute::new("model", BackendKind::CodexAppServer);
         prefix.model_prefixes.push("model-".to_owned());
         assert!(prefix.description().contains("modelPrefixes"));
-        let mut acp = BackendRoute::new("model", BackendKind::ConfiguredAcp);
-        acp.acp = Some(AcpLaunch {
-            program: "provider".to_owned(),
-            arguments: Vec::new(),
-        });
-        assert!(acp.description().contains("program"));
     }
 
     #[test]
@@ -128,7 +96,7 @@ mod tests {
 
     #[test]
     fn session_scoped_catalog_delegates_concurrency_and_model_metadata() {
-        let mut route = BackendRoute::new("vendor", BackendKind::ConfiguredAcp);
+        let mut route = BackendRoute::new("vendor", BackendKind::PiGateway);
         route.max_concurrency = Some(4);
         route.max_context_tokens = Some(32_000);
         route.model_provider = Some("vendor-provider".to_owned());
@@ -146,7 +114,7 @@ mod tests {
         );
         assert_eq!(
             backend.backend_kind_for_model("vendor-preview"),
-            Some(BackendKind::ConfiguredAcp)
+            Some(BackendKind::PiGateway)
         );
         assert_eq!(
             backend
@@ -154,20 +122,5 @@ mod tests {
                 .as_deref(),
             Some("vendor-provider")
         );
-    }
-
-    #[test]
-    fn routed_and_leaf_backends_delegate_or_omit_concurrency_metadata() {
-        let leaf = std::sync::Arc::new(AgentBackend::Grok(
-            crate::grok_acp::GrokAcp::stopped_for_test(),
-        ));
-        let routed = AgentBackend::routed(vec![("model".to_owned(), leaf)]);
-
-        assert_eq!(routed.max_context_tokens_for_model("model"), None);
-        assert_eq!(routed.max_concurrency_for_model("model"), None);
-        assert!(routed.configured_concurrency_limits().is_empty());
-
-        assert_eq!(routed.max_context_tokens_for_model("unknown"), None);
-        assert_eq!(routed.max_concurrency_for_model("unknown"), None);
     }
 }

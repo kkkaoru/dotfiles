@@ -6,7 +6,10 @@ mod agent_intent_store;
 mod agent_route_validation;
 mod agent_routing;
 mod async_agent_handoff;
-pub(crate) use async_agent_handoff::{agent_tool_round_ids, exact_async_launch_acknowledgement};
+mod nested_subagent_launch;
+pub(crate) use async_agent_handoff::{
+    acknowledged_background_launch_count, agent_tool_round_ids, exact_async_launch_acknowledgement,
+};
 mod config;
 mod content;
 mod content_batch;
@@ -27,8 +30,6 @@ mod routing_quota;
 mod segment;
 mod session;
 mod stream;
-pub(crate) use session::is_unknown_session_text;
-pub(crate) use stream::usage_limit::contains_opencode_quota_marker;
 mod stream_batch;
 mod subagent_continuation;
 mod subagent_reuse;
@@ -51,6 +52,7 @@ mod subscription_oauth;
 pub(crate) mod subscription_request;
 mod subscription_stream;
 mod team_protocol;
+pub(crate) mod token_efficiency;
 mod tool_schema_cache;
 mod turn_input;
 mod usage_limit_cooldown;
@@ -59,7 +61,6 @@ mod usage_limit_failover;
 pub use content::{error_response, token_count};
 pub use request_identity::RequestIdentity;
 use segment::{Segment, Usage, WebEvidenceSummary};
-pub(crate) use segment::{cline_credits_failure_message, contains_cline_credits_balance_marker};
 pub(crate) use subscription::{DEFAULT_MAX_PROCESSES, DEFAULT_TIMEOUT_MINUTES};
 
 mod bridge_helpers;

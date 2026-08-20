@@ -27,6 +27,7 @@ struct Fixture<W> {
 struct ParallelAgents {
     agent_ids: Vec<String>,
     task_outputs: usize,
+    expected: usize,
 }
 
 impl<W: Write> Fixture<W> {
@@ -196,11 +197,11 @@ impl<W: Write> Fixture<W> {
             self.send_control_tool(
                 message,
                 "call-follow-up-reuse",
-                "cc_TaskOutput_1",
+                "cc_SendMessage_3",
                 json!({
-                    "task_id":"agent-profile-7",
-                    "block":false,
-                    "timeout":0
+                    "to":"agent-profile-7",
+                    "summary":"extend current task",
+                    "message":"extend the profile worker's current task"
                 }),
             );
         } else if input.contains("FOLLOW_UP_NO_AGENT") {
@@ -216,11 +217,11 @@ impl<W: Write> Fixture<W> {
             self.send_control_tool(
                 message,
                 "call-control-message",
-                "cc_TaskOutput_1",
+                "cc_SendMessage_3",
                 json!({
-                    "task_id":"agent-profile-7",
-                    "block":true,
-                    "timeout":120000
+                    "to":"agent-profile-7",
+                    "summary":"request current findings",
+                    "message":"ask the profile worker for its current findings"
                 }),
             );
         } else if input.contains("CONTROL_SUBAGENTS_TASK_UPDATE") {
@@ -256,7 +257,7 @@ impl<W: Write> Fixture<W> {
 
     fn run_parallel_scenario(&mut self, message: &Value, input: &str) -> bool {
         if input.contains("USE_PARALLEL_AGENTS_TASK_OUTPUT") {
-            self.send_parallel_agents(message);
+            self.send_parallel_agents(message, input);
         } else if input.contains("USE_PARALLEL_TOOLS") {
             self.send_delayed_parallel_tools();
         } else if input.contains("USE_INTERLEAVED_TOOLS") {
@@ -401,14 +402,22 @@ impl<W: Write> Fixture<W> {
         self.send_tool_event(901, "call-test-b");
     }
 
-    fn send_parallel_agents(&mut self, message: &Value) {
+    fn send_parallel_agents(&mut self, message: &Value, input: &str) {
         self.pending_tool = true;
-        self.parallel_agents = Some(ParallelAgents::default());
         self.parallel_thread_id = message
             .pointer("/params/threadId")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        for (id, name) in [(910, "profile"), (911, "business"), (912, "funding")] {
+        let agents: &[(u64, &str)] = if input.contains("one independent background scope") {
+            &[(910, "profile")]
+        } else {
+            &[(910, "profile"), (911, "business"), (912, "funding")]
+        };
+        self.parallel_agents = Some(ParallelAgents {
+            expected: agents.len(),
+            ..ParallelAgents::default()
+        });
+        for (id, name) in agents.iter().copied() {
             self.send(json!({
                 "id":id, "method":"item/tool/call",
                 "params":{
@@ -676,7 +685,7 @@ impl<W: Write> Fixture<W> {
             return;
         };
         workflow.agent_ids.push(agent_id);
-        if workflow.agent_ids.len() != 3 {
+        if workflow.agent_ids.len() != workflow.expected {
             return;
         }
         let agent_ids = workflow.agent_ids.clone();
@@ -697,7 +706,7 @@ impl<W: Write> Fixture<W> {
             return;
         };
         workflow.task_outputs += 1;
-        if workflow.task_outputs == 3 {
+        if workflow.task_outputs == workflow.expected {
             self.pending_tool = false;
             self.parallel_agents = None;
             self.send_text_and_complete("PARALLEL_AGENT_RESULTS_COMPLETE");

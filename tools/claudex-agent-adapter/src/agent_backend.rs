@@ -1,8 +1,6 @@
 pub use crate::web_search::WebSearchMode;
 use crate::{
     app_server::{AppServer, ThreadEvents},
-    copilot_acp::CopilotAcp,
-    grok_acp::GrokAcp,
     pi_gateway::PiGateway,
 };
 use anyhow::Result;
@@ -10,6 +8,7 @@ use std::sync::Arc;
 mod kind;
 mod model_kind;
 pub use kind::BackendKind;
+pub(crate) use kind::MAX_MODEL_CONCURRENCY;
 mod concurrency;
 mod dispatch;
 mod lifecycle;
@@ -23,13 +22,10 @@ use routes::{RoutedBackend, RoutedBackends};
 pub(crate) use session_scope::{ProviderSessionScopeSnapshot, SessionScopedBackends};
 #[path = "agent_backend_route.rs"]
 mod route;
-pub use route::{AcpLaunch, BackendRoute};
+pub use route::BackendRoute;
 
 pub enum AgentBackend {
     Codex(Arc<AppServer>),
-    Copilot(Arc<CopilotAcp>),
-    ConfiguredAcp(Arc<GrokAcp>),
-    Grok(Arc<GrokAcp>),
     Pi(Arc<PiGateway>),
     Routed(RoutedBackends),
     /// Claude-session-keyed pools of [`RoutedBackends`].
@@ -44,9 +40,6 @@ impl AgentBackend {
     pub const fn kind(&self) -> BackendKind {
         match self {
             Self::Codex(_) => BackendKind::CodexAppServer,
-            Self::ConfiguredAcp(_) => BackendKind::ConfiguredAcp,
-            Self::Copilot(_) => BackendKind::CopilotAcp,
-            Self::Grok(_) => BackendKind::GrokAcp,
             Self::Pi(_) => BackendKind::PiGateway,
             Self::Routed(_) | Self::SessionScoped(_) => {
                 panic!("a routed backend has no single kind")
@@ -72,30 +65,21 @@ impl AgentBackend {
         match self {
             Self::Routed(routes) => routes.supports(model),
             Self::SessionScoped(scopes) => scopes.catalog().supports(model),
-            Self::Codex(_)
-            | Self::ConfiguredAcp(_)
-            | Self::Copilot(_)
-            | Self::Grok(_)
-            | Self::Pi(_) => false,
+            Self::Codex(_) | Self::Pi(_) => false,
         }
     }
     pub fn web_search_mode(&self, model: &str) -> WebSearchMode {
         match self {
             Self::Routed(routes) => routes.web_search_mode(model),
             Self::SessionScoped(scopes) => scopes.catalog().web_search_mode(model),
-            Self::Codex(_)
-            | Self::ConfiguredAcp(_)
-            | Self::Copilot(_)
-            | Self::Grok(_)
-            | Self::Pi(_) => WebSearchMode::default(),
+            Self::Codex(_) | Self::Pi(_) => WebSearchMode::default(),
         }
     }
 
     pub fn pi_gateway(&self) -> Option<Arc<PiGateway>> {
         match self {
             Self::Pi(gateway) => Some(Arc::clone(gateway)),
-            Self::Routed(_) | Self::SessionScoped(_) => None,
-            Self::Codex(_) | Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) => None,
+            Self::Routed(_) | Self::SessionScoped(_) | Self::Codex(_) => None,
         }
     }
 
@@ -109,7 +93,7 @@ impl AgentBackend {
             Self::SessionScoped(scopes) => {
                 Box::pin(scopes.unguarded_scope().pi_gateway_for_model(model)).await
             }
-            Self::Codex(_) | Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) => Ok(None),
+            Self::Codex(_) => Ok(None),
         }
     }
 
@@ -118,7 +102,7 @@ impl AgentBackend {
             Self::Routed(routes) => routes.pi_identity(model),
             Self::SessionScoped(scopes) => scopes.catalog().pi_identity(model),
             Self::Pi(gateway) => Some(gateway.identity()),
-            Self::Codex(_) | Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) => None,
+            Self::Codex(_) => None,
         }
     }
 
@@ -126,11 +110,7 @@ impl AgentBackend {
         match self {
             Self::Routed(routes) => routes.launch_scoped_effort(model),
             Self::SessionScoped(scopes) => scopes.catalog().launch_scoped_effort(model),
-            Self::Codex(_)
-            | Self::ConfiguredAcp(_)
-            | Self::Copilot(_)
-            | Self::Grok(_)
-            | Self::Pi(_) => None,
+            Self::Codex(_) | Self::Pi(_) => None,
         }
     }
     pub fn route_descriptions(&self) -> Vec<String> {
@@ -144,11 +124,7 @@ impl AgentBackend {
         match self {
             Self::Routed(routes) => routes.models(),
             Self::SessionScoped(scopes) => scopes.catalog().models(),
-            Self::Codex(_)
-            | Self::ConfiguredAcp(_)
-            | Self::Copilot(_)
-            | Self::Grok(_)
-            | Self::Pi(_) => vec![],
+            Self::Codex(_) | Self::Pi(_) => vec![],
         }
     }
 
@@ -156,11 +132,7 @@ impl AgentBackend {
         match self {
             Self::Routed(routes) => routes.started_models(),
             Self::SessionScoped(scopes) => scopes.started_models(),
-            Self::Codex(_)
-            | Self::ConfiguredAcp(_)
-            | Self::Copilot(_)
-            | Self::Grok(_)
-            | Self::Pi(_) => vec![],
+            Self::Codex(_) | Self::Pi(_) => vec![],
         }
     }
 
@@ -183,9 +155,6 @@ impl AgentBackend {
     pub fn subscribe_thread(&self, thread_id: &str) -> ThreadEvents {
         match self {
             Self::Codex(server) => server.subscribe_thread(thread_id),
-            Self::Copilot(agent) => agent.subscribe_thread(thread_id),
-            Self::ConfiguredAcp(agent) => agent.subscribe_thread(thread_id),
-            Self::Grok(agent) => agent.subscribe_thread(thread_id),
             Self::Pi(gateway) => gateway.subscribe_thread(thread_id),
             Self::Routed(routes) => {
                 let (index, raw_id) = routed_thread(thread_id);
@@ -209,20 +178,13 @@ impl AgentBackend {
             Self::SessionScoped(scopes) => {
                 Box::pin(scopes.unguarded_scope().ensure_thread_ready(thread_id)).await
             }
-            Self::Codex(_)
-            | Self::Copilot(_)
-            | Self::ConfiguredAcp(_)
-            | Self::Grok(_)
-            | Self::Pi(_) => Ok(()),
+            Self::Codex(_) | Self::Pi(_) => Ok(()),
         }
     }
 
     pub fn is_alive(&self) -> bool {
         match self {
             Self::Codex(server) => server.is_alive(),
-            Self::Copilot(agent) => agent.is_alive(),
-            Self::ConfiguredAcp(agent) => agent.is_alive(),
-            Self::Grok(agent) => agent.is_alive(),
             Self::Pi(gateway) => gateway.is_alive(),
             Self::Routed(routes) => routes.is_alive(),
             Self::SessionScoped(_) => true,
@@ -233,11 +195,7 @@ impl AgentBackend {
         match self {
             Self::Routed(routes) => routes.model_is_alive(model),
             Self::SessionScoped(scopes) => scopes.model_is_alive(model),
-            Self::Codex(_)
-            | Self::ConfiguredAcp(_)
-            | Self::Copilot(_)
-            | Self::Grok(_)
-            | Self::Pi(_) => self.is_alive(),
+            Self::Codex(_) | Self::Pi(_) => self.is_alive(),
         }
     }
 
@@ -250,9 +208,7 @@ impl AgentBackend {
                 Box::pin(scopes.unguarded_scope().search_backend(model)).await
             }
             Self::Codex(_) => Ok(Arc::clone(self)),
-            Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) | Self::Pi(_) => {
-                Self::spawn(BackendKind::CodexAppServer, model).await
-            }
+            Self::Pi(_) => Self::spawn(BackendKind::CodexAppServer, model).await,
         }
     }
 }

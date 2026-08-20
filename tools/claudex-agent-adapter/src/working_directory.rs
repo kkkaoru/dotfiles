@@ -1,8 +1,10 @@
 use std::{
     ffi::OsStr,
-    io,
     path::{Path, PathBuf},
 };
+
+#[cfg(test)]
+use std::io;
 
 use anyhow::{Context, Result};
 
@@ -12,7 +14,8 @@ pub(crate) const HEADER_NAME: &str = "x-claudex-working-directory";
 ///
 /// `std::env::current_dir()` fails with ENOENT when the daemon was started in a
 /// directory that has since been deleted (hot-swap temp worktrees). Fall back
-/// to `~/.cache/claudex` instead of failing the first Grok/ACP turn.
+/// to `~/.cache/claudex` instead of failing the first child spawn.
+#[cfg(test)]
 pub(crate) fn resolve_process_cwd(context: &str) -> Result<PathBuf> {
     resolve_cwd(std::env::current_dir(), context)
 }
@@ -30,6 +33,7 @@ pub(crate) fn pin_process_cwd() -> Result<PathBuf> {
     }
 }
 
+#[cfg(test)]
 fn resolve_cwd(current: io::Result<PathBuf>, context: &str) -> Result<PathBuf> {
     if let Ok(cwd) = &current
         && cwd.is_dir()

@@ -82,14 +82,23 @@ impl SubscriptionStream {
             .filter(|input| input.is_object())
             .cloned()
             .context("Claude subscription emitted non-object tool input")?;
-        let (private_input, public_input) = match self
+        let (mut private_input, mut public_input) = match self
             .prepare_routed_tool_input(sender, &name, id, &input)
             .await?
         {
             Some(inputs) => inputs,
             None => return Ok(false),
         };
-        if self.skip_duplicate_subagent_launch(&name, id, &private_input, &public_input)? {
+        if self
+            .skip_duplicate_subagent_launch(
+                sender,
+                &name,
+                id,
+                &mut private_input,
+                &mut public_input,
+            )
+            .await?
+        {
             return Ok(false);
         }
         if self
@@ -104,12 +113,24 @@ impl SubscriptionStream {
         {
             return Ok(false);
         }
+        if crate::anthropic::subagent_reuse::is_send_message_follow_up(&public_input)
+            && !crate::anthropic::subagent_reuse::has_listed_send_message(self.tools.iter())
+        {
+            self.reject_unlisted_send_message(sender).await?;
+            return Ok(false);
+        }
         self.report_subagent_action(sender, &name, &private_input)
             .await?;
-        send_tool_block(sender, self.next_index, id, &name, public_input).await?;
+        let public_name =
+            if crate::anthropic::subagent_reuse::is_send_message_follow_up(&public_input) {
+                "SendMessage"
+            } else {
+                name.as_str()
+            };
+        send_tool_block(sender, self.next_index, id, public_name, public_input).await?;
         self.next_index += 1;
         self.saw_tool_use = true;
-        if crate::anthropic::agent_effort::is_agent_tool(&name) {
+        if crate::anthropic::agent_effort::is_agent_tool(&name) && public_name != "SendMessage" {
             self.arm_launch_fanout();
         } else {
             self.clear_launch_fanout();
@@ -126,7 +147,9 @@ impl SubscriptionStream {
     ) -> Result<Option<(Value, Value)>> {
         match self.route_agent_tool_input(name, id, input) {
             Ok(inputs) => Ok(Some(inputs)),
-            Err(error) if crate::anthropic::agent_effort::is_agent_tool(name) => {
+            Err(error)
+                if crate::anthropic::agent_effort::is_agent_tool(name) || name == "SendMessage" =>
+            {
                 self.emit_blocked_subagent(sender, name, error).await?;
                 Ok(None)
             }
@@ -141,9 +164,9 @@ impl SubscriptionStream {
         error: anyhow::Error,
     ) -> Result<()> {
         tracing::warn!(%error, tool = name, "blocked unsupported SubAgent launch");
-        self.blocked_subagent = true;
-        let notice = error
-            .downcast_ref::<BlockedSubagentError>()
+        let blocked = error.downcast_ref::<BlockedSubagentError>();
+        self.blocked_subagent = blocked.is_none_or(|error| !error.continues_batch());
+        let notice = blocked
             .map(BlockedSubagentError::notice)
             .unwrap_or_else(|| fallback_blocked_notice(&error));
         self.report_blocked_agent_notice(sender, &notice).await?;
@@ -192,7 +215,10 @@ impl SubscriptionStream {
 
 fn fallback_blocked_notice(error: &anyhow::Error) -> String {
     let detail = error.to_string();
-    if detail.contains("cooling down") {
+    if detail.contains("cooling down")
+        || detail == super::handle_route::SEND_MESSAGE_REQUIRES_TO
+        || detail == crate::anthropic::subagent_reuse::NESTED_SUBAGENT_LAUNCH_NOTICE
+    {
         detail
     } else {
         BlockedSubagentReason::MissingConfig.notice(None)

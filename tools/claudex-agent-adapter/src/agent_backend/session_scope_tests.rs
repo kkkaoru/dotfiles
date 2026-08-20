@@ -93,9 +93,9 @@ async fn release_scope_drops_the_pool() {
 
 #[tokio::test]
 async fn release_scope_waits_for_leaf_shutdown_before_scope_is_gone() {
-    let scopes = SessionScopedBackends::new(&[BackendRoute::new("main", BackendKind::GrokAcp)]);
-    let leaf = Arc::new(AgentBackend::Grok(
-        crate::grok_acp::GrokAcp::alive_for_test(),
+    let scopes = SessionScopedBackends::new(&[BackendRoute::new("main", BackendKind::PiGateway)]);
+    let leaf = Arc::new(AgentBackend::Pi(
+        crate::pi_gateway::PiGateway::alive_for_test(),
     ));
     scopes.insert_scope_for_test(
         "shutdown-order",

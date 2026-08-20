@@ -7,9 +7,9 @@ use std::{
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Semaphore};
 
-use crate::agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute, WebSearchMode};
-use crate::parallel_scheduler::{ParallelScheduler, SchedulerConfig};
+use crate::agent_backend::AgentBackend;
 
+use super::super::internal_notification;
 use super::*;
 
 fn request(content: Value) -> MessagesRequest {
@@ -451,37 +451,51 @@ async fn keeps_provider_open_when_non_async_tools_remain_pending() {
     pending.insert("bash-1".to_owned(), json!(2));
     bridge.sessions.lock().await.push(handoff_session(pending));
 
-    let response = bridge
-        .async_agent_launch_handoff(&background_agent_request("background"))
-        .await;
+    let response = bridge.async_agent_launch_handoff(&background_agent_request("background"));
     assert!(
         response.is_none(),
         "leftover pending tools must keep the provider turn open"
     );
+    let sessions = bridge.sessions.lock().await;
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].thread_id, "handoff-thread");
+    let pending_tools = sessions[0].pending_tools.lock().await;
+    assert_eq!(pending_tools.get("background"), Some(&json!(1)));
+    assert_eq!(pending_tools.get("bash-1"), Some(&json!(2)));
+}
+
+#[test]
+fn launch_ack_chrome_returns_none() {
+    let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main-model".to_owned());
+    assert!(
+        bridge
+            .async_agent_launch_handoff(&background_agent_request("background"))
+            .is_none(),
+        "ASYNC_LAUNCH_PREFIX + BACKGROUND_MARKER is launch chrome, not completion"
+    );
 }
 
 #[tokio::test]
-async fn hands_control_back_when_no_session_owns_the_async_results() {
+async fn launch_ack_without_provider_turn_returns_short_non_stream_status() {
     let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main-model".to_owned());
+    let mut request = scheduler_handoff_request("Implement the authentication cache.");
+    request.stream = true;
     let response = bridge
-        .async_agent_launch_handoff(&background_agent_request("background"))
-        .await
-        .expect("unowned async launch acknowledgement still hands control back");
+        .launch_ack_without_provider_turn(&request)
+        .expect("completed launch ack returns a short status");
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
     let body: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(body["stop_reason"], "end_turn");
-    assert!(
-        body["content"][0]["text"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("Background agent launched")
+    assert_eq!(
+        body["content"][0]["text"],
+        "Background agent launched; the main prompt is ready."
     );
 }
 
-#[tokio::test]
-async fn hands_control_back_when_steering_user_message_follows_async_ack() {
+#[test]
+fn post_ack_steering_keeps_the_parent_open() {
     let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main-model".to_owned());
     let mut request = background_agent_request("background");
     request.messages.push(json!({
@@ -491,19 +505,18 @@ async fn hands_control_back_when_steering_user_message_follows_async_ack() {
             "text":"The user sent a new message while you were working:\n優先して調査\n\nAddress the message above as you continue this turn."
         }]
     }));
-    let response = bridge
-        .async_agent_launch_handoff(&request)
-        .await
-        .expect("async ack before trailing steering must still hand control back");
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-        .await
-        .unwrap();
-    let body: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(body["stop_reason"], "end_turn");
+    assert!(
+        bridge.async_agent_launch_handoff(&request).is_none(),
+        "post-ack steering must reach the parent instead of skipping it"
+    );
+    assert!(
+        bridge.launch_ack_without_provider_turn(&request).is_none(),
+        "steering after launch ack must still start a provider turn"
+    );
 }
 
-#[tokio::test]
-async fn keeps_provider_open_for_a_partial_async_launch_ack() {
+#[test]
+fn keeps_provider_open_for_a_partial_async_launch_ack() {
     let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main-model".to_owned());
     let mut request = request(json!([launch_result("one")]));
     request.messages.insert(
@@ -518,58 +531,62 @@ async fn keeps_provider_open_for_a_partial_async_launch_ack() {
     );
 
     assert!(
-        bridge.async_agent_launch_handoff(&request).await.is_none(),
+        bridge.async_agent_launch_handoff(&request).is_none(),
         "a partial acknowledgement must not hand control back"
     );
 }
 
-#[tokio::test]
-async fn keeps_provider_open_for_an_empty_async_launch_round() {
+#[test]
+fn keeps_provider_open_for_an_empty_async_launch_round() {
     let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main-model".to_owned());
     let request = request(json!([]));
 
     assert!(
-        bridge.async_agent_launch_handoff(&request).await.is_none(),
+        bridge.async_agent_launch_handoff(&request).is_none(),
         "an empty launch round must not hand control back"
     );
 }
 
+#[test]
+fn keeps_implementing_parent_open_when_subagent_acks_background_launch() {
+    let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main-model".to_owned());
+    let mut request = background_agent_request("background");
+    request.system = json!("cc_is_subagent=true");
+    assert!(
+        bridge.async_agent_launch_handoff(&request).is_none(),
+        "background-ack chrome must not complete an implementing SubAgent parent"
+    );
+}
+
 #[tokio::test]
-async fn keeps_provider_open_when_thread_ensure_fails() {
-    let backend = AgentBackend::spawn_routes(&[BackendRoute {
-        model: "failed".to_owned(),
-        backend: BackendKind::ConfiguredAcp,
-        effort: None,
-        model_provider: None,
-        model_catalog_json: None,
-        pi_provider: None,
-        pi_model: None,
-        pi_extensions: Vec::new(),
-        max_context_tokens: None,
-        max_concurrency: None,
-        model_prefixes: Vec::new(),
-        acp: Some(AcpLaunch {
-            program: "/definitely/missing/claudex-acp".to_owned(),
-            arguments: Vec::new(),
-        }),
-        web_search_mode: WebSearchMode::default(),
-    }]);
-    let bridge = Bridge::new_with_backend(backend, "failed".to_owned());
+async fn launch_ack_keeps_the_parent_session() {
+    let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main-model".to_owned());
+    let mut pending = HashMap::new();
+    pending.insert("background".to_owned(), json!({"id": 1}));
     let mut consumed = HashSet::new();
     consumed.insert("background".to_owned());
-    bridge.sessions.lock().await.push(handoff_session_with(
-        "0:missing-thread",
-        HashMap::new(),
-        consumed,
-    ));
+    bridge
+        .sessions
+        .lock()
+        .await
+        .push(handoff_session_with("handoff-thread", pending, consumed));
 
-    let response = bridge
-        .async_agent_launch_handoff(&background_agent_request("background"))
-        .await;
     assert!(
-        response.is_none(),
-        "handoff must abort when the owning thread cannot be ensured"
+        bridge
+            .async_agent_launch_handoff(&background_agent_request("background"))
+            .is_none(),
+        "launch ack must not cancel or disconnect the parent session"
     );
+
+    let sessions = bridge.sessions.lock().await;
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].thread_id, "handoff-thread");
+    assert_eq!(sessions[0].model, "main-model");
+    let pending_tools = sessions[0].pending_tools.lock().await;
+    assert_eq!(pending_tools.get("background"), Some(&json!({"id": 1})));
+    let consumed_ids = sessions[0].consumed_tool_ids.lock().await;
+    assert_eq!(consumed_ids.len(), 1);
+    assert!(consumed_ids.contains("background"));
 }
 
 fn parallel_background_agent_request(agent_id: &str) -> MessagesRequest {
@@ -597,114 +614,103 @@ fn scheduler_handoff_request(user_text: &str) -> MessagesRequest {
 }
 
 #[test]
-fn exact_two_scope_target_hands_off_at_two() {
-    let scheduler = ParallelScheduler::for_tests();
+fn completed_launch_ack_does_not_defer_to_launch_more_workers() {
     let request = scheduler_handoff_request(
         "Implement exactly these 2 independent scopes:\n- implement parser\n- verify renderer",
     );
-
-    assert!(should_defer_background_handoff_with(
-        &scheduler, &request, 1
-    ));
-    assert!(!should_defer_background_handoff_with(
-        &scheduler, &request, 2
-    ));
+    assert!(!should_defer_background_handoff_with(&request));
 }
 
 #[test]
-fn single_scope_substantive_work_hands_off_at_one_worker() {
-    let scheduler = ParallelScheduler::new(SchedulerConfig {
-        min_parallel_workers: 5,
-        max_parallel_workers: 8,
-        ..SchedulerConfig::default()
-    });
+fn single_scope_launch_ack_does_not_defer() {
     let request = scheduler_handoff_request("Implement the authentication cache.");
-
-    assert!(should_defer_background_handoff_with(
-        &scheduler, &request, 0
-    ));
-    assert!(!should_defer_background_handoff_with(
-        &scheduler, &request, 1
-    ));
+    assert!(!should_defer_background_handoff_with(&request));
 }
 
 #[test]
-fn seven_scopes_respect_max_four_before_handoff() {
-    let scheduler = ParallelScheduler::new(SchedulerConfig {
-        max_parallel_workers: 4,
-        ..SchedulerConfig::default()
-    });
+fn seven_scope_launch_ack_does_not_defer_to_fill_the_cap() {
     let request = scheduler_handoff_request(
         "Tasks:\n- implement one\n- implement two\n- implement three\n- implement four\n- implement five\n- implement six\n- implement seven",
     );
-
-    assert!(should_defer_background_handoff_with(
-        &scheduler, &request, 3
-    ));
-    assert!(!should_defer_background_handoff_with(
-        &scheduler, &request, 4
-    ));
+    assert!(!should_defer_background_handoff_with(&request));
 }
 
 #[test]
 fn no_delegation_intent_never_defers_handoff() {
-    let scheduler = ParallelScheduler::for_tests();
     let request = scheduler_handoff_request("Do not launch another SubAgent.");
+    assert!(!should_defer_background_handoff_with(&request));
+}
 
-    assert!(!should_defer_background_handoff_with(
-        &scheduler, &request, 0
-    ));
+#[test]
+fn post_ack_steering_defers_handoff_so_the_parent_receives_it() {
+    let mut request = scheduler_handoff_request(
+        "Implement exactly these 2 independent scopes:\n- implement parser\n- verify renderer",
+    );
+    request.messages.push(json!({
+        "role":"user",
+        "content":"The user sent a new message while you were working:\n優先して調査\n\nAddress the message above as you continue this turn."
+    }));
+    assert!(should_defer_background_handoff_with(&request));
 }
 
 #[tokio::test]
-async fn defers_handoff_when_parallel_floor_is_unmet() {
+async fn unmet_scheduler_target_still_returns_short_launch_ack_status() {
     let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main-model".to_owned());
-    let response = bridge
-        .async_agent_launch_handoff(&parallel_background_agent_request("background"))
-        .await;
+    let mut request = parallel_background_agent_request("background");
+    request.stream = true;
     assert!(
-        response.is_none(),
-        "partial fan-out must keep the provider turn open for additional launches"
+        bridge.async_agent_launch_handoff(&request).is_none(),
+        "launch chrome is not parent completion"
+    );
+    let response = bridge
+        .launch_ack_without_provider_turn(&request)
+        .expect("completed launch ack is short status, not another generation");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["stop_reason"], "end_turn");
+    assert_eq!(
+        body["content"][0]["text"],
+        "Background agent launched; the main prompt is ready."
     );
 }
 
 #[tokio::test]
-async fn hands_control_back_once_parallel_floor_is_met() {
+async fn launch_ack_returns_none_once_parallel_floor_is_met() {
     let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main-model".to_owned());
-    let config = crate::parallel_scheduler::ParallelScheduler::shared().config();
-    let required = config.min_parallel_workers.max(config.active_floor);
-    let ids = (0..required)
-        .map(|index| format!("worker-{index}"))
-        .collect::<Vec<_>>();
-    let mut request = request(json!(
-        ids.iter().map(|id| launch_result(id)).collect::<Vec<_>>()
-    ));
+    let mut request = request(json!([launch_result("one"), launch_result("two")]));
     request.messages.insert(
         0,
         json!({
             "role":"user",
-            "content":"並列で複数の独立スコープを実装してください。"
+            "content":"Implement exactly these 2 independent scopes:\n- implement parser\n- verify renderer"
         }),
     );
     request.messages.insert(
         1,
         json!({
             "role":"assistant",
-            "content": ids.iter().map(|id| json!({
-                "type":"tool_use",
-                "id": id,
-                "name":"Agent",
-                "input":{}
-            })).collect::<Vec<_>>()
+            "content":[
+                {"type":"tool_use", "id":"one", "name":"Agent", "input":{}},
+                {"type":"tool_use", "id":"two", "name":"Agent", "input":{}}
+            ]
         }),
     );
+    assert!(
+        bridge.async_agent_launch_handoff(&request).is_none(),
+        "launch chrome must not cancel or complete the parent"
+    );
     let response = bridge
-        .async_agent_launch_handoff(&request)
-        .await
-        .expect("met floor should hand control back");
+        .launch_ack_without_provider_turn(&request)
+        .expect("skip-generation short status, not a second provider turn");
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
     let body: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(body["stop_reason"], "end_turn");
+    assert_eq!(
+        body["content"][0]["text"],
+        "2 background agents launched; the main prompt is ready."
+    );
 }

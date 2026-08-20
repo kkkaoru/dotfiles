@@ -6,7 +6,8 @@ pub(super) const NON_RETRYABLE_ERROR_TYPE: &str = "invalid_request_error";
 
 mod classify;
 use classify::{
-    is_provider_auth_error, is_provider_exhaustion_error, is_terminal_provider_configuration_error,
+    is_incomplete_tool_json_error, is_provider_auth_error, is_provider_exhaustion_error,
+    is_terminal_provider_configuration_error,
 };
 
 pub(super) fn error_type(error: &Error) -> &'static str {
@@ -17,7 +18,10 @@ pub(super) fn error_type(error: &Error) -> &'static str {
             NON_RETRYABLE_ERROR_TYPE
         };
     }
-    if is_terminal_provider_configuration_error(error) || is_provider_exhaustion_error(error) {
+    if is_terminal_provider_configuration_error(error)
+        || is_provider_exhaustion_error(error)
+        || is_incomplete_tool_json_error(error)
+    {
         NON_RETRYABLE_ERROR_TYPE
     } else {
         RETRYABLE_ERROR_TYPE
@@ -36,6 +40,8 @@ pub(super) fn http_status(fallback: StatusCode, error: &Error) -> StatusCode {
     {
         StatusCode::TOO_MANY_REQUESTS
     } else if is_terminal_provider_configuration_error(error)
+        || is_provider_exhaustion_error(error)
+        || is_incomplete_tool_json_error(error)
         || super::stream::usage_limit::contains_classic_usage_limit_marker(&error.to_string())
         || super::segment::contains_empty_acp_billing_marker(&error.to_string())
     {

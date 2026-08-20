@@ -480,10 +480,7 @@ fn successful_resume_without_spawn_phrase_keeps_recipient_reusable() {
         Some("worker-a".to_owned()),
         "successful resume prose must not retire the recipient"
     );
-    assert_eq!(
-        follow.get("resume").and_then(Value::as_str),
-        Some("worker-a")
-    );
+    assert_eq!(follow["to"], "worker-a");
 }
 
 #[test]
@@ -494,11 +491,56 @@ fn launch_tools_are_hidden_only_after_the_session_budget_is_reached() {
     let mut reached = request("session-a", Vec::new());
     set_limit_metadata(&mut reached, true);
     assert!(!should_expose_launch_tools(&reached));
-    assert_eq!(DEFAULT_MAX_SUBAGENTS_PER_SESSION, 1_024);
+    assert_eq!(DEFAULT_MAX_SUBAGENTS_PER_SESSION, 40);
     let mut null_metadata = request("session-a", Vec::new());
     null_metadata.metadata = Value::Null;
     set_limit_metadata(&mut null_metadata, true);
     assert!(null_metadata.metadata.is_object());
+}
+
+#[test]
+fn colliding_writer_path_rewrites_to_send_message() {
+    let registry = SubagentReuseRegistry::default();
+    let mut first = request(
+        "session-a",
+        vec![
+            json!({
+                "role":"assistant",
+                "content":[{
+                    "type":"tool_use",
+                    "id":"tool-a",
+                    "name":"Agent",
+                    "input":{
+                        "description":"Implement the writer path",
+                        "prompt":"Edit src/lib.rs in the adapter crate.",
+                        "claudex_model":"gpt-test"
+                    }
+                }]
+            }),
+            launch("tool-a", "worker-a"),
+        ],
+    );
+    registry.observe_and_restore(&mut first);
+    let mut colliding = json!({
+        "description":"Investigate the same file as a second writer",
+        "prompt":"Write src/lib.rs from another model.",
+        "claudex_model":"gpt-5.6-luna"
+    });
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut colliding),
+        Some("worker-a".to_owned())
+    );
+    assert_eq!(colliding["to"], "worker-a");
+    assert_eq!(colliding["message"], "Write src/lib.rs from another model.");
+    let mut disjoint = json!({
+        "description":"Read-only investigation of a disjoint path",
+        "prompt":"Inspect src/main.rs only.",
+        "claudex_model":"gpt-5.6-luna"
+    });
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut disjoint),
+        None
+    );
 }
 
 #[test]
@@ -583,7 +625,14 @@ fn ordinary_agent_session_does_not_restore_mailbox_guidance() {
     let guidance = resumed.system.to_string();
     assert!(guidance.contains(REUSE_GUIDANCE_MARKER));
     assert!(guidance.contains("worker-a"));
-    assert!(guidance.contains("resume"));
+    assert!(guidance.contains("SendMessage"));
+    assert!(guidance.contains("to: that exact agentId"));
+    assert!(guidance.contains("Never launch a new Agent for the same path"));
+    assert!(guidance.contains("never Agent({resume})"));
+    assert!(guidance.contains("workers must not nest Agent fan-out"));
+    assert!(guidance.contains("One writer per file path"));
+    assert!(guidance.contains("User 全て中断 is /tasks-style"));
+    assert!(guidance.contains("do not auto-resume via SendMessage"));
     assert!(!guidance.contains("TeamSendMessage"));
 }
 
@@ -647,6 +696,7 @@ fn concurrent_claude_sessions_do_not_reuse_each_others_workers() {
         registry.rewrite_launch_input("session-a", &mut arguments),
         Some("worker-a".to_owned())
     );
+    assert_eq!(arguments["to"], "worker-a");
 }
 
 #[test]
@@ -667,7 +717,9 @@ fn same_scope_active_launch_is_rewritten_to_resume_instead_of_a_new_spawn() {
         registry.rewrite_launch_input("session-a", &mut arguments),
         Some("worker-a".to_owned())
     );
-    assert_eq!(arguments["resume"], "worker-a");
+    assert_eq!(arguments["to"], "worker-a");
+    assert_eq!(arguments["message"], "Audit the Rust adapter tests");
+    assert!(arguments.get("resume").is_none());
     assert_eq!(registry.state_for("session-a").expect("state").len(), 1);
 }
 
@@ -696,11 +748,12 @@ fn completed_same_scope_worker_is_revived_with_resume_instead_of_a_new_spawn() {
         registry.rewrite_launch_input("session-a", &mut arguments),
         Some("worker-a".to_owned())
     );
-    assert_eq!(arguments["resume"], "worker-a");
+    assert_eq!(arguments["to"], "worker-a");
+    assert_eq!(arguments["message"], "Audit the Rust adapter tests");
 }
 
 #[test]
-fn failed_or_stopped_worker_is_not_rewritten_to_resume() {
+fn failed_worker_is_not_rewritten_to_resume() {
     let registry = SubagentReuseRegistry::default();
     let mut first = request(
         "session-a",
@@ -712,22 +765,242 @@ fn failed_or_stopped_worker_is_not_rewritten_to_resume() {
         ),
     );
     registry.observe_and_restore(&mut first);
-    for status in ["failed", "cancelled", "stopped"] {
-        let mut terminal = request(
-            "session-a",
-            vec![
-                json!({"role":"user","content":format!("<task-id>worker-a</task-id><status>{status}</status>")}),
-            ],
-        );
-        registry.observe_and_restore(&mut terminal);
-        let mut arguments = launch_arguments("Audit the Rust adapter tests", "worker-model");
-        assert_eq!(
-            registry.rewrite_launch_input("session-a", &mut arguments),
-            None,
-            "{status} workers must stay launchable as a fresh spawn"
-        );
-        assert!(arguments.get("resume").is_none());
-    }
+    let mut terminal = request(
+        "session-a",
+        vec![json!({"role":"user","content":"<task-id>worker-a</task-id><status>failed</status>"})],
+    );
+    registry.observe_and_restore(&mut terminal);
+    let mut arguments = launch_arguments("Audit the Rust adapter tests", "worker-model");
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut arguments),
+        None
+    );
+    assert!(arguments.get("resume").is_none());
+}
+
+#[test]
+fn cancelled_worker_is_not_rewritten_to_resume() {
+    let registry = SubagentReuseRegistry::default();
+    let mut first = request(
+        "session-a",
+        launch_with_scope(
+            "tool-a",
+            "worker-a",
+            "Audit the Rust adapter tests",
+            "worker-model",
+        ),
+    );
+    registry.observe_and_restore(&mut first);
+    let mut terminal = request(
+        "session-a",
+        vec![
+            json!({"role":"user","content":"<task-id>worker-a</task-id><status>cancelled</status>"}),
+        ],
+    );
+    registry.observe_and_restore(&mut terminal);
+    let mut arguments = launch_arguments("Audit the Rust adapter tests", "worker-model");
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut arguments),
+        None
+    );
+    assert!(arguments.get("resume").is_none());
+}
+
+#[test]
+fn claude_task_stop_worker_is_rewritten_to_send_message() {
+    let registry = SubagentReuseRegistry::default();
+    let mut first = request(
+        "session-a",
+        launch_with_scope(
+            "tool-a",
+            "worker-a",
+            "Audit the Rust adapter tests",
+            "worker-model",
+        ),
+    );
+    registry.observe_and_restore(&mut first);
+    let mut paused = request(
+        "session-a",
+        vec![
+            json!({"role":"assistant","content":[{"type":"tool_use","id":"stop-a","name":"TaskStop","input":{"task_id":"worker-a"}}]}),
+            json!({"role":"user","content":"<task-id>worker-a</task-id><status>stopped</status>"}),
+        ],
+    );
+    registry.observe_and_restore(&mut paused);
+    let mut arguments = launch_arguments("Audit the Rust adapter tests", "worker-model");
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut arguments),
+        Some("worker-a".to_owned())
+    );
+    assert_eq!(arguments["to"], "worker-a");
+}
+
+#[test]
+fn user_tasks_stop_is_not_rewritten_to_send_message() {
+    let registry = SubagentReuseRegistry::default();
+    let mut first = request(
+        "session-a",
+        launch_with_scope(
+            "tool-a",
+            "worker-a",
+            "Audit the Rust adapter tests",
+            "worker-model",
+        ),
+    );
+    registry.observe_and_restore(&mut first);
+    let mut stopped = request(
+        "session-a",
+        vec![
+            json!({"role":"user","content":"<task-id>worker-a</task-id><status>stopped</status>"}),
+        ],
+    );
+    registry.observe_and_restore(&mut stopped);
+    let mut arguments = launch_arguments("Audit the Rust adapter tests", "worker-model");
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut arguments),
+        None
+    );
+    assert!(arguments.get("to").is_none());
+}
+
+#[test]
+fn later_bare_stopped_after_claude_task_stop_confirmation_is_not_rewritten() {
+    let registry = SubagentReuseRegistry::default();
+    let mut first = request(
+        "session-a",
+        launch_with_scope(
+            "tool-a",
+            "worker-a",
+            "Audit the Rust adapter tests",
+            "worker-model",
+        ),
+    );
+    registry.observe_and_restore(&mut first);
+    let mut later = request(
+        "session-a",
+        vec![
+            json!({"role":"assistant","content":[{"type":"tool_use","id":"stop-a","name":"TaskStop","input":{"task_id":"worker-a"}}]}),
+            json!({"role":"user","content":"<task-id>worker-a</task-id><status>stopped</status>"}),
+            json!({"role":"user","content":"continue after the agents panel stop"}),
+            json!({"role":"user","content":"<task-id>worker-a</task-id><status>stopped</status>"}),
+        ],
+    );
+    registry.observe_and_restore(&mut later);
+    let mut arguments = launch_arguments("Audit the Rust adapter tests", "worker-model");
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut arguments),
+        None
+    );
+    assert!(arguments.get("to").is_none());
+}
+
+#[test]
+fn full_transcript_user_tasks_stop_after_old_task_stop_is_not_rewritten() {
+    let registry = SubagentReuseRegistry::default();
+    let mut history = request(
+        "session-a",
+        vec![
+            json!({
+                "role":"assistant",
+                "content":[{
+                    "type":"tool_use",
+                    "id":"tool-a",
+                    "name":"Agent",
+                    "input":{
+                        "prompt":"Audit the Rust adapter tests",
+                        "claudex_model":"worker-model"
+                    }
+                }]
+            }),
+            json!({
+                "role":"user",
+                "content":[{
+                    "type":"tool_result",
+                    "tool_use_id":"tool-a",
+                    "content":[{"type":"text","text":"Async agent launched successfully.\\nagentId: worker-a"}]
+                }]
+            }),
+            json!({"role":"assistant","content":[{"type":"tool_use","id":"stop-a","name":"TaskStop","input":{"task_id":"worker-a"}}]}),
+            json!({"role":"user","content":"<task-id>worker-a</task-id><status>stopped</status>"}),
+            json!({"role":"user","content":"<task-id>worker-a</task-id><status>stopped</status>"}),
+        ],
+    );
+    registry.observe_and_restore(&mut history);
+    let mut arguments = launch_arguments("Audit the Rust adapter tests", "worker-model");
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut arguments),
+        None
+    );
+    assert!(arguments.get("to").is_none());
+}
+
+#[test]
+fn later_user_full_stop_after_old_task_stop_is_not_rewritten() {
+    let registry = SubagentReuseRegistry::default();
+    let mut first = request(
+        "session-a",
+        launch_with_scope(
+            "tool-a",
+            "worker-a",
+            "Audit the Rust adapter tests",
+            "worker-model",
+        ),
+    );
+    registry.observe_and_restore(&mut first);
+    let mut later = request(
+        "session-a",
+        vec![
+            json!({"role":"assistant","content":[{"type":"tool_use","id":"stop-a","name":"TaskStop","input":{"task_id":"worker-a"}}]}),
+            json!({"role":"user","content":"<task-id>worker-a</task-id><status>stopped</status>"}),
+            json!({"role":"user","content":"一旦全て中断"}),
+        ],
+    );
+    registry.observe_and_restore(&mut later);
+    let mut arguments = launch_arguments("Audit the Rust adapter tests", "worker-model");
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut arguments),
+        None
+    );
+    assert!(arguments.get("to").is_none());
+}
+
+#[test]
+fn burst_task_stop_after_user_interrupt_is_not_rewritten() {
+    let registry = SubagentReuseRegistry::default();
+    let mut first = request(
+        "session-a",
+        launch_with_scope(
+            "tool-a",
+            "worker-a",
+            "Audit the Rust adapter tests",
+            "worker-model",
+        ),
+    );
+    registry.observe_and_restore(&mut first);
+    let mut second = request(
+        "session-a",
+        launch_with_scope("tool-b", "worker-b", "Review CSS layout", "worker-model"),
+    );
+    registry.observe_and_restore(&mut second);
+    let mut stopped = request(
+        "session-a",
+        vec![
+            json!({"role":"user","content":"全て中断"}),
+            json!({"role":"assistant","content":[
+                {"type":"tool_use","id":"stop-a","name":"TaskStop","input":{"task_id":"worker-a"}},
+                {"type":"tool_use","id":"stop-b","name":"TaskStop","input":{"task_id":"worker-b"}}
+            ]}),
+            json!({"role":"user","content":"<task-id>worker-a</task-id><status>stopped</status>"}),
+            json!({"role":"user","content":"<task-id>worker-b</task-id><status>stopped</status>"}),
+        ],
+    );
+    registry.observe_and_restore(&mut stopped);
+    let mut audit = launch_arguments("Audit the Rust adapter tests", "worker-model");
+    assert_eq!(registry.rewrite_launch_input("session-a", &mut audit), None);
+    assert!(audit.get("to").is_none());
+    let mut css = launch_arguments("Review CSS layout", "worker-model");
+    assert_eq!(registry.rewrite_launch_input("session-a", &mut css), None);
+    assert!(css.get("to").is_none());
 }
 
 #[test]
@@ -752,7 +1025,7 @@ fn independent_scope_still_launches_a_new_worker() {
 }
 
 #[test]
-fn explicit_resume_is_left_alone() {
+fn explicit_resume_is_converted_to_send_message() {
     let registry = SubagentReuseRegistry::default();
     let mut first = request(
         "session-a",
@@ -771,9 +1044,40 @@ fn explicit_resume_is_left_alone() {
     });
     assert_eq!(
         registry.rewrite_launch_input("session-a", &mut arguments),
-        None
+        Some("already-chosen".to_owned())
     );
-    assert_eq!(arguments["resume"], "already-chosen");
+    assert_eq!(arguments["to"], "already-chosen");
+    assert_eq!(arguments["message"], "Audit the Rust adapter tests");
+    assert!(arguments.get("resume").is_none());
+    assert!(arguments.get("resume_from").is_none());
+}
+
+#[test]
+fn explicit_resume_from_is_converted_to_send_message() {
+    let registry = SubagentReuseRegistry::default();
+    let mut first = request(
+        "session-a",
+        launch_with_scope(
+            "tool-a",
+            "worker-a",
+            "Audit the Rust adapter tests",
+            "worker-model",
+        ),
+    );
+    registry.observe_and_restore(&mut first);
+    let mut arguments = json!({
+        "prompt":"Audit the Rust adapter tests",
+        "claudex_model":"worker-model",
+        "resume_from":"pi-session"
+    });
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut arguments),
+        Some("pi-session".to_owned())
+    );
+    assert_eq!(arguments["to"], "pi-session");
+    assert_eq!(arguments["message"], "Audit the Rust adapter tests");
+    assert!(arguments.get("resume").is_none());
+    assert!(arguments.get("resume_from").is_none());
 }
 
 #[test]
@@ -840,6 +1144,221 @@ fn description_same_scope_same_model_prefers_existing_worker() {
         registry.rewrite_launch_input("session-a", &mut same_model),
         Some("worker-a".to_owned())
     );
+    assert_eq!(same_model["to"], "worker-a");
+}
+
+#[test]
+fn same_source_path_different_titles_rewrites_to_send_message() {
+    let registry = SubagentReuseRegistry::default();
+    let mut first = request(
+        "session-a",
+        vec![
+            json!({
+                "role":"assistant",
+                "content":[{
+                    "type":"tool_use",
+                    "id":"tool-a",
+                    "name":"Agent",
+                    "input":{
+                        "description":"Implement skip_duplicate notices",
+                        "prompt":"Edit tools/claudex-agent-adapter/src/anthropic/stream/capture.rs and keep SendMessage continue.",
+                        "claudex_model":"gpt-test"
+                    }
+                }]
+            }),
+            launch("tool-a", "worker-a"),
+        ],
+    );
+    registry.observe_and_restore(&mut first);
+    let mut follow = json!({
+        "description":"Rewrite occupancy matching",
+        "prompt":"The 9 Agents all targeted capture.rs; convert the second writer to SendMessage.",
+        "claudex_model":"gpt-test"
+    });
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut follow),
+        Some("worker-a".to_owned())
+    );
+    assert_eq!(follow["to"], "worker-a");
+    assert_eq!(
+        follow["message"],
+        "The 9 Agents all targeted capture.rs; convert the second writer to SendMessage."
+    );
+    assert!(follow.get("resume").is_none());
+}
+
+#[test]
+fn same_source_path_different_model_family_stays_independent() {
+    let registry = SubagentReuseRegistry::default();
+    let mut first = request(
+        "session-a",
+        vec![
+            json!({
+                "role":"assistant",
+                "content":[{
+                    "type":"tool_use",
+                    "id":"tool-a",
+                    "name":"Agent",
+                    "input":{
+                        "description":"Implement skip_duplicate notices",
+                        "prompt":"Own capture.rs for the gpt writer.",
+                        "claudex_model":"gpt-test"
+                    }
+                }]
+            }),
+            launch("tool-a", "worker-a"),
+        ],
+    );
+    registry.observe_and_restore(&mut first);
+    let mut cursor = json!({
+        "description":"Cursor occupancy rewrite",
+        "prompt":"Own capture.rs for the cursor writer.",
+        "claudex_model":"cursor-test"
+    });
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut cursor),
+        None,
+        "distinct model families must still fan out on the same source path"
+    );
+    assert!(cursor.get("to").is_none());
+}
+
+#[test]
+fn independent_source_paths_do_not_invent_a_shared_scope() {
+    let registry = SubagentReuseRegistry::default();
+    let mut first = request(
+        "session-a",
+        vec![
+            json!({
+                "role":"assistant",
+                "content":[{
+                    "type":"tool_use",
+                    "id":"tool-a",
+                    "name":"Agent",
+                    "input":{
+                        "description":"Fix records.rs occupancy",
+                        "prompt":"Change records.rs only.",
+                        "claudex_model":"gpt-test"
+                    }
+                }]
+            }),
+            launch("tool-a", "worker-a"),
+        ],
+    );
+    registry.observe_and_restore(&mut first);
+    let mut other = json!({
+        "description":"Fix launch_prep.rs routing",
+        "prompt":"Change launch_prep.rs only.",
+        "claudex_model":"gpt-test"
+    });
+    assert_eq!(registry.rewrite_launch_input("session-a", &mut other), None);
+    assert!(other.get("to").is_none());
+}
+
+#[test]
+fn same_source_path_occupies_inflight_scope_for_a_later_title() {
+    let registry = SubagentReuseRegistry::default();
+    let first = json!({
+        "description":"Implement skip_duplicate notices",
+        "prompt":"Edit capture.rs and keep SendMessage continue.",
+        "claudex_model":"gpt-test"
+    });
+    assert!(registry.note_inflight_launch("session-a", &first, "tool-pending"));
+    let later = json!({
+        "description":"Rewrite occupancy matching",
+        "prompt":"The follow-up still owns capture.rs.",
+        "claudex_model":"gpt-test"
+    });
+    assert!(registry.scope_is_occupied("session-a", &later));
+}
+
+#[test]
+fn completed_workers_do_not_count_toward_the_live_agent_cap() {
+    let _guard = reuse_env_lock();
+    let previous = std::env::var_os(MAX_SUBAGENTS_PER_SESSION_ENV);
+    unsafe { std::env::set_var(MAX_SUBAGENTS_PER_SESSION_ENV, "1") };
+    let registry = SubagentReuseRegistry::default();
+    let mut completed = request(
+        "session-a",
+        launch_with_scope(
+            "tool-a",
+            "worker-a",
+            "Audit the Rust adapter tests",
+            "worker-model",
+        ),
+    );
+    completed.messages.push(json!({
+        "role":"user",
+        "content":"<task-id>worker-a</task-id><status>completed</status>"
+    }));
+    registry.observe_and_restore(&mut completed);
+    assert!(should_expose_launch_tools(&completed));
+    assert_eq!(
+        registry.live_agent_count("session-a", &completed.messages),
+        0
+    );
+    unsafe {
+        match previous {
+            Some(value) => std::env::set_var(MAX_SUBAGENTS_PER_SESSION_ENV, value),
+            None => std::env::remove_var(MAX_SUBAGENTS_PER_SESSION_ENV),
+        }
+    }
+}
+
+#[test]
+fn nested_live_agents_count_toward_the_session_cap() {
+    let _guard = reuse_env_lock();
+    let previous = std::env::var_os(MAX_SUBAGENTS_PER_SESSION_ENV);
+    unsafe { std::env::set_var(MAX_SUBAGENTS_PER_SESSION_ENV, "2") };
+    let registry = SubagentReuseRegistry::default();
+    let mut parent = request(
+        "session-a",
+        launch_with_scope(
+            "tool-a",
+            "a4496564387a2561f",
+            "Parent writer for capture.rs",
+            "worker-model",
+        ),
+    );
+    parent.messages.push(json!({
+        "role":"user",
+        "content":[{
+            "type":"tool_result",
+            "tool_use_id":"tool-nested",
+            "content":[{"type":"text","text":"Async agent launched successfully.\\nagentId: a906c77ad60469b0a"}]
+        }]
+    }));
+    registry.observe_and_restore(&mut parent);
+    assert_eq!(registry.live_agent_count("session-a", &parent.messages), 2);
+    assert!(registry.session_at_live_capacity("session-a", &parent.messages));
+    assert!(!should_expose_launch_tools(&parent));
+    let mut follow = json!({
+        "description":"Independent CSS review",
+        "prompt":"Review CSS layout",
+        "claudex_model":"worker-model",
+        "message":"Review CSS layout"
+    });
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut follow),
+        None,
+        "over-cap new Agent stays a launch so the skip path can emit the cap notice"
+    );
+    let mut continue_parent = json!({
+        "description":"Parent writer for capture.rs",
+        "prompt":"Parent writer for capture.rs",
+        "claudex_model":"worker-model"
+    });
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut continue_parent),
+        Some("a4496564387a2561f".to_owned())
+    );
+    assert_eq!(continue_parent["to"], "a4496564387a2561f");
+    unsafe {
+        match previous {
+            Some(value) => std::env::set_var(MAX_SUBAGENTS_PER_SESSION_ENV, value),
+            None => std::env::remove_var(MAX_SUBAGENTS_PER_SESSION_ENV),
+        }
+    }
 }
 
 #[test]
@@ -858,6 +1377,96 @@ fn inflight_placeholder_occupies_scope_before_tool_result() {
             .is_none()
     );
     assert_eq!(registry.state_for("session-a"), Some(Vec::<String>::new()));
+}
+
+#[test]
+fn occupied_pending_launch_with_recipient_rewrites_to_send_message() {
+    let registry = SubagentReuseRegistry::default();
+    {
+        let mut states = registry.states.lock().expect("states");
+        states.insert(
+            "session-a".to_owned(),
+            SessionState {
+                launches: vec![LaunchRecord {
+                    key: "tool-pending".to_owned(),
+                    recipient: "worker-pending".to_owned(),
+                    scope: "Trace azookey conversion pipeline".to_owned(),
+                    model: Some("gpt-test".to_owned()),
+                    status: "pending".to_owned(),
+                }],
+            },
+        );
+    }
+    let mut follow = json!({
+        "description":"Trace azookey conversion pipeline",
+        "prompt":"Continue with the Vibrato path.",
+        "claudex_model":"gpt-test"
+    });
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut follow),
+        Some("worker-pending".to_owned())
+    );
+    assert_eq!(follow["to"], "worker-pending");
+    assert_eq!(follow["message"], "Continue with the Vibrato path.");
+}
+
+#[test]
+fn inflight_empty_recipient_queues_follow_up_until_send_message_rewrite() {
+    let registry = SubagentReuseRegistry::default();
+    let first = json!({
+        "description":"Trace azookey conversion pipeline",
+        "prompt":"Start with Vibrato boundaries.",
+        "claudex_model":"gpt-test"
+    });
+    assert!(registry.note_inflight_launch("session-a", &first, "tool-pending"));
+    let queued = json!({
+        "description":"Trace azookey conversion pipeline",
+        "prompt":"Use another provider to continue the Vibrato path.",
+        "claudex_model":"gpt-test"
+    });
+    assert!(registry.queue_inflight_follow_up("session-a", &queued));
+    assert_eq!(
+        registry.queued_follow_up_messages("session-a"),
+        vec!["Use another provider to continue the Vibrato path.".to_owned()]
+    );
+    let mut later = request(
+        "session-a",
+        vec![
+            json!({
+                "role":"assistant",
+                "content":[{
+                    "type":"tool_use",
+                    "id":"tool-pending",
+                    "name":"Agent",
+                    "input":first
+                }]
+            }),
+            json!({
+                "role":"user",
+                "content":[{
+                    "type":"tool_result",
+                    "tool_use_id":"tool-pending",
+                    "content":"Async agent launched successfully.\nagentId: worker-inflight"
+                }]
+            }),
+        ],
+    );
+    registry.observe_and_restore(&mut later);
+    let mut follow = json!({
+        "description":"Trace azookey conversion pipeline",
+        "prompt":"Keep going after Vibrato.",
+        "claudex_model":"gpt-test"
+    });
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut follow),
+        Some("worker-inflight".to_owned())
+    );
+    assert_eq!(follow["to"], "worker-inflight");
+    assert_eq!(
+        follow["message"],
+        "Use another provider to continue the Vibrato path.\n\nKeep going after Vibrato."
+    );
+    assert!(registry.queued_follow_up_messages("session-a").is_empty());
 }
 
 #[test]
@@ -1149,7 +1758,7 @@ fn named_agent_input_alone_does_not_enable_agent_teams_mailbox() {
     assert!(
         tools
             .iter()
-            .all(|tool| { tool.get("name").and_then(Value::as_str) != Some("cc_SendMessage_1") })
+            .any(|tool| { tool.get("name").and_then(Value::as_str) == Some("cc_SendMessage_1") })
     );
 }
 
@@ -1200,9 +1809,19 @@ fn launch_records_cover_empty_scope_and_background_spawn_text() {
         summarize_scope(&json!({"prompt":"\nclaudex_hidden\n<claudex-note>skip</claudex-note>\n"}))
             .is_empty()
     );
+    assert_eq!(
+        summarize_scope(&json!({
+            "description":"Rewrite occupancy matching",
+            "prompt":"Nine Agents targeted capture.rs with different titles."
+        })),
+        "Rewrite occupancy matching capture.rs"
+    );
     assert!(!already_has_resume(&json!({})));
     assert!(!already_has_resume(&json!({"resume":""})));
+    assert!(!already_has_resume(&json!({"resume_from":""})));
     assert!(already_has_resume(&json!({"resume":"session-1"})));
+    assert!(already_has_resume(&json!({"resume_from":"session-1"})));
+    assert!(already_has_resume(&json!({"to":"teammate-a"})));
     assert!(find_reusable_launch(&[], &json!({})).is_none());
     assert!(!scope_is_occupied(&[], "", None));
 
@@ -1659,6 +2278,8 @@ fn find_reusable_launch_requires_nonempty_recipient() {
 fn already_has_resume_with_nonempty_value() {
     assert!(already_has_resume(&json!({"resume": "worker-a"})));
     assert!(already_has_resume(&json!({"resume": "some-agent"})));
+    assert!(already_has_resume(&json!({"resume_from": "pi-session"})));
+    assert!(already_has_resume(&json!({"to": "teammate-a"})));
 }
 
 #[test]
@@ -1683,6 +2304,210 @@ fn apply_transcript_with_status_update() {
     })];
     apply_transcript(&mut launches, &messages);
     assert_eq!(launches[0].status, "completed");
+}
+
+#[test]
+fn apply_transcript_maps_only_the_first_stopped_after_task_stop_to_paused() {
+    let mut launches = vec![LaunchRecord {
+        key: "tool-a".to_owned(),
+        recipient: "worker-a".to_owned(),
+        scope: "Audit the Rust adapter tests".to_owned(),
+        model: Some("worker-model".to_owned()),
+        status: "active".to_owned(),
+    }];
+    let messages = vec![
+        json!({"role":"assistant","content":[{"type":"tool_use","id":"stop-a","name":"TaskStop","input":{"task_id":"worker-a"}}]}),
+        json!({"role":"user","content":"<task-id>worker-a</task-id><status>stopped</status>"}),
+    ];
+    apply_transcript(&mut launches, &messages);
+    assert_eq!(launches[0].status, "paused");
+}
+
+#[test]
+fn apply_transcript_does_not_treat_later_bare_stopped_as_claude_pause() {
+    let mut launches = vec![LaunchRecord {
+        key: "tool-a".to_owned(),
+        recipient: "worker-a".to_owned(),
+        scope: "Audit the Rust adapter tests".to_owned(),
+        model: Some("worker-model".to_owned()),
+        status: "active".to_owned(),
+    }];
+    let messages = vec![
+        json!({"role":"assistant","content":[{"type":"tool_use","id":"stop-a","name":"TaskStop","input":{"task_id":"worker-a"}}]}),
+        json!({"role":"user","content":"<task-id>worker-a</task-id><status>stopped</status>"}),
+        json!({"role":"user","content":"continue after the agents panel stop"}),
+        json!({"role":"user","content":"<task-id>worker-a</task-id><status>stopped</status>"}),
+    ];
+    apply_transcript(&mut launches, &messages);
+    assert_eq!(launches[0].status, "stopped");
+}
+
+#[test]
+fn later_user_full_stop_after_old_task_stop_is_not_paused() {
+    let mut launches = vec![LaunchRecord {
+        key: "tool-a".to_owned(),
+        recipient: "worker-a".to_owned(),
+        scope: "Audit the Rust adapter tests".to_owned(),
+        model: Some("worker-model".to_owned()),
+        status: "active".to_owned(),
+    }];
+    let messages = vec![
+        json!({"role":"assistant","content":[{"type":"tool_use","id":"stop-a","name":"TaskStop","input":{"task_id":"worker-a"}}]}),
+        json!({"role":"user","content":"<task-id>worker-a</task-id><status>stopped</status>"}),
+        json!({"role":"user","content":"一旦全て中断"}),
+    ];
+    apply_transcript(&mut launches, &messages);
+    assert_eq!(launches[0].status, "stopped");
+}
+
+#[test]
+fn burst_task_stop_after_user_interrupt_is_stopped() {
+    let mut launches = vec![
+        LaunchRecord {
+            key: "tool-a".to_owned(),
+            recipient: "worker-a".to_owned(),
+            scope: "Audit the Rust adapter tests".to_owned(),
+            model: Some("worker-model".to_owned()),
+            status: "active".to_owned(),
+        },
+        LaunchRecord {
+            key: "tool-b".to_owned(),
+            recipient: "worker-b".to_owned(),
+            scope: "Review CSS layout".to_owned(),
+            model: Some("worker-model".to_owned()),
+            status: "active".to_owned(),
+        },
+    ];
+    let messages = vec![
+        json!({"role":"user","content":"全て中断"}),
+        json!({"role":"assistant","content":[
+            {"type":"tool_use","id":"stop-a","name":"TaskStop","input":{"task_id":"worker-a"}},
+            {"type":"tool_use","id":"stop-b","name":"TaskStop","input":{"task_id":"worker-b"}}
+        ]}),
+        json!({"role":"user","content":"<task-id>worker-a</task-id><status>stopped</status>"}),
+        json!({"role":"user","content":"<task-id>worker-b</task-id><status>stopped</status>"}),
+    ];
+    apply_transcript(&mut launches, &messages);
+    assert_eq!(launches[0].recipient, "worker-a");
+    assert_eq!(launches[0].status, "stopped");
+    assert_eq!(launches[1].recipient, "worker-b");
+    assert_eq!(launches[1].status, "stopped");
+}
+
+#[test]
+fn session_wide_stop_marks_stale_active_workers_terminal() {
+    let mut launches = vec![
+        LaunchRecord {
+            key: "tool-a".to_owned(),
+            recipient: "worker-a".to_owned(),
+            scope: "Audit the Rust adapter tests".to_owned(),
+            model: Some("worker-model".to_owned()),
+            status: "active".to_owned(),
+        },
+        LaunchRecord {
+            key: "tool-502".to_owned(),
+            recipient: "worker-502".to_owned(),
+            scope: "Dead 502 worker".to_owned(),
+            model: Some("worker-model".to_owned()),
+            status: "active".to_owned(),
+        },
+        LaunchRecord {
+            key: "tool-done".to_owned(),
+            recipient: "worker-done".to_owned(),
+            scope: "Finished audit".to_owned(),
+            model: Some("worker-model".to_owned()),
+            status: "completed".to_owned(),
+        },
+    ];
+    let messages = vec![
+        json!({"role":"user","content":"一旦全て中断"}),
+        json!({"role":"assistant","content":[{"type":"tool_use","id":"stop-a","name":"TaskStop","input":{"task_id":"worker-a"}}]}),
+        json!({"role":"user","content":"<task-id>worker-a</task-id><status>stopped</status>"}),
+    ];
+    apply_transcript(&mut launches, &messages);
+    assert_eq!(launches[0].recipient, "worker-a");
+    assert_eq!(launches[0].status, "stopped");
+    assert_eq!(launches[1].recipient, "worker-502");
+    assert_eq!(launches[1].status, "stopped");
+    assert_eq!(launches[2].recipient, "worker-done");
+    assert_eq!(launches[2].status, "completed");
+}
+
+#[test]
+fn tool_result_mentioning_session_wide_stop_does_not_pause_as_user_interrupt() {
+    let mut launches = vec![LaunchRecord {
+        key: "tool-a".to_owned(),
+        recipient: "worker-a".to_owned(),
+        scope: "Audit the Rust adapter tests".to_owned(),
+        model: Some("worker-model".to_owned()),
+        status: "active".to_owned(),
+    }];
+    let messages = vec![
+        json!({"role":"user","content":[{"type":"tool_result","tool_use_id":"note-a","content":"全て中断"}]}),
+        json!({"role":"assistant","content":[{"type":"tool_use","id":"stop-a","name":"TaskStop","input":{"task_id":"worker-a"}}]}),
+        json!({"role":"user","content":"<task-id>worker-a</task-id><status>stopped</status>"}),
+    ];
+    apply_transcript(&mut launches, &messages);
+    assert_eq!(launches[0].status, "paused");
+}
+
+#[test]
+fn later_claude_task_stop_after_continue_stays_paused_for_new_worker() {
+    let mut launches = vec![LaunchRecord {
+        key: "tool-a".to_owned(),
+        recipient: "worker-a".to_owned(),
+        scope: "Audit the Rust adapter tests".to_owned(),
+        model: Some("worker-model".to_owned()),
+        status: "active".to_owned(),
+    }];
+    let messages = vec![
+        json!({"role":"user","content":"一旦全て中断"}),
+        json!({"role":"user","content":"continue after the full stop"}),
+        json!({
+            "role":"assistant",
+            "content":[{
+                "type":"tool_use",
+                "id":"tool-b",
+                "name":"Agent",
+                "input":{"prompt":"Review CSS layout","claudex_model":"worker-model"}
+            }]
+        }),
+        json!({
+            "role":"user",
+            "content":[{
+                "type":"tool_result",
+                "tool_use_id":"tool-b",
+                "content":[{"type":"text","text":"Async agent launched successfully.\nagentId: worker-b"}]
+            }]
+        }),
+        json!({"role":"assistant","content":[{"type":"tool_use","id":"stop-b","name":"TaskStop","input":{"task_id":"worker-b"}}]}),
+        json!({"role":"user","content":"<task-id>worker-b</task-id><status>stopped</status>"}),
+    ];
+    apply_transcript(&mut launches, &messages);
+    assert_eq!(launches[0].recipient, "worker-a");
+    assert_eq!(launches[0].status, "stopped");
+    assert_eq!(launches[1].recipient, "worker-b");
+    assert_eq!(launches[1].status, "paused");
+}
+
+#[test]
+fn leftover_task_stop_after_user_full_stop_does_not_revive_paused() {
+    let mut launches = vec![LaunchRecord {
+        key: "tool-a".to_owned(),
+        recipient: "worker-a".to_owned(),
+        scope: "Audit the Rust adapter tests".to_owned(),
+        model: Some("worker-model".to_owned()),
+        status: "active".to_owned(),
+    }];
+    let messages = vec![
+        json!({"role":"user","content":"一旦全て中断"}),
+        json!({"role":"assistant","content":[{"type":"tool_use","id":"stop-a","name":"TaskStop","input":{"task_id":"worker-a"}}]}),
+        json!({"role":"user","content":"continue after the full stop"}),
+        json!({"role":"assistant","content":[{"type":"tool_use","id":"stop-a-again","name":"TaskStop","input":{"task_id":"worker-a"}}]}),
+        json!({"role":"user","content":"<task-id>worker-a</task-id><status>stopped</status>"}),
+    ];
+    apply_transcript(&mut launches, &messages);
+    assert_eq!(launches[0].status, "stopped");
 }
 
 #[test]
@@ -1734,11 +2559,13 @@ fn rewrite_launch_input_with_already_has_resume() {
         "claudex_model": "model-1",
         "resume": "existing-worker"
     });
-    assert!(
-        registry
-            .rewrite_launch_input("session-a", &mut arguments)
-            .is_none()
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut arguments),
+        Some("existing-worker".to_owned())
     );
+    assert_eq!(arguments["to"], "existing-worker");
+    assert_eq!(arguments["message"], "Test");
+    assert!(arguments.get("resume").is_none());
 }
 
 #[test]
@@ -1746,6 +2573,22 @@ fn rewrite_launch_input_empty_session_id() {
     let registry = SubagentReuseRegistry::default();
     let mut arguments = json!({"prompt": "Test", "claudex_model": "model-1"});
     assert!(registry.rewrite_launch_input("", &mut arguments).is_none());
+}
+
+#[test]
+fn rewrite_launch_input_converts_explicit_resume_without_a_session() {
+    let registry = SubagentReuseRegistry::default();
+    let mut arguments = json!({
+        "prompt": "Test",
+        "claudex_model": "model-1",
+        "resume": "existing-worker"
+    });
+    assert_eq!(
+        registry.rewrite_launch_input("", &mut arguments),
+        Some("existing-worker".to_owned())
+    );
+    assert_eq!(arguments["to"], "existing-worker");
+    assert_eq!(arguments["message"], "Test");
 }
 
 #[test]
@@ -2266,9 +3109,10 @@ fn inflight_placeholder_receives_recipient_so_resume_rewrite_works() {
     assert_eq!(
         registry.rewrite_launch_input("session-a", &mut follow_up),
         Some("worker-inflight".to_owned()),
-        "launch tool_result must fill the inflight empty recipient for resume/prompt-cache"
+        "launch tool_result must fill the inflight empty recipient for SendMessage follow-up"
     );
-    assert_eq!(follow_up["resume"], "worker-inflight");
+    assert_eq!(follow_up["to"], "worker-inflight");
+    assert_eq!(follow_up["message"], "Continue with the Vibrato path.");
 }
 
 #[test]
@@ -2320,11 +3164,6 @@ fn reuse_guidance_omits_empty_inflight_and_failed_recipients() {
         !guidance.contains("(Trace azookey conversion pipeline; gpt-test; pending)"),
         "empty-recipient inflight placeholders must not appear as resume targets: {guidance}"
     );
-}
-
-fn reuse_env_lock() -> std::sync::MutexGuard<'static, ()> {
-    static LOCK: Mutex<()> = Mutex::new(());
-    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[test]
@@ -2949,6 +3788,7 @@ fn idle_shadow_state_does_not_change_rewrite_results() {
     assert_eq!(instrumented_result, baseline_result);
     assert_eq!(instrumented_input, baseline_input);
     assert_eq!(instrumented_result.as_deref(), Some("shadow-worker"));
+    assert_eq!(instrumented_input["to"], "shadow-worker");
 }
 
 #[test]

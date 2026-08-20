@@ -3,7 +3,6 @@ use std::{
     convert::Infallible,
     ops::ControlFlow,
     os::unix::fs::PermissionsExt,
-    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -27,7 +26,6 @@ use crate::{
     agent_backend::AgentBackend,
     anthropic::{ActiveTurn, Bridge, ContextRetry, MessagesRequest, Session},
     app_server::{AppServer, events::ThreadEventDispatcher},
-    grok_acp::GrokAcp,
 };
 
 fn block_lacks_websearch_chrome(block: &Value) -> bool {
@@ -3189,7 +3187,11 @@ async fn deduplicates_same_scope_provider_agent_batch_launches() {
         .await
         .expect("duplicate provider follow-up");
     assert!(!duplicate.has_external_tool_calls());
-    assert_eq!(duplicate.blocks[0]["type"], "text");
+    assert!(
+        duplicate.blocks.is_empty(),
+        "inflight follow-up must queue without skip-dropping as assistant text: {:?}",
+        duplicate.blocks
+    );
     duplicate
         .update_provider_stop_reason(&json!({
             "params":{"turn":{"providerStopReason":"tool_use"}}
@@ -3203,6 +3205,95 @@ async fn deduplicates_same_scope_provider_agent_batch_launches() {
             .stop_reason,
         "end_turn"
     );
+    assert_eq!(
+        bridge
+            .subagent_reuse
+            .queued_follow_up_messages("provider-batch-dedup"),
+        vec![
+            "implement the PR".to_owned(),
+            "verify the PR".to_owned(),
+            "continue the PR".to_owned()
+        ]
+    );
+}
+
+#[tokio::test]
+async fn occupied_provider_follow_up_with_recipient_rewrites_to_send_message() {
+    let (_root, _app, bridge, mut session) = disconnect_fixture().await;
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .claude_session_id = Some("provider-send-message".to_owned());
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .external_tool_names
+        .insert("cc_SendMessage_3".to_owned(), "SendMessage".to_owned());
+    let mut recorded = MessagesRequest {
+        model: "main".to_owned(),
+        system: json!("stable system"),
+        messages: vec![
+            json!({
+                "role":"assistant",
+                "content":[{
+                    "type":"tool_use",
+                    "id":"tool-a",
+                    "name":"Agent",
+                    "input":{
+                        "description":"Fold 1790 into 1780",
+                        "prompt":"inspect the PR",
+                        "claudex_model":"worker-model"
+                    }
+                }]
+            }),
+            json!({
+                "role":"user",
+                "content":[{
+                    "type":"tool_result",
+                    "tool_use_id":"tool-a",
+                    "content":[{"type":"text","text":"Async agent launched successfully.\\nagentId: worker-a"}]
+                }]
+            }),
+        ],
+        tools: vec![json!({"name":"Agent"}), json!({"name":"SendMessage"})],
+        stream: false,
+        output_config: Value::Null,
+        metadata: json!({"_claudex_transport_identity":{"session_id":"provider-send-message"}}),
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+    bridge.subagent_reuse.observe_and_restore(&mut recorded);
+    let routing = json!(
+        r#"Claudex routing for this turn: {"providers":{},"selected_workers":[{"agent":"worker","model":"worker-model"}]}"#
+    );
+    let mut builder = SegmentBuilder::new(1);
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[json!({"role":"user","content":"fold the pull request"})],
+            &routing,
+            &json!({
+                "method":"item/providerTool/call",
+                "params":{
+                    "callId":"occupied-follow-up",
+                    "tool":"cc_Agent_0",
+                    "status":"pending",
+                    "arguments":{
+                        "description":"Fold 1790 into 1780",
+                        "prompt":"continue the PR",
+                        "subagent_type":"worker",
+                        "claudex_model":"worker-model"
+                    }
+                }
+            }),
+            None,
+        )
+        .await
+        .expect("occupied provider follow-up");
+    assert!(builder.has_external_tool_calls());
+    assert_eq!(builder.blocks[0]["name"], "SendMessage");
+    assert_eq!(builder.blocks[0]["input"]["to"], "worker-a");
+    assert_eq!(builder.blocks[0]["input"]["message"], "continue the PR");
 }
 
 #[tokio::test]
@@ -3296,6 +3387,86 @@ async fn forwards_generic_tools_and_blocks_disabled_subagent_models() {
             text.contains("blocked-model") && text.contains("disabled by policy")
         })
     }));
+}
+
+#[tokio::test]
+async fn nested_subagent_session_rejects_agent_task_with_english_notice() {
+    let (_root, _app, bridge, session) = disconnect_fixture().await;
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":2,
+                "method":"item/tool/call",
+                "params":{
+                    "callId":"nested-agent",
+                    "tool":"cc_Agent_0",
+                    "arguments":{"prompt":"launch another worker","subagent_type":"worker","claudex_model":"worker-model"}
+                }
+            }),
+            None,
+        )
+        .await
+        .expect("nested Agent launch is a visible local response");
+    assert!(!builder.has_external_tool_calls());
+    assert_eq!(builder.blocks.len(), 1);
+    assert_eq!(builder.blocks[0]["type"], "text");
+    assert_eq!(
+        builder.blocks[0]["text"].as_str(),
+        Some(
+            "Nested SubAgent sessions must not launch Agent/Task. The parent session owns fan-out. Continue the delegated task with the tools you have. SendMessage({to}) is still allowed to continue an existing worker."
+        )
+    );
+    builder
+        .update_provider_stop_reason(&json!({
+            "params":{"turn":{"providerStopReason":"tool_use"}}
+        }))
+        .expect("provider stopped for the nested Agent tool");
+    let segment = builder
+        .finish(None)
+        .await
+        .expect("nested Agent block must end_turn");
+    assert_eq!(segment.stop_reason, "end_turn");
+}
+
+#[tokio::test]
+async fn nested_subagent_session_still_emits_send_message() {
+    let (_root, _app, bridge, mut session) = disconnect_fixture().await;
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .external_tool_names
+        .insert("cc_SendMessage_3".to_owned(), "SendMessage".to_owned());
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":3,
+                "method":"item/tool/call",
+                "params":{
+                    "callId":"nested-send",
+                    "tool":"cc_SendMessage_3",
+                    "arguments":{"to":"a0123456789abcdef","message":"continue the review"}
+                }
+            }),
+            None,
+        )
+        .await
+        .expect("nested SendMessage remains executable");
+    assert!(builder.has_external_tool_calls());
+    assert_eq!(builder.blocks[0]["type"], "tool_use");
+    assert_eq!(builder.blocks[0]["name"], "SendMessage");
+    assert_eq!(
+        builder.blocks[0]["input"],
+        json!({"to":"a0123456789abcdef","message":"continue the review"})
+    );
 }
 
 #[tokio::test]
@@ -4836,7 +5007,7 @@ async fn drive_stream_retries_provider_failure_onto_a_live_sibling_route() {
     let backend = AgentBackend::routed(vec![
         (
             "main".to_owned(),
-            AgentBackend::grok(GrokAcp::stopped_for_test()),
+            AgentBackend::pi(crate::pi_gateway::PiGateway::stopped_for_test()),
         ),
         ("retry-target".to_owned(), AgentBackend::codex(app)),
     ]);
@@ -4902,17 +5073,13 @@ async fn drive_stream_retries_provider_failure_onto_a_live_sibling_route() {
 
 #[tokio::test]
 async fn retry_usage_limit_stream_restarts_on_a_sibling_with_its_configured_effort() {
-    let root = tempfile::tempdir().expect("configured sibling fixture");
-    let sibling =
-        GrokAcp::spawn_with_program("auto", grok_acp_mock_program(), root.path().to_path_buf())
-            .await
-            .expect("start configured sibling ACP fixture");
+    let (_root, app, _seed_bridge, _seed_session) = retryable_drive_fixture_with_output().await;
     let backend = AgentBackend::routed(vec![
         (
             "qwen3.8-max-preview".to_owned(),
-            AgentBackend::grok(GrokAcp::stopped_for_test()),
+            AgentBackend::pi(crate::pi_gateway::PiGateway::stopped_for_test()),
         ),
-        ("auto".to_owned(), AgentBackend::configured_acp(sibling)),
+        ("auto".to_owned(), AgentBackend::codex(app)),
     ]);
     let mut catalog = crate::provider_config::ModelCatalog::default();
     catalog
@@ -4980,7 +5147,7 @@ async fn retry_usage_limit_stream_restarts_on_a_sibling_with_its_configured_effo
 
     let output = collect_sse_frames(&mut receiver).await;
     assert!(
-        output.contains("GROK_ACP_STREAM_OK"),
+        output.contains("retried answer") || output.contains("message_stop"),
         "retry output: {output}"
     );
 }
@@ -5191,7 +5358,9 @@ async fn disconnect_fixture() -> (tempfile::TempDir, Arc<AppServer>, Bridge, Arc
 }
 
 fn grok_disconnect_fixture() -> (Bridge, Arc<Session>, Arc<ThreadEventDispatcher>) {
-    let backend = Arc::new(AgentBackend::Grok(GrokAcp::stopped_for_test()));
+    let backend = Arc::new(AgentBackend::Pi(
+        crate::pi_gateway::PiGateway::stopped_for_test(),
+    ));
     let bridge = Bridge::new_with_backend(backend, "main".to_owned());
     let slot = Arc::clone(&bridge.session_slots)
         .try_acquire_owned()
@@ -5349,37 +5518,6 @@ async fn request_trace(path: &std::path::Path, expected: usize) -> Vec<Value> {
         .expect("request trace should land promptly")
 }
 
-fn grok_acp_mock_program() -> PathBuf {
-    let test_binary = std::env::current_exe().expect("locate stream test binary");
-    let target_debug = test_binary
-        .parent()
-        .and_then(std::path::Path::parent)
-        .expect("locate Cargo target debug directory");
-    let mock = target_debug.join("grok-acp-mock");
-    if mock.is_file() {
-        return mock;
-    }
-    let mock = std::fs::read_dir(target_debug.join("deps"))
-        .expect("read Cargo test fixture directory")
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .find(|path| {
-            path.is_file()
-                && path.extension().is_none()
-                && path
-                    .file_name()
-                    .and_then(std::ffi::OsStr::to_str)
-                    .is_some_and(|name| name.starts_with("grok_acp_mock-"))
-        })
-        .expect("locate Grok ACP fixture binary");
-    assert!(
-        mock.is_file(),
-        "grok ACP fixture binary: {}",
-        mock.display()
-    );
-    mock
-}
-
 async fn wait_for_disconnected_drain(events: &Arc<crate::app_server::ThreadEvents>) {
     tokio::time::timeout(Duration::from_secs(1), async {
         while Arc::strong_count(events) > 1 {
@@ -5411,18 +5549,18 @@ async fn retryable_drive_fixture_with_retried_output(
     let program = root.path().join("retry-app-server");
     let mut program_script = r#"#!/bin/sh
 log="__REQUESTS_LOG__"
-read initialize
+read -r initialize
 printf '%s\n' '{"id":1,"result":{}}'
-read initialized
-read start
+read -r initialized
+read -r start
 printf '%s\n' "$start" >> "$log"
 printf '%s\n' '{"id":2,"result":{"thread":{"id":"retried"}}}'
-read turn
+read -r turn
 printf '%s\n' "$turn" >> "$log"
 sleep 0.05
 __RETRIED_OUTPUT__
 printf '%s\n' '{"method":"turn/completed","params":{"threadId":"retried","turn":{"status":"completed"}}}'
-while read line; do :; done
+while read -r line; do :; done
 "#.to_owned();
     program_script = program_script.replace("__REQUESTS_LOG__", &requests_log.to_string_lossy());
     let retried_output = emit_output.then_some(
@@ -6004,56 +6142,6 @@ async fn external_batch_segment_keeps_subagent_segment_when_sse_already_closed()
 }
 
 #[tokio::test]
-async fn external_batch_segment_cancels_provider_for_acp_bridged_tool_use() {
-    let (root, app, bridge, session) = disconnect_fixture().await;
-    let events = Arc::new(app.subscribe_thread("thread"));
-    let (sender, _receiver) = mpsc::channel::<Result<Bytes, Infallible>>(4);
-    session.pending_tools.lock().await.insert(
-        "toolu_bridge".to_owned(),
-        super::acp_tool_bridge::acp_bridge_request_id("spawn-1"),
-    );
-    let mut builder = SegmentBuilder::new(1);
-    let _ = builder
-        .handle_event(
-            &bridge,
-            &session,
-            &[json!({"role":"user","content":"delegate"})],
-            &json!(
-                r#"{"providers":{},"selected_workers":[{"agent":"worker","model":"worker-model"}]}"#
-            ),
-            &json!({
-                "id":43,
-                "method":"item/tool/call",
-                "params":{
-                    "callId":"agent-1",
-                    "tool":"cc_Agent_0",
-                    "arguments":{
-                        "prompt":"work",
-                        "subagent_type":"worker",
-                        "claudex_model":"worker-model"
-                    }
-                }
-            }),
-            Some(&sender),
-        )
-        .await
-        .expect("agent tool");
-    let result = bridge
-        .external_batch_segment(&session, events, &mut builder, Some(&sender))
-        .await
-        .expect("bridged batch");
-    assert!(matches!(
-        result,
-        super::StreamTurn::Segment {
-            provider_settled: false,
-            ..
-        }
-    ));
-    let log = std::fs::read_to_string(root.path().join("responses.log")).unwrap_or_default();
-    let _ = log;
-}
-
-#[tokio::test]
 async fn finish_completed_stream_commits_closed_subagent_without_sse_frames() {
     let (_root, app, bridge, session) = disconnect_fixture().await;
     bridge.sessions.lock().await.push(Arc::clone(&session));
@@ -6273,12 +6361,12 @@ async fn failover_usage_limit_turn_attempts_sibling_configured_acp_provider() {
     let cache = tempfile::tempdir().expect("failover cache");
     let mut qwen = crate::agent_backend::BackendRoute::new(
         "qwen3.8-max-preview",
-        crate::agent_backend::BackendKind::ConfiguredAcp,
+        crate::agent_backend::BackendKind::PiGateway,
     );
     qwen.max_concurrency = Some(3);
     let mut cursor = crate::agent_backend::BackendRoute::new(
         "auto",
-        crate::agent_backend::BackendKind::ConfiguredAcp,
+        crate::agent_backend::BackendKind::PiGateway,
     );
     cursor.max_concurrency = Some(3);
     let backend = AgentBackend::spawn_routes(&[qwen, cursor]);
@@ -6359,12 +6447,12 @@ async fn empty_acp_sibling_retry_bridge() -> (
     let cache = tempfile::tempdir().expect("stream failover cache");
     let mut qwen = crate::agent_backend::BackendRoute::new(
         "qwen3.8-max-preview",
-        crate::agent_backend::BackendKind::ConfiguredAcp,
+        crate::agent_backend::BackendKind::PiGateway,
     );
     qwen.max_concurrency = Some(3);
     let mut cursor = crate::agent_backend::BackendRoute::new(
         "auto",
-        crate::agent_backend::BackendKind::ConfiguredAcp,
+        crate::agent_backend::BackendKind::PiGateway,
     );
     cursor.max_concurrency = Some(3);
     let backend = AgentBackend::spawn_routes(&[qwen, cursor]);

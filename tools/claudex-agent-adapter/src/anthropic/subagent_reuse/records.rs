@@ -1,6 +1,9 @@
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::{is_launch_tool, records_scope::active_status, records_status::launch_record};
+
+const FOLLOW_UP_RECIPIENT_KEYS: [&str; 3] = ["to", "resume", "resume_from"];
+const FOLLOW_UP_MESSAGE_KEYS: [&str; 2] = ["message", "prompt"];
 
 pub(super) use super::records_scope::summarize_scope;
 
@@ -44,23 +47,18 @@ fn same_logical_launch(current: &LaunchRecord, observed: &LaunchRecord) -> bool 
     if current.scope.is_empty() || observed.scope.is_empty() {
         return false;
     }
-    if normalize_scope(&current.scope) != normalize_scope(&observed.scope) {
-        return false;
+    if same_scope_title(&current.scope, &observed.scope) {
+        return models_match_exact(current.model.as_deref(), observed.model.as_deref());
     }
-    // Same agents-panel title with different claudex_model is intentional
-    // multi-route fan-out (gpt + cursor + muse + advisor), not a duplicate.
-    match (&current.model, &observed.model) {
-        (Some(left), Some(right)) => left.eq_ignore_ascii_case(right),
-        (None, None) => true,
-        _ => false,
-    }
+    super::records_scope::share_source_path(&current.scope, &observed.scope)
+        && models_match_family(current.model.as_deref(), observed.model.as_deref())
 }
 
 pub(super) fn launch_scope_key(input: &Value) -> String {
     normalize_scope(&super::records_scope::summarize_scope(input))
 }
 
-pub(super) fn launch_model(input: &Value) -> Option<&str> {
+pub(in crate::anthropic) fn launch_model(input: &Value) -> Option<&str> {
     input
         .get("claudex_model")
         .and_then(Value::as_str)
@@ -74,18 +72,71 @@ pub(super) fn scope_is_occupied(
 ) -> bool {
     !scope_key.is_empty()
         && launches.iter().any(|launch| {
-            if terminal_status(&launch.status) || normalize_scope(&launch.scope) != scope_key {
-                return false;
-            }
-            match (model, launch.model.as_deref()) {
-                (Some(want), Some(have)) => want.eq_ignore_ascii_case(have),
-                (None, None) => true,
-                // Model-less placeholders must not block explicit multi-model
-                // fan-out; model-less queries still collide with any occupant.
-                (None, Some(_)) => true,
-                (Some(_), None) => false,
-            }
+            !terminal_status(&launch.status)
+                && occupancy_matches(&launch.scope, launch.model.as_deref(), scope_key, model)
         })
+}
+
+pub(in crate::anthropic::subagent_reuse) fn occupancy_matches(
+    existing_scope: &str,
+    existing_model: Option<&str>,
+    proposed_scope: &str,
+    proposed_model: Option<&str>,
+) -> bool {
+    if existing_scope.is_empty() || proposed_scope.is_empty() {
+        return false;
+    }
+    if same_scope_title(existing_scope, proposed_scope) {
+        return occupancy_models_match(existing_model, proposed_model);
+    }
+    super::records_scope::share_source_path(existing_scope, proposed_scope)
+        && occupancy_family_matches(existing_model, proposed_model)
+}
+
+fn same_scope_title(left: &str, right: &str) -> bool {
+    let left_title = super::records_scope::title_key(left);
+    let right_title = super::records_scope::title_key(right);
+    !left_title.is_empty() && left_title == right_title
+}
+
+fn occupancy_models_match(existing: Option<&str>, proposed: Option<&str>) -> bool {
+    match (proposed, existing) {
+        (Some(want), Some(have)) => want.eq_ignore_ascii_case(have),
+        (None, Some(_)) | (None, None) => true,
+        (Some(_), None) => false,
+    }
+}
+
+fn occupancy_family_matches(existing: Option<&str>, proposed: Option<&str>) -> bool {
+    match (proposed, existing) {
+        (Some(want), Some(have)) => model_family(want).eq_ignore_ascii_case(&model_family(have)),
+        (None, Some(_)) | (None, None) => true,
+        (Some(_), None) => false,
+    }
+}
+
+fn models_match_exact(left: Option<&str>, right: Option<&str>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => left.eq_ignore_ascii_case(right),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn models_match_family(left: Option<&str>, right: Option<&str>) -> bool {
+    match (left, right) {
+        (Some(left), Some(right)) => model_family(left).eq_ignore_ascii_case(&model_family(right)),
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn model_family(model: &str) -> String {
+    model
+        .split(['/', '-', '_', '.'])
+        .next()
+        .filter(|part| !part.is_empty())
+        .map_or_else(|| model.to_ascii_lowercase(), str::to_ascii_lowercase)
 }
 
 fn normalize_scope(scope: &str) -> String {
@@ -104,7 +155,7 @@ pub(super) fn terminal_status(status: &str) -> bool {
 }
 
 pub(super) fn reusable_status(status: &str) -> bool {
-    matches!(status, "active" | "message_queued" | "completed")
+    matches!(status, "active" | "message_queued" | "completed" | "paused")
 }
 
 pub(super) enum ShadowCandidate<'a> {
@@ -134,11 +185,58 @@ pub(super) fn shadow_candidate<'a>(
     }
 }
 
-pub(super) fn already_has_resume(arguments: &Value) -> bool {
+#[cfg(test)]
+pub(in crate::anthropic) fn already_has_resume(arguments: &Value) -> bool {
+    explicit_follow_up_recipient(arguments).is_some()
+}
+
+pub(super) fn explicit_follow_up_recipient(arguments: &Value) -> Option<String> {
+    first_nonempty_string(arguments, &FOLLOW_UP_RECIPIENT_KEYS)
+}
+
+pub(super) fn follow_up_message(arguments: &Value) -> Option<String> {
+    first_nonempty_string(arguments, &FOLLOW_UP_MESSAGE_KEYS)
+}
+
+pub(in crate::anthropic) fn is_send_message_follow_up(arguments: &Value) -> bool {
     arguments
-        .get("resume")
+        .get("to")
         .and_then(Value::as_str)
         .is_some_and(|value| !value.is_empty())
+        && arguments
+            .get("message")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty())
+}
+
+pub(in crate::anthropic) fn has_listed_send_message<I, S>(names: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    names.into_iter().any(|name| name.as_ref() == "SendMessage")
+}
+
+pub(super) fn send_message_follow_up_arguments(
+    recipient: &str,
+    message: &str,
+    summary: Option<&str>,
+) -> Value {
+    match summary {
+        Some(summary) => json!({"to": recipient, "message": message, "summary": summary}),
+        None => json!({"to": recipient, "message": message}),
+    }
+}
+
+fn first_nonempty_string(arguments: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        arguments
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+    })
 }
 
 mod find;
@@ -147,3 +245,4 @@ pub(super) use find::{find_reusable_launch, merge_record};
 #[cfg(test)]
 pub(super) use live::launch_records;
 pub(in crate::anthropic) use live::live_agent_task_ids;
+pub(super) use live::unique_live_agent_count;
