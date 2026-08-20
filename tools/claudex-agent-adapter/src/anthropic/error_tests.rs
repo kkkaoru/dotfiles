@@ -207,6 +207,26 @@ fn marks_empty_acp_billing_as_non_retryable_instead_of_502() {
 }
 
 #[test]
+fn marks_generic_empty_assistant_turn_as_non_retryable_instead_of_502() {
+    let error = anyhow!(super::super::segment::EMPTY_ASSISTANT_TURN);
+    assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+    assert_eq!(
+        http_status(StatusCode::BAD_GATEWAY, &error),
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[test]
+fn marks_context_window_overflow_after_message_start_as_non_retryable() {
+    let error = anyhow!(super::super::segment::CONTEXT_WINDOW_AFTER_MESSAGE_START);
+    assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+    assert_eq!(
+        http_status(StatusCode::BAD_GATEWAY, &error),
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[test]
 fn marks_cline_credits_insufficient_balance_as_non_retryable_instead_of_502() {
     let error = anyhow::Error::msg(
         "codex app-server turn failed: ConfiguredLaunch ACP prompt failed: \

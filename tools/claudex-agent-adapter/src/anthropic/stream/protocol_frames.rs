@@ -78,6 +78,31 @@ pub(in crate::anthropic) async fn send_content_block_stop(
     .await
 }
 
+/// Visible assistant text so a primed SSE turn cannot close with zero blocks.
+pub(in crate::anthropic::stream) async fn send_visible_assistant_text(
+    stream: Option<&StreamSender>,
+    index: usize,
+    text: &str,
+) {
+    let _ = send_stream_frame(stream, "content_block_start", || {
+        json!({
+            "type":"content_block_start",
+            "index":index,
+            "content_block":{"type":"text","text":""}
+        })
+    })
+    .await;
+    let _ = send_stream_frame(stream, "content_block_delta", || {
+        json!({
+            "type":"content_block_delta",
+            "index":index,
+            "delta":{"type":"text_delta","text":text}
+        })
+    })
+    .await;
+    let _ = send_content_block_stop(stream, index).await;
+}
+
 pub(in crate::anthropic) fn tool_use_frames(
     index: usize,
     block: &Value,

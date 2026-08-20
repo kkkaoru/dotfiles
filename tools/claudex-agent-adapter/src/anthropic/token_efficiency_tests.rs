@@ -126,10 +126,28 @@ fn empty_read_object_is_unusable() {
 }
 
 #[test]
+fn read_without_file_path_is_unusable() {
+    assert!(tool_arguments_are_unusable("Read", &json!({"offset": 1})));
+}
+
+#[test]
 fn read_with_path_is_usable() {
     assert!(!tool_arguments_are_unusable(
         "Read",
         &json!({"path": "CLAUDE.md"})
+    ));
+}
+
+#[test]
+fn grep_without_pattern_is_unusable() {
+    assert!(tool_arguments_are_unusable("Grep", &json!({"path": "src"})));
+}
+
+#[test]
+fn glob_with_pattern_is_usable() {
+    assert!(!tool_arguments_are_unusable(
+        "Glob",
+        &json!({"pattern": "*.rs"})
     ));
 }
 

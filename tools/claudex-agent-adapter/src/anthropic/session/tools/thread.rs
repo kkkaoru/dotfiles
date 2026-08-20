@@ -32,6 +32,9 @@ pub(in crate::anthropic) fn thread_start_params_for_mode(
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(isolated_runtime_cwd);
     let launch_owner = super::super::super::request_identity::claude_session_id(request);
+    if crate::anthropic::is_command_code_model(model) {
+        return command_code_thread_start_params(request, model, &cwd, dynamic_tools, launch_owner);
+    }
     let is_subagent = super::super::super::agent_effort::is_subagent_request(request);
     let acp_role = if is_subagent {
         "worker"
@@ -87,4 +90,34 @@ pub(in crate::anthropic) fn system_with_developer_instructions(
     } else {
         format!("{system}\n\n{developer_instructions}")
     }
+}
+
+fn command_code_thread_start_params(
+    request: &MessagesRequest,
+    model: &str,
+    cwd: &str,
+    dynamic_tools: Vec<Value>,
+    launch_owner: Option<String>,
+) -> Value {
+    json!({
+        "model": model,
+        "cwd": cwd,
+        "baseInstructions": "",
+        "developerInstructions": build_developer_instructions(request, true, true),
+        "dynamicTools": dynamic_tools,
+        "environments": [],
+        "ephemeral": true,
+        "approvalPolicy": "never",
+        "sandbox": "danger-full-access",
+        "personality": "none",
+        "claudexLaunchOwner": launch_owner,
+        "claudexAcpRole": "worker",
+        "config": {
+            "web_search": "disabled",
+            "features": {
+                "apps": false, "multi_agent": false, "shell_tool": true,
+                "tool_search": true, "unified_exec": true, "web_search": false
+            }
+        }
+    })
 }

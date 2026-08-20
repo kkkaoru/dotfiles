@@ -3,9 +3,21 @@ use std::collections::HashMap;
 use serde_json::json;
 
 use super::{
+    SegmentBuilder,
     batch::ensure_background_batch_launch,
     external_tool::{requested_external_tool_name, unrequested_tool_reply},
 };
+
+#[test]
+fn reserved_sse_slots_advance_the_next_index() {
+    assert_eq!(SegmentBuilder::new(1).next_sse_index(), 0);
+    assert_eq!(
+        SegmentBuilder::new(1)
+            .with_reserved_sse_slots(2)
+            .next_sse_index(),
+        2
+    );
+}
 
 #[test]
 fn leaves_non_object_batch_arguments_unchanged() {

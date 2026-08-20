@@ -3,8 +3,9 @@ use serde_json::{Value, json};
 use super::{
     FULL_HISTORY_HEADER, MAX_TURN_INPUT_BYTES, TRUNCATED_HISTORY_HEADER, TRUNCATED_INPUT_NOTICE,
     bound_input, full_transcript_input, full_transcript_input_with_token_budget, input_bytes,
-    oversized_latest_message, provider_turn_input, provider_turn_input_with_token_budget,
-    provider_user_turn_input, user_input_from_messages, utf8_suffix,
+    latest_user_messages, oversized_latest_message, provider_turn_input,
+    provider_turn_input_with_token_budget, provider_user_turn_input, truncated_request_messages,
+    user_input_from_messages, utf8_suffix,
 };
 
 #[test]
@@ -125,6 +126,48 @@ fn command_code_follow_up_uses_only_the_latest_user_instruction() {
         budgeted[0]["text"],
         "Stop. Output only the first heading of CLAUDE.md."
     );
+    assert_eq!(
+        latest_user_messages(&[json!({"role":"assistant","content":"Ready"})]),
+        vec![json!({"role":"user","content":"Continue."})]
+    );
+}
+
+#[test]
+fn pi_luna_and_spark_follow_ups_use_only_the_latest_user_instruction() {
+    let messages = [
+        json!({"role":"user","content":"OLD_TASK read the whole repository"}),
+        json!({"role":"assistant","content":"Scanning files"}),
+        json!({"role":"user","content":"Stop. Output only the first heading of CLAUDE.md."}),
+    ];
+    assert_eq!(
+        provider_turn_input("commandcode/gpt-5.6-luna", &messages)[0]["text"],
+        "Stop. Output only the first heading of CLAUDE.md."
+    );
+    assert_eq!(
+        provider_user_turn_input("commandcode/gpt-5.6-luna", &messages)[0]["text"],
+        "Stop. Output only the first heading of CLAUDE.md."
+    );
+    assert_eq!(
+        provider_turn_input("gpt-5.3-codex-spark", &messages)[0]["text"],
+        "Stop. Output only the first heading of CLAUDE.md."
+    );
+    assert_eq!(
+        provider_turn_input_with_token_budget("commandcode/gpt-5.6-luna", &messages, 1_000)[0]["text"],
+        "Stop. Output only the first heading of CLAUDE.md."
+    );
+}
+
+#[test]
+fn truncated_request_messages_keeps_the_latest_user_turn() {
+    let messages = [
+        json!({"role":"user","content":"OLDEST_SENTINEL"}),
+        json!({"role":"assistant","content":"mid"}),
+        json!({"role":"user","content":"LATEST_SENTINEL"}),
+    ];
+    let kept = truncated_request_messages(&messages, 60);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0]["role"], "user");
+    assert_eq!(kept[0]["content"], "LATEST_SENTINEL");
 }
 
 #[test]

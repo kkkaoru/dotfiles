@@ -202,6 +202,11 @@ impl SegmentBuilder {
         }
         let tool_handoff = self.is_subagent && self.external_tool_calls > 0;
         self.close_blocks_for_finish(tool_handoff, stream).await?;
+        self.emit_unusable_tool_failure_text(stream).await?;
+        let next_sse_index = self.blocks.len();
+        self.blocks.retain(|block| {
+            block.get("type").and_then(Value::as_str) != Some(super::SSE_INDEX_PAD)
+        });
         sanitize_committed_blocks(&mut self.blocks);
         let has_tool_calls = self.external_tool_calls > 0;
         if self.provider_stop_reason == Some("tool_use")
@@ -239,11 +244,40 @@ impl SegmentBuilder {
             stop_reason,
             usage: self.usage,
             web_evidence: WebEvidenceSummary::default(),
+            next_sse_index,
         }
         .with_web_evidence(WebEvidenceSummary::from_verified_count(
             self.verified_web_evidence_count(),
         )))
     }
+
+    async fn emit_unusable_tool_failure_text(
+        &mut self,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        if !self.suppressed_tool_use || self.blocks.iter().any(block_has_visible_text) {
+            return Ok(());
+        }
+        let notice = crate::anthropic::segment::UNUSABLE_TOOLS_SUBSTITUTE;
+        let index = self.start_text_block(notice, stream).await?;
+        send_stream_frame(stream, "content_block_delta", || {
+            json!({
+                "type":"content_block_delta",
+                "index":index,
+                "delta":{"type":"text_delta","text":notice}
+            })
+        })
+        .await?;
+        self.close_text_block(stream).await
+    }
+}
+
+fn block_has_visible_text(block: &Value) -> bool {
+    block.get("type").and_then(Value::as_str) == Some("text")
+        && block
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.replace('\u{200b}', "").trim().is_empty())
 }
 
 fn thinking_contains_pending(blocks: &[Value], pending: &str) -> bool {

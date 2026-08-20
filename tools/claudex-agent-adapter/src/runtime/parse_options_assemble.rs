@@ -71,15 +71,17 @@ pub(super) fn assemble_options(mut draft: OptionsDraft) -> Result<ParsedOptions>
 }
 fn enable_pi_routes(routes: &mut [BackendRoute]) -> Result<()> {
     for route in routes {
-        match (&route.pi_provider, &route.pi_model) {
-            (Some(provider), Some(model)) if !provider.is_empty() && !model.is_empty() => {
-                route.backend = BackendKind::PiGateway;
-                if route.web_search_mode == crate::web_search::WebSearchMode::AcpNative {
-                    route.web_search_mode = crate::web_search::WebSearchMode::DelegatePi;
-                }
-            }
-            (None, None) => {}
+        let mapped = match (&route.pi_provider, &route.pi_model) {
+            (Some(provider), Some(model)) if !provider.is_empty() && !model.is_empty() => true,
+            (None, None) => false,
             _ => bail!("Pi route mappings require non-empty piProvider and piModel"),
+        };
+        if !mapped {
+            continue;
+        }
+        route.backend = BackendKind::PiGateway;
+        if route.web_search_mode == crate::web_search::WebSearchMode::AcpNative {
+            route.web_search_mode = crate::web_search::WebSearchMode::DelegatePi;
         }
     }
     Ok(())

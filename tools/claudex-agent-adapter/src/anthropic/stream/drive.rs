@@ -13,6 +13,7 @@ pub(super) struct ContextRetryStream {
     pub(super) model_permit: Option<ModelPermit>,
     pub(super) is_subagent: bool,
     pub(super) run_in_background: bool,
+    pub(super) next_sse_index: usize,
 }
 
 pub(super) struct StreamDriveOptions {

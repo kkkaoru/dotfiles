@@ -42,6 +42,8 @@ mod task_ids;
 pub(crate) use subagent_timeout::{
     LEGACY_SUBAGENT_RESPONSE_TIMEOUT_ENV, SUBAGENT_HARD_TIMEOUT_ENV,
 };
+mod command_code_model;
+pub(crate) use command_code_model::is_command_code_model;
 mod provider_auth;
 mod provider_auth_cooldown;
 pub(crate) mod provider_kind;

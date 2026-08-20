@@ -120,6 +120,11 @@ fn opencode_provider_maps_to_pi_gateway() {
 }
 
 #[test]
+#[expect(
+    clippy::cognitive_complexity,
+    clippy::too_many_lines,
+    reason = "worker route capability matrix is intentionally exhaustive"
+)]
 fn configured_worker_routes_are_command_capable() {
     let root = repository_root();
     let codex_config =
@@ -135,14 +140,6 @@ fn configured_worker_routes_are_command_capable() {
             "Codex app-server routes must enable {feature}"
         );
     }
-    let grok_command = fs::read_to_string(
-        root.join("tools/claudex-agent-adapter/src/grok_acp/connection_command.rs"),
-    )
-    .expect("Grok ACP command source");
-    assert!(
-        grok_command.contains("--always-approve"),
-        "Grok ACP routes must allow command tools"
-    );
     let config: Value = serde_json::from_str(
         &fs::read_to_string(root.join(".config/claudex/providers.json"))
             .expect("provider configuration"),

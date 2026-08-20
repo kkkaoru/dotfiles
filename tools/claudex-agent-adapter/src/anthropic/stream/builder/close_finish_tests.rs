@@ -214,10 +214,10 @@ async fn finish_ends_the_turn_after_three_consecutive_unusable_tools() {
     builder.provider_stop_reason = Some("tool_use");
     let segment = builder.finish(None).await.expect("finish after circuit");
     assert_eq!(segment.stop_reason, "end_turn");
-    assert!(
-        segment
-            .blocks
-            .iter()
-            .all(|block| block.get("type").and_then(serde_json::Value::as_str) != Some("tool_use"))
+    assert_eq!(segment.blocks.len(), 1);
+    assert_eq!(segment.blocks[0]["type"], "text");
+    assert_eq!(
+        segment.blocks[0]["text"],
+        "No assistant content was produced: tool arguments were unusable after 3 consecutive failures, so tool_use was suppressed. This is not successful work."
     );
 }

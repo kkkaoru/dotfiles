@@ -140,6 +140,10 @@ async fn socket_is_connectable(socket: &Path) -> bool {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::items_after_test_module,
+    reason = "inline process tests stay beside isolated command construction"
+)]
 mod tests {
     use super::*;
 
@@ -220,20 +224,20 @@ fn exa_api_key() -> Option<String> {
         let Ok(contents) = fs::read_to_string(&path) else {
             continue;
         };
-        for line in contents.lines() {
-            let Some(value) = line.strip_prefix("EXA_API_KEY=") else {
-                continue;
-            };
-            let value = value
-                .trim()
-                .trim_matches(|mark| mark == '"' || mark == '\'')
-                .to_owned();
-            if !value.is_empty() {
-                return Some(value);
-            }
+        if let Some(value) = contents.lines().find_map(exa_key_from_line) {
+            return Some(value);
         }
     }
     None
+}
+
+fn exa_key_from_line(line: &str) -> Option<String> {
+    let value = line
+        .strip_prefix("EXA_API_KEY=")?
+        .trim()
+        .trim_matches(|mark| mark == '"' || mark == '\'')
+        .to_owned();
+    (!value.is_empty()).then_some(value)
 }
 
 fn isolate_agent_directory(runtime_directory: &Path) -> Result<PathBuf> {
@@ -268,15 +272,19 @@ fn isolate_agent_directory(runtime_directory: &Path) -> Result<PathBuf> {
     if let Some(home) = std::env::var_os("HOME") {
         let source = PathBuf::from(home).join(".pi/agent");
         for name in ["auth.json", "models.json", "models-store.json"] {
-            let from = source.join(name);
-            if from.exists() {
-                std::os::unix::fs::symlink(&from, agent_directory.join(name)).with_context(
-                    || format!("share Pi {} with isolated agent directory", from.display()),
-                )?;
-            }
+            share_existing_pi_file(&source, &agent_directory, name)?;
         }
     }
     Ok(agent_directory)
+}
+
+fn share_existing_pi_file(source: &Path, agent_directory: &Path, name: &str) -> Result<()> {
+    let from = source.join(name);
+    if !from.exists() {
+        return Ok(());
+    }
+    std::os::unix::fs::symlink(&from, agent_directory.join(name))
+        .with_context(|| format!("share Pi {} with isolated agent directory", from.display()))
 }
 
 fn runtime_directory() -> Result<PathBuf> {

@@ -53,7 +53,9 @@ pub(super) fn prime_subagent_sse(
         .expect("new streaming response channel has capacity");
     // The response body itself supplies SSE comment keepalives while preparation
     // is quiet. Do not synthesize a thinking block here: a silent Cline turn
-    // must stay block-free until real CoT or ACP progress arrives.
+    // must stay block-free until real CoT or ACP progress arrives. If the turn
+    // still has zero blocks at finish, inject visible assistant text before
+    // `end_turn` — an empty close after `message_start` is "No assistant messages found".
     let _ = is_subagent;
     true
 }

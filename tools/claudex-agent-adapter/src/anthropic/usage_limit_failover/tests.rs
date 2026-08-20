@@ -707,6 +707,10 @@ fn model_uses_codex_app_server_false_branch() {
 }
 
 #[test]
+#[expect(
+    clippy::unnecessary_mut_passed,
+    reason = "mutable request call shape documents legacy preflight compatibility"
+)]
 fn apply_usage_limit_preflight_skips_subagent() {
     let bridge = cline_and_qwen_bridge();
     let mut request = dummy_request(CLINE_FLASH);
@@ -719,6 +723,10 @@ fn apply_usage_limit_preflight_skips_subagent() {
 }
 
 #[test]
+#[expect(
+    clippy::unnecessary_mut_passed,
+    reason = "mutable request call shape documents legacy preflight compatibility"
+)]
 fn apply_usage_limit_preflight_skips_non_provider_route() {
     let bridge = cline_and_qwen_bridge();
     let mut request = dummy_request(CLINE_FLASH);
@@ -736,6 +744,10 @@ fn apply_usage_limit_preflight_skips_non_provider_route() {
 }
 
 #[test]
+#[expect(
+    clippy::unnecessary_mut_passed,
+    reason = "mutable request call shape documents legacy preflight compatibility"
+)]
 fn apply_usage_limit_preflight_activates_when_auth_cooling_down() {
     let root = tempfile::tempdir().expect("preflight auth fixture");
     let bridge = cline_and_qwen_bridge().with_usage_limit_cache_home(root.path());
@@ -755,6 +767,10 @@ fn apply_usage_limit_preflight_activates_when_auth_cooling_down() {
 }
 
 #[test]
+#[expect(
+    clippy::unnecessary_mut_passed,
+    reason = "mutable request call shape documents legacy preflight compatibility"
+)]
 fn apply_usage_limit_preflight_rewrites_effort_from_configured_fallback() {
     let root = tempfile::tempdir().expect("preflight effort fixture");
     let bridge = cline_and_qwen_bridge().with_usage_limit_cache_home(root.path());
@@ -773,6 +789,10 @@ fn apply_usage_limit_preflight_rewrites_effort_from_configured_fallback() {
 }
 
 #[test]
+#[expect(
+    clippy::unnecessary_mut_passed,
+    reason = "mutable request call shape documents legacy preflight compatibility"
+)]
 fn apply_usage_limit_preflight_keeps_provider_when_cooling_down_without_failover() {
     let root = tempfile::tempdir().expect("preflight no failover fixture");
     let backend =

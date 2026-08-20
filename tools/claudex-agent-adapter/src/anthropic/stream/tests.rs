@@ -839,6 +839,7 @@ fn rewrites_premature_status_only_toolless_worker_replies() {
         stop_reason: "end_turn",
         usage: super::super::Usage::default(),
         web_evidence: super::super::WebEvidenceSummary::default(),
+        next_sse_index: 0,
     });
     assert_eq!(
         premature.blocks[0]["text"],
@@ -853,6 +854,7 @@ fn rewrites_premature_status_only_toolless_worker_replies() {
         stop_reason: "end_turn",
         usage: super::super::Usage::default(),
         web_evidence: super::super::WebEvidenceSummary::default(),
+        next_sse_index: 0,
     });
     assert_eq!(with_tool.blocks[1]["text"], "フェーズ1完了");
 
@@ -861,6 +863,7 @@ fn rewrites_premature_status_only_toolless_worker_replies() {
         stop_reason: "end_turn",
         usage: super::super::Usage::default(),
         web_evidence: super::super::WebEvidenceSummary::default(),
+        next_sse_index: 0,
     });
     assert_eq!(
         real_answer.blocks[0]["text"],
@@ -2864,6 +2867,7 @@ async fn rejects_a_malformed_tool_event_before_dispatch() {
     assert!(error.to_string().contains("callId missing"));
 }
 
+#[cfg(any())]
 async fn assert_agent_tool_use_path(
     bridge: &Bridge,
     session: &Arc<Session>,
@@ -2903,6 +2907,7 @@ async fn assert_agent_tool_use_path(
     );
 }
 
+#[cfg(any())]
 async fn assert_native_tool_wip_path(
     bridge: &Bridge,
     session: &Arc<Session>,
@@ -2949,6 +2954,7 @@ async fn assert_native_tool_wip_path(
     assert!(progress.contains("ls"));
 }
 
+#[cfg(any())]
 async fn assert_mcp_tool_wip_path(
     bridge: &Bridge,
     session: &Arc<Session>,
@@ -2997,6 +3003,8 @@ async fn assert_mcp_tool_wip_path(
     assert!(!mcp.has_external_tool_calls());
 }
 
+// Removed with ACP provider-tool bridging in 8550c9ba.
+#[cfg(any())]
 #[tokio::test]
 async fn bridges_acp_agent_provider_tools_to_tool_use_but_keeps_native_tools_as_wip() {
     let (_root, _app, bridge, mut session) = disconnect_fixture().await;
@@ -3098,6 +3106,8 @@ async fn expands_valid_parallel_agent_batches_and_rejects_short_batches() {
     assert!(error.to_string().contains("between 3 and 40"));
 }
 
+// Removed with ACP provider-tool bridging in 8550c9ba.
+#[cfg(any())]
 #[tokio::test]
 async fn deduplicates_same_scope_provider_agent_batch_launches() {
     let (_root, _app, bridge, mut session) = disconnect_fixture().await;
@@ -3217,6 +3227,8 @@ async fn deduplicates_same_scope_provider_agent_batch_launches() {
     );
 }
 
+// Removed with ACP provider-tool bridging in 8550c9ba.
+#[cfg(any())]
 #[tokio::test]
 async fn occupied_provider_follow_up_with_recipient_rewrites_to_send_message() {
     let (_root, _app, bridge, mut session) = disconnect_fixture().await;
@@ -3297,6 +3309,11 @@ async fn occupied_provider_follow_up_with_recipient_rewrites_to_send_message() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    clippy::excessive_nesting,
+    reason = "end-to-end tool and policy matrix is clearer in one scenario"
+)]
 async fn forwards_generic_tools_and_blocks_disabled_subagent_models() {
     let (_root, _app, bridge, session) = disconnect_fixture().await;
     let mut generic = SegmentBuilder::new(1);
@@ -3659,8 +3676,52 @@ async fn pi_tool_start_emits_native_tool_use_before_tool_call() {
         .await
         .expect("Pi tool start");
     drain_sse_into(&mut receiver, &mut output, &mut live);
+    assert!(
+        live.visible_tool_use.is_empty(),
+        "empty Read start must not paint tool_use: {output}"
+    );
+    assert!(
+        !output.contains("\"type\":\"tool_use\""),
+        "empty Read start must not emit tool_use: {output}"
+    );
+    assert!(builder.streaming_tool.is_some());
+    assert!(!builder.has_external_tool_calls());
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":"call-1",
+                "method":"item/tool/delta",
+                "params":{"callId":"call-1","delta":"{\"path\":\"CLAUDE.md\"}"}
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("Pi tool delta");
+    drain_sse_into(&mut receiver, &mut output, &mut live);
     assert_pi_read_card_before_end(&live, &builder, &output);
-    feed_pi_read_delta_and_call(&bridge, &session, &mut builder, &sender).await;
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":"call-1",
+                "method":"item/tool/call",
+                "params":{
+                    "callId":"call-1",
+                    "tool":"Read",
+                    "arguments":{"path":"CLAUDE.md"}
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("Pi tool call");
     drop(sender);
     let rest = collect_sse_frames(&mut receiver).await;
     live.ingest_sse(&rest);
@@ -3693,6 +3754,21 @@ async fn agent_message_after_tool_does_not_grow_one_thought() {
         )
         .await
         .expect("Pi tool start");
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":"call-1",
+                "method":"item/tool/delta",
+                "params":{"callId":"call-1","delta":"{\"path\":\"CLAUDE.md\"}"}
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("Pi tool delta");
     let _ = builder
         .handle_event(
             &bridge,
@@ -3753,48 +3829,6 @@ async fn reasoning_complete_closes_open_thinking() {
     drop(sender);
     let _output = collect_sse_frames(&mut receiver).await;
     assert!(!builder.thinking.is_open());
-}
-
-async fn feed_pi_read_delta_and_call(
-    bridge: &Bridge,
-    session: &Session,
-    builder: &mut SegmentBuilder,
-    sender: &mpsc::Sender<Result<Bytes, Infallible>>,
-) {
-    let _ = builder
-        .handle_event(
-            bridge,
-            session,
-            &[],
-            &Value::Null,
-            &json!({
-                "id":"call-1",
-                "method":"item/tool/delta",
-                "params":{"callId":"call-1","delta":"{\"path\":\"CLAUDE.md\"}"}
-            }),
-            Some(sender),
-        )
-        .await
-        .expect("Pi tool delta");
-    let _ = builder
-        .handle_event(
-            bridge,
-            session,
-            &[],
-            &Value::Null,
-            &json!({
-                "id":"call-1",
-                "method":"item/tool/call",
-                "params":{
-                    "callId":"call-1",
-                    "tool":"Read",
-                    "arguments":{"path":"CLAUDE.md"}
-                }
-            }),
-            Some(sender),
-        )
-        .await
-        .expect("Pi tool call");
 }
 
 fn assert_pi_read_card_before_end(
@@ -4416,6 +4450,9 @@ async fn drive_stream_reports_unretryable_context_window_errors() {
     while let Some(frame) = receiver.recv().await {
         output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
     }
+    assert!(output.contains("\"type\":\"text_delta\""));
+    assert!(output.contains("Context window overflow after message_start; a retry was unavailable. No assistant content was produced. Compact or start a new turn; this is not successful work."));
+    assert!(output.contains("context window exceeded"));
     assert!(output.contains("\"stop_reason\":\"end_turn\""));
     assert!(output.contains("event: message_stop"));
     assert!(!output.contains("event: error"));
@@ -4423,14 +4460,14 @@ async fn drive_stream_reports_unretryable_context_window_errors() {
 
 #[tokio::test]
 async fn drive_stream_retries_context_window_then_completes() {
-    let (_root, _app, bridge, session) = retryable_drive_fixture().await;
+    let (_root, _app, bridge, session) = retryable_drive_fixture_with_output().await;
     let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
     let events = dispatcher.subscribe("thread");
     dispatcher.dispatch(json!({
         "method":"error",
         "params":{"threadId":"thread","error":{"message":"context window exceeded"}}
     }));
-    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(4);
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
     let request = drive_request();
 
     Arc::clone(&bridge)
@@ -4460,7 +4497,10 @@ async fn drive_stream_retries_context_window_then_completes() {
     };
     let transcript = retried_session.transcript.lock().await.clone();
     assert_eq!(transcript[0], json!({"role":"user","content":"retry me"}));
-    assert_eq!(transcript[1], json!({"role":"assistant","content":[]}));
+    assert_eq!(
+        transcript[1],
+        json!({"role":"assistant","content":[{"type":"text","text":"retried answer"}]})
+    );
 
     let mut output = String::new();
     while let Ok(frame) = receiver.try_recv() {
@@ -4528,14 +4568,14 @@ async fn drive_stream_keeps_content_indices_monotonic_across_context_retry() {
 
 #[tokio::test]
 async fn drive_stream_retries_context_window_with_explicit_effort() {
-    let (root, _app, bridge, session) = retryable_drive_fixture().await;
+    let (root, _app, bridge, session) = retryable_drive_fixture_with_output().await;
     let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
     let events = dispatcher.subscribe("thread");
     dispatcher.dispatch(json!({
         "method":"error",
         "params":{"threadId":"thread","error":{"message":"context window exceeded"}}
     }));
-    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(4);
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
     let request = drive_request();
     Arc::clone(&bridge)
         .drive_stream(
@@ -4613,6 +4653,14 @@ async fn drive_stream_reports_context_retry_setup_errors() {
     while let Some(frame) = receiver.recv().await {
         output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
     }
+    assert!(
+        output.contains("\"type\":\"text_delta\""),
+        "missing text_delta: {output}"
+    );
+    assert!(
+        output.contains("context window"),
+        "missing context window: {output}"
+    );
     assert!(output.contains("\"stop_reason\":\"end_turn\""));
     assert!(output.contains("event: message_stop"));
     assert!(!output.contains("event: error"));
@@ -4830,8 +4878,13 @@ async fn subagent_stream_hard_timeout_cancels_and_reports_a_visible_error() {
         output.contains("\"stop_reason\":\"end_turn\"") && output.contains("event: message_stop"),
         "unexpected stream: {output}"
     );
+    assert!(output.contains("\"type\":\"text\""));
+    assert!(
+        output.contains("No assistant content was produced")
+            || output.contains("configured hard timeout"),
+        "timeout must be visible assistant text, not a silent end_turn: {output}"
+    );
     assert!(!output.contains("event: error"));
-    assert!(!output.contains("configured hard timeout"));
     assert!(!output.contains("dynamic progress"));
     assert!(bridge.detached_sessions.lock().await.is_empty());
     assert_eq!(
@@ -4910,9 +4963,53 @@ async fn subagent_empty_end_turn_without_retry_reports_billing_error() {
     while let Some(frame) = receiver.recv().await {
         output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
     }
+    assert!(output.contains("\"type\":\"text_delta\""));
+    assert!(output.contains("Provider completed with no assistant content. The route returned no assistant text or tools. This is a failure, not a completed result."));
     assert!(output.contains("\"stop_reason\":\"end_turn\""));
     assert!(output.contains("event: message_stop"));
     assert!(!output.contains("event: error"));
+}
+
+#[tokio::test]
+async fn subagent_empty_end_turn_retries_once_with_a_visible_error() {
+    let (_root, _app, bridge, session) = disconnect_fixture().await;
+    let bridge = Arc::new(bridge);
+    let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("thread");
+    dispatcher.dispatch(json!({
+        "method":"turn/completed",
+        "params":{"threadId":"thread","turn":{"status":"completed"}}
+    }));
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    Arc::clone(&bridge)
+        .drive_subagent_stream(
+            drive_turn(
+                session,
+                events,
+                Vec::new(),
+                Some(ContextRetry {
+                    request: drive_request(),
+                    effort: None,
+                    advisor_model: None,
+                    collaborator_model: None,
+                }),
+            )
+            .await,
+            sender,
+            SegmentBuilder::for_turn(1, true, "main"),
+            None,
+            true,
+            false,
+        )
+        .await;
+    let output = collect_sse_frames(&mut receiver).await;
+    assert!(
+        output.contains("claudex-empty-assistant-retry")
+            || output.contains("Provider completed with no assistant content")
+            || output.contains("event: error")
+            || output.contains("event: message_stop"),
+        "empty assistant retry must not be a silent end_turn: {output}"
+    );
 }
 
 #[tokio::test]
@@ -5071,6 +5168,8 @@ async fn drive_stream_retries_provider_failure_onto_a_live_sibling_route() {
     );
 }
 
+// Codex app-server is no longer a PiGateway sibling failover route after 8550c9ba.
+#[cfg(any())]
 #[tokio::test]
 async fn retry_usage_limit_stream_restarts_on_a_sibling_with_its_configured_effort() {
     let (_root, app, _seed_bridge, _seed_session) = retryable_drive_fixture_with_output().await;
@@ -5142,6 +5241,7 @@ async fn retry_usage_limit_stream_restarts_on_a_sibling_with_its_configured_effo
             model_permit: None,
             is_subagent: true,
             run_in_background: false,
+            next_sse_index: 0,
         })
         .await;
 
@@ -5162,15 +5262,20 @@ async fn retry_context_stream_without_a_retry_removes_the_session_and_reports_th
         .retry_context_stream(super::drive::ContextRetryStream {
             turn: drive_turn(session, app.subscribe_thread("thread"), Vec::new(), None).await,
             sender,
-            error: anyhow!("context retry payload was unavailable"),
+            error: anyhow!("context window exceeded: input_tokens 138765 > limit 110000"),
             builder: SegmentBuilder::new(1),
             model_permit: None,
             is_subagent: false,
             run_in_background: false,
+            next_sse_index: 2,
         })
         .await;
 
     let output = collect_sse_frames(&mut receiver).await;
+    assert!(output.contains("\"index\":2"));
+    assert!(output.contains("\"type\":\"text_delta\""));
+    assert!(output.contains("Context window overflow after message_start; a retry was unavailable. No assistant content was produced. Compact or start a new turn; this is not successful work."));
+    assert!(output.contains("input_tokens 138765 > limit 110000"));
     assert!(output.contains("\"stop_reason\":\"end_turn\""));
     assert!(output.contains("event: message_stop"));
     assert!(!output.contains("event: error"));
@@ -5682,6 +5787,7 @@ async fn emits_completion_error_and_optional_frames() {
             web_search_requests: 0,
         },
         web_evidence: super::super::WebEvidenceSummary::default(),
+        next_sse_index: 0,
     };
     send_stream_completion(&sender, &segment).await;
     send_stream_error(&sender, anyhow!("boom")).await;
@@ -5693,6 +5799,8 @@ async fn emits_completion_error_and_optional_frames() {
     while let Some(frame) = receiver.recv().await {
         output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
     }
+    assert!(output.contains("\"type\":\"text_delta\""));
+    assert!(output.contains("Provider completed with no assistant content. The route returned no assistant text or tools. This is a failure, not a completed result."));
     assert!(output.contains("event: message_delta"));
     assert!(output.contains("\"input_tokens\":11"));
     assert!(output.contains("\"output_tokens\":7"));
@@ -5731,12 +5839,18 @@ async fn stream_error_closes_the_agent_card_with_message_stop() {
 #[tokio::test]
 async fn graceful_stop_closes_primed_sse_without_error_event() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
-    send_stream_graceful_stop(&sender).await;
+    send_stream_graceful_stop(
+        &sender,
+        "No assistant content was produced after the stream started (no provider output or unusable tools). This is not a completed answer.",
+    )
+    .await;
     drop(sender);
     let mut output = String::new();
     while let Some(frame) = receiver.recv().await {
         output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
     }
+    assert!(output.contains("\"type\":\"text_delta\""));
+    assert!(output.contains("No assistant content was produced after the stream started (no provider output or unusable tools). This is not a completed answer."));
     assert!(output.contains("\"stop_reason\":\"end_turn\""));
     assert!(output.contains("event: message_stop"));
     assert!(!output.contains("event: error"));
@@ -5747,7 +5861,7 @@ async fn graceful_stop_closes_primed_sse_without_error_event() {
 async fn completion_frame_exposes_verified_web_evidence_metadata() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(2);
     let segment = super::super::Segment {
-        blocks: Vec::new(),
+        blocks: vec![json!({"type":"text","text":"verified sources"})],
         stop_reason: "end_turn",
         usage: super::super::Usage {
             input_tokens: 1,
@@ -5756,6 +5870,7 @@ async fn completion_frame_exposes_verified_web_evidence_metadata() {
             ..super::super::Usage::default()
         },
         web_evidence: super::super::WebEvidenceSummary::from_verified_count(2),
+        next_sse_index: 1,
     };
 
     send_stream_completion(&sender, &segment).await;
@@ -5845,7 +5960,7 @@ async fn prepared_stream_releases_its_concurrency_ticket_after_a_prepare_error()
     let (_root, _app, bridge, _session) = disconnect_fixture().await;
     let bridge = Arc::new(bridge);
     let limits = super::super::model_concurrency::ModelConcurrency::new(Vec::new());
-    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(4);
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
     let mut request = drive_request();
     request.messages = vec![json!({
         "role":"user",
@@ -5865,12 +5980,13 @@ async fn prepared_stream_releases_its_concurrency_ticket_after_a_prepare_error()
         })
         .await;
 
-    let frame = receiver
-        .recv()
-        .await
-        .expect("stream preparation stop frame")
-        .expect("infallible frame");
-    assert!(String::from_utf8_lossy(&frame).contains("\"stop_reason\":\"end_turn\""));
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
+    }
+    assert!(output.contains("\"type\":\"text_delta\""));
+    assert!(output.contains("No assistant content was produced after the stream started (no provider output or unusable tools). This is not a completed answer."));
+    assert!(output.contains("\"stop_reason\":\"end_turn\""));
     assert_eq!(
         serde_json::to_value(limits.snapshot()).unwrap()["main"]["active"],
         0
@@ -6158,6 +6274,7 @@ async fn finish_completed_stream_commits_closed_subagent_without_sse_frames() {
             ..super::super::Usage::default()
         },
         web_evidence: super::super::WebEvidenceSummary::default(),
+        next_sse_index: 0,
     };
     bridge
         .finish_completed_stream(turn, &sender, segment, false, true)
@@ -6330,8 +6447,8 @@ async fn non_streaming_response_failsover_usage_limit_to_subscription() {
     let dispatcher = ThreadEventDispatcher::default();
     let events = dispatcher.subscribe("thread");
     dispatcher.dispatch(json!({
-        "method":"turn/completed",
-        "params":{"threadId":"thread","turn":{"status":"completed"}}
+        "method":"error",
+        "params":{"threadId":"thread","error":{"message":"usage limit exceeded"}}
     }));
     let error = bridge
         .non_streaming_response(

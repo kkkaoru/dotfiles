@@ -45,6 +45,7 @@ impl Bridge {
                 ..Usage::default()
             },
             web_evidence: WebEvidenceSummary::default(),
+            next_sse_index: 0,
         };
         Ok(anthropic_response(segment, &request.model))
     }

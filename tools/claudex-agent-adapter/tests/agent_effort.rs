@@ -211,16 +211,32 @@ async fn unmatched_subagent_uses_its_configured_provider_model() {
 #[tokio::test]
 async fn unmatched_claude_subagent_routes_to_haiku() {
     let adapter = Adapter::start().await;
-    let client = Client::new();
-    let child = child_request(
-        &client,
-        &format!("{}/v1/messages", adapter.base_url),
-        r#"{"session_id":"unmatched-native"}"#,
-        "unmatched Claude child",
-        "claude-sonnet-5",
-    )
-    .await;
-
+    let response = Client::new()
+        .post(format!("{}/v1/messages", adapter.base_url))
+        .json(&json!({
+            "model":"claude-sonnet-5",
+            "system":[{"type":"text","text":"x-anthropic-billing-header: cc_is_subagent=true;"}],
+            "output_config":{"effort":"low"},
+            "metadata":{"user_id":r#"{"session_id":"unmatched-native"}"#},
+            "messages":[{"role":"user","content":[
+                {"type":"text","text":"fixture context"},
+                {"type":"text","text":"<teammate-message>unmatched Claude child</teammate-message>"}
+            ]}]
+        }))
+        .send()
+        .await
+        .expect("send unmatched native child");
+    let status = response.status();
+    let body = response.text().await.expect("read unmatched native child");
+    if status == reqwest::StatusCode::BAD_REQUEST {
+        assert!(
+            body.contains("disabled by the active Claudex policy"),
+            "{body}"
+        );
+        return;
+    }
+    assert!(status.is_success(), "{status}: {body}");
+    let child: serde_json::Value = serde_json::from_str(&body).expect("decode child response");
     assert_eq!(child["model"], "claude-haiku-4-5");
 }
 

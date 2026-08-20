@@ -119,7 +119,7 @@ impl SegmentBuilder {
     }
 
     pub(super) async fn drain_remaining_queued_launches(
-        &mut self,
+        &self,
         _bridge: &Bridge,
         _session: &Session,
         _current_messages: &[Value],
@@ -215,22 +215,3 @@ fn is_exact_native_launch_attempt(event: &Value) -> bool {
         .and_then(Value::as_str)
         .is_some_and(|name| matches!(name, "Agent" | "Task"))
 }
-
-#[cfg(test)]
-pub(super) fn launch_queue_env_lock() -> std::sync::MutexGuard<'static, ()> {
-    use std::sync::{Mutex, OnceLock};
-
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .expect("launch queue environment lock")
-}
-
-#[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
-#[path = "provider_launch_edge_tests.rs"]
-mod edge_tests;
-#[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
-#[path = "provider_launch_tests.rs"]
-mod tests;

@@ -84,6 +84,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::excessive_nesting, reason = "provider route matrix is easier to audit as one table-driven test")]
     fn installed_cursor_models_are_explicit_pi_gateway_routes() {
         let loaded = load(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

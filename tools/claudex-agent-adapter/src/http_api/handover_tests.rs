@@ -437,6 +437,10 @@ async fn proxy_middleware_serves_locally_when_retained_is_unreachable() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "handover circuit integration sequence must retain one shared fixture"
+)]
 async fn retained_proxy_application_503_keeps_session_until_circuit_opens() {
     let upstream = serve_retained_busy_messages_unavailable().await;
     let root = tempfile::tempdir().expect("retained 503 fixture");
@@ -1430,6 +1434,10 @@ async fn serve_health_then_close_divert() -> SocketAddr {
     serve_rebound_proxy(None, advertised, "must-not-run-local").await
 }
 
+#[expect(
+    clippy::excessive_nesting,
+    reason = "minimal nested HTTP fixture keeps request handling local"
+)]
 async fn serve_garbage_health() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await

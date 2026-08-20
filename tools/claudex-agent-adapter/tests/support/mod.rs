@@ -196,15 +196,17 @@ pub fn base_request() -> Value {
 }
 
 pub async fn post_json(client: &Client, url: &str, body: Value) -> Value {
-    client
+    let response = client
         .post(url)
         .json(&body)
         .send()
         .await
-        .expect("send JSON request")
-        .error_for_status()
-        .expect("successful JSON status")
-        .json()
-        .await
-        .expect("decode JSON response")
+        .expect("send JSON request");
+    let status = response.status();
+    let body = response.text().await.expect("read JSON response");
+    assert!(
+        status.is_success(),
+        "JSON request failed with {status}: {body}"
+    );
+    serde_json::from_str(&body).expect("decode JSON response")
 }

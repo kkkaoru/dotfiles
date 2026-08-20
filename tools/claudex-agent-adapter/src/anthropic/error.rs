@@ -21,6 +21,7 @@ pub(super) fn error_type(error: &Error) -> &'static str {
     if is_terminal_provider_configuration_error(error)
         || is_provider_exhaustion_error(error)
         || is_incomplete_tool_json_error(error)
+        || super::segment::contains_empty_assistant_turn_marker(&error.to_string())
     {
         NON_RETRYABLE_ERROR_TYPE
     } else {
@@ -44,6 +45,7 @@ pub(super) fn http_status(fallback: StatusCode, error: &Error) -> StatusCode {
         || is_incomplete_tool_json_error(error)
         || super::stream::usage_limit::contains_classic_usage_limit_marker(&error.to_string())
         || super::segment::contains_empty_acp_billing_marker(&error.to_string())
+        || super::segment::contains_empty_assistant_turn_marker(&error.to_string())
     {
         StatusCode::BAD_REQUEST
     } else {

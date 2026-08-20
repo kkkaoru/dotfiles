@@ -12,7 +12,7 @@ mod retry;
 #[path = "session_turn_model.rs"]
 mod turn_model;
 #[cfg(test)]
-pub(in crate::anthropic) use turn_model::pi_claude_request;
+pub(in crate::anthropic) use turn_model::{pi_claude_request, pi_claude_request_for_model};
 
 pub(in crate::anthropic) struct StartContextRetry<'a> {
     pub(super) request: &'a MessagesRequest,

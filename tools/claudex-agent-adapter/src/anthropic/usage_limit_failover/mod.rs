@@ -47,7 +47,7 @@ impl Bridge {
 
     pub(super) fn apply_usage_limit_preflight(
         &self,
-        request: &mut MessagesRequest,
+        request: &MessagesRequest,
         route: RouteDecision,
         _effort: &mut Option<String>,
         is_subagent: bool,

@@ -67,7 +67,7 @@ fn parse_stored(text: &str, source: &Path) -> Option<BTreeSet<String>> {
 fn last_good_file() -> Option<PathBuf> {
     #[cfg(test)]
     {
-        return Some(test_last_good_file());
+        Some(test_last_good_file())
     }
     #[cfg(not(test))]
     {

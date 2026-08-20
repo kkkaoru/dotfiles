@@ -10,6 +10,8 @@ const BASH_COMMAND_KEYS: [&str; 4] = ["command", "cmd", "script", "bash"];
 const SEND_MESSAGE_RECIPIENT_KEYS: [&str; 3] = ["to", "resume_from", "resume"];
 const SEND_MESSAGE_BODY_KEYS: [&str; 6] =
     ["prompt", "message", "task", "instruction", "query", "input"];
+const READ_PATH_KEYS: [&str; 2] = ["file_path", "path"];
+const PATTERN_KEYS: [&str; 1] = ["pattern"];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum UnusableCircuitDecision {
@@ -103,6 +105,12 @@ fn tool_arguments_usable(name: &str, arguments: &Value) -> bool {
     }
     if is_subagent_lifecycle_tool(name) {
         return subagent_arguments_usable(object);
+    }
+    if name.eq_ignore_ascii_case("Read") {
+        return first_nonempty(object, &READ_PATH_KEYS).is_some();
+    }
+    if name.eq_ignore_ascii_case("Grep") || name.eq_ignore_ascii_case("Glob") {
+        return first_nonempty(object, &PATTERN_KEYS).is_some();
     }
     !object.is_empty()
 }

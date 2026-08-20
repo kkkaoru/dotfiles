@@ -157,6 +157,10 @@ fn serve_ineligible_health(
     }
 }
 
+#[expect(
+    clippy::excessive_nesting,
+    reason = "test-only HTTP framing parser remains local and explicit"
+)]
 fn read_complete_health_request(stream: &mut std::net::TcpStream) {
     use std::io::Read;
 

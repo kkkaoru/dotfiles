@@ -1,12 +1,11 @@
-use anyhow::anyhow;
 use std::sync::Arc;
 
 use super::{
     SegmentBuilder, StreamSender, StreamTurn, drive::ContextRetryStream,
-    protocol::send_stream_graceful_stop,
+    empty_turn::EmptyAssistantStream, protocol::send_stream_graceful_stop_for_error,
 };
 use crate::anthropic::{
-    ActiveTurn, Bridge, model_concurrency::ModelPermit, segment::EMPTY_ACP_END_TURN,
+    ActiveTurn, Bridge, model_concurrency::ModelPermit,
     usage_limit_failover::is_usage_limit_exceeded,
 };
 
@@ -34,15 +33,12 @@ impl Bridge {
             StreamTurn::Segment {
                 segment,
                 provider_settled,
-            } if is_subagent && segment.is_empty_end_turn() => {
-                let input_tokens = turn.input_tokens;
-                let model = turn.session.model.clone();
+            } if segment.is_empty_end_turn() => {
                 let _ = provider_settled;
-                self.retry_usage_limit_stream(ContextRetryStream {
+                self.finish_empty_assistant_stream(EmptyAssistantStream {
                     turn,
                     sender,
-                    error: anyhow!("{EMPTY_ACP_END_TURN}"),
-                    builder: SegmentBuilder::for_turn(input_tokens, is_subagent, &model),
+                    segment,
                     model_permit,
                     is_subagent,
                     run_in_background,
@@ -67,6 +63,7 @@ impl Bridge {
                     turn,
                     sender,
                     error,
+                    next_sse_index: builder.next_sse_index(),
                     builder,
                     model_permit,
                     is_subagent,
@@ -79,6 +76,7 @@ impl Bridge {
                     turn,
                     sender,
                     error,
+                    next_sse_index: builder.next_sse_index(),
                     builder,
                     model_permit,
                     is_subagent,
@@ -122,6 +120,7 @@ impl Bridge {
                 model_permit,
                 is_subagent,
                 run_in_background,
+                next_sse_index: 0,
             })
             .await;
             return;
@@ -135,6 +134,6 @@ impl Bridge {
             self.disconnect_stream(&turn.session, Arc::clone(&turn.events))
                 .await
         };
-        send_stream_graceful_stop(&sender).await;
+        send_stream_graceful_stop_for_error(&sender, &error).await;
     }
 }

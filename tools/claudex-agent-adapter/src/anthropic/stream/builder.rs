@@ -23,6 +23,8 @@ mod web_provenance;
 
 pub(super) use super::tool_call_parser::{parse_tool_call, parse_tool_delta, parse_tool_start};
 
+pub(super) const SSE_INDEX_PAD: &str = "sse_index_pad";
+
 pub(in crate::anthropic) struct SegmentBuilder {
     pub(super) blocks: Vec<Value>,
     pub(super) thinking: ThinkingState,

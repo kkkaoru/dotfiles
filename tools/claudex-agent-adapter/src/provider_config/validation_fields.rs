@@ -116,18 +116,10 @@ fn prefix_captures_claude_model(prefix: &str) -> bool {
     if prefix.is_empty() || prefix.starts_with(crate::DISCOVERY_MODEL_PREFIX) {
         return false;
     }
-    const SAMPLES: [&str; 8] = [
-        "claude-haiku-4-5",
-        "claude-sonnet-5",
-        "claude-opus-5",
-        "haiku",
-        "sonnet",
-        "opus",
-        "fable",
-        "sonnet[1m]",
-    ];
+    let samples = ["haiku", "sonnet", "opus", "fable", "sonnet[1m]"];
     crate::anthropic::normalize_claude_model_to_haiku(prefix).is_some()
-        || SAMPLES.iter().any(|sample| sample.starts_with(prefix))
+        || "claude-".starts_with(prefix)
+        || samples.iter().any(|sample| sample.starts_with(prefix))
 }
 
 pub(super) fn validate_web_search_mode(provider: &Provider) -> Result<()> {

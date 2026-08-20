@@ -411,6 +411,7 @@ async fn builds_anthropic_json_and_error_responses() {
                 web_search_requests: 0,
             },
             web_evidence: WebEvidenceSummary::default(),
+            next_sse_index: 0,
         },
         "model",
     );
@@ -462,6 +463,7 @@ async fn exposes_verified_web_evidence_metadata_in_non_stream_response() {
                 ..Usage::default()
             },
             web_evidence: WebEvidenceSummary::from_verified_count(3),
+            next_sse_index: 0,
         },
         "model",
     );

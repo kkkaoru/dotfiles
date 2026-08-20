@@ -13,10 +13,10 @@ use tokio::sync::{Mutex, Semaphore};
 use super::tools::launch_capability_summary;
 use super::{
     candidate_length, codex_tool_name, dynamic_tool, helpers::owns_tool_result, is_better_length,
-    is_idempotent_task_lifecycle_error, pi_claude_request, reservation::reserve_matching_session,
-    session_turn::contains_context_window_marker, thread_start_params,
-    thread_start_params_for_mode, tool_configuration, tool_configuration_for_mode,
-    transcript_owns_tool_results, validate_tool_result_ownership,
+    is_idempotent_task_lifecycle_error, pi_claude_request, pi_claude_request_for_model,
+    reservation::reserve_matching_session, session_turn::contains_context_window_marker,
+    thread_start_params, thread_start_params_for_mode, tool_configuration,
+    tool_configuration_for_mode, transcript_owns_tool_results, validate_tool_result_ownership,
 };
 
 #[test]
@@ -128,6 +128,7 @@ async fn t14_turn_progress_and_adopted_thread_id_stay_off_transcript() {
         stop_reason: "end_turn",
         usage: Default::default(),
         web_evidence: Default::default(),
+        next_sse_index: 0,
     };
     super::super::stream::commit_transcript(&session, Vec::new(), &segment).await;
 
@@ -177,6 +178,7 @@ async fn t11_read_only_main_turn_commits_empty_assistant_after_progress() {
         stop_reason: "end_turn",
         usage: Default::default(),
         web_evidence: Default::default(),
+        next_sse_index: 0,
     };
     super::super::stream::commit_transcript(&session, Vec::new(), &segment).await;
 
@@ -547,6 +549,10 @@ fn documents_idempotent_task_stop_semantics_in_the_dynamic_schema() {
 }
 
 #[test]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "schema preservation assertions form one cohesive matrix"
+)]
 fn main_and_worker_sessions_preserve_received_tool_schemas_exactly() {
     let routing = r#"Claudex routing for this turn: {"providers":{},"selected_agents":["claudex-deepseek-pro","claudex-ollama-glm-5-2"],"selected_workers":[{"agent":"claudex-deepseek-pro","model":"deepseek-model"}]} mandatory policy"#;
     let tools = vec![
@@ -805,6 +811,10 @@ fn main_session_does_not_synthesize_agent_tools() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "launch capability edge cases share one fixture matrix"
+)]
 fn launch_capability_summary_requires_nonempty_tools_without_an_exact_or_launch_like_name() {
     struct Case {
         name: &'static str,
@@ -1086,7 +1096,7 @@ fn pi_request_uses_the_same_combined_system_as_direct() {
         pi["messages"][1]["content"][0]["text"],
         "later system reminder"
     );
-    assert_eq!(pi["tools"], json!(request.tools));
+    assert_eq!(pi["tools"], json!([]));
 
     let direct_acp =
         thread_start_params_for_mode(&request, "auto", Vec::new(), WebSearchMode::AcpNative);
@@ -1100,6 +1110,87 @@ fn pi_request_uses_the_same_combined_system_as_direct() {
         pi_acp["system"]
             .as_str()
             .is_some_and(|system| system.starts_with("outer system\n\n"))
+    );
+}
+
+#[test]
+fn nested_subagent_pi_request_hides_launch_tools_and_keeps_send_message() {
+    let request = request(
+        json!("cc_is_subagent=true"),
+        vec![
+            json!({"name":"Read","input_schema":{"type":"object"}}),
+            json!({"name":"Agent","input_schema":{"type":"object"}}),
+            json!({"name":"Task","input_schema":{"type":"object"}}),
+            json!({"name":"spawn_subagent","input_schema":{"type":"object"}}),
+            json!({"name":"MCP__spawn_subagent","input_schema":{"type":"object"}}),
+            json!({"name":"cc_Agent_0","input_schema":{"type":"object"}}),
+            json!({"name":"cc_Task_1","input_schema":{"type":"object"}}),
+            json!({"name":"SendMessage","input_schema":{"type":"object"}}),
+            json!({"name":"cc_SendMessage_3","input_schema":{"type":"object"}}),
+            json!({"name":"TaskOutput","input_schema":{"type":"object"}}),
+        ],
+    );
+    let pi = pi_claude_request(&request, true, false).expect("Pi nested request");
+    assert_eq!(
+        pi["tools"],
+        json!([
+            {"name":"Read","input_schema":{"type":"object"}},
+            {"name":"SendMessage","input_schema":{"type":"object"}},
+            {"name":"cc_SendMessage_3","input_schema":{"type":"object"}},
+            {"name":"TaskOutput","input_schema":{"type":"object"}}
+        ])
+    );
+    let pi_acp = pi_claude_request(&request, true, true).expect("Pi nested ACP request");
+    assert_eq!(
+        pi_acp["tools"],
+        json!([
+            {"name":"Read","input_schema":{"type":"object"}},
+            {"name":"SendMessage","input_schema":{"type":"object"}},
+            {"name":"cc_SendMessage_3","input_schema":{"type":"object"}},
+            {"name":"TaskOutput","input_schema":{"type":"object"}}
+        ])
+    );
+}
+
+#[test]
+fn main_session_pi_request_keeps_launch_tools() {
+    let request = request(
+        json!("outer system"),
+        vec![
+            json!({"name":"Agent","input_schema":{"type":"object"}}),
+            json!({"name":"Task","input_schema":{"type":"object"}}),
+            json!({"name":"spawn_subagent","input_schema":{"type":"object"}}),
+            json!({"name":"cc_Agent_0","input_schema":{"type":"object"}}),
+            json!({"name":"SendMessage","input_schema":{"type":"object"}}),
+        ],
+    );
+    let pi = pi_claude_request(&request, false, false).expect("Pi main request");
+    assert_eq!(
+        pi["tools"],
+        json!([
+            {"name":"Agent","input_schema":{"type":"object"}},
+            {"name":"Task","input_schema":{"type":"object"}},
+            {"name":"spawn_subagent","input_schema":{"type":"object"}},
+            {"name":"cc_Agent_0","input_schema":{"type":"object"}},
+            {"name":"SendMessage","input_schema":{"type":"object"}}
+        ])
+    );
+}
+
+#[test]
+fn pi_request_hides_launch_tools_from_cc_is_subagent_when_flag_is_false() {
+    let request = request(
+        json!("cc_is_subagent=true"),
+        vec![
+            json!({"name":"Agent","input_schema":{"type":"object"}}),
+            json!({"name":"cc_Task_1","input_schema":{"type":"object"}}),
+            json!({"name":"SendMessage","input_schema":{"type":"object"}}),
+        ],
+    );
+    let pi = pi_claude_request(&request, false, false).expect("Pi nested by system marker");
+    assert_eq!(
+        pi["tools"],
+        json!([{"name":"SendMessage","input_schema":{"type":"object"}}])
     );
 }
 
@@ -1215,15 +1306,121 @@ fn command_code_model_omits_claude_system_and_uses_acp_native_instructions() {
         .expect("command-code developer instructions");
     assert!(!base.contains("HUGE_CLAUDE_SYSTEM"));
     assert!(!base.contains("selected_workers"));
-    assert!(
-        base.is_empty(),
-        "Command Code must not carry ACP_NATIVE dumps: {base}"
-    );
-    assert!(
-        developer.is_empty(),
-        "Command Code must not carry developer ACP dumps: {developer}"
-    );
+    assert_eq!(base, "");
+    assert!(developer.contains("You are a provider-native ACP worker"));
+    assert!(!developer.contains("You are the orchestrator, not an implementation worker"));
     assert_eq!(params["claudexAcpRole"], "worker");
+}
+
+#[test]
+fn command_code_pi_luna_omits_claude_system_and_keeps_latest_user() {
+    let mut request = request(
+        json!("HUGE_CLAUDE_SYSTEM selected_workers You are the orchestrator"),
+        vec![
+            json!({"name":"Agent","input_schema":{"type":"object"}}),
+            json!({"name":"Read","input_schema":{"type":"object"}}),
+            json!({"name":"SendMessage","input_schema":{"type":"object"}}),
+        ],
+    );
+    request.model = "commandcode/gpt-5.6-luna".to_owned();
+    request.messages = vec![
+        json!({"role":"user","content":"OLD_TASK read the whole repository"}),
+        json!({"role":"assistant","content":"Scanning"}),
+        json!({"role":"user","content":"<claudex-agent-id>toolu_cc</claudex-agent-id>\nread CLAUDE.md"}),
+    ];
+    let pi = pi_claude_request(&request, false, false).expect("Pi Command Code Luna request");
+    let system = pi["system"].as_str().expect("Pi Command Code system");
+    assert!(!system.contains("HUGE_CLAUDE_SYSTEM"));
+    assert!(!system.contains("You are the orchestrator, not an implementation worker"));
+    assert!(system.contains("You are a provider-native ACP worker"));
+    assert_eq!(
+        pi["messages"],
+        json!([{
+            "role":"user",
+            "content":"<claudex-agent-id>toolu_cc</claudex-agent-id>\nread CLAUDE.md"
+        }])
+    );
+    assert_eq!(
+        pi["tools"],
+        json!([
+            {"name":"Read","input_schema":{"type":"object"}},
+            {"name":"SendMessage","input_schema":{"type":"object"}}
+        ])
+    );
+}
+
+#[test]
+fn command_code_pi_flattens_tool_results_for_a_stateless_provider_turn() {
+    let mut request = request(
+        json!("system"),
+        vec![json!({"name":"Bash","input_schema":{"type":"object"}})],
+    );
+    request.model = "commandcode/gpt-5.6-luna".to_owned();
+    request.messages = vec![
+        json!({"role":"user","content":"run pwd and report it"}),
+        json!({"role":"assistant","content":[{
+            "type":"tool_use","id":"toolu_pwd","name":"Bash","input":{"command":"pwd"}
+        }]}),
+        json!({"role":"user","content":[
+            {"type":"tool_result","tool_use_id":"toolu_pwd","content":"/tmp/project"},
+            {"type":"text","text":"Use the result and finish the task."}
+        ]}),
+    ];
+    let pi = pi_claude_request(&request, true, false).expect("Pi tool-result continuation");
+    assert_eq!(
+        pi["messages"],
+        json!([{
+            "role":"user",
+            "content":"run pwd and report it\n\nUse the result and finish the task.\n\n[Claude tool result toolu_pwd]\n/tmp/project"
+        }])
+    );
+    assert_eq!(pi["tools"], json!(request.tools));
+    assert!(
+        !pi["messages"].to_string().contains("tool_result"),
+        "provider-owned tool IDs must not be replayed as protocol tool results"
+    );
+}
+
+#[test]
+fn command_code_pi_spark_omits_claude_system_and_keeps_latest_user() {
+    let mut request = request(
+        json!("HUGE_CLAUDE_SYSTEM selected_workers You are the orchestrator"),
+        vec![json!({"name":"Task","input_schema":{"type":"object"}})],
+    );
+    request.model = "gpt-5.3-codex-spark".to_owned();
+    request.messages = vec![
+        json!({"role":"user","content":"OLD_TASK scan src"}),
+        json!({"role":"user","content":"inspect session_turn_model.rs"}),
+    ];
+    let pi = pi_claude_request(&request, false, false).expect("Pi Spark request");
+    let system = pi["system"].as_str().expect("Pi Spark system");
+    assert!(!system.contains("HUGE_CLAUDE_SYSTEM"));
+    assert!(!system.contains("You are the orchestrator, not an implementation worker"));
+    assert!(system.contains("You are a provider-native ACP worker"));
+    assert_eq!(
+        pi["messages"],
+        json!([{"role":"user","content":"inspect session_turn_model.rs"}])
+    );
+    assert_eq!(pi["tools"], json!([]));
+}
+
+#[test]
+fn command_code_pi_follows_session_model_when_request_model_is_main() {
+    let mut request = request(
+        json!("HUGE_CLAUDE_SYSTEM You are the orchestrator"),
+        Vec::new(),
+    );
+    request.model = "main".to_owned();
+    request.messages = vec![json!({"role":"user","content":"read CLAUDE.md"})];
+    let pi = pi_claude_request_for_model(&request, false, false, "commandcode/gpt-5.6-luna")
+        .expect("session-model Command Code");
+    let system = pi["system"].as_str().expect("Pi session-model system");
+    assert!(!system.contains("HUGE_CLAUDE_SYSTEM"));
+    assert!(system.contains("You are a provider-native ACP worker"));
+    assert_eq!(
+        pi["messages"],
+        json!([{"role":"user","content":"read CLAUDE.md"}])
+    );
 }
 
 fn assert_developer_guidance(developer: &str) {
@@ -1310,6 +1507,11 @@ fn assert_developer_guidance(developer: &str) {
 }
 
 #[test]
+#[expect(
+    clippy::cognitive_complexity,
+    clippy::too_many_lines,
+    reason = "instruction contract assertions are intentionally exhaustive"
+)]
 fn main_session_orchestration_instructions_are_omitted_for_subagents() {
     let mut subagent = request(
         json!("x-anthropic-billing-header: cc_version=1; cc_is_subagent=true;"),
@@ -1457,6 +1659,10 @@ fn subscription_prompt_requires_atomic_parallel_launches() {
     assert_subscription_workspace_failover_contract(&prompt);
 }
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "atomic launch contract is audited as one assertion set"
+)]
 fn assert_subscription_atomic_launch_contract(prompt: &str) {
     assert!(prompt.contains("same assistant message and tool round"));
     assert!(prompt.contains("exactly that many launch calls"));
@@ -2438,7 +2644,7 @@ async fn recovered_turn_fails_empty_bash_instead_of_replaying_complete_tool_use(
     let root = tempfile::tempdir().expect("mock app-server fixture");
     let trace = root.path().join("empty-bash.jsonl");
     let script = format!(
-        "#!/bin/sh\nread initialize\nprintf '%s\\n' '{{\"id\":1,\"result\":{{}}}}'\nread initialized\nwhile read line; do printf '%s\\n' \"$line\" >> '{}'; done\n",
+        "#!/bin/sh\nIFS= read -r initialize\nprintf '%s\\n' '{{\"id\":1,\"result\":{{}}}}'\nIFS= read -r initialized\nwhile IFS= read -r line; do printf '%s\\n' \"$line\" >> '{}'; done\n",
         trace.display()
     );
     let (_server_root, app) = mock_app_server(&script).await;
@@ -2513,7 +2719,7 @@ async fn recovered_turn_replays_complete_bash_json() {
     let root = tempfile::tempdir().expect("mock app-server fixture");
     let trace = root.path().join("complete-bash.jsonl");
     let script = format!(
-        "#!/bin/sh\nread initialize\nprintf '%s\\n' '{{\"id\":1,\"result\":{{}}}}'\nread initialized\nwhile read line; do printf '%s\\n' \"$line\" >> '{}'; done\n",
+        "#!/bin/sh\nIFS= read -r initialize\nprintf '%s\\n' '{{\"id\":1,\"result\":{{}}}}'\nIFS= read -r initialized\nwhile IFS= read -r line; do printf '%s\\n' \"$line\" >> '{}'; done\n",
         trace.display()
     );
     let (_server_root, app) = mock_app_server(&script).await;
@@ -2604,6 +2810,8 @@ async fn recovered_session_reuses_consumed_ids_instead_of_creating_another_sessi
     .await
     .expect("first recovery timeout")
     .expect("first recovery");
+    let first_thread_id = first.session.thread_id.clone();
+    drop(first);
     let second = tokio::time::timeout(
         Duration::from_secs(2),
         bridge.prepare_turn(&request, 10, None),
@@ -2612,7 +2820,7 @@ async fn recovered_session_reuses_consumed_ids_instead_of_creating_another_sessi
     .expect("second recovery timeout")
     .expect("second recovery");
 
-    assert_eq!(first.session.thread_id, "recovered");
+    assert_eq!(first_thread_id, "recovered");
     assert_eq!(second.session.thread_id, "recovered");
     assert_eq!(bridge.sessions.lock().await.len(), 1);
 }

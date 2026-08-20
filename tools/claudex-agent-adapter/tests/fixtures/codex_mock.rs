@@ -417,7 +417,7 @@ impl<W: Write> Fixture<W> {
             expected: agents.len(),
             ..ParallelAgents::default()
         });
-        for (id, name) in agents.iter().copied() {
+        for &(id, name) in agents {
             self.send(json!({
                 "id":id, "method":"item/tool/call",
                 "params":{

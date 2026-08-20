@@ -2057,6 +2057,10 @@ fn prepare_tool_input_rejects_send_message_without_to() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "follow-up rejection contract uses one end-to-end stream fixture"
+)]
 async fn rejects_rewritten_send_message_follow_up_when_the_tool_is_unlisted() {
     let (sender, mut receiver) = channel();
     let registry = Arc::new(SubagentReuseRegistry::default());
@@ -2542,6 +2546,11 @@ async fn same_turn_same_source_path_forwards_only_one_agent() {
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    clippy::await_holding_lock,
+    reason = "environment lock must span this isolated async policy scenario"
+)]
 async fn live_agent_cap_rejects_new_agent_but_allows_send_message() {
     let _guard = crate::anthropic::subagent_reuse::reuse_env_lock();
     let previous =

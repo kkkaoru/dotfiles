@@ -43,14 +43,124 @@ async fn marks_missing_provider_environment_as_non_retryable() {
 async fn graceful_stop_emits_end_turn_without_error_event() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
 
-    send_stream_graceful_stop(&sender).await;
+    send_stream_graceful_stop(&sender, "Provider completed with no assistant content").await;
     drop(sender);
 
     let output = drain_frames(&mut receiver).await;
+    assert!(output.contains("\"type\":\"text_delta\""));
+    assert!(output.contains("Provider completed with no assistant content"));
     assert!(output.contains("\"stop_reason\":\"end_turn\""));
     assert!(output.contains("event: message_stop"));
     assert!(!output.contains("event: error"));
     assert!(!output.contains("api_error"));
+}
+
+#[tokio::test]
+async fn visible_failure_emits_assistant_text_then_end_turn() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+
+    send_stream_graceful_stop_at(&sender, 0, "Provider completed with no assistant content").await;
+    drop(sender);
+
+    let output = drain_frames(&mut receiver).await;
+    assert!(output.contains("\"type\":\"text\""));
+    assert!(output.contains("Provider completed with no assistant content"));
+    assert!(output.contains("\"stop_reason\":\"end_turn\""));
+    assert!(output.contains("event: message_stop"));
+    assert!(!output.contains("event: error"));
+}
+
+#[tokio::test]
+async fn primed_stream_without_blocks_emits_context_window_text() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    sender
+        .try_send(Ok(Bytes::from(message_start("test-model", 138765))))
+        .expect("prime message_start");
+    send_empty_turn_or_overflow_error(
+        &sender,
+        0,
+        &anyhow::anyhow!("context window exceeded: input_tokens 138765 > limit 110000"),
+    )
+    .await;
+    drop(sender);
+
+    let output = drain_frames(&mut receiver).await;
+    assert!(output.contains("event: message_start"));
+    assert!(output.contains("\"type\":\"text_delta\""));
+    assert!(output.contains("Context window overflow after message_start; a retry was unavailable. No assistant content was produced. Compact or start a new turn; this is not successful work."));
+    assert!(output.contains("context window exceeded: input_tokens 138765 > limit 110000"));
+    assert!(output.contains("\"stop_reason\":\"end_turn\""));
+    assert!(output.contains("event: message_stop"));
+    assert!(!output.contains("event: error"));
+}
+
+#[tokio::test]
+async fn primed_stream_without_blocks_emits_no_assistant_substitute() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    sender
+        .try_send(Ok(Bytes::from(message_start("test-model", 12))))
+        .expect("prime message_start");
+    send_stream_graceful_stop(
+        &sender,
+        "No assistant content was produced after the stream started (no provider output or unusable tools). This is not a completed answer.",
+    )
+    .await;
+    drop(sender);
+
+    let output = drain_frames(&mut receiver).await;
+    assert!(output.contains("event: message_start"));
+    assert!(output.contains("\"type\":\"text_delta\""));
+    assert!(output.contains("No assistant content was produced after the stream started (no provider output or unusable tools). This is not a completed answer."));
+    assert!(output.contains("\"stop_reason\":\"end_turn\""));
+    assert!(output.contains("event: message_stop"));
+    assert!(!output.contains("event: error"));
+}
+
+#[tokio::test]
+async fn empty_end_turn_completion_injects_visible_assistant_text() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    send_stream_completion(
+        &sender,
+        &super::Segment {
+            blocks: Vec::new(),
+            stop_reason: "end_turn",
+            usage: super::super::super::Usage::default(),
+            web_evidence: super::super::super::WebEvidenceSummary::default(),
+            next_sse_index: 2,
+        },
+    )
+    .await;
+    drop(sender);
+
+    let output = drain_frames(&mut receiver).await;
+    assert!(output.contains("event: content_block_start"));
+    assert!(output.contains("\"index\":2"));
+    assert!(output.contains("\"type\":\"text_delta\""));
+    assert!(output.contains("Provider completed with no assistant content. The route returned no assistant text or tools. This is a failure, not a completed result."));
+    assert!(output.contains("\"stop_reason\":\"end_turn\""));
+    assert!(output.contains("event: message_stop"));
+    assert!(!output.contains("event: error"));
+}
+
+#[tokio::test]
+async fn overflow_notice_uses_reserved_sse_index() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    send_empty_turn_or_overflow_error(
+        &sender,
+        1,
+        &anyhow::anyhow!("context window exceeded: input_tokens 138765 > limit 110000"),
+    )
+    .await;
+    drop(sender);
+
+    let output = drain_frames(&mut receiver).await;
+    assert!(output.contains("\"index\":1"));
+    assert!(output.contains("\"type\":\"text_delta\""));
+    assert!(output.contains("Context window overflow after message_start; a retry was unavailable. No assistant content was produced. Compact or start a new turn; this is not successful work."));
+    assert!(output.contains("input_tokens 138765 > limit 110000"));
+    assert!(output.contains("\"stop_reason\":\"end_turn\""));
+    assert!(output.contains("event: message_stop"));
+    assert!(!output.contains("event: error"));
 }
 
 async fn drain_frames(receiver: &mut mpsc::Receiver<Result<Bytes, Infallible>>) -> String {

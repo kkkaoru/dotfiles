@@ -26,6 +26,10 @@ async fn wait_for_health(client: &Client, url: &str) -> reqwest::Response {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "CLI route parsing matrix is kept together for auditability"
+)]
 fn parses_pi_provider_interface_and_preserves_default_route() {
     let route = r#"{"model":"m","backend":"codex-app-server","piProvider":"openai-codex","piModel":"gpt-5.6-luna"}"#;
     let omitted = parse_command(
@@ -206,7 +210,7 @@ fn assert_cli_shape_failures_routes_and_limits() {
                 "--model",
                 "m",
                 "--backend-route",
-                "m=grok-acp",
+                "m=codex-app-server",
                 "--backend-route",
                 "m=codex-app-server",
             ],
@@ -301,8 +305,8 @@ fn assert_parses_valid_cli_options_part1() {
             "serve",
             "--model",
             "grok-4.6",
-            "--backend-route",
-            "grok-4.6=grok-acp",
+            "--backend-route-json",
+            r#"{"model":"grok-4.6","backend":"pi-gateway","piProvider":"xai","piModel":"grok-4.6"}"#,
             "--worker-route-json",
             r#"{"agent":"claudex-grok","model":"grok-4.6","effort":"medium"}"#,
             "--search-worker-route-json",
@@ -675,6 +679,10 @@ async fn dispatches_a_successful_hot_swap_through_the_runtime_command() {
     server.await.expect("hot-swap fixture server");
 }
 
+#[expect(
+    clippy::excessive_nesting,
+    reason = "test-only HTTP framing parser remains local and explicit"
+)]
 async fn read_complete_hot_swap_request(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
     const MAX_REQUEST_BYTES: usize = 64 * 1024;
 

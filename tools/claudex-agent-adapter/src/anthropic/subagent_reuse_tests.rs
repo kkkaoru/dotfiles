@@ -3913,6 +3913,10 @@ fn idle_shadow_correlates_known_context_mismatches() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "reuse classification cases share one stateful fixture"
+)]
 fn idle_shadow_classifies_unmatched_decisions_without_record_metadata() {
     let registry = SubagentReuseRegistry::default();
     let mut empty = request("empty-shadow-session", Vec::new());

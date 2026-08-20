@@ -264,26 +264,23 @@ impl PiGateway {
         let ready = read_json_line(&mut lines).await?;
         protocol::validate_ready(&ready)?;
         write_line(&mut writer, &request).await?;
-        loop {
-            let line = lines
-                .next_line()
-                .await
-                .context("read Pi web_search event")?
-                .context("Pi gateway closed before a web_search result")?;
-            let event: Value =
-                serde_json::from_str(&line).context("decode Pi web_search event JSON")?;
-            let event_type = protocol::validate_event(&event, &request_id)?;
-            match event_type {
-                "web_search_result" | "web_search_error" => return Ok(event),
-                "protocol_error" => {
-                    let message = event
-                        .get("message")
-                        .and_then(Value::as_str)
-                        .unwrap_or("Pi web_search protocol error");
-                    bail!("{message}");
-                }
-                other => bail!("unsupported Pi web_search event type `{other}`"),
+        let line = lines
+            .next_line()
+            .await
+            .context("read Pi web_search event")?
+            .context("Pi gateway closed before a web_search result")?;
+        let event: Value =
+            serde_json::from_str(&line).context("decode Pi web_search event JSON")?;
+        match protocol::validate_event(&event, &request_id)? {
+            "web_search_result" | "web_search_error" => Ok(event),
+            "protocol_error" => {
+                let message = event
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("Pi web_search protocol error");
+                bail!("{message}");
             }
+            other => bail!("unsupported Pi web_search event type `{other}`"),
         }
     }
 

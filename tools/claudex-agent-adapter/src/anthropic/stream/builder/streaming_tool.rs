@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::external_tool::ExternalToolContext;
@@ -9,23 +9,16 @@ use crate::anthropic::retention::record_pending_tool;
 use crate::anthropic::stream::protocol::{
     StreamSender, send_content_block_stop, send_input_json_delta, send_tool_use_start,
 };
-const INVALID_TOOL_JSON_CIRCUIT_LIMIT: u8 = 3;
-const BASH_COMMAND_KEYS: [&str; 4] = ["command", "cmd", "script", "bash"];
-const SEND_MESSAGE_RECIPIENT_KEYS: [&str; 3] = ["to", "resume_from", "resume"];
-const SEND_MESSAGE_BODY_KEYS: [&str; 6] =
-    ["prompt", "message", "task", "instruction", "query", "input"];
-const INCOMPLETE_BASH_JSON: &str =
-    "Incomplete Bash tool JSON was not flushed; a non-empty command is required.";
-const INCOMPLETE_SEND_MESSAGE_JSON: &str =
-    "Incomplete SendMessage tool JSON was not flushed; non-empty to and message are required.";
-const INCOMPLETE_TOOL_JSON: &str =
-    "Incomplete tool JSON was not flushed; required keys are missing.";
 
-enum ToolJsonReadiness {
-    Truncated,
-    Incomplete,
-    Ready,
-}
+#[path = "streaming_tool_ready.rs"]
+mod streaming_tool_ready;
+use streaming_tool_ready::{
+    ToolJsonReadiness, finished_tool_json_payload, incomplete_tool_json_error,
+    requires_complete_tool_json, tool_input_ready, tool_json_readiness,
+};
+
+const INVALID_TOOL_JSON_CIRCUIT_LIMIT: u8 = 3;
+
 impl SegmentBuilder {
     pub(super) async fn start_native_tool_use(
         &mut self,
@@ -263,7 +256,8 @@ impl SegmentBuilder {
         self.report_subagent_action(original_name, &arguments, context.stream)
             .await?;
         if !open.json_emitted {
-            let payload = finished_tool_json_payload(original_name, &open, &claude_arguments);
+            let payload =
+                finished_tool_json_payload(original_name, &open.partial_json, &claude_arguments);
             send_input_json_delta(context.stream, open.index, &payload).await?;
             self.consecutive_invalid_tool_json = 0;
         }
@@ -303,93 +297,10 @@ fn unstarted_streaming_tool(call_id: &str, name: &str) -> StreamingToolUse {
     }
 }
 
-fn tool_json_readiness(name: &str, raw: &str) -> ToolJsonReadiness {
-    if raw.trim().is_empty() {
-        return ToolJsonReadiness::Incomplete;
-    }
-    let Ok(value) = serde_json::from_str::<Value>(raw) else {
-        return ToolJsonReadiness::Truncated;
-    };
-    match tool_arguments_ready(name, &value) {
-        true => ToolJsonReadiness::Ready,
-        false => ToolJsonReadiness::Incomplete,
-    }
-}
-
-fn tool_input_ready(name: &str, partial_json: &str, arguments: &Value) -> bool {
-    tool_arguments_ready(name, arguments)
-        || matches!(
-            tool_json_readiness(name, partial_json),
-            ToolJsonReadiness::Ready
-        )
-}
-
-fn tool_arguments_ready(name: &str, arguments: &Value) -> bool {
-    let Some(object) = arguments.as_object() else {
-        return false;
-    };
-    if name.eq_ignore_ascii_case("Bash") {
-        return bash_command_present(object);
-    }
-    if name.eq_ignore_ascii_case("SendMessage") {
-        return send_message_ready(object);
-    }
-    true
-}
-
-fn bash_command_present(object: &Map<String, Value>) -> bool {
-    BASH_COMMAND_KEYS.iter().any(|key| {
-        object
-            .get(*key)
-            .and_then(Value::as_str)
-            .is_some_and(|command| !command.is_empty())
-    })
-}
-
-fn send_message_ready(object: &Map<String, Value>) -> bool {
-    first_nonempty(object, &SEND_MESSAGE_RECIPIENT_KEYS).is_some()
-        && first_nonempty(object, &SEND_MESSAGE_BODY_KEYS).is_some()
-}
-
-fn first_nonempty<'a>(object: &'a Map<String, Value>, keys: &[&str]) -> Option<&'a str> {
-    keys.iter().find_map(|key| {
-        object
-            .get(*key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-    })
-}
-
-fn requires_complete_tool_json(name: &str) -> bool {
-    name.eq_ignore_ascii_case("Bash") || name.eq_ignore_ascii_case("SendMessage")
-}
-
-fn incomplete_tool_json_error(name: &str) -> &'static str {
-    if name.eq_ignore_ascii_case("Bash") {
-        INCOMPLETE_BASH_JSON
-    } else if name.eq_ignore_ascii_case("SendMessage") {
-        INCOMPLETE_SEND_MESSAGE_JSON
-    } else {
-        INCOMPLETE_TOOL_JSON
-    }
-}
-
 fn invalid_tool_json_circuit_error() -> String {
     format!(
         "Stopped emitting tool_use after {INVALID_TOOL_JSON_CIRCUIT_LIMIT} consecutive empty or invalid JSON payloads."
     )
-}
-
-fn finished_tool_json_payload(
-    name: &str,
-    open: &StreamingToolUse,
-    claude_arguments: &Value,
-) -> String {
-    match tool_arguments_ready(name, claude_arguments) {
-        true => claude_arguments.to_string(),
-        false => open.partial_json.clone(),
-    }
 }
 
 #[cfg(test)]

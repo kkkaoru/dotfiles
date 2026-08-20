@@ -1031,6 +1031,7 @@ fn native_grok_route_effort_overrides_explicit_and_unmatched_request_effort() {
     request.output_config = json!({"effort":"low"});
     assert_eq!(
         configured_bridge.resolve_request_effort(&request, AgentEffort::Unmatched),
-        Some("low".to_owned())
+        Some("max".to_owned()),
+        "PiGateway launch-scoped effort must override stale request metadata"
     );
 }

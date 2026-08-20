@@ -24,7 +24,10 @@ impl SegmentBuilder {
         delta: &str,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        if delta.is_empty() || self.is_command_code_subagent() {
+        if delta.is_empty()
+            || (self.is_command_code_subagent()
+                && crate::anthropic::command_code_model::is_canned_command_code_progress(delta))
+        {
             return Ok(());
         }
         self.note_provider_turn_activity();

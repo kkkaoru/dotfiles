@@ -21,13 +21,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_non_executables_and_unresolved_backend_programs() {
+    fn rejects_non_executables_and_accepts_builtin_pi_gateway() {
         let root = tempfile::tempdir().unwrap();
         let regular = root.path().join("regular");
         std::fs::write(&regular, "not executable").unwrap();
         assert!(resolve_program(regular.as_os_str(), OsStr::new("")).is_none());
         assert!(resolve_program(OsStr::new(""), root.path().as_os_str()).is_none());
-        assert!(validate(&[BackendRoute::new("missing", BackendKind::PiGateway)]).is_err());
+        assert!(validate(&[BackendRoute::new("missing", BackendKind::PiGateway)]).is_ok());
     }
 
     #[test]

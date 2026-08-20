@@ -418,6 +418,10 @@ fn subscription_auth_failover_skips_exhausted_luna_and_picks_cursor() {
 }
 
 #[test]
+#[expect(
+    clippy::unnecessary_mut_passed,
+    reason = "mutable request call shape documents legacy preflight compatibility"
+)]
 fn exhausted_provider_then_expired_oauth_returns_to_a_sibling_provider() {
     let root = tempfile::tempdir().expect("usage then oauth fixture");
     write_credentials_with_refresh(
