@@ -16,25 +16,70 @@ if [ -z "$REAL_PI" ]; then
 fi
 
 OMLX_CLI="${OMLX_CLI:-/Applications/oMLX.app/Contents/MacOS/omlx-cli}"
-needs_omlx=1
+needs_omlx=0
 case "${1-}" in
   install|remove|uninstall|update|list|config|auth|--list-models|--help|-h|--version|-v)
-    needs_omlx=0
+    ;;
+  *)
+    provider="${PI_PROVIDER:-}"
+    model="${PI_MODEL:-}"
+    provider_from_cli=0
+    while [ "$#" -gt 0 ]; do
+      case "$1" in
+        --provider)
+          provider="${2-}"
+          provider_from_cli=1
+          if [ "$#" -ge 2 ]; then
+            shift 2
+          else
+            shift
+          fi
+          continue
+          ;;
+        --provider=*)
+          provider="${1#*=}"
+          provider_from_cli=1
+          ;;
+        --model)
+          model="${2-}"
+          if [ "$#" -ge 2 ]; then
+            shift 2
+          else
+            shift
+          fi
+          continue
+          ;;
+        --model=*)
+          model="${1#*=}"
+          ;;
+      esac
+      shift
+    done
+
+    # A provider-qualified model is an explicit selection and wins over the
+    # ambient provider. Otherwise use pi's configured default provider.
+    if [ "$provider_from_cli" -eq 0 ] && [[ "$model" == omlx/* ]]; then
+      provider="omlx"
+    elif [ -z "$provider" ]; then
+      for settings_file in \
+        "${PWD}/.pi/settings.json" \
+        "${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}/settings.json"; do
+        if [ ! -r "$settings_file" ]; then
+          continue
+        fi
+        configured_provider="$(sed -nE 's/.*"defaultProvider"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$settings_file" | head -n 1)"
+        if [ -n "$configured_provider" ]; then
+          provider="$configured_provider"
+          break
+        fi
+      done
+    fi
+
+    if [ "$provider" = "omlx" ]; then
+      needs_omlx=1
+    fi
     ;;
 esac
-
-provider=""
-prev=""
-for arg in "$@"; do
-  if [ "$prev" = "--provider" ]; then
-    provider="$arg"
-  fi
-  prev="$arg"
-done
-
-if [ -n "$provider" ] && [ "$provider" != "omlx" ]; then
-  needs_omlx=0
-fi
 
 if [ "$needs_omlx" -eq 1 ] && [ ! -x "$OMLX_CLI" ]; then
   # Pi remains usable with another provider when the optional local oMLX
