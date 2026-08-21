@@ -1,9 +1,9 @@
 {
   "lastChangelogVersion": "0.84.2",
   "theme": "dracula",
-  "defaultProvider": "omlx",
-  "defaultModel": "Qwen3.8-27B-4bit",
-  "defaultThinkingLevel": "low",
+  "defaultProvider": "devin",
+  "defaultModel": "swe-1-7",
+  "defaultThinkingLevel": "off",
   "packages": [
     "npm:pi-effort",
     "./packages/pi-my-clinepass-provider",
