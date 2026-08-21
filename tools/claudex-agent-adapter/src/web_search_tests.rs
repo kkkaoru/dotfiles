@@ -103,6 +103,23 @@ async fn rejects_empty_queries_and_missing_workers() {
 }
 
 #[tokio::test]
+async fn pi_search_workers_do_not_start_an_implicit_codex_app_server() {
+    let backend = std::sync::Arc::new(AgentBackend::Pi(
+        crate::pi_gateway::PiGateway::alive_for_test(),
+    ));
+    let worker = WorkerRoute::new(
+        "pi-worker".to_owned(),
+        "pi-model".to_owned(),
+        "high".to_owned(),
+    );
+    let error = match run(&backend, &[worker], "query").await {
+        Ok(_) => panic!("the test gateway has no search socket"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("Pi gateway"));
+}
+
+#[tokio::test]
 async fn injected_worker_events_cover_native_results_and_prose_fallback() {
     let dispatcher = ThreadEventDispatcher::default();
     let events = dispatcher.subscribe("native-search");

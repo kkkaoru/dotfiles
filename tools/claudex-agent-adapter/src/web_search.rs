@@ -6,7 +6,11 @@ use serde_json::{Value, json};
 use tokio::process::Command;
 use tokio::time::timeout;
 
-use crate::{agent_backend::AgentBackend, app_server::ThreadEvents, provider_config::WorkerRoute};
+use crate::{
+    agent_backend::{AgentBackend, BackendKind},
+    app_server::ThreadEvents,
+    provider_config::WorkerRoute,
+};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SearchResult {
@@ -151,6 +155,13 @@ async fn run_worker(
     worker: &WorkerRoute,
     query: &str,
 ) -> Result<SearchResponse> {
+    if backend.backend_kind_for_model(&worker.model) == Some(BackendKind::PiGateway)
+        && let Some((provider, pi_model)) = backend.pi_identity(&worker.model)
+    {
+        return run_pi(backend, &provider, &pi_model, query)
+            .await?
+            .context("Pi gateway returned no web search response");
+    }
     run_worker_with_events(query, start_worker(backend, worker, query)).await
 }
 
