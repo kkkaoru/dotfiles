@@ -372,6 +372,29 @@ describe("Anthropic to Pi context conversion", () => {
     expect(context.tools?.[0]?.description).toBe("");
   });
 
+  it("normalizes non-object tool schemas while preserving valid schemas", () => {
+    const context = toPiContext(
+      gatewayRequest({
+        tools: [
+          {
+            name: "lookup",
+            input_schema: {
+              type: "object",
+              properties: { query: { type: "string" } },
+            },
+          },
+          { name: "goal", input_schema: null },
+        ],
+      }),
+      MODEL,
+    );
+    expect(context.tools?.[0]?.parameters).toStrictEqual({
+      type: "object",
+      properties: { query: { type: "string" } },
+    });
+    expect(context.tools?.[1]?.parameters).toStrictEqual({ type: "object" });
+  });
+
   it("rejects unsupported system, message, content, image, and result shapes", () => {
     expect(() => toPiContext(gatewayRequest({ system: {} }), MODEL)).toThrow("system must be");
     expect(() => toPiContext(gatewayRequest({ system: [{ type: "image" }] }), MODEL)).toThrow(
@@ -472,6 +495,6 @@ describe("Anthropic to Pi context conversion", () => {
         MODEL,
       ),
     ).toThrow("tool result content");
-    expect(() => toPiContext(gatewayRequest({ tools: [{}] }), MODEL)).toThrow("input_schema");
+    expect(() => toPiContext(gatewayRequest({ tools: [{}] }), MODEL)).toThrow("field name");
   });
 });

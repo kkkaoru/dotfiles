@@ -269,9 +269,15 @@ function parseSystemPrompt(value: unknown, requestId: string): string | undefine
     .join("\n\n");
 }
 
+function normalizeToolSchema(value: unknown): JsonRecord {
+  // Keep the Pi tool contract object-shaped.
+  // An upstream tool may omit or provide an invalid Anthropic schema.
+  return isRecord(value) ? value : { type: "object" };
+}
+
 function parseTool(value: unknown, index: number, requestId: string): Tool {
   const tool = requiredRecord(value, `tool ${index}`, requestId);
-  const schema = requiredRecord(tool["input_schema"], `tool ${index} input_schema`, requestId);
+  const schema = normalizeToolSchema(tool["input_schema"]);
   return {
     name: requiredText(tool, "name", requestId),
     description: typeof tool["description"] === "string" ? tool["description"] : "",
