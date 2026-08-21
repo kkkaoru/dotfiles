@@ -41,13 +41,18 @@ async fn translates_text_thinking_tool_usage_and_terminal_events() {
 
 fn feed_text_thinking_tool_turn(gateway: &PiGateway) {
     let mut state = super::EventTranslateState::default();
+    feed_text_and_thinking(gateway, &mut state);
+    feed_tool_and_done(gateway, &mut state);
+}
+
+fn feed_text_and_thinking(gateway: &PiGateway, state: &mut super::EventTranslateState) {
     assert!(
         !gateway
             .handle_event(
                 "thread",
                 "request",
                 &event(json!({"type":"text_delta","index":0,"delta":"hello"})),
-                &mut state
+                state
             )
             .expect("text delta")
     );
@@ -56,11 +61,24 @@ fn feed_text_thinking_tool_turn(gateway: &PiGateway) {
             .handle_event(
                 "thread",
                 "request",
-                &event(json!({"type":"thinking_delta","index":1,"delta":"reason"})),
-                &mut state
+                &event(json!({"type":"thinking_progress","index":1})),
+                state
             )
-            .expect("thinking delta")
+            .expect("thinking progress")
     );
+    assert!(
+        !gateway
+            .handle_event(
+                "thread",
+                "request",
+                &event(json!({"type":"thinking_result","index":1,"result":"ready"})),
+                state
+            )
+            .expect("thinking result")
+    );
+}
+
+fn feed_tool_and_done(gateway: &PiGateway, state: &mut super::EventTranslateState) {
     assert!(
         !gateway
             .handle_event(
@@ -69,7 +87,7 @@ fn feed_text_thinking_tool_turn(gateway: &PiGateway) {
                 &event(json!({
                     "type":"toolcall_start","index":2,"toolCallId":"call-1","name":"Read"
                 })),
-                &mut state
+                state
             )
             .expect("tool start")
     );
@@ -81,7 +99,7 @@ fn feed_text_thinking_tool_turn(gateway: &PiGateway) {
                 &event(json!({
                     "type":"toolcall_delta","index":2,"delta":"{\"path\":\"a\"}"
                 })),
-                &mut state
+                state
             )
             .expect("tool delta")
     );
@@ -94,7 +112,7 @@ fn feed_text_thinking_tool_turn(gateway: &PiGateway) {
                     "type":"toolcall_end","index":2,"toolCallId":"call-1","name":"Read",
                     "arguments":{"path":"a"}
                 })),
-                &mut state
+                state
             )
             .expect("tool end")
     );
@@ -112,7 +130,7 @@ fn feed_text_thinking_tool_turn(gateway: &PiGateway) {
                             "cacheWrite":0.2,"total":3.3}
                     }}
                 })),
-                &mut state
+                state
             )
             .expect("done")
     );
@@ -120,22 +138,40 @@ fn feed_text_thinking_tool_turn(gateway: &PiGateway) {
 
 async fn assert_translated_tool_stream(receiver: &ThreadEvents) {
     let text = receiver.recv().await.expect("text event");
-    let thinking = receiver.recv().await.expect("thinking event");
+    let thinking_progress = receiver.recv().await.expect("thinking progress");
+    let thinking = receiver.recv().await.expect("thinking result");
+    let thinking_complete = receiver.recv().await.expect("thinking complete");
     let start = receiver.recv().await.expect("tool start");
     let delta = receiver.recv().await.expect("tool delta");
     let tool = receiver.recv().await.expect("tool event");
     let usage = receiver.recv().await.expect("usage event");
     let done = receiver.recv().await.expect("done event");
+    assert_translated_content(&text, &thinking_progress, &thinking, &thinking_complete);
+    assert_translated_tool(&start, &delta, &tool);
+    assert_translated_usage_and_done(&usage, &done);
+}
+
+fn assert_translated_content(
+    text: &Value,
+    thinking_progress: &Value,
+    thinking: &Value,
+    thinking_complete: &Value,
+) {
     assert_eq!(text["method"], "item/agentMessage/delta");
+    assert_eq!(thinking_progress["method"], "item/reasoning/progress");
     assert_eq!(thinking["method"], "item/reasoning/summaryTextDelta");
+    assert_eq!(thinking["params"]["delta"], "ready");
     assert_eq!(thinking["params"]["summaryIndex"], 0);
+    assert_eq!(thinking_complete["method"], "item/reasoning/complete");
+}
+
+fn assert_translated_tool(start: &Value, delta: &Value, tool: &Value) {
     assert_eq!(start["method"], "item/tool/start");
     assert_eq!(start["params"]["tool"], "Read");
     assert_eq!(start["params"]["callId"], "call-1");
     assert_eq!(delta["method"], "item/tool/delta");
     assert_eq!(delta["params"]["delta"], "{\"path\":\"a\"}");
     assert_eq!(tool["params"]["arguments"], json!({"path":"a"}));
-    assert_translated_usage_and_done(&usage, &done);
 }
 
 fn assert_translated_usage_and_done(usage: &Value, done: &Value) {
@@ -155,6 +191,10 @@ fn assert_translated_usage_and_done(usage: &Value, done: &Value) {
     assert_eq!(usage["cost"]["total"], 3.3);
     assert_eq!(done["params"]["turn"]["status"], "completed");
     assert_eq!(done["params"]["turn"]["providerStopReason"], "tool_use");
+    assert_eq!(
+        done["params"]["turn"]["terminal"],
+        json!({"state":"complete"})
+    );
 }
 
 #[tokio::test]
@@ -296,7 +336,7 @@ async fn toolcall_end_uses_buffered_bash_command_when_event_arguments_are_empty(
 }
 
 #[tokio::test]
-async fn delta_less_thinking_end_and_text_end_still_stream() {
+async fn normalized_thinking_result_and_delta_less_text_end_stream_once() {
     let gateway = gateway();
     let receiver = gateway.events.subscribe("request");
     let mut state = super::EventTranslateState::default();
@@ -306,11 +346,11 @@ async fn delta_less_thinking_end_and_text_end_still_stream() {
             "thread",
             "request",
             &event(json!({
-                "type":"thinking_end","index":0,"content":"plan the edit"
+                "type":"thinking_result","index":0,"result":"plan the edit"
             })),
             &mut state,
         )
-        .expect("thinking_end");
+        .expect("thinking_result");
     gateway
         .handle_event(
             "thread",
@@ -326,36 +366,42 @@ async fn delta_less_thinking_end_and_text_end_still_stream() {
             "thread",
             "request",
             &event(json!({
-                "type":"thinking_end","index":0,"content":"plan the edit"
+                "type":"thinking_result","index":0,"result":"plan the edit"
             })),
             &mut state,
         )
-        .expect("duplicate thinking_end");
+        .expect("duplicate thinking_result");
 
     let thinking = receiver.recv().await.expect("thinking from end");
     let complete = receiver.recv().await.expect("thinking complete");
     let text = receiver.recv().await.expect("text from end");
-    let duplicate_complete = receiver.recv().await.expect("duplicate thinking complete");
     assert_eq!(thinking["method"], "item/reasoning/summaryTextDelta");
     assert_eq!(thinking["params"]["delta"], "plan the edit");
     assert_eq!(complete["method"], "item/reasoning/complete");
     assert_eq!(text["method"], "item/agentMessage/delta");
     assert_eq!(text["params"]["delta"], "done");
-    assert_eq!(duplicate_complete["method"], "item/reasoning/complete");
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(20), receiver.recv())
             .await
             .is_err(),
-        "a later thinking_end must not replay already streamed content"
+        "a later thinking_result must not replay or complete twice"
     );
 }
 
 #[tokio::test]
-async fn thinking_delta_prevents_thinking_end_replay() {
+async fn legacy_thinking_hides_raw_deltas_and_emits_only_the_end_result() {
     let gateway = gateway();
     let receiver = gateway.events.subscribe("request");
     let mut state = super::EventTranslateState::default();
 
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({"type":"thinking_start","index":3})),
+            &mut state,
+        )
+        .expect("thinking_start");
     gateway
         .handle_event(
             "thread",
@@ -371,21 +417,28 @@ async fn thinking_delta_prevents_thinking_end_replay() {
             "thread",
             "request",
             &event(json!({
-                "type":"thinking_end","index":3,"content":"why extra"
+                "type":"thinking_end","index":3,
+                "content":"private reasoning\n\nThe compatibility result."
             })),
             &mut state,
         )
         .expect("thinking_end after delta");
 
-    let thinking = receiver.recv().await.expect("delta thinking");
+    let start = receiver.recv().await.expect("start progress");
+    let delta = receiver.recv().await.expect("delta progress");
+    let thinking = receiver.recv().await.expect("result thinking");
     let complete = receiver.recv().await.expect("thinking complete");
-    assert_eq!(thinking["params"]["delta"], "why");
+    assert_eq!(start["method"], "item/reasoning/progress");
+    assert_eq!(delta["method"], "item/reasoning/progress");
+    assert_eq!(thinking["method"], "item/reasoning/summaryTextDelta");
+    assert_eq!(thinking["params"]["delta"], "The compatibility result.");
+    assert_ne!(thinking["params"]["delta"], "why");
     assert_eq!(complete["method"], "item/reasoning/complete");
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(20), receiver.recv())
             .await
             .is_err(),
-        "thinking_end must not append after a streamed delta"
+        "legacy thinking must emit no extra raw content"
     );
 }
 
@@ -1172,6 +1225,26 @@ async fn spawn_subagent_resume_without_listed_send_message_emits_no_call() {
             .is_err(),
         "unlisted SendMessage continue must not emit item/tool/start or item/tool/call"
     );
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"done",
+                "reason":"toolUse",
+                "terminal":{"state":"complete","output":"tool_use"},
+                "message":{"usage":{}}
+            })),
+            &mut state,
+        )
+        .expect("done");
+    let _usage = receiver.recv().await.expect("usage event");
+    let done = receiver.recv().await.expect("done event");
+    assert_eq!(done["params"]["turn"]["providerStopReason"], "end_turn");
+    assert_eq!(
+        done["params"]["turn"]["terminal"]["state"],
+        "recoverable_error"
+    );
 }
 
 #[tokio::test]
@@ -1307,4 +1380,30 @@ async fn empty_bash_does_not_emit_tool_start() {
         Ok(None) => {}
         Ok(Some(frame)) => panic!("empty Bash must not emit {frame}"),
     }
+    assert!(
+        gateway
+            .handle_event(
+                "thread",
+                "request",
+                &event(json!({
+                    "type":"done",
+                    "reason":"toolUse",
+                    "terminal":{"state":"complete","output":"tool_use"},
+                    "message":{"usage":{}}
+                })),
+                &mut state,
+            )
+            .expect("done")
+    );
+    let _usage = receiver.recv().await.expect("usage event");
+    let done = receiver.recv().await.expect("done event");
+    assert_eq!(done["params"]["turn"]["providerStopReason"], "end_turn");
+    assert_eq!(
+        done["params"]["turn"]["terminal"],
+        json!({
+            "state":"recoverable_error",
+            "output":"none",
+            "code":"tool_use_without_forwarded_call"
+        })
+    );
 }

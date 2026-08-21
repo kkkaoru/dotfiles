@@ -10,28 +10,21 @@ impl PiGateway {
         thread_id: &str,
         request_id: &str,
         event: &Value,
-        thinking: bool,
     ) -> Result<()> {
         let delta = event
             .get("delta")
             .and_then(Value::as_str)
             .context("Pi gateway delta event omitted delta")?;
-        let method = if thinking {
-            "item/reasoning/summaryTextDelta"
-        } else {
-            "item/agentMessage/delta"
-        };
-        let mut params = json!({
+        let params = json!({
             "threadId":thread_id,
             "turnId":thread_id,
             "itemId":format!("pi-{}", event.get("index").and_then(Value::as_u64).unwrap_or(0)),
             "delta":delta
         });
-        if thinking {
-            params["summaryIndex"] = json!(0);
-        }
-        self.events
-            .dispatch_to(request_id, json!({"method":method,"params":params}));
+        self.events.dispatch_to(
+            request_id,
+            json!({"method":"item/agentMessage/delta","params":params}),
+        );
         Ok(())
     }
 
@@ -40,7 +33,6 @@ impl PiGateway {
         thread_id: &str,
         request_id: &str,
         event: &Value,
-        thinking: bool,
         state: &mut EventTranslateState,
     ) -> Result<()> {
         let index = event_index(event)?;
@@ -58,8 +50,71 @@ impl PiGateway {
             thread_id,
             request_id,
             &json!({"index":index,"delta":content}),
-            thinking,
         )
+    }
+
+    pub(super) fn dispatch_thinking_progress(
+        &self,
+        thread_id: &str,
+        request_id: &str,
+        event: &Value,
+    ) {
+        self.events.dispatch_to(
+            request_id,
+            json!({
+                "method":"item/reasoning/progress",
+                "params":{
+                    "threadId":thread_id,
+                    "turnId":thread_id,
+                    "itemId":format!(
+                        "pi-{}",
+                        event.get("index").and_then(Value::as_u64).unwrap_or(0)
+                    )
+                }
+            }),
+        );
+    }
+
+    pub(super) fn dispatch_thinking_result(
+        &self,
+        thread_id: &str,
+        request_id: &str,
+        event: &Value,
+        field: &str,
+        state: &mut EventTranslateState,
+    ) -> Result<()> {
+        let index = event_index(event)?;
+        if !state.completed_thinking.insert(index) {
+            return Ok(());
+        }
+        let result = event
+            .get(field)
+            .and_then(Value::as_str)
+            .map(legacy_thought_result)
+            .unwrap_or_default();
+        if !result.is_empty() {
+            self.events.dispatch_to(
+                request_id,
+                json!({
+                    "method":"item/reasoning/summaryTextDelta",
+                    "params":{
+                        "threadId":thread_id,
+                        "turnId":thread_id,
+                        "itemId":format!("pi-{index}"),
+                        "summaryIndex":0,
+                        "delta":result
+                    }
+                }),
+            );
+        }
+        self.events.dispatch_to(
+            request_id,
+            json!({
+                "method":"item/reasoning/complete",
+                "params":{"threadId":thread_id}
+            }),
+        );
+        Ok(())
     }
 
     pub(super) fn dispatch_usage(&self, thread_id: &str, request_id: &str, event: &Value) {
@@ -110,4 +165,27 @@ impl PiGateway {
             }),
         );
     }
+}
+
+fn legacy_thought_result(content: &str) -> String {
+    const LIMIT: usize = 400;
+    let compact = content
+        .trim()
+        .rsplit("\n\n")
+        .find(|paragraph| !paragraph.trim().is_empty())
+        .unwrap_or_default()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    let count = compact.chars().count();
+    if count <= LIMIT {
+        return compact;
+    }
+    format!(
+        "…{}",
+        compact
+            .chars()
+            .skip(count - (LIMIT - 1))
+            .collect::<String>()
+    )
 }

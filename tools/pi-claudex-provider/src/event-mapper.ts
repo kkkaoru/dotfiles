@@ -1,8 +1,17 @@
+// Runs with Bun.
+
 import type { AssistantMessage, AssistantMessageEvent, ToolCall } from "@earendil-works/pi-ai";
 import { GatewayError } from "./errors.ts";
 import { serverMessage, type ServerMessage } from "./protocol.ts";
+import { normalizeThoughtResult } from "./thought-result.ts";
 
 type ContentEvent = Exclude<AssistantMessageEvent, { type: "start" | "done" | "error" }>;
+
+interface TerminalContract {
+  state: "complete" | "recoverable_error";
+  output: "assistant" | "tool_use" | "none";
+  code?: "empty_assistant" | "tool_use_without_call";
+}
 
 function isToolCall(value: unknown): value is ToolCall {
   return (
@@ -30,7 +39,6 @@ function mapContentEvent(requestId: string, event: ContentEvent): ServerMessage 
       return serverMessage(event.type, { ...common, index: event.contentIndex });
     }
     case "text_delta":
-    case "thinking_delta":
     case "toolcall_delta": {
       return serverMessage(event.type, {
         ...common,
@@ -38,12 +46,24 @@ function mapContentEvent(requestId: string, event: ContentEvent): ServerMessage 
         delta: event.delta,
       });
     }
-    case "text_end":
-    case "thinking_end": {
+    case "thinking_delta": {
+      return serverMessage("thinking_progress", {
+        ...common,
+        index: event.contentIndex,
+      });
+    }
+    case "text_end": {
       return serverMessage(event.type, {
         ...common,
         index: event.contentIndex,
         content: event.content,
+      });
+    }
+    case "thinking_end": {
+      return serverMessage("thinking_result", {
+        ...common,
+        index: event.contentIndex,
+        result: normalizeThoughtResult(event.partial, event.contentIndex, event.content),
       });
     }
     case "toolcall_start": {
@@ -67,6 +87,35 @@ function mapContentEvent(requestId: string, event: ContentEvent): ServerMessage 
   }
 }
 
+function hasVisibleAssistantText(message: AssistantMessage): boolean {
+  return message.content.some(
+    (block) => block.type === "text" && block.text.replaceAll("\u200B", "").trim().length > 0,
+  );
+}
+
+function hasToolCall(message: AssistantMessage): boolean {
+  return message.content.some(isToolCall);
+}
+
+function terminalContract(
+  reason: Extract<AssistantMessageEvent, { type: "done" }>["reason"],
+  message: AssistantMessage,
+): TerminalContract {
+  if (hasToolCall(message)) {
+    return { state: "complete", output: "tool_use" };
+  }
+  if (hasVisibleAssistantText(message)) {
+    return { state: "complete", output: "assistant" };
+  }
+  if (reason === "toolUse") {
+    return { state: "recoverable_error", output: "none", code: "tool_use_without_call" };
+  }
+  if (reason === "stop" || reason === "length") {
+    return { state: "recoverable_error", output: "none", code: "empty_assistant" };
+  }
+  return { state: "complete", output: "none" };
+}
+
 export function mapAssistantEvent(requestId: string, event: AssistantMessageEvent): ServerMessage {
   if (event.type === "start") {
     return serverMessage("start", {
@@ -77,7 +126,12 @@ export function mapAssistantEvent(requestId: string, event: AssistantMessageEven
     });
   }
   if (event.type === "done") {
-    return serverMessage("done", { id: requestId, reason: event.reason, message: event.message });
+    return serverMessage("done", {
+      id: requestId,
+      reason: event.reason,
+      message: event.message,
+      terminal: terminalContract(event.reason, event.message),
+    });
   }
   if (event.type === "error") {
     return serverMessage("error", { id: requestId, reason: event.reason, error: event.error });

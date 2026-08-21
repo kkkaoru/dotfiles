@@ -1,6 +1,13 @@
 use serde_json::json;
 
-use super::{sanitize_committed_blocks, strip_worker_status_lines};
+use super::{is_visible_activity_event, sanitize_committed_blocks, strip_worker_status_lines};
+
+#[test]
+fn contentless_reasoning_progress_counts_as_provider_activity() {
+    assert!(is_visible_activity_event(
+        &json!({"method":"item/reasoning/progress","params":{"threadId":"thread"}})
+    ));
+}
 
 #[test]
 fn drops_unsigned_and_adapter_local_thinking_from_committed_blocks() {

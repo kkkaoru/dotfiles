@@ -1,3 +1,5 @@
+// Runs with Bun.
+
 import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { mapAssistantEvent } from "../src/event-mapper.ts";
@@ -71,20 +73,57 @@ describe("Pi assistant event mapping", () => {
       map({ type: "thinking_delta", contentIndex: 1, delta: "why", partial: MESSAGE }),
     ).toStrictEqual({
       version: 1,
-      type: "thinking_delta",
+      type: "thinking_progress",
       id: "request",
       index: 1,
-      delta: "why",
     });
     expect(
-      map({ type: "thinking_end", contentIndex: 1, content: "why", partial: MESSAGE }),
+      map({
+        type: "thinking_end",
+        contentIndex: 1,
+        content: "private steps\n\nThe edit is ready.",
+        partial: MESSAGE,
+      }),
     ).toStrictEqual({
       version: 1,
-      type: "thinking_end",
+      type: "thinking_result",
       id: "request",
       index: 1,
-      content: "why",
+      result: "The edit is ready.",
     });
+  });
+
+  it("prefers a native Responses reasoning summary", () => {
+    const signature = JSON.stringify({
+      type: "reasoning",
+      summary: [{ type: "summary_text", text: "Checked files.\n\nUse the shared protocol." }],
+      content: [{ type: "reasoning_text", text: "private chain" }],
+    });
+    const partial: AssistantMessage = {
+      ...MESSAGE,
+      api: "openai-responses",
+      content: [{ type: "thinking", thinking: "private chain", thinkingSignature: signature }],
+    };
+
+    expect(
+      map({ type: "thinking_end", contentIndex: 0, content: "private chain", partial }),
+    ).toStrictEqual({
+      version: 1,
+      type: "thinking_result",
+      id: "request",
+      index: 0,
+      result: "Use the shared protocol.",
+    });
+  });
+
+  it("returns no result for redacted thinking", () => {
+    const partial: AssistantMessage = {
+      ...MESSAGE,
+      content: [{ type: "thinking", thinking: "[redacted]", redacted: true }],
+    };
+    expect(
+      map({ type: "thinking_end", contentIndex: 0, content: "[redacted]", partial }),
+    ).toMatchObject({ type: "thinking_result", result: "" });
   });
 
   it("maps tool-call lifecycle events", () => {
@@ -136,6 +175,7 @@ describe("Pi assistant event mapping", () => {
       id: "request",
       reason: "stop",
       message: done,
+      terminal: { state: "recoverable_error", output: "none", code: "empty_assistant" },
     });
     expect(map({ type: "error", reason: "error", error: failed })).toStrictEqual({
       version: 1,
@@ -199,8 +239,69 @@ describe("Pi assistant event mapping", () => {
       id: "request",
       reason: "deferred",
       message: richMessage,
+      terminal: { state: "complete", output: "tool_use" },
     });
     expect(mapped["message"]).toBe(richMessage);
+  });
+
+  it("normalizes provider-specific empty tool termination", () => {
+    const emptyToolUse: AssistantMessage = {
+      ...MESSAGE,
+      stopReason: "toolUse",
+      content: [{ type: "thinking", thinking: "unfinished tool arguments" }],
+    };
+    expect(map({ type: "done", reason: "toolUse", message: emptyToolUse })).toStrictEqual({
+      version: 1,
+      type: "done",
+      id: "request",
+      reason: "toolUse",
+      message: emptyToolUse,
+      terminal: {
+        state: "recoverable_error",
+        output: "none",
+        code: "tool_use_without_call",
+      },
+    });
+  });
+
+  it("marks visible assistant output as complete", () => {
+    const answer: AssistantMessage = {
+      ...MESSAGE,
+      stopReason: "stop",
+      content: [{ type: "text", text: "answer" }],
+    };
+    expect(map({ type: "done", reason: "stop", message: answer })["terminal"]).toStrictEqual({
+      state: "complete",
+      output: "assistant",
+    });
+  });
+
+  it("normalizes an empty length termination as recoverable", () => {
+    const truncated: AssistantMessage = { ...MESSAGE, stopReason: "length" };
+    expect(map({ type: "done", reason: "length", message: truncated })["terminal"]).toStrictEqual({
+      state: "recoverable_error",
+      output: "none",
+      code: "empty_assistant",
+    });
+  });
+
+  it("normalizes empty length, deferred, and zero-width terminal output", () => {
+    const zeroWidth: AssistantMessage = {
+      ...MESSAGE,
+      content: [{ type: "text", text: "\u200B " }],
+      stopReason: "length",
+    };
+    expect(map({ type: "done", reason: "length", message: zeroWidth })["terminal"]).toStrictEqual({
+      state: "recoverable_error",
+      output: "none",
+      code: "empty_assistant",
+    });
+
+    const deferred: AssistantMessage = { ...MESSAGE, stopReason: "deferred" };
+    expect(map({ type: "done", reason: "deferred", message: deferred })["terminal"]).toStrictEqual({
+      state: "complete",
+      output: "none",
+    });
   });
 
   it("rejects a malformed tool-call start", () => {

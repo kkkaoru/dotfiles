@@ -32,6 +32,7 @@ pub(super) fn is_bridge_event(event: &Value) -> bool {
         }
         Some(
             "item/agentMessage/delta"
+            | "item/reasoning/progress"
             | "item/reasoning/summaryTextDelta"
             | "item/reasoning/textDelta"
             | "item/reasoning/complete"

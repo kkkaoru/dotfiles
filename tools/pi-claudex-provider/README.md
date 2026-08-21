@@ -24,7 +24,7 @@ The socket uses strict LF-delimited JSON, version `1`. Every client message incl
 1. Client sends `hello`; server sends `ready`.
 2. `list_models` returns available Pi models except provider `claudex`.
 3. `request` carries `provider`, `modelId`, raw Anthropic `system` / `messages` / `tools`, safe sampling options, and `origin: "claudex"`.
-4. Server emits compact `text_*`, `thinking_*`, and `toolcall_*` events. `done` or `error` includes the full authoritative Pi assistant message and is terminal.
+4. Server emits compact `text_*`, normalized `thinking_start` / `thinking_progress` / `thinking_result`, and `toolcall_*` events. `done` or `error` includes the full authoritative Pi assistant message and is terminal. A `done` event also includes the provider-neutral `terminal` contract described below.
 5. `cancel` aborts the matching request. Multiple authenticated connections and multiplexed request IDs are supported.
 6. `web_search` carries `provider`, `modelId`, and `query`. The server replies with `web_search_result` (`results: [{title,url,snippet}]`, possibly empty) or `web_search_error` (`provider`, `modelId`, `message`).
 
@@ -50,15 +50,17 @@ Native Claude models (`claude-*`, `opus` / `sonnet` / `haiku` / `fable`, and `[1
 
 The compact lifecycle events are incremental transport, not a replacement for the terminal Pi message. A consumer must correlate every event by exact request `id` and treat `done.message` or `error.error` as authoritative.
 
-| Event                                                | Incremental fields                                        | Consumer requirement                                                                                                                                                                                                      | Failure if ignored                                                                  |
-| ---------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `start`                                              | `provider`, `model`, `api`                                | Retain resolved response identity when it differs from the requested model.                                                                                                                                               | Auto-routed responses report the wrong provider or model.                           |
-| `text_start` / `text_delta` / `text_end`             | `index`; `delta` or final `content`                       | Preserve order and block index. Reconcile accumulated deltas with final content instead of silently accepting missing suffixes.                                                                                           | Empty, split, or partially streamed text is silently dropped or merged incorrectly. |
-| `thinking_start` / `thinking_delta` / `thinking_end` | `index`; `delta` or final `content`                       | Preserve order and block index. Protocol v1 intentionally carries visible thinking only; a consumer may translate its SSE signature when follow-up replay is validated for the selected provider.                         | Thinking disappears, or unvalidated signature translation breaks a follow-up.       |
-| `toolcall_start` / `toolcall_delta` / `toolcall_end` | `index`, call ID, name, argument delta or final arguments | Emit each call once and preserve exact IDs and arguments. Retain terminal-only `thoughtSignature` and `namespace` metadata for provider continuation.                                                                     | A tool is omitted or duplicated, or provider continuation fails.                    |
-| `done`                                               | `reason`, full `message`                                  | Own successful termination for this request only. Preserve the exact stop reason, reconcile terminal content without duplicating streamed content or tools, and retain provider continuation metadata and complete usage. | Truncation is reported as success; terminal-only content and usage are lost.        |
-| `error`                                              | `reason`, full `error` message                            | Own failed termination for this request only and retain the provider error details.                                                                                                                                       | The request fails without its actionable provider error.                            |
-| `protocol_error`                                     | `message`                                                 | Fail the matching request; never complete another request on the same session or thread.                                                                                                                                  | One request can fail or complete an unrelated turn.                                 |
+`done.terminal` normalizes model-specific termination behavior. `output` is `assistant`, `tool_use`, or `none`. `state` is `complete` when the authoritative message contains usable assistant text or a tool call, and `recoverable_error` when `stop`/`length` is empty or `toolUse` contains no tool call. Recoverable codes are `empty_assistant` and `tool_use_without_call`. Consumers may apply stricter tool-schema validation; if a declared tool call cannot be forwarded, they must downgrade the turn to the same recoverable empty-output path.
+
+| Event                                                      | Incremental fields                                        | Consumer requirement                                                                                                                                                                                                                                                               | Failure if ignored                                                                           |
+| ---------------------------------------------------------- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `start`                                                    | `provider`, `model`, `api`                                | Retain resolved response identity when it differs from the requested model.                                                                                                                                                                                                        | Auto-routed responses report the wrong provider or model.                                    |
+| `text_start` / `text_delta` / `text_end`                   | `index`; `delta` or final `content`                       | Preserve order and block index. Reconcile accumulated deltas with final content instead of silently accepting missing suffixes.                                                                                                                                                    | Empty, split, or partially streamed text is silently dropped or merged incorrectly.          |
+| `thinking_start` / `thinking_progress` / `thinking_result` | `index`; final `result` only                              | Treat start and contentless progress as live activity. Display only the bounded terminal result; raw chain-of-thought is intentionally absent.                                                                                                                                     | Thought activity disappears, or private reasoning is exposed.                                |
+| `toolcall_start` / `toolcall_delta` / `toolcall_end`       | `index`, call ID, name, argument delta or final arguments | Emit each call once and preserve exact IDs and arguments. Retain terminal-only `thoughtSignature` and `namespace` metadata for provider continuation.                                                                                                                              | A tool is omitted or duplicated, or provider continuation fails.                             |
+| `done`                                                     | `reason`, full `message`, `terminal`                      | Own termination for this request only. Preserve the exact stop reason, reconcile terminal content without duplicating streamed content or tools, and retain provider continuation metadata and complete usage. `terminal.state=recoverable_error` must not be reported as success. | Truncation or empty output is reported as success; terminal-only content and usage are lost. |
+| `error`                                                    | `reason`, full `error` message                            | Own failed termination for this request only and retain the provider error details.                                                                                                                                                                                                | The request fails without its actionable provider error.                                     |
+| `protocol_error`                                           | `message`                                                 | Fail the matching request; never complete another request on the same session or thread.                                                                                                                                                                                           | One request can fail or complete an unrelated turn.                                          |
 
 Terminal reconciliation must account for fields required by the selected provider that incremental events cannot fully represent: `thinkingSignature`, `redacted`, `textSignature`, tool-call `thoughtSignature` and `namespace`, `responseId`, `responseModel`, `deferred`, detailed stop reasons, and usage including cache and reasoning tokens. A provider-validated session or signature translation may satisfy continuation without adding opaque signatures to incremental events. If terminal content extends an already streamed prefix, emit only the missing suffix. If it conflicts with streamed content, fail visibly rather than replaying or dropping content silently.
 
@@ -74,10 +76,18 @@ pi install "$PWD/tools/pi-claudex-provider"
 
 ## Thinking display characteristics (measured)
 
-Gateway protocol v1 forwards `thinking_start` / `thinking_delta` / `thinking_end`
-the moment Pi emits them; there is no buffering on the socket path (verified with
-live socket captures). Whether a TUI can show live reasoning therefore depends
-entirely on what the upstream provider streams. Measured behavior by model
+Gateway protocol v1 normalizes every Pi thinking lifecycle into a model-neutral
+contract. `thinking_start` opens activity, every upstream delta immediately emits
+a contentless `thinking_progress`, and `thinking_result` carries only a bounded
+result when the thought ends. Raw chain-of-thought is never placed in incremental
+Thought events. The authoritative `done.message` may still retain provider-owned
+thinking/signatures for validated continuation, but consumers must not render it.
+For Responses APIs the provider extracts the native terminal reasoning summary
+from Pi's signed reasoning item. Other APIs use the final non-empty paragraph of
+the terminal thinking block. Redacted thinking yields an empty result, and every
+non-empty result is limited to 400 grapheme clusters.
+
+The upstream characteristics that feed this normalization were measured by model
 family (2026-08-15, pi-ai 0.84.2):
 
 | Family                             | Pi provider(s)                               | Live incremental thinking | Notes                                                                                                                                                                                                                                                                                                                                                |
@@ -89,16 +99,16 @@ family (2026-08-15, pi-ai 0.84.2):
 
 Consequences for consumers:
 
-- A "thought for N seconds with no visible deltas" experience is the expected
-  upstream behavior for all OpenAI responses models, not a gateway defect.
+- OpenAI Responses models may provide no intermediate progress because their
+  reasoning summary is generated only at the end; the terminal summary is still
+  returned as `thinking_result` when the backend exposes one.
 - For `gpt-5.3-codex-spark` the consumer sees no thinking block at all. This
   cannot be fixed on the client side: the backend simply does not expose the
   data. Alternatives with live thinking are Qwen and xAI routes; OpenAI routes
   via `github-copilot` (`gpt-5.3-codex`, non-spark) at least surface a short
   summary at the end of the reasoning phase.
-- Do not synthesize fake `thinking_delta` pacing to smooth the end burst: it
-  misrepresents timing, pollutes replayed thinking blocks, and destroys latency
-  forensics on the wire.
+- The gateway does not synthesize fake pacing. `thinking_progress` corresponds
+  one-for-one with actual upstream delta arrival and deliberately omits content.
 
 ## Isolated verification
 

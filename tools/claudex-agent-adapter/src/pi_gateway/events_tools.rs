@@ -176,6 +176,7 @@ impl PiGateway {
                 }
             }),
         );
+        state.forwarded_tool_calls = state.forwarded_tool_calls.saturating_add(1);
         Ok(())
     }
 }

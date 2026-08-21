@@ -27,8 +27,10 @@ pub(super) struct ToolCallBuffer {
 pub(super) struct EventTranslateState {
     tools: HashMap<u64, ToolCallBuffer>,
     streamed_content: HashSet<u64>,
+    completed_thinking: HashSet<u64>,
     listed_tools: HashSet<String>,
     consecutive_unusable_tools: u8,
+    forwarded_tool_calls: usize,
 }
 pub(super) use events_finish::event_translate_state;
 
@@ -43,27 +45,25 @@ impl PiGateway {
         let event_type = protocol::validate_event(event, request_id)?;
         tracing::debug!(thread_id, request_id, event_type, event = %event, "received Pi gateway event");
         match event_type {
-            "start" | "text_start" | "thinking_start" => {}
+            "start" | "text_start" => {}
+            "thinking_start" | "thinking_progress" => {
+                self.dispatch_thinking_progress(thread_id, request_id, event);
+            }
             "text_end" => {
-                self.dispatch_end_content(thread_id, request_id, event, false, state)?;
+                self.dispatch_end_content(thread_id, request_id, event, state)?;
             }
             "thinking_end" => {
-                self.dispatch_end_content(thread_id, request_id, event, true, state)?;
-                self.events.dispatch_to(
-                    request_id,
-                    json!({
-                        "method":"item/reasoning/complete",
-                        "params":{"threadId":thread_id}
-                    }),
-                );
+                self.dispatch_thinking_result(thread_id, request_id, event, "content", state)?;
+            }
+            "thinking_result" => {
+                self.dispatch_thinking_result(thread_id, request_id, event, "result", state)?;
             }
             "text_delta" => {
                 mark_streamed(state, event);
-                self.dispatch_delta(thread_id, request_id, event, false)?;
+                self.dispatch_delta(thread_id, request_id, event)?;
             }
             "thinking_delta" => {
-                mark_streamed(state, event);
-                self.dispatch_delta(thread_id, request_id, event, true)?;
+                self.dispatch_thinking_progress(thread_id, request_id, event);
             }
             "toolcall_start" => {
                 start_tool_call(event, &mut state.tools)?;
@@ -77,7 +77,7 @@ impl PiGateway {
             "toolcall_end" => {
                 self.finish_tool_call(thread_id, request_id, event, state)?;
             }
-            "done" => return self.dispatch_done(thread_id, request_id, event),
+            "done" => return self.dispatch_done(thread_id, request_id, event, state),
             "error" | "protocol_error" => {
                 self.dispatch_error_event(request_id, thread_id, event);
                 return Ok(true);
@@ -87,8 +87,42 @@ impl PiGateway {
         Ok(false)
     }
 
-    fn dispatch_done(&self, thread_id: &str, request_id: &str, event: &Value) -> Result<bool> {
-        let stop_reason = anthropic_stop_reason(event)?;
+    fn dispatch_done(
+        &self,
+        thread_id: &str,
+        request_id: &str,
+        event: &Value,
+        state: &EventTranslateState,
+    ) -> Result<bool> {
+        let reported_stop_reason = anthropic_stop_reason(event)?;
+        let provider_recoverable =
+            event.pointer("/terminal/state").and_then(Value::as_str) == Some("recoverable_error");
+        let missing_forwarded_tool =
+            reported_stop_reason == "tool_use" && state.forwarded_tool_calls == 0;
+        let recoverable = provider_recoverable || missing_forwarded_tool;
+        let stop_reason = if recoverable {
+            "end_turn"
+        } else {
+            reported_stop_reason
+        };
+        let recoverable_fallback = json!({
+            "state":"recoverable_error",
+            "output":"none",
+            "code":"tool_use_without_forwarded_call"
+        });
+        let terminal = if missing_forwarded_tool {
+            recoverable_fallback
+        } else if provider_recoverable {
+            event
+                .get("terminal")
+                .cloned()
+                .unwrap_or(recoverable_fallback)
+        } else {
+            event
+                .get("terminal")
+                .cloned()
+                .unwrap_or_else(|| json!({"state":"complete"}))
+        };
         self.dispatch_usage(thread_id, request_id, event);
         self.events.dispatch_to(
             request_id,
@@ -97,7 +131,8 @@ impl PiGateway {
                 "params":{"threadId":thread_id,"turn":{
                     "threadId":thread_id,
                     "status":"completed",
-                    "providerStopReason":stop_reason
+                    "providerStopReason":stop_reason,
+                    "terminal":terminal
                 }}
             }),
         );

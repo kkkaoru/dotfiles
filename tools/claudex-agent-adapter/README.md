@@ -10,6 +10,13 @@ Claudex launch always uses the Pi gateway (`pi --mode rpc` via
 `pi`. ACP-native (`grok --acp`, `cursor-agent acp`, `qwen --acp`,
 `command-code-acp`) is not a claudex route.
 
+Pi gateway protocol v1 carries a provider-neutral `done.terminal` contract. The
+adapter independently verifies which assistant text and tool calls were actually
+transferable to Claude Code. A `recoverable_error`, or a `toolUse` completion
+with no forwarded tool call, is downgraded to an empty `end_turn` and enters the
+shared one-shot empty-response retry path. It is never surfaced as a successful
+SubAgent result.
+
 | `--backend-route MODEL=BACKEND` | Backend protocol | Tool runtime |
 | --- | --- | --- |
 | `pi-gateway` | Pi RPC gateway (`pi --mode rpc`) | Provider `streamSimple` through `pi-claudex-provider` |
@@ -63,6 +70,11 @@ the cross-provider integration.
 Streaming requests return their HTTP response immediately. Each Codex
 `item/agentMessage/delta` notification is converted to an Anthropic
 `content_block_delta` SSE event instead of being buffered until turn completion.
+For Pi routes, the adapter consumes the provider's model-neutral Thought contract:
+contentless `thinking_progress` keeps Claudex activity live, while only the final
+`thinking_result` is rendered in the Thought block. Legacy `thinking_delta` input
+is accepted for compatibility but its raw content is suppressed; a legacy
+`thinking_end` is reduced to a bounded final result.
 Subscription subprocesses likewise use Claude Code's `stream-json` output and
 forward text deltas as they arrive. Streaming responses open immediately with
 `message_start` so Anthropic `ping` SSE events keep Claude Code's ~180s raw-byte

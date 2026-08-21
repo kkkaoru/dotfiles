@@ -124,6 +124,11 @@ describe("gateway request coordination", () => {
     await settle();
     expect(messages.map((message) => message.type)).toStrictEqual(["start", "done"]);
     expect(messages[1]?.["message"]).toStrictEqual(final);
+    expect(messages[1]?.["terminal"]).toStrictEqual({
+      state: "recoverable_error",
+      output: "none",
+      code: "empty_assistant",
+    });
   });
 
   it("rejects duplicate ids and unknown cancellation", async () => {
@@ -244,7 +249,14 @@ describe("gateway request coordination", () => {
     gateway.handle(request("terminal"));
     await settle();
     expect(messages).toStrictEqual([
-      { version: 1, type: "done", id: "terminal", reason: "stop", message: final },
+      {
+        version: 1,
+        type: "done",
+        id: "terminal",
+        reason: "stop",
+        message: final,
+        terminal: { state: "recoverable_error", output: "none", code: "empty_assistant" },
+      },
     ]);
   });
 });

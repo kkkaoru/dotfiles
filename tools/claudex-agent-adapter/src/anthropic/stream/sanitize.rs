@@ -27,6 +27,7 @@ pub(super) fn is_visible_activity_event(event: &Value) -> bool {
         Some(
             "item/agentMessage/delta"
                 | "item/reasoning/summaryTextDelta"
+                | "item/reasoning/progress"
                 | "item/reasoning/textDelta"
                 | "item/reasoning/complete"
                 | "item/tool/call"

@@ -363,6 +363,7 @@ async fn discards_oversized_events_the_bridge_never_consumes() {
 fn accepts_only_events_used_by_the_anthropic_bridge() {
     for method in [
         "item/agentMessage/delta",
+        "item/reasoning/progress",
         "item/reasoning/summaryTextDelta",
         "item/reasoning/textDelta",
         "item/reasoning/complete",
