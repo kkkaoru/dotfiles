@@ -92,6 +92,19 @@ fn parses_pi_provider_interface_and_preserves_default_route() {
     assert_eq!(pi.routes[0].pi_provider.as_deref(), Some("openai-codex"));
     assert_eq!(pi.routes[0].pi_model.as_deref(), Some("gpt-5.6-luna"));
 
+    let pi_without_route = parse_command(
+        ["serve", "--model", "m", "--provider-interface", "pi"]
+            .into_iter()
+            .map(OsString::from)
+            .collect(),
+    )
+    .expect_err("Pi interface must not synthesize a Codex route");
+    assert!(
+        pi_without_route
+            .to_string()
+            .contains("Pi provider interface requires")
+    );
+
     assert!(
         parse_command(
             ["serve", "--model", "m", "--provider-interface", ""]

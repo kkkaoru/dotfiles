@@ -32,6 +32,9 @@ pub(super) fn assemble_options(mut draft: OptionsDraft) -> Result<ParsedOptions>
         bail!("--model or --provider-config is required");
     }
     if draft.routes.is_empty() {
+        if draft.provider_interface.as_deref() == Some("pi") {
+            bail!("Pi provider interface requires --provider-config or --backend-route");
+        }
         draft
             .routes
             .push(BackendRoute::new(&model, BackendKind::CodexAppServer));
@@ -80,7 +83,11 @@ fn enable_pi_routes(routes: &mut [BackendRoute]) -> Result<()> {
             continue;
         }
         route.backend = BackendKind::PiGateway;
-        if route.web_search_mode == crate::web_search::WebSearchMode::AcpNative {
+        if matches!(
+            route.web_search_mode,
+            crate::web_search::WebSearchMode::AcpNative
+                | crate::web_search::WebSearchMode::CodexNative
+        ) {
             route.web_search_mode = crate::web_search::WebSearchMode::DelegatePi;
         }
     }
@@ -150,7 +157,7 @@ mod tests {
     }
 
     #[test]
-    fn maps_acp_native_web_search_to_delegate_pi() {
+    fn maps_provider_native_web_search_to_delegate_pi() {
         let mut draft = OptionsDraft {
             model: Some("grok-4.6".to_owned()),
             ..Default::default()
@@ -162,6 +169,25 @@ mod tests {
         mapped.web_search_mode = crate::web_search::WebSearchMode::AcpNative;
         draft.routes.push(mapped);
         let options = assemble_options(draft).expect("map acp-native onto Pi");
+        assert_eq!(
+            options.adapter.routes[0].web_search_mode,
+            crate::web_search::WebSearchMode::DelegatePi
+        );
+        assert_eq!(options.adapter.routes[0].backend, BackendKind::PiGateway);
+    }
+
+    #[test]
+    fn maps_codex_native_web_search_to_delegate_pi_for_pi_routes() {
+        let mut draft = OptionsDraft {
+            model: Some("gpt-5.6-luna".to_owned()),
+            ..Default::default()
+        };
+        let mut mapped = route("gpt-5.6-luna");
+        mapped.pi_provider = Some("openai-codex".to_owned());
+        mapped.pi_model = Some("gpt-5.6-luna".to_owned());
+        mapped.web_search_mode = crate::web_search::WebSearchMode::CodexNative;
+        draft.routes.push(mapped);
+        let options = assemble_options(draft).expect("map Codex-native search onto Pi");
         assert_eq!(
             options.adapter.routes[0].web_search_mode,
             crate::web_search::WebSearchMode::DelegatePi
