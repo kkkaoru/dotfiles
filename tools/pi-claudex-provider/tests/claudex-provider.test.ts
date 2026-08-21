@@ -74,6 +74,12 @@ describe("Claudex model catalog", () => {
     );
   });
 
+  it("loads a catalog that contains only a fallback model", async () => {
+    const file = await configFile({ fallback: { model: "fallback-only" } });
+    const models = await loadClaudexModels(file);
+    expect(models.map((model) => model.id)).toStrictEqual(["fallback-only"]);
+  });
+
   it("honors an abort signal during model loading", async () => {
     const file = await configFile({ providers: [{ defaultModel: "gpt-5.6-luna" }] });
     const controller = new AbortController();
