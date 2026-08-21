@@ -15,7 +15,11 @@ use super::{
     },
     installed_adapter, launcher_logs, program_identity,
 };
-use crate::{ADAPTER_PROTOCOL_VERSION, app_server};
+use crate::{
+    ADAPTER_PROTOCOL_VERSION,
+    agent_backend::{BackendKind, BackendRoute},
+    app_server,
+};
 
 #[derive(Debug)]
 pub(crate) struct ServiceConfig {
@@ -41,10 +45,7 @@ impl ServiceConfig {
             std::env::current_exe().context("locate adapter executable")?,
         );
         let home = std::env::var_os("HOME").context("HOME is required")?;
-        let source_home = std::env::var_os("CODEX_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(&home).join(".codex"));
-        let codex_config_fingerprint = app_server::provider_config_fingerprint(&source_home);
+        let codex_config_fingerprint = codex_config_fingerprint(&options.routes)?;
         let service_config_fingerprint =
             service_config_fingerprint(&options, &codex_config_fingerprint);
         let cache = PathBuf::from(home).join(".cache/claudex");
@@ -106,4 +107,28 @@ fn service_config_fingerprint(options: &AdapterOptions, codex_fingerprint: &str)
         .map(std::num::NonZeroU64::get)
         .hash(&mut hasher);
     format!("{:016x}", hasher.finish())
+}
+
+fn codex_config_fingerprint(routes: &[BackendRoute]) -> Result<String> {
+    if !routes
+        .iter()
+        .any(|route| route.backend == BackendKind::CodexAppServer)
+    {
+        return Ok(String::new());
+    }
+    let source_home = app_server::source_home()?;
+    Ok(app_server::provider_config_fingerprint(&source_home))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pi_only_routes_do_not_read_codex_configuration() {
+        let fingerprint =
+            codex_config_fingerprint(&[BackendRoute::new("model", BackendKind::PiGateway)])
+                .expect("Pi-only configuration");
+        assert!(fingerprint.is_empty());
+    }
 }
