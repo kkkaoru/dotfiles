@@ -148,8 +148,10 @@ actual model selects that route; merely declaring a provider or listing it in
 
 Each route may also set `webSearchMode` to `codex-native`, `acp-native`,
 `delegate-ccr`, `delegate-mcp`, or `disabled`. `codex-native` enables the
-Codex app-server live search flags on `thread/start`; `acp-native` leaves the
-request on an ACP route that owns native search (Command Code Muse Spark uses
+Codex app-server live search flags on an explicitly selected
+`codex-app-server` route. On a Pi route, `codex-native` and `acp-native` are
+normalized to `delegate-pi`, so Pi never creates a hidden Codex search route.
+`acp-native` leaves the request on an ACP route that owns native search (Command Code Muse Spark uses
 this so Claude system/routing/ACP_NATIVE dumps are not prefixed onto `cmd -p`;
 `command-code-acp` also reads `cmd -p` stdout as bytes so invalid UTF-8 from
 web/tool dumps cannot crash the ACP turn, coalesces tiny NDJSON deltas, and
@@ -175,7 +177,10 @@ outer `claudex` invocation. Subscription children explicitly clear those
 local CCR variables, preventing recursive search calls. A fallback worker must
 be enabled and have a valid route; configuration loading rejects unknown or
 disabled fallback IDs before serving requests.
-Omitting all routes preserves the single-model `codex-app-server` default.
+Omitting all routes preserves the single-model `codex-app-server` default for
+legacy invocations without an explicit `--provider-interface pi`. The Pi
+interface requires a provider config or an explicit route, so it never
+silently falls back to Codex.
 Other adapter options are `--listen`, `--subscription-max-processes`, and
 `--subscription-timeout-minutes`; their defaults are `127.0.0.1:8318`, 20, and
 120. The launch-only `--inherit-claude-model` option omits Claude Code's
