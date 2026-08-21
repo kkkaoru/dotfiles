@@ -5,7 +5,6 @@ use super::{AgentBackend, BackendKind, BackendRoute, BackendStartup, RoutedBacke
 pub struct RoutedBackends {
     pub(super) configured: Vec<Arc<RoutedBackend>>,
     pub(super) dynamic: Mutex<Vec<Arc<RoutedBackend>>>,
-    pub(super) search_routes: Mutex<Vec<Arc<RoutedBackend>>>,
     pub(super) codex_startup: Arc<BackendStartup>,
     pub(super) closed: AtomicBool,
 }
@@ -34,7 +33,6 @@ impl RoutedBackends {
                 })
                 .collect(),
             dynamic: Mutex::new(Vec::new()),
-            search_routes: Mutex::new(Vec::new()),
             codex_startup,
             closed: AtomicBool::new(false),
         }
@@ -53,7 +51,6 @@ impl RoutedBackends {
         Self {
             configured,
             dynamic: Mutex::new(Vec::new()),
-            search_routes: Mutex::new(Vec::new()),
             codex_startup,
             closed: AtomicBool::new(false),
         }
@@ -63,21 +60,12 @@ impl RoutedBackends {
         &self,
         model: &str,
     ) -> anyhow::Result<Arc<AgentBackend>> {
-        self.search_route(model).get().await
-    }
-
-    pub(in crate::agent_backend) fn search_route(&self, model: &str) -> Arc<RoutedBackend> {
-        let mut search_routes = self.search_routes.lock().expect("search routes poisoned");
-        if let Some(existing) = search_routes.iter().find(|route| route.model == model) {
-            return Arc::clone(existing);
+        let (_, route) = self.resolve(model)?;
+        if route.kind != BackendKind::CodexAppServer {
+            anyhow::bail!(
+                "Pi gateway web search must use the provider-native route for model `{model}`"
+            );
         }
-        let mut template = BackendRoute::new(model, BackendKind::CodexAppServer);
-        template.web_search_mode = crate::agent_backend::WebSearchMode::CodexNative;
-        let route = Arc::new(RoutedBackend::lazy(
-            template,
-            Arc::clone(&self.codex_startup),
-        ));
-        search_routes.push(Arc::clone(&route));
-        route
+        route.get().await
     }
 }

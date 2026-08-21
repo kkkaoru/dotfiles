@@ -3,7 +3,7 @@ use crate::{
     app_server::{AppServer, ThreadEvents},
     pi_gateway::PiGateway,
 };
-use anyhow::Result;
+use anyhow::{Result, bail};
 use std::sync::Arc;
 mod kind;
 mod model_kind;
@@ -199,8 +199,9 @@ impl AgentBackend {
         }
     }
 
-    /// CCR WebSearch workers must use Codex live search even when the public
-    /// model route has been remapped onto PiGateway.
+    /// Use the configured Codex route for native search workers. Pi routes
+    /// perform search through their gateway instead of spawning an implicit
+    /// Codex app-server.
     pub async fn search_backend(self: &Arc<Self>, model: &str) -> Result<Arc<Self>> {
         match self.as_ref() {
             Self::Routed(routes) => routes.search_backend(model).await,
@@ -208,7 +209,9 @@ impl AgentBackend {
                 Box::pin(scopes.unguarded_scope().search_backend(model)).await
             }
             Self::Codex(_) => Ok(Arc::clone(self)),
-            Self::Pi(_) => Self::spawn(BackendKind::CodexAppServer, model).await,
+            Self::Pi(_) => bail!(
+                "Pi gateway web search must use the provider-native route for model `{model}`"
+            ),
         }
     }
 }

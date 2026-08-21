@@ -35,17 +35,11 @@ impl RoutedBackends {
             .lock()
             .expect("dynamic routes poisoned")
             .clone();
-        let search_routes = self
-            .search_routes
-            .lock()
-            .expect("search routes poisoned")
-            .clone();
         let routes = self
             .configured
             .iter()
             .cloned()
             .chain(dynamic)
-            .chain(search_routes)
             .collect::<Vec<_>>();
         let mut seen = HashSet::new();
         for backend in routes

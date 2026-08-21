@@ -65,6 +65,16 @@ mod tests {
         assert!(prefix.description().contains("modelPrefixes"));
     }
 
+    #[tokio::test]
+    async fn pi_search_does_not_spawn_an_implicit_codex_backend() {
+        let backend = AgentBackend::pi(crate::pi_gateway::PiGateway::alive_for_test());
+        let error = match backend.search_backend("model").await {
+            Ok(_) => panic!("Pi search must stay on the Pi gateway"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("provider-native route"));
+    }
+
     #[test]
     fn describes_nondefault_web_search_routes_as_json() {
         for mode in [

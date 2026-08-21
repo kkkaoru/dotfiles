@@ -210,26 +210,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn pins_ccr_search_workers_to_codex_when_the_public_route_is_pi() {
+    #[tokio::test]
+    async fn rejects_implicit_codex_search_for_a_pi_route() {
         let mut public = route("gpt-5.6-luna", BackendKind::PiGateway);
         public.pi_provider = Some("openai-codex".to_owned());
         public.pi_model = Some("gpt-5.6-luna".to_owned());
         public.web_search_mode = WebSearchMode::CodexNative;
         let routes = RoutedBackends::lazy(&[public]);
-        let search = routes.search_route("gpt-5.6-luna");
-        assert_eq!(search.kind, BackendKind::CodexAppServer);
-        assert_eq!(search.model, "gpt-5.6-luna");
-        assert_eq!(search.template.web_search_mode, WebSearchMode::CodexNative);
-        assert!(search.template.pi_provider.is_none());
-        assert!(std::ptr::eq(
-            Arc::as_ptr(&search),
-            Arc::as_ptr(&routes.search_route("gpt-5.6-luna"))
-        ));
-        assert_eq!(
-            routes.find("gpt-5.6-luna").unwrap().kind,
-            BackendKind::PiGateway
-        );
+        let error = match routes.search_backend("gpt-5.6-luna").await {
+            Ok(_) => panic!("Pi search must not create an app-server route"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("provider-native route"));
     }
 
     #[test]
