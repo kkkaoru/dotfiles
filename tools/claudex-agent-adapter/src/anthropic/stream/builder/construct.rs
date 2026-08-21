@@ -33,6 +33,8 @@ impl SegmentBuilder {
             injected_output_tokens: 0,
             provider_stop_reason: None,
             suppressed_tool_use: false,
+            recoverable_empty_output: false,
+            requires_subagent_launch: false,
             usage: Usage {
                 input_tokens,
                 ..Usage::default()

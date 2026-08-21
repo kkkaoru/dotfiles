@@ -20,6 +20,7 @@ pub(super) fn is_generated_instruction(text: &str) -> bool {
         || lower.starts_with("<command-name>")
         || lower.starts_with("(re-invocation of /")
         || lower.starts_with("launching skill:")
+        || lower.starts_with("claudex (claudex-")
         || trimmed.starts_with("Base directory for this skill:")
 }
 

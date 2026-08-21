@@ -3,10 +3,40 @@ use std::time::Duration;
 use super::{
     super::{ParallelScheduler, SchedulerConfig},
     actions::count_for_content,
-    declines_delegation, has_classifiable_user_turn, has_parallel_scope, independent_scope_count,
-    is_substantive_work, needs_single_worker,
+    declines_delegation, explicitly_requests_subagent_launch, has_classifiable_user_turn,
+    has_parallel_scope, independent_scope_count, is_substantive_work, needs_single_worker,
     test_support::{messages_request, real_three_scope_message},
 };
+
+#[test]
+fn detects_explicit_subagent_execution_requests_without_internal_retry_noise() {
+    let japanese = messages_request(vec![serde_json::json!({
+        "role":"user",
+        "content":"branch への反映をsubagent に指示してください"
+    })]);
+    assert!(explicitly_requests_subagent_launch(&japanese.messages));
+
+    let english = messages_request(vec![serde_json::json!({
+        "role":"user",
+        "content":"Please delegate this to a subagent."
+    })]);
+    assert!(explicitly_requests_subagent_launch(&english.messages));
+
+    let declined = messages_request(vec![serde_json::json!({
+        "role":"user",
+        "content":"Do not delegate this to a subagent."
+    })]);
+    assert!(!explicitly_requests_subagent_launch(&declined.messages));
+
+    let retried = messages_request(vec![
+        serde_json::json!({"role":"user","content":"Please delegate this to a subagent."}),
+        serde_json::json!({
+            "role":"user",
+            "content":"Claudex (claudex-empty-assistant-retry): retry the provider"
+        }),
+    ]);
+    assert!(explicitly_requests_subagent_launch(&retried.messages));
+}
 
 #[test]
 fn action_list_contexts_cover_acceptance_and_nested_items() {

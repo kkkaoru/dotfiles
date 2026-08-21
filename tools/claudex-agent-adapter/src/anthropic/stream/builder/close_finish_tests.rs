@@ -221,3 +221,106 @@ async fn finish_ends_the_turn_after_three_consecutive_unusable_tools() {
         "No assistant content was produced: tool arguments were unusable after 3 consecutive failures, so tool_use was suppressed. This is not successful work."
     );
 }
+
+#[tokio::test]
+async fn recoverable_terminal_contract_drops_reasoning_only_output() {
+    let mut builder = SegmentBuilder::new(1);
+    builder
+        .blocks
+        .push(json!({"type":"thinking","thinking":"unfinished tool arguments"}));
+    builder
+        .update_provider_stop_reason(&json!({
+            "params":{"turn":{
+                "providerStopReason":"end_turn",
+                "terminal":{
+                    "state":"recoverable_error",
+                    "output":"none",
+                    "code":"tool_use_without_call"
+                }
+            }}
+        }))
+        .expect("recoverable stop");
+
+    let segment = builder.finish(None).await.expect("finish");
+
+    assert!(segment.is_empty_end_turn());
+    assert!(segment.blocks.is_empty());
+}
+
+#[tokio::test]
+async fn unbacked_japanese_subagent_launch_claim_becomes_retryable_empty_output() {
+    let mut builder = SegmentBuilder::new(1);
+    builder.blocks.push(json!({
+        "type":"text",
+        "text":"ARM64 移行を1ワーカーに委譲しました。バックグラウンドで実行中です。"
+    }));
+    builder.provider_stop_reason = Some("end_turn");
+
+    let segment = builder
+        .finish(None)
+        .await
+        .expect("finish false launch claim");
+
+    assert!(segment.is_empty_end_turn());
+    assert!(segment.blocks.is_empty());
+}
+
+#[tokio::test]
+async fn unbacked_english_subagent_launch_claim_becomes_retryable_empty_output() {
+    let mut builder = SegmentBuilder::new(1);
+    builder.blocks.push(json!({
+        "type":"text",
+        "text":"The ARM64 migration was delegated to one worker and is running in the background."
+    }));
+    builder.provider_stop_reason = Some("end_turn");
+
+    let segment = builder
+        .finish(None)
+        .await
+        .expect("finish false launch claim");
+
+    assert!(segment.is_empty_end_turn());
+    assert!(segment.blocks.is_empty());
+}
+
+#[tokio::test]
+async fn explicit_subagent_execution_request_rejects_plain_text_without_a_launch() {
+    let mut builder = SegmentBuilder::new(1);
+    builder.requires_subagent_launch = true;
+    builder.blocks.push(json!({
+        "type":"text",
+        "text":"I will prepare the delegation next."
+    }));
+    builder.provider_stop_reason = Some("end_turn");
+
+    let segment = builder.finish(None).await.expect("finish missing launch");
+
+    assert!(segment.is_empty_end_turn());
+    assert!(segment.blocks.is_empty());
+}
+
+#[tokio::test]
+async fn tool_backed_subagent_launch_claim_keeps_the_agent_call() {
+    let mut builder = SegmentBuilder::new(1);
+    builder.blocks.push(json!({
+        "type":"text",
+        "text":"ARM64 移行を1ワーカーに委譲しました。"
+    }));
+    builder.blocks.push(json!({
+        "type":"tool_use",
+        "id":"toolu_agent",
+        "name":"Agent",
+        "input":{"prompt":"Perform the ARM64 migration","run_in_background":true}
+    }));
+    builder.external_tool_calls = 1;
+    builder.requires_subagent_launch = true;
+
+    let segment = builder
+        .finish(None)
+        .await
+        .expect("finish tool-backed launch");
+
+    assert_eq!(segment.stop_reason, "tool_use");
+    assert_eq!(segment.blocks.len(), 2);
+    assert_eq!(segment.blocks[1]["name"], "Agent");
+}

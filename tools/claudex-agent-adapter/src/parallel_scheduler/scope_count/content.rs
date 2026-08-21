@@ -12,12 +12,15 @@ use super::{
 };
 
 pub(super) fn last_real_user_text(request: &MessagesRequest) -> Option<String> {
-    let classifiable = request
-        .messages
+    last_real_user_text_from_messages(&request.messages)
+}
+
+pub(super) fn last_real_user_text_from_messages(messages: &[Value]) -> Option<String> {
+    let classifiable = messages
         .iter()
         .enumerate()
         .filter(|(_, message)| message.get("role").and_then(Value::as_str) == Some("user"))
-        .filter_map(|(index, _)| user_message_text(&request.messages, index))
+        .filter_map(|(index, _)| user_message_text(messages, index))
         .collect::<Vec<_>>();
     let latest = classifiable.last()?;
     if declines_delegation_text(latest) {

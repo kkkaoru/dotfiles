@@ -10,7 +10,7 @@ mod detect;
 mod filters;
 
 use actions::{count_for_content, declines_delegation_text, is_atomic_lookup};
-use content::last_real_user_text;
+use content::{last_real_user_text, last_real_user_text_from_messages};
 use detect::{contains_parallel_intent, contains_substantive_verb};
 use filters::remove_negative_or_diagnostic_lines;
 
@@ -35,6 +35,37 @@ pub(crate) fn has_classifiable_user_turn(request: &MessagesRequest) -> bool {
 
 pub(crate) fn declines_delegation(request: &MessagesRequest) -> bool {
     last_real_user_text(request).is_some_and(|content| declines_delegation_text(&content))
+}
+
+pub(crate) fn explicitly_requests_subagent_launch(messages: &[serde_json::Value]) -> bool {
+    let Some(content) = last_real_user_text_from_messages(messages) else {
+        return false;
+    };
+    if declines_delegation_text(&content) {
+        return false;
+    }
+    let lower = content.to_ascii_lowercase();
+    [
+        "subagent に指示",
+        "subagentに指示",
+        "subagent に委譲",
+        "subagentに委譲",
+        "subagent を起動",
+        "subagentを起動",
+        "ワーカーに委譲",
+        "ワーカーを起動",
+        "delegate this to a subagent",
+        "delegate to a subagent",
+        "assign this to a subagent",
+        "ask a subagent to",
+        "instruct a subagent to",
+        "launch a subagent",
+        "start a subagent",
+        "use a subagent to",
+        "have a subagent",
+    ]
+    .iter()
+    .any(|pattern| lower.contains(pattern))
 }
 
 pub(crate) fn needs_single_worker(request: &MessagesRequest) -> bool {

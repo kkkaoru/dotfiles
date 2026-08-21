@@ -143,6 +143,10 @@ impl SegmentBuilder {
         &mut self,
         event: &Value,
     ) -> Result<()> {
+        self.recoverable_empty_output = event
+            .pointer("/params/turn/terminal/state")
+            .and_then(Value::as_str)
+            == Some("recoverable_error");
         let Some(reason) = event
             .pointer("/params/turn/providerStopReason")
             .and_then(Value::as_str)
@@ -196,18 +200,21 @@ impl SegmentBuilder {
         stream: Option<&StreamSender>,
     ) -> Result<Segment> {
         self.report_incomplete_launches(stream).await?;
-        self.report_no_subagent_action(stream).await?;
         if crate::anthropic::token_efficiency::circuit_is_open(self.consecutive_invalid_tool_json) {
             self.suppressed_tool_use = true;
         }
         let tool_handoff = self.is_subagent && self.external_tool_calls > 0;
         self.close_blocks_for_finish(tool_handoff, stream).await?;
         self.emit_unusable_tool_failure_text(stream).await?;
+        self.report_no_subagent_action();
         let next_sse_index = self.blocks.len();
         self.blocks.retain(|block| {
             block.get("type").and_then(Value::as_str) != Some(super::SSE_INDEX_PAD)
         });
         sanitize_committed_blocks(&mut self.blocks);
+        if self.recoverable_empty_output {
+            remove_recoverable_terminal_output(&mut self.blocks);
+        }
         let has_tool_calls = self.external_tool_calls > 0;
         if self.provider_stop_reason == Some("tool_use")
             && !has_tool_calls
@@ -278,6 +285,15 @@ fn block_has_visible_text(block: &Value) -> bool {
             .get("text")
             .and_then(Value::as_str)
             .is_some_and(|text| !text.replace('\u{200b}', "").trim().is_empty())
+}
+
+fn remove_recoverable_terminal_output(blocks: &mut Vec<Value>) {
+    blocks.retain(|block| {
+        !matches!(
+            block.get("type").and_then(Value::as_str),
+            Some("text" | "thinking")
+        )
+    });
 }
 
 fn thinking_contains_pending(blocks: &[Value], pending: &str) -> bool {

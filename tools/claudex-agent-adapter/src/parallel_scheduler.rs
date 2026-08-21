@@ -12,6 +12,7 @@ mod decide;
 mod env;
 mod policy;
 mod scope_count;
+pub(crate) use scope_count::explicitly_requests_subagent_launch;
 
 #[allow(unused_imports)]
 pub(crate) use config::{

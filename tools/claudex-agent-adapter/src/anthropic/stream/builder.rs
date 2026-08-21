@@ -82,6 +82,12 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// finish() must then end_turn rather than treat missing tool calls as a
     /// provider protocol error.
     suppressed_tool_use: bool,
+    /// Provider-neutral terminal contract marked this turn as having no usable
+    /// assistant output. Reasoning-only blocks must not make that a success.
+    recoverable_empty_output: bool,
+    /// The latest real user turn explicitly requires an Agent/Task launch.
+    /// A text-only provider response cannot satisfy this execution contract.
+    requires_subagent_launch: bool,
     usage: Usage,
     pub(super) last_turn_progress: Vec<crate::anthropic::TurnProgressEvent>,
     /// Pi `toolcall_start` card that is already on the SSE wire. Completed by
@@ -112,6 +118,10 @@ impl SegmentBuilder {
         event: &Value,
         stream: Option<&StreamSender>,
     ) -> Result<ControlFlow<()>> {
+        if !self.requires_subagent_launch {
+            self.requires_subagent_launch =
+                crate::parallel_scheduler::explicitly_requests_subagent_launch(current_messages);
+        }
         self.record_web_evidence_requirement(current_messages, system);
         if self.model_output_event(event, stream).await? {
             return Ok(ControlFlow::Continue(()));

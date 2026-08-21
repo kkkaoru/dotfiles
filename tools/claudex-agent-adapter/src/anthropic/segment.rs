@@ -162,7 +162,10 @@ pub(super) const EMPTY_ASSISTANT_RETRY_MARKER: &str = "claudex-empty-assistant-r
 
 pub(super) const EMPTY_ASSISTANT_RETRY_PROMPT: &str = "Claudex (claudex-empty-assistant-retry): \
 previous provider turn completed with no assistant content. That empty turn is a failure. \
-Continue with tools or visible assistant text. Do not emit another empty end_turn.";
+Continue with tools or visible assistant text. Do not emit another empty end_turn. If the active \
+user requested delegation, call the matching Agent/Task tool now before saying that a worker was \
+delegated, launched, started, or is running. Never substitute a launch plan or status sentence for \
+the tool call.";
 
 /// Detect empty-ACP billing/auth failures so SubAgent turns can cool down the
 /// exhausted provider and failover to a sibling (for example Qwen Cloud).
