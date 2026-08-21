@@ -1,6 +1,6 @@
 function codex --description "Run Codex with scrollback preserved in Ghostty inside Zellij"
     set -l codex_argv $argv
-    set -l codex_monitor_shim /Users/kkk4oru/.agents/skills/agmsg/scripts/drivers/types/codex/codex-shim.sh
+    set -l codex_monitor_shim "$HOME/.agents/skills/agmsg/scripts/drivers/types/codex/codex-shim.sh"
     set -l requested_model
     set -l explicit_profile 0
     set -l expect_model 0
@@ -51,6 +51,17 @@ function codex --description "Run Codex with scrollback preserved in Ghostty ins
         set in_ghostty 1
     else if string match -qi '*ghostty*' -- "$TERM"
         set in_ghostty 1
+    end
+
+    if not test -x "$codex_monitor_shim"
+        for codex_binary in /opt/homebrew/bin/codex /usr/local/bin/codex
+            if test -x "$codex_binary"
+                command "$codex_binary" $codex_argv
+                return $status
+            end
+        end
+        command codex $codex_argv
+        return $status
     end
 
     if test $in_zellij -eq 1; and test $in_ghostty -eq 1; and not contains -- --no-alt-screen $argv
