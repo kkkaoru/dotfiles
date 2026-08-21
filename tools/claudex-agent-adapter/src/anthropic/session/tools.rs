@@ -107,6 +107,13 @@ fn external_tools(
     (specs, names)
 }
 
+fn tool_input_schema(tool: &Value) -> Value {
+    match tool.get("input_schema") {
+        Some(schema) if schema.is_object() => schema.clone(),
+        _ => json!({"type":"object"}),
+    }
+}
+
 pub(in crate::anthropic) fn dynamic_tool(tool: &Value, codex_name: &str) -> Option<Value> {
     let original_name = tool.get("name")?.as_str()?;
     let lifecycle_guidance = task_lifecycle_guidance(original_name);
@@ -118,8 +125,7 @@ pub(in crate::anthropic) fn dynamic_tool(tool: &Value, codex_name: &str) -> Opti
             tool.get("description").and_then(Value::as_str).unwrap_or(""),
             lifecycle_guidance
         ),
-        "inputSchema": tool.get("input_schema").cloned()
-            .unwrap_or_else(|| json!({"type":"object"}))
+        "inputSchema": tool_input_schema(tool)
     }))
 }
 

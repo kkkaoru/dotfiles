@@ -1896,10 +1896,33 @@ fn starts_codex_threads_in_the_request_working_directory() {
 }
 
 #[test]
-fn supplies_a_default_dynamic_tool_schema() {
-    let tool = json!({"name":"lookup"});
-    let dynamic = dynamic_tool(&tool, "lookup").expect("dynamic tool");
-    assert_eq!(dynamic["inputSchema"]["type"], "object");
+fn supplies_object_dynamic_tool_schemas_and_preserves_valid_schemas() {
+    let valid_schema = json!({
+        "type":"object",
+        "properties":{"query":{"type":"string"}},
+        "required":["query"]
+    });
+    let valid_tool = dynamic_tool(
+        &json!({"name":"lookup","input_schema":valid_schema}),
+        "lookup",
+    )
+    .expect("dynamic tool");
+    assert_eq!(
+        valid_tool["inputSchema"],
+        json!({
+            "type":"object",
+            "properties":{"query":{"type":"string"}},
+            "required":["query"]
+        })
+    );
+
+    let missing_schema = dynamic_tool(&json!({"name":"missing"}), "missing").expect("dynamic tool");
+    assert_eq!(missing_schema["inputSchema"], json!({"type":"object"}));
+
+    let invalid_schema =
+        dynamic_tool(&json!({"name":"goal","input_schema":null}), "goal").expect("dynamic tool");
+    assert_eq!(invalid_schema["inputSchema"], json!({"type":"object"}));
+
     assert!(dynamic_tool(&json!({"name": 7}), "invalid").is_none());
     assert_eq!(codex_tool_name("", 0), "cc__0");
 }
