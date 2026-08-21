@@ -15,7 +15,7 @@ mod tests {
 
     fn parsed() -> ProviderConfig {
         serde_json::from_str(&config(
-            r#"{"id":"p","agent":"w","defaultModel":"m","effort":"high","modelPrefixes":["m-"],"backend":"grok-acp"}"#,
+            r#"{"id":"p","agent":"w","defaultModel":"m","effort":"high","modelPrefixes":["m-"],"backend":"codex-app-server"}"#,
         ))
         .unwrap()
     }
@@ -27,7 +27,7 @@ mod tests {
         std::fs::write(
             &path,
             config(
-                r#"{"id":"p","agent":"worker","defaultModel":"model","subagentModel":"model-spark","effort":"high","enabled":true,"modelPrefixes":["model-"],"selectableModels":["model-terra"],"backend":"codex-app-server"},{"id":"off","agent":"off","defaultModel":"off","effort":"low","enabled":false,"selectableModels":["off-terra"],"backend":"grok-acp"}"#,
+                r#"{"id":"p","agent":"worker","defaultModel":"model","subagentModel":"model-spark","effort":"high","enabled":true,"modelPrefixes":["model-"],"selectableModels":["model-terra"],"backend":"codex-app-server"},{"id":"off","agent":"off","defaultModel":"off","effort":"low","enabled":false,"selectableModels":["off-terra"],"backend":"pi-gateway"}"#,
             ),
         )
         .unwrap();
@@ -84,6 +84,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::excessive_nesting, reason = "provider route matrix is easier to audit as one table-driven test")]
     fn installed_cursor_models_are_explicit_pi_gateway_routes() {
         let loaded = load(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -126,7 +127,6 @@ mod tests {
             assert_eq!(route.backend, BackendKind::PiGateway);
             assert_eq!(route.pi_provider.as_deref(), Some("cursor"));
             assert_eq!(route.pi_model.as_deref(), Some(pi_model));
-            assert!(route.acp.is_none());
             assert_eq!(
                 route.effort.as_deref(),
                 Some(if agent == "claudex-cursor-luna" {
@@ -135,7 +135,14 @@ mod tests {
                     "high"
                 })
             );
-            assert_eq!(route.max_context_tokens, Some(800_000));
+            assert_eq!(
+                route.max_context_tokens,
+                Some(if agent == "claudex-cursor-luna" {
+                    217_600
+                } else {
+                    800_000
+                })
+            );
             assert_eq!(route.model_prefixes, [model]);
         }
 
@@ -155,7 +162,6 @@ mod tests {
             Some(("grok-4.6", "medium"))
         );
         assert_eq!(grok.backend, BackendKind::PiGateway);
-        assert!(grok.acp.is_none());
         assert_eq!(grok.effort.as_deref(), Some("medium"));
     }
 
@@ -181,7 +187,6 @@ mod tests {
         assert_eq!(route.backend, BackendKind::PiGateway);
         assert_eq!(route.pi_provider.as_deref(), Some("commandcode"));
         assert_eq!(route.pi_model.as_deref(), Some("gpt-5.6-luna"));
-        assert!(route.acp.is_none());
         assert_eq!(route.effort.as_deref(), Some("max"));
         assert_eq!(route.max_context_tokens, Some(800_000));
         assert_eq!(route.model_prefixes, ["commandcode/gpt-5.6-luna"]);
@@ -212,7 +217,6 @@ mod tests {
         assert_eq!(devin.backend, BackendKind::PiGateway);
         assert_eq!(devin.pi_provider.as_deref(), Some("devin"));
         assert_eq!(devin.pi_model.as_deref(), Some("swe-1-7"));
-        assert!(devin.acp.is_none());
         assert_eq!(devin.effort.as_deref(), Some("high"));
         assert_eq!(devin.model_prefixes, ["devin/swe-1-7"]);
         assert!(
@@ -278,7 +282,7 @@ mod tests {
         std::fs::write(
             &path,
             config(
-                r#"{"id":"p","agent":"worker","defaultModel":"model","subagentModel":"model-spark","effort":"high","enabled":true,"usageProvider":"quota","modelPrefixes":["model-"],"backend":"codex-app-server"},{"id":"off","agent":"off","defaultModel":"off","effort":"low","enabled":false,"backend":"grok-acp"}"#,
+                r#"{"id":"p","agent":"worker","defaultModel":"model","subagentModel":"model-spark","effort":"high","enabled":true,"usageProvider":"quota","modelPrefixes":["model-"],"backend":"codex-app-server"},{"id":"off","agent":"off","defaultModel":"off","effort":"low","enabled":false,"backend":"pi-gateway"}"#,
             ),
         )
         .unwrap();
@@ -303,7 +307,7 @@ mod tests {
     #[test]
     fn hostname_denylist_conflicts_with_enabled_providers() {
         let parsed: ProviderConfig = serde_json::from_str(&config(
-            r#"{"id":"p","agent":"worker","defaultModel":"opencode-go/deepseek-v4-flash","effort":"high","enabled":true,"backend":"configured-acp"},{"id":"off","agent":"off","defaultModel":"denied-other","effort":"low","enabled":false,"backend":"grok-acp"}"#,
+            r#"{"id":"p","agent":"worker","defaultModel":"opencode-go/deepseek-v4-flash","effort":"high","enabled":true,"backend":"pi-gateway"},{"id":"off","agent":"off","defaultModel":"denied-other","effort":"low","enabled":false,"backend":"pi-gateway"}"#,
         ))
         .unwrap();
         let denylist = BTreeSet::from([
@@ -321,7 +325,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("providers.json");
         let mut document: serde_json::Value = serde_json::from_str(&config(
-            r#"{"id":"p","agent":"worker","defaultModel":"model","effort":"high","enabled":true,"backend":"grok-acp"}"#,
+            r#"{"id":"p","agent":"worker","defaultModel":"model","effort":"high","enabled":true,"backend":"codex-app-server"}"#,
         ))
         .unwrap();
         document["nativeWorkers"] = serde_json::json!([
@@ -353,7 +357,7 @@ mod tests {
     #[test]
     fn validates_and_exports_worker_routes() {
         let mut catalog =
-            ModelCatalog::from_routes(&[BackendRoute::new("model", BackendKind::GrokAcp)]);
+            ModelCatalog::from_routes(&[BackendRoute::new("model", BackendKind::CodexAppServer)]);
         assert!(
             catalog
                 .set_worker_routes(vec![WorkerRoute::new(
@@ -415,7 +419,7 @@ mod tests {
     #[test]
     fn accepts_and_validates_the_optional_advisor_choice() {
         let mut document: serde_json::Value = serde_json::from_str(&config(
-            r#"{"id":"p","agent":"worker","defaultModel":"model","effort":"high","enabled":true,"backend":"grok-acp"}"#,
+            r#"{"id":"p","agent":"worker","defaultModel":"model","effort":"high","enabled":true,"backend":"codex-app-server"}"#,
         ))
         .unwrap();
         document["advisor"] = serde_json::json!({
@@ -444,14 +448,17 @@ mod tests {
     }
 
     #[test]
-    fn accepts_a_configured_acp() {
+    fn rejects_a_configured_acp() {
         let json = config(
             r#"{"id":"p","agent":"worker","defaultModel":"new-1","effort":"high","enabled":true,"modelPrefixes":["new-"],"backend":"configured-acp","acp":{"program":"new-acp","arguments":["--model","{model}","--stdio"]}}"#,
         );
-        let parsed: ProviderConfig = serde_json::from_str(&json).unwrap();
-        let loaded = validate(parsed).unwrap();
-        assert_eq!(loaded.routes[0].acp.as_ref().unwrap().program, "new-acp");
-        assert_eq!(loaded.routes[0].max_context_tokens, None);
+        let Err(error) = serde_json::from_str::<ProviderConfig>(&json) else {
+            panic!("configured-acp must not parse");
+        };
+        assert!(
+            error.to_string().contains("ACP backends are removed"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -492,7 +499,7 @@ mod tests {
         std::fs::write(
             &path,
             config(
-                r#"{"id":"p","agent":"worker","defaultModel":"opencode-go/deepseek-v4-flash","effort":"high","enabled":true,"usageProvider":"opencodego","requestBudget":{"estimatedRequests":31650,"windowMinutes":300,"usageWindow":"primary"},"modelPrefixes":["opencode-go/"],"backend":"configured-acp","acp":{"program":"opencode","arguments":["acp"]}}"#,
+                r#"{"id":"p","agent":"worker","defaultModel":"opencode-go/deepseek-v4-flash","effort":"high","enabled":true,"usageProvider":"opencodego","requestBudget":{"estimatedRequests":31650,"windowMinutes":300,"usageWindow":"primary"},"modelPrefixes":["opencode-go/"],"piProvider":"opencode-go","piModel":"deepseek-v4-flash","backend":"pi-gateway"}"#,
             ),
         )
         .unwrap();
@@ -548,28 +555,16 @@ mod tests {
     fn rejects_invalid_configurations() {
         let invalid = [
             config(
-                r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","enabled":true,"backend":"configured-acp"}"#,
+                r#"{"id":"p","agent":"","defaultModel":"m","effort":"h","enabled":true,"backend":"codex-app-server"}"#,
             ),
             config(
-                r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","enabled":true,"backend":"grok-acp","acp":{"program":"x","arguments":["y"]}}"#,
+                r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","enabled":true,"maxContextTokens":0,"backend":"codex-app-server"}"#,
             ),
             config(
-                r#"{"id":"p","agent":"","defaultModel":"m","effort":"h","enabled":true,"backend":"grok-acp"}"#,
+                r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","enabled":true,"maxConcurrency":0,"backend":"codex-app-server"}"#,
             ),
             config(
-                r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","backend":"configured-acp","acp":{"program":"","arguments":["--stdio"]}}"#,
-            ),
-            config(
-                r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","backend":"configured-acp","acp":{"program":"provider","arguments":[]}}"#,
-            ),
-            config(
-                r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","enabled":true,"maxContextTokens":0,"backend":"grok-acp"}"#,
-            ),
-            config(
-                r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","enabled":true,"maxConcurrency":0,"backend":"grok-acp"}"#,
-            ),
-            config(
-                r#"{"id":"p","agent":"w","defaultModel":"m","subagentModel":"","effort":"h","enabled":true,"backend":"grok-acp"}"#,
+                r#"{"id":"p","agent":"w","defaultModel":"m","subagentModel":"","effort":"h","enabled":true,"backend":"codex-app-server"}"#,
             ),
             config(
                 r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","enabled":true,"modelProvider":"","backend":"codex-app-server"}"#,
@@ -578,7 +573,7 @@ mod tests {
                 r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","enabled":true,"modelCatalogJson":"","backend":"codex-app-server"}"#,
             ),
             config(
-                r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","enabled":true,"modelProvider":"sakana","backend":"grok-acp"}"#,
+                r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","enabled":true,"backend":"codex-app-server","webSearchMode":"acp-native"}"#,
             ),
         ];
         for json in invalid {
@@ -587,22 +582,27 @@ mod tests {
         }
     }
 
+    fn reject_grok_acp(effort: &str) {
+        let json = config(&format!(
+            r#"{{"id":"p","agent":"w","defaultModel":"grok-4.6","effort":"{effort}","enabled":true,"backend":"grok-acp"}}"#
+        ));
+        let Err(error) = serde_json::from_str::<ProviderConfig>(&json) else {
+            panic!("accepted grok-acp with effort {effort}");
+        };
+        assert!(
+            error.to_string().contains("ACP backends are removed"),
+            "{error}"
+        );
+    }
+
     #[test]
-    fn accepts_only_native_grok_reasoning_efforts() {
-        for effort in ["low", "medium", "high"] {
-            let parsed: ProviderConfig = serde_json::from_str(&config(&format!(
-                r#"{{"id":"p","agent":"w","defaultModel":"grok-4.6","effort":"{effort}","enabled":true,"backend":"grok-acp"}}"#
-            )))
-            .unwrap();
-            assert!(validate(parsed).is_ok(), "rejected Grok effort {effort}");
-        }
-        for effort in ["mid", "xhigh", "max"] {
-            let parsed: ProviderConfig = serde_json::from_str(&config(&format!(
-                r#"{{"id":"p","agent":"w","defaultModel":"grok-4.6","effort":"{effort}","enabled":true,"backend":"grok-acp"}}"#
-            )))
-            .unwrap();
-            assert!(validate(parsed).is_err(), "accepted Grok effort {effort}");
-        }
+    fn rejects_grok_acp() {
+        reject_grok_acp("low");
+        reject_grok_acp("medium");
+        reject_grok_acp("high");
+        reject_grok_acp("mid");
+        reject_grok_acp("xhigh");
+        reject_grok_acp("max");
     }
 
     #[test]
@@ -633,7 +633,7 @@ mod tests {
         config.providers[0].selectable_models = vec![String::new()];
         invalid.push(config);
         let mut config = parsed();
-        config.providers[0].max_concurrency = Some(crate::grok_acp::MAX_MODEL_CONCURRENCY + 1);
+        config.providers[0].max_concurrency = Some(crate::agent_backend::MAX_MODEL_CONCURRENCY + 1);
         invalid.push(config);
         for field in ["id", "model", "prefix"] {
             let mut config = parsed();
@@ -661,26 +661,27 @@ mod tests {
         std::fs::write(
             &path,
             config(
-                r#"{"id":"p","agent":"worker","defaultModel":"model","effort":"high","enabled":true,"backend":"grok-acp"},{"id":"disabled","agent":"worker","defaultModel":"","effort":"low","enabled":false,"backend":"grok-acp"}"#,
+                r#"{"id":"p","agent":"worker","defaultModel":"model","effort":"high","enabled":true,"backend":"codex-app-server"},{"id":"disabled","agent":"worker","defaultModel":"","effort":"low","enabled":false,"backend":"pi-gateway"}"#,
             ),
         )
         .unwrap();
         let loaded = load(&path).unwrap();
         assert!(!loaded.model_catalog.matches(""));
 
-        let empty = ModelCatalog::from_routes(&[BackendRoute::new("", BackendKind::GrokAcp)]);
+        let empty =
+            ModelCatalog::from_routes(&[BackendRoute::new("", BackendKind::CodexAppServer)]);
         assert!(!empty.matches(""));
     }
 
     #[test]
     fn accepts_pi_gateway_catalog_and_codex_native_search() {
         let catalog: ProviderConfig = serde_json::from_str(&config(
-            r#"{"id":"p","agent":"w","defaultModel":"m","effort":"high","modelProvider":"sakana","modelCatalogJson":"~/.codex/fugu.json","backend":"pi-gateway"}"#,
+            r#"{"id":"p","agent":"w","defaultModel":"m","effort":"high","piProvider":"sakana","piModel":"m","modelProvider":"sakana","modelCatalogJson":"~/.codex/fugu.json","backend":"pi-gateway"}"#,
         ))
         .unwrap();
         assert!(validate(catalog).is_ok());
         let search: ProviderConfig = serde_json::from_str(&config(
-            r#"{"id":"p","agent":"w","defaultModel":"m","effort":"high","backend":"pi-gateway","webSearchMode":"codex-native"}"#,
+            r#"{"id":"p","agent":"w","defaultModel":"m","effort":"high","piProvider":"xai","piModel":"m","backend":"pi-gateway","webSearchMode":"codex-native"}"#,
         ))
         .unwrap();
         assert!(validate(search).is_ok());
@@ -688,18 +689,29 @@ mod tests {
 
     #[test]
     fn rejects_backend_metadata_and_search_mode_mismatches() {
-        for provider in [
+        let Err(error) = serde_json::from_str::<ProviderConfig>(&config(
             r#"{"id":"p","agent":"w","defaultModel":"m","effort":"high","backend":"grok-acp","modelProvider":"provider"}"#,
-            r#"{"id":"p","agent":"w","defaultModel":"m","effort":"high","backend":"grok-acp","webSearchMode":"codex-native"}"#,
+        )) else {
+            panic!("grok-acp must not parse");
+        };
+        assert!(
+            error.to_string().contains("ACP backends are removed"),
+            "{error}"
+        );
+        let Err(error) = serde_json::from_str::<ProviderConfig>(&config(
             r#"{"id":"p","agent":"w","defaultModel":"m","effort":"high","backend":"configured-acp"}"#,
+        )) else {
+            panic!("configured-acp must not parse");
+        };
+        assert!(
+            error.to_string().contains("ACP backends are removed"),
+            "{error}"
+        );
+        let parsed: ProviderConfig = serde_json::from_str(&config(
             r#"{"id":"p","agent":"w","defaultModel":"m","effort":"high","backend":"codex-app-server","webSearchMode":"acp-native"}"#,
-        ] {
-            let parsed: ProviderConfig = serde_json::from_str(&config(provider)).unwrap();
-            assert!(
-                validate(parsed).is_err(),
-                "accepted invalid provider: {provider}"
-            );
-        }
+        ))
+        .unwrap();
+        assert!(validate(parsed).is_err());
     }
 
     #[test]
@@ -732,8 +744,8 @@ mod tests {
     fn reaches_model_and_prefix_uniqueness_checks_after_distinct_identity_checks() {
         let duplicate_model: ProviderConfig = serde_json::from_str(
             r#"{"version":1,"mainProviders":["p"],"providers":[
-                {"id":"p","agent":"w","defaultModel":"same-model","effort":"high","backend":"grok-acp"},
-                {"id":"q","agent":"other-w","defaultModel":"same-model","effort":"low","backend":"grok-acp"}
+                {"id":"p","agent":"w","defaultModel":"same-model","effort":"high","backend":"codex-app-server"},
+                {"id":"q","agent":"other-w","defaultModel":"same-model","effort":"low","piProvider":"xai","piModel":"same-model","backend":"pi-gateway"}
             ],"fallback":{"agent":"f","model":"m","effort":"high"}}"#,
         )
         .unwrap();
@@ -741,8 +753,8 @@ mod tests {
 
         let duplicate_prefix: ProviderConfig = serde_json::from_str(
             r#"{"version":1,"mainProviders":["p"],"providers":[
-                {"id":"p","agent":"w","defaultModel":"model-a","effort":"high","modelPrefixes":["shared-"],"backend":"grok-acp"},
-                {"id":"q","agent":"other-w","defaultModel":"model-b","effort":"low","modelPrefixes":["shared-"],"backend":"grok-acp"}
+                {"id":"p","agent":"w","defaultModel":"model-a","effort":"high","modelPrefixes":["shared-"],"backend":"codex-app-server"},
+                {"id":"q","agent":"other-w","defaultModel":"model-b","effort":"low","modelPrefixes":["shared-"],"piProvider":"xai","piModel":"model-b","backend":"pi-gateway"}
             ],"fallback":{"agent":"f","model":"m","effort":"high"}}"#,
         )
         .unwrap();

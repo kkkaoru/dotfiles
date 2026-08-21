@@ -18,6 +18,11 @@ fn fish_launcher_uses_the_shared_provider_config() {
 }
 
 #[test]
+#[expect(
+    clippy::cognitive_complexity,
+    clippy::too_many_lines,
+    reason = "launcher interface matrix shares one shell fixture"
+)]
 fn fish_launcher_defaults_to_pi_and_preserves_interface_overrides() {
     let home = shared_provider_fixture();
     let function = launcher_function();
@@ -180,6 +185,10 @@ fn fish_launcher_defaults_to_pi_and_preserves_interface_overrides() {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "hot-swap wrapper matrix shares one shell fixture"
+)]
 fn hot_swap_wrappers_default_to_pi_and_preserve_overrides() {
     let home = shared_provider_fixture();
     let fish = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

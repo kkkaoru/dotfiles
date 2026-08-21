@@ -71,29 +71,29 @@ async fn leaf_shutdown_returns_for_a_routed_backend() {
 
 #[tokio::test]
 async fn cancellation_and_abort_cover_each_leaf_and_routed_route() {
-    let copilot = AgentBackend::Copilot(crate::copilot_acp::CopilotAcp::settled_for_test().await);
+    let copilot = AgentBackend::Pi(crate::pi_gateway::PiGateway::alive_for_test());
     assert_eq!(
         copilot.cancel_turn("session").await.unwrap(),
         super::super::TurnCancellation::Settled
     );
     copilot.abort_turn_provider("session").await.unwrap();
 
-    let configured = AgentBackend::ConfiguredAcp(crate::grok_acp::GrokAcp::stopped_for_test());
+    let configured = AgentBackend::Pi(crate::pi_gateway::PiGateway::stopped_for_test());
     assert_eq!(
         configured.cancel_turn("session").await.unwrap(),
         super::super::TurnCancellation::Settled
     );
     configured.abort_turn_provider("session").await.unwrap();
 
-    let grok = AgentBackend::Grok(crate::grok_acp::GrokAcp::stopped_for_test());
+    let grok = AgentBackend::Pi(crate::pi_gateway::PiGateway::stopped_for_test());
     assert_eq!(
         grok.cancel_turn("session").await.unwrap(),
         super::super::TurnCancellation::Settled
     );
     grok.abort_turn_provider("session").await.unwrap();
 
-    let leaf = Arc::new(AgentBackend::Grok(
-        crate::grok_acp::GrokAcp::alive_for_test(),
+    let leaf = Arc::new(AgentBackend::Pi(
+        crate::pi_gateway::PiGateway::alive_for_test(),
     ));
     let routed = AgentBackend::routed(vec![("worker".to_owned(), leaf)]);
     assert_eq!(
@@ -118,8 +118,8 @@ async fn cancellation_and_abort_cover_each_leaf_and_routed_route() {
 
 #[tokio::test]
 async fn routed_abort_retains_shared_children() {
-    let shared_leaf = Arc::new(AgentBackend::ConfiguredAcp(
-        crate::grok_acp::GrokAcp::alive_for_test(),
+    let shared_leaf = Arc::new(AgentBackend::Pi(
+        crate::pi_gateway::PiGateway::alive_for_test(),
     ));
     let shared = AgentBackend::routed(vec![("shared".to_owned(), Arc::clone(&shared_leaf))]);
     shared.abort_turn_provider("0:target").await.unwrap();
@@ -135,8 +135,8 @@ async fn routed_abort_retains_shared_children() {
 
 #[tokio::test]
 async fn routed_abort_retains_copilot_child() {
-    let shared_leaf = Arc::new(AgentBackend::Copilot(
-        crate::copilot_acp::CopilotAcp::settled_for_test().await,
+    let shared_leaf = Arc::new(AgentBackend::Pi(
+        crate::pi_gateway::PiGateway::alive_for_test(),
     ));
     let shared = AgentBackend::routed(vec![("copilot".to_owned(), Arc::clone(&shared_leaf))]);
     shared.abort_turn_provider("0:target").await.unwrap();
@@ -153,7 +153,7 @@ async fn routed_abort_retains_copilot_child() {
 
 #[tokio::test]
 async fn shutdown_covers_the_standalone_leaf_fallback() {
-    let leaf = AgentBackend::Grok(crate::grok_acp::GrokAcp::stopped_for_test());
+    let leaf = AgentBackend::Pi(crate::pi_gateway::PiGateway::stopped_for_test());
     leaf.shutdown().await;
 }
 
@@ -168,34 +168,24 @@ async fn session_scoped_respond_for_model_uses_the_pool_that_started_the_model()
     let AgentBackend::SessionScoped(scopes) = scoped.as_ref() else {
         panic!("expected SessionScoped backends");
     };
-    let leaf = Arc::new(AgentBackend::Grok(
-        crate::grok_acp::GrokAcp::alive_for_test(),
+    let leaf = Arc::new(AgentBackend::Pi(
+        crate::pi_gateway::PiGateway::alive_for_test(),
     ));
     scopes.insert_scope_for_test(
         "tui-session",
         AgentBackend::routed(vec![("glm-5.2:cloud".to_owned(), leaf)]),
     );
-    let error = scoped
+    scoped
         .respond_for_model("glm-5.2:cloud", serde_json::json!(1), serde_json::json!({}))
         .await
-        .expect_err("Grok leaf rejects Claude tool results");
-    let message = error.to_string();
-    assert!(
-        !message.contains("not initialized"),
-        "tool result must not hit the uninitialized anonymous pool: {message}"
-    );
-    assert!(
-        message.contains("Grok ACP"),
-        "expected the started Claude-session pool: {message}"
-    );
+        .expect("Pi leaf accepts Claude tool results on the started Claude-session pool");
 }
 
 #[tokio::test]
 async fn session_scoped_cancel_abort_and_shutdown_reach_inner_routes() {
     use crate::agent_backend::{BackendKind, BackendRoute};
 
-    let scoped =
-        AgentBackend::spawn_routes(&[BackendRoute::new("worker", BackendKind::ConfiguredAcp)]);
+    let scoped = AgentBackend::spawn_routes(&[BackendRoute::new("worker", BackendKind::PiGateway)]);
     assert_eq!(
         scoped.cancel_turn("0:session").await.unwrap(),
         super::super::TurnCancellation::Settled
@@ -208,24 +198,24 @@ async fn session_scoped_cancel_abort_and_shutdown_reach_inner_routes() {
 
 #[tokio::test]
 async fn leaf_backends_report_kind_and_omit_model_provider() {
-    let copilot = AgentBackend::Copilot(crate::copilot_acp::CopilotAcp::settled_for_test().await);
+    let copilot = AgentBackend::Pi(crate::pi_gateway::PiGateway::alive_for_test());
     assert_eq!(
         copilot.backend_kind_for_model("any"),
-        Some(super::super::BackendKind::CopilotAcp)
+        Some(super::super::BackendKind::PiGateway)
     );
     assert_eq!(copilot.model_provider_for_model("any"), None);
 
-    let configured = AgentBackend::ConfiguredAcp(crate::grok_acp::GrokAcp::stopped_for_test());
+    let configured = AgentBackend::Pi(crate::pi_gateway::PiGateway::stopped_for_test());
     assert_eq!(
         configured.backend_kind_for_model("any"),
-        Some(super::super::BackendKind::ConfiguredAcp)
+        Some(super::super::BackendKind::PiGateway)
     );
     assert_eq!(configured.model_provider_for_model("any"), None);
 
-    let grok = AgentBackend::Grok(crate::grok_acp::GrokAcp::stopped_for_test());
+    let grok = AgentBackend::Pi(crate::pi_gateway::PiGateway::stopped_for_test());
     assert_eq!(
         grok.backend_kind_for_model("any"),
-        Some(super::super::BackendKind::GrokAcp)
+        Some(super::super::BackendKind::PiGateway)
     );
     assert_eq!(grok.model_provider_for_model("any"), None);
 }

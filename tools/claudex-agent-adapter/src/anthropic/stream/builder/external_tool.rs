@@ -96,14 +96,7 @@ fn rewrite_reused_subagent_launch(
     if !crate::anthropic::agent_effort::is_agent_tool(original_name) {
         return;
     }
-    let Some(session_id) = context
-        .session
-        .claude_session_id
-        .as_deref()
-        .filter(|session_id| !session_id.is_empty())
-    else {
-        return;
-    };
+    let session_id = context.session.claude_session_id.as_deref().unwrap_or("");
     let Some(recipient) = context
         .bridge
         .subagent_reuse
@@ -119,16 +112,105 @@ fn rewrite_reused_subagent_launch(
     );
 }
 
+async fn reject_non_follow_up_launch(
+    builder: &mut SegmentBuilder,
+    context: ExternalToolContext<'_>,
+    original_name: &str,
+    arguments: &mut Value,
+    reject_request_id: Value,
+    follow_up: bool,
+) -> Result<bool> {
+    if follow_up {
+        return Ok(false);
+    }
+    if builder
+        .reject_nested_subagent_launch(context, original_name, arguments, reject_request_id.clone())
+        .await?
+    {
+        return Ok(true);
+    }
+    if builder
+        .reject_capped_subagent_launch(context, original_name, reject_request_id.clone())
+        .await?
+    {
+        return Ok(true);
+    }
+    if builder
+        .reject_disabled_subagent(context, original_name, arguments, reject_request_id.clone())
+        .await?
+    {
+        return Ok(true);
+    }
+    if crate::anthropic::agent_effort::is_agent_tool(original_name) {
+        context.bridge.rewrite_exhausted_agent_launch_with_quota(
+            arguments,
+            context.current_messages,
+            context.system,
+        );
+    }
+    if builder
+        .reject_disabled_subagent(context, original_name, arguments, reject_request_id.clone())
+        .await?
+    {
+        return Ok(true);
+    }
+    if builder
+        .reject_exhausted_subagent(context, original_name, arguments, reject_request_id.clone())
+        .await?
+    {
+        return Ok(true);
+    }
+    builder
+        .reject_unroutable_subagent(context, original_name, arguments, reject_request_id)
+        .await
+}
+
+enum DuplicateSkip {
+    Forward,
+    Queued,
+    Rejected,
+}
+
+const QUEUED_FOLLOW_UP_ACK: &str = "A same-scope SubAgent is already running, so this follow-up was queued for SendMessage({to}) once the worker id is known.";
+
+async fn ack_queued_subagent_follow_up(
+    builder: &mut SegmentBuilder,
+    context: ExternalToolContext<'_>,
+    original_name: &str,
+    request_id: Value,
+) -> Result<()> {
+    tracing::info!(
+        session_id = ?context.session.claude_session_id,
+        tool_name = original_name,
+        "queued duplicate provider SubAgent follow-up"
+    );
+    context
+        .bridge
+        .app_for_session(context.session)
+        .respond_for_model(
+            &context.session.model,
+            request_id,
+            json!({
+                "contentItems":[{"type":"inputText","text":QUEUED_FOLLOW_UP_ACK}],
+                "success":true
+            }),
+        )
+        .await
+        .context("failed to acknowledge a queued provider SubAgent follow-up")?;
+    builder.suppressed_tool_use = true;
+    Ok(())
+}
+
 fn skip_duplicate_subagent_launch(
     context: ExternalToolContext<'_>,
     original_name: &str,
-    arguments: &Value,
+    arguments: &mut Value,
     tool_use_id: &str,
-) -> bool {
+) -> DuplicateSkip {
     if !crate::anthropic::agent_effort::is_agent_tool(original_name)
         || !crate::anthropic::subagent_reuse::reuse_enabled()
     {
-        return false;
+        return DuplicateSkip::Forward;
     }
     let Some(session_id) = context
         .session
@@ -136,34 +218,24 @@ fn skip_duplicate_subagent_launch(
         .as_deref()
         .filter(|session_id| !session_id.is_empty())
     else {
-        return false;
+        return DuplicateSkip::Forward;
     };
-    if arguments
-        .get("resume")
-        .and_then(Value::as_str)
-        .is_some_and(|resume| !resume.is_empty())
-    {
-        return false;
+    if crate::anthropic::subagent_reuse::is_send_message_follow_up(arguments) {
+        return DuplicateSkip::Forward;
     }
     if context
         .bridge
         .subagent_reuse
         .scope_is_occupied(session_id, arguments)
     {
-        tracing::info!(
-            session_id,
-            tool = original_name,
-            tool_use_id,
-            "skipped duplicate same-scope same-model provider SubAgent launch"
-        );
-        return true;
+        return occupied_duplicate_skip(context, session_id, original_name, arguments, tool_use_id);
     }
     if context
         .bridge
         .subagent_reuse
         .note_inflight_launch(session_id, arguments, tool_use_id)
     {
-        return false;
+        return DuplicateSkip::Forward;
     }
     tracing::info!(
         session_id,
@@ -171,7 +243,67 @@ fn skip_duplicate_subagent_launch(
         tool_use_id,
         "skipped provider SubAgent launch because admission claim was taken"
     );
-    true
+    DuplicateSkip::Rejected
+}
+
+fn occupied_duplicate_skip(
+    context: ExternalToolContext<'_>,
+    session_id: &str,
+    original_name: &str,
+    arguments: &mut Value,
+    tool_use_id: &str,
+) -> DuplicateSkip {
+    if context
+        .bridge
+        .subagent_reuse
+        .rewrite_launch_input(session_id, arguments)
+        .is_some()
+    {
+        return DuplicateSkip::Forward;
+    }
+    if context
+        .bridge
+        .subagent_reuse
+        .queue_inflight_follow_up(session_id, arguments)
+    {
+        tracing::info!(
+            session_id,
+            tool = original_name,
+            tool_use_id,
+            "queued follow-up for an inflight same-scope provider SubAgent"
+        );
+        return DuplicateSkip::Queued;
+    }
+    tracing::info!(
+        session_id,
+        tool = original_name,
+        tool_use_id,
+        "skipped duplicate same-scope same-model provider SubAgent launch"
+    );
+    DuplicateSkip::Rejected
+}
+
+async fn skip_or_queue_duplicate_launch(
+    builder: &mut SegmentBuilder,
+    context: ExternalToolContext<'_>,
+    original_name: &str,
+    arguments: &mut Value,
+    tool_use_id: &str,
+    request_id: Value,
+) -> Result<bool> {
+    match skip_duplicate_subagent_launch(context, original_name, arguments, tool_use_id) {
+        DuplicateSkip::Forward => Ok(false),
+        DuplicateSkip::Queued => {
+            ack_queued_subagent_follow_up(builder, context, original_name, request_id).await?;
+            Ok(true)
+        }
+        DuplicateSkip::Rejected => {
+            builder
+                .reject_duplicate_subagent(context, original_name, request_id)
+                .await?;
+            Ok(true)
+        }
+    }
 }
 
 impl SegmentBuilder {
@@ -190,61 +322,16 @@ impl SegmentBuilder {
         let reject_request_id = request_id.clone();
         let mut arguments = hydrate_external_tool_arguments(&context, original_name, arguments);
         rewrite_reused_subagent_launch(context, original_name, &mut arguments);
-        // Apply the exact denylist before failover as well as after it.  The
-        // first check prevents a stale exhausted launch from being rewritten
-        // at all when the caller explicitly disabled that source model.  The
-        // second check below is mandatory because quota failover can replace
-        // `claudex_model` with a sibling that is independently disabled.
-        if self
-            .reject_disabled_subagent(
-                context,
-                original_name,
-                &arguments,
-                reject_request_id.clone(),
-            )
-            .await?
-        {
-            return Ok(());
-        }
-        if crate::anthropic::agent_effort::is_agent_tool(original_name) {
-            context.bridge.rewrite_exhausted_agent_launch_with_quota(
-                &mut arguments,
-                context.current_messages,
-                context.system,
-            );
-        }
-        // Re-check after quota rewrite: exact membership, never a prefix or
-        // provider-family match, remains authoritative for the final route.
-        if self
-            .reject_disabled_subagent(
-                context,
-                original_name,
-                &arguments,
-                reject_request_id.clone(),
-            )
-            .await?
-        {
-            return Ok(());
-        }
-        if self
-            .reject_exhausted_subagent(
-                context,
-                original_name,
-                &arguments,
-                reject_request_id.clone(),
-            )
-            .await?
-        {
-            return Ok(());
-        }
-        if self
-            .reject_unroutable_subagent(
-                context,
-                original_name,
-                &arguments,
-                reject_request_id.clone(),
-            )
-            .await?
+        let follow_up = crate::anthropic::subagent_reuse::is_send_message_follow_up(&arguments);
+        if reject_non_follow_up_launch(
+            self,
+            context,
+            original_name,
+            &mut arguments,
+            reject_request_id.clone(),
+            follow_up,
+        )
+        .await?
         {
             return Ok(());
         }
@@ -255,14 +342,45 @@ impl SegmentBuilder {
             return Ok(());
         }
         let tool_use_id = format!("toolu_{}", Uuid::new_v4().simple());
-        if skip_duplicate_subagent_launch(context, original_name, &arguments, &tool_use_id) {
-            return self
-                .reject_duplicate_subagent(context, original_name, request_id)
-                .await;
+        if !follow_up
+            && skip_or_queue_duplicate_launch(
+                self,
+                context,
+                original_name,
+                &mut arguments,
+                &tool_use_id,
+                request_id.clone(),
+            )
+            .await?
+        {
+            return Ok(());
         }
+        let follow_up = crate::anthropic::subagent_reuse::is_send_message_follow_up(&arguments);
+        if follow_up
+            && !crate::anthropic::subagent_reuse::has_listed_send_message(
+                context.session.external_tool_names.values(),
+            )
+        {
+            return reject_unrequested_tool(
+                context.bridge,
+                context.session,
+                ToolCall {
+                    call_id,
+                    name: "SendMessage".to_owned(),
+                    arguments,
+                    request_id,
+                },
+            )
+            .await;
+        }
+        let emit_name = if follow_up {
+            "SendMessage"
+        } else {
+            original_name
+        };
         self.emit_external_tool_use(
             context,
-            original_name,
+            emit_name,
             call_id,
             tool_use_id,
             request_id,

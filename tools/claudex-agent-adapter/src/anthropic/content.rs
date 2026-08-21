@@ -73,10 +73,8 @@ pub(super) async fn matching_transcript_len(
 
 #[path = "content_canonical.rs"]
 mod canonical;
-#[cfg(test)]
-pub(super) use canonical::content_text;
 pub(super) use canonical::{
-    canonical_eq, canonical_value, image_data_url, system_text, text_block,
+    canonical_eq, canonical_value, content_text, image_data_url, system_text, text_block,
 };
 
 pub(super) fn collect_tool_results(messages: &[Value]) -> Vec<ToolResult> {

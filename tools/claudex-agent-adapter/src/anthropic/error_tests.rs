@@ -207,6 +207,26 @@ fn marks_empty_acp_billing_as_non_retryable_instead_of_502() {
 }
 
 #[test]
+fn marks_generic_empty_assistant_turn_as_non_retryable_instead_of_502() {
+    let error = anyhow!(super::super::segment::EMPTY_ASSISTANT_TURN);
+    assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+    assert_eq!(
+        http_status(StatusCode::BAD_GATEWAY, &error),
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[test]
+fn marks_context_window_overflow_after_message_start_as_non_retryable() {
+    let error = anyhow!(super::super::segment::CONTEXT_WINDOW_AFTER_MESSAGE_START);
+    assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+    assert_eq!(
+        http_status(StatusCode::BAD_GATEWAY, &error),
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[test]
 fn marks_cline_credits_insufficient_balance_as_non_retryable_instead_of_502() {
     let error = anyhow::Error::msg(
         "codex app-server turn failed: ConfiguredLaunch ACP prompt failed: \
@@ -226,7 +246,53 @@ fn marks_cooling_down_provider_as_non_retryable_exhaustion() {
     assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
     assert_eq!(
         http_status(StatusCode::BAD_GATEWAY, &error),
-        StatusCode::BAD_GATEWAY
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[test]
+fn does_not_retry_provider_cooldown_502() {
+    let error = anyhow!(
+        "API Error: 502 grok-4.6 ACP model `grok-4.6` is cooling down after a no-event prompt timeout"
+    );
+    assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+    assert_eq!(
+        http_status(StatusCode::BAD_GATEWAY, &error),
+        StatusCode::BAD_REQUEST
+    );
+    assert!(!crate::anthropic::token_efficiency::should_retry_provider_failure(&error));
+}
+
+#[test]
+fn does_not_retry_input_validation_error() {
+    let error = anyhow!("InputValidationError: prompt: Required");
+    assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+    assert_eq!(
+        http_status(StatusCode::BAD_GATEWAY, &error),
+        StatusCode::BAD_REQUEST
+    );
+    assert!(!crate::anthropic::token_efficiency::should_retry_provider_failure(&error));
+}
+
+#[test]
+fn marks_incomplete_bash_tool_json_as_non_retryable() {
+    let error =
+        anyhow!("Incomplete Bash tool JSON was not flushed; a non-empty command is required.");
+    assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+    assert_eq!(
+        http_status(StatusCode::BAD_GATEWAY, &error),
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[test]
+fn marks_empty_tool_json_circuit_as_non_retryable() {
+    let error =
+        anyhow!("Stopped emitting tool_use after 3 consecutive empty or invalid JSON payloads.");
+    assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+    assert_eq!(
+        http_status(StatusCode::BAD_GATEWAY, &error),
+        StatusCode::BAD_REQUEST
     );
 }
 

@@ -5,8 +5,8 @@ use serde_json::Value;
 
 use super::{
     Bridge, Segment, SegmentBuilder, Session, StreamEventState, StreamSender, StreamTurn,
-    acp_tool_bridge, commit_transcript, context_window, is_provider_stream_closed,
-    send_stream_completion, usage_limit,
+    commit_transcript, context_window, is_provider_stream_closed, send_stream_completion,
+    usage_limit,
 };
 use crate::anthropic::ActiveTurn;
 
@@ -44,19 +44,6 @@ impl Bridge {
         }
         if !sse_open {
             return Ok(self.disconnect_stream(session, events).await);
-        }
-        // ACP-bridged Agent/spawn: cancel provider so Grok does not also native-spawn.
-        let bridge = session
-            .pending_tools
-            .lock()
-            .await
-            .values()
-            .any(acp_tool_bridge::is_acp_bridge_request_id);
-        if segment.stop_reason == "tool_use" && bridge {
-            let _ = self
-                .app_for_session(session)
-                .cancel_turn(&session.thread_id)
-                .await;
         }
         Ok(StreamTurn::Segment {
             segment,

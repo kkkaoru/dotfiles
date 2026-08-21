@@ -3,15 +3,6 @@ use std::collections::HashSet;
 
 use super::{BackendKind, Provider, WebSearchMode};
 
-pub(super) fn validate_effort(provider: &Provider) -> Result<()> {
-    if provider.backend == BackendKind::GrokAcp
-        && !matches!(provider.effort.as_str(), "low" | "medium" | "high")
-    {
-        bail!("grok-acp effort must be one of low, medium, or high");
-    }
-    Ok(())
-}
-
 pub(super) fn validate_identity(
     provider: &Provider,
     ids: &mut HashSet<String>,
@@ -49,7 +40,7 @@ pub(super) fn validate_limits(provider: &Provider) -> Result<()> {
     }
     if provider
         .max_concurrency
-        .is_some_and(|limit| limit == 0 || limit > crate::grok_acp::MAX_MODEL_CONCURRENCY)
+        .is_some_and(|limit| limit == 0 || limit > crate::agent_backend::MAX_MODEL_CONCURRENCY)
     {
         bail!("maxConcurrency must be between 1 and the adapter semaphore limit");
     }
@@ -84,22 +75,13 @@ pub(super) fn validate_backend_fields(provider: &Provider) -> Result<()> {
             "modelProvider and modelCatalogJson are valid only with codex-app-server or pi-gateway"
         );
     }
-    Ok(())
-}
-
-pub(super) fn validate_acp(provider: &Provider) -> Result<()> {
-    match (provider.backend, &provider.acp) {
-        (BackendKind::ConfiguredAcp, Some(acp))
-            if !acp.program.is_empty() && !acp.arguments.is_empty() =>
-        {
-            Ok(())
-        }
-        (BackendKind::ConfiguredAcp, _) => {
-            bail!("configured-acp requires a non-empty acp program and arguments")
-        }
-        (_, None) => Ok(()),
-        (_, Some(_)) => bail!("acp is valid only with configured-acp"),
+    if provider.backend == BackendKind::PiGateway
+        && (provider.pi_provider.as_ref().is_none_or(String::is_empty)
+            || provider.pi_model.as_ref().is_none_or(String::is_empty))
+    {
+        bail!("pi-gateway requires non-empty piProvider and piModel");
     }
+    Ok(())
 }
 
 pub(super) fn validate_claude_models_are_not_pi_routes(provider: &Provider) -> Result<()> {
@@ -134,18 +116,10 @@ fn prefix_captures_claude_model(prefix: &str) -> bool {
     if prefix.is_empty() || prefix.starts_with(crate::DISCOVERY_MODEL_PREFIX) {
         return false;
     }
-    const SAMPLES: [&str; 8] = [
-        "claude-haiku-4-5",
-        "claude-sonnet-5",
-        "claude-opus-5",
-        "haiku",
-        "sonnet",
-        "opus",
-        "fable",
-        "sonnet[1m]",
-    ];
+    let samples = ["haiku", "sonnet", "opus", "fable", "sonnet[1m]"];
     crate::anthropic::normalize_claude_model_to_haiku(prefix).is_some()
-        || SAMPLES.iter().any(|sample| sample.starts_with(prefix))
+        || "claude-".starts_with(prefix)
+        || samples.iter().any(|sample| sample.starts_with(prefix))
 }
 
 pub(super) fn validate_web_search_mode(provider: &Provider) -> Result<()> {
@@ -154,10 +128,10 @@ pub(super) fn validate_web_search_mode(provider: &Provider) -> Result<()> {
             provider.backend,
             BackendKind::CodexAppServer | BackendKind::PiGateway
         ),
-        WebSearchMode::AcpNative | WebSearchMode::DelegateMcp => {
-            provider.backend != BackendKind::CodexAppServer
+        WebSearchMode::AcpNative | WebSearchMode::DelegatePi | WebSearchMode::DelegateMcp => {
+            provider.backend == BackendKind::PiGateway
         }
-        WebSearchMode::DelegateCcr | WebSearchMode::DelegatePi | WebSearchMode::Disabled => true,
+        WebSearchMode::DelegateCcr | WebSearchMode::Disabled => true,
     };
     if !valid {
         bail!(

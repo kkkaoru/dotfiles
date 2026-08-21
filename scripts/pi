@@ -36,7 +36,17 @@ if [ -n "$provider" ] && [ "$provider" != "omlx" ]; then
 fi
 
 if [ "$needs_omlx" -eq 1 ]; then
-  "$(cd "$(dirname "$0")" && pwd)/ensure-omlx.sh" || true
+  pi_dir="$(cd "$(dirname "$0")" && pwd)"
+  ensure_omlx=""
+  for candidate in "$pi_dir/ensure-omlx" "$pi_dir/ensure-omlx.sh"; do
+    if [ -x "$candidate" ]; then
+      ensure_omlx="$candidate"
+      break
+    fi
+  done
+  if [ -n "$ensure_omlx" ]; then
+    "$ensure_omlx" || true
+  fi
 fi
 
 exec "$REAL_PI" "$@"

@@ -91,8 +91,8 @@ fn assert_notice_uses_text_delta(frames: &str, notice: &str) {
 }
 
 async fn settled_bridge() -> Bridge {
-    let leaf = Arc::new(AgentBackend::Copilot(
-        crate::copilot_acp::CopilotAcp::settled_for_test().await,
+    let leaf = Arc::new(AgentBackend::Pi(
+        crate::pi_gateway::PiGateway::alive_for_test(),
     ));
     let backend = AgentBackend::routed(vec![("main".to_owned(), leaf)]);
     let mut catalog = crate::provider_config::ModelCatalog::default();
@@ -518,7 +518,7 @@ async fn drain_remaining_queued_launches_bridges_session_queue() {
         .expect("time")
         .as_secs_f64();
     // Session-owned queues live beside the base path as launch-queue.<owner>.jsonl.
-    let owned = crate::launch_mcp::launch_queue_path(&queue_dir, Some("scope-a"));
+    let owned = queue_dir.join("launch-queue.scope-a.jsonl");
     std::fs::write(
         &owned,
         format!(
@@ -536,8 +536,8 @@ async fn drain_remaining_queued_launches_bridges_session_queue() {
 
     // Use a settled Copilot leaf so tool_call rejection is not required to
     // exercise drain / queued_launch_tool_call / record paths.
-    let leaf = Arc::new(AgentBackend::Copilot(
-        crate::copilot_acp::CopilotAcp::settled_for_test().await,
+    let leaf = Arc::new(AgentBackend::Pi(
+        crate::pi_gateway::PiGateway::alive_for_test(),
     ));
     let backend = AgentBackend::routed(vec![("main".to_owned(), leaf)]);
     let bridge = Bridge::new_with_backend(backend, "main".to_owned());
@@ -816,6 +816,99 @@ async fn unbridged_launch_suppression_handles_missing_call_id_and_unsuppressed_c
             "{name}: no call id or no suppression must not track an incomplete launch"
         );
     }
+}
+
+#[tokio::test]
+async fn nested_subagent_unbridged_agent_launch_emits_english_notice() {
+    let backend = AgentBackend::spawn_routes(&[]);
+    let bridge = Bridge::new_with_backend(backend, "main".to_owned());
+    let session = test_session_with_tools(Some("nested-worker"), [("Bash", "Bash")], false);
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    builder
+        .provider_launch_event(
+            &bridge,
+            &session,
+            &[],
+            &json!(null),
+            &native_launch_event(
+                "item/providerTool/call",
+                "nested-agent",
+                "Agent",
+                json!({"prompt":"launch another worker"}),
+            ),
+            Some(&sender),
+        )
+        .await
+        .expect("nested Agent attempt");
+    let live = drain_stream(&mut receiver);
+    assert!(
+        live.contains(crate::anthropic::subagent_reuse::NESTED_SUBAGENT_LAUNCH_NOTICE),
+        "{live}"
+    );
+    assert!(!live.contains(r#""type":"tool_use""#), "{live}");
+}
+
+#[tokio::test]
+async fn nested_subagent_unbridged_task_launch_emits_english_notice() {
+    let backend = AgentBackend::spawn_routes(&[]);
+    let bridge = Bridge::new_with_backend(backend, "main".to_owned());
+    let session = test_session_with_tools(Some("nested-task"), [("Bash", "Bash")], false);
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    builder
+        .provider_launch_event(
+            &bridge,
+            &session,
+            &[],
+            &json!(null),
+            &native_launch_event(
+                "item/providerTool/call",
+                "nested-task",
+                "Task",
+                json!({"prompt":"launch another worker"}),
+            ),
+            Some(&sender),
+        )
+        .await
+        .expect("nested Task attempt");
+    let live = drain_stream(&mut receiver);
+    assert!(
+        live.contains(crate::anthropic::subagent_reuse::NESTED_SUBAGENT_LAUNCH_NOTICE),
+        "{live}"
+    );
+    assert!(!live.contains(r#""type":"tool_use""#), "{live}");
+}
+
+#[tokio::test]
+async fn nested_subagent_send_message_is_not_rejected_as_a_launch() {
+    let backend = AgentBackend::spawn_routes(&[]);
+    let bridge = Bridge::new_with_backend(backend, "main".to_owned());
+    let session =
+        test_session_with_tools(Some("nested-send"), [("SendMessage", "SendMessage")], false);
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    builder
+        .provider_launch_event(
+            &bridge,
+            &session,
+            &[],
+            &json!(null),
+            &native_launch_event(
+                "item/providerTool/call",
+                "nested-send",
+                "SendMessage",
+                json!({"to":"a0123456789abcdef","message":"continue the review"}),
+            ),
+            Some(&sender),
+        )
+        .await
+        .expect("nested SendMessage");
+    let live = drain_stream(&mut receiver);
+    assert!(
+        !live.contains(crate::anthropic::subagent_reuse::NESTED_SUBAGENT_LAUNCH_NOTICE),
+        "{live}"
+    );
 }
 
 mod temporary_env {

@@ -8,7 +8,7 @@ use super::{AgentBackend, BackendRoute, RoutedBackends};
 /// Claude Code sessions without an id share this bucket (tests / anonymous HTTP).
 pub(crate) const ANONYMOUS_SESSION_SCOPE: &str = "_anonymous";
 
-/// One [`RoutedBackends`] pool per Claude Code session so Codex / ACP / Copilot
+/// One [`RoutedBackends`] pool per Claude Code session so Codex / Pi
 /// processes are not shared across unrelated Claude sessions.
 pub struct SessionScopedBackends {
     templates: Vec<BackendRoute>,

@@ -5,7 +5,7 @@ use anyhow::Result;
 
 use super::super::{
     ACTIVITY_KEEPALIVE_INTERVAL, INITIAL_ACTIVITY_DELAY, SUBAGENT_INITIAL_ACTIVITY_DELAY,
-    protocol::send_stream_graceful_stop,
+    protocol::send_stream_graceful_stop_for_error_at,
 };
 use super::{
     PrepareActivityOptions, PreparedStream, SegmentBuilder, StreamSender, prepare_with_activity,
@@ -55,7 +55,7 @@ impl Bridge {
         );
         let _active_subagent = self.track_active_subagent(is_subagent, &request);
         let paint_command_code_progress =
-            is_subagent && crate::command_code_acp::is_command_code_model(&request.model);
+            is_subagent && crate::anthropic::is_command_code_model(&request.model);
         let start_status = (!primed_thinking)
             .then(|| subagent_start_status(is_subagent, &request.model, effort.as_deref()))
             .flatten();
@@ -169,6 +169,6 @@ impl Bridge {
         }
         let _ = builder.close_open_blocks(Some(sender)).await;
         tracing::warn!(?error, "prepared stream failed after message_start");
-        send_stream_graceful_stop(sender).await;
+        send_stream_graceful_stop_for_error_at(sender, builder.next_sse_index(), &error).await;
     }
 }

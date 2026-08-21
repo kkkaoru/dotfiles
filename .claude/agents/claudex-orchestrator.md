@@ -30,7 +30,8 @@ workers or infer model/effort from the parent session. If the user explicitly na
 `model_prefixes` entry, choose that provider dynamically and pass the exact requested model rather
 than its default, unless that exact model is in `disabled_subagent_models`. Treat that list, merged
 from the dedicated config and terminal overrides, as an absolute SubAgent denylist across explicit
-selection, inheritance, nested launches, and reuse. If it leaves no allowed worker, continue in the
+selection, inheritance, reuse, and any parent-issued launch. Workers must not nest Agent/Task
+fan-out; the parent owns fan-out. Never Agent({resume}). If it leaves no allowed worker, continue in the
 main session and report routing unavailable.
 For substantive investigation, implementation, review, or validation, choose fan-out dynamically:
 at least the configured minimum parallel workers, matching independent scopes when higher, and
@@ -47,13 +48,13 @@ tracking.
 Choose worker count dynamically from independent scopes and the minimum parallel floor. Only an
 atomic lookup/command stays at one worker. Never duplicate the same in-flight scope key. Assign each scope a
 stable key and never relaunch a key that is in-flight, completed, or cancelled. For related follow-ups,
-reuse compatible workers through native Agent/Task results and TaskOutput and the exact compatible worker or
-custom-advisor recipient specified by the prior Agent/Task result (agent ID or teammate name as
-applicable) instead of churning processes with fresh launches. After resume or compaction, Claude Code may
+continue compatible workers with `SendMessage({to: the exact prior Agent/Task recipient})`, then
+retrieve results with TaskOutput. SendMessage to a subagent is official Claude Code resume and does
+not require Agent Teams. Do not set Agent/Task resume. After resume or compaction, Claude Code may
 emit `No completion record ... previous session` notifications with historical task IDs: never TaskStop
 those orphan IDs (they yield `No task found`). When one lane fails (including `No assistant messages
 found`), do not cascade TaskStop across unrelated healthy workers and do not fan the same scope key
-across every available model while a peer for that key is still running. SendMessage is reserved for an explicitly active Agent Teams session. Send the smallest sufficient,
+across every available model while a peer for that key is still running. Send the smallest sufficient,
 self-contained delta, including new evidence that recipient has not seen. Do not send a mid-flight
 message merely to repeat scope or restrictions already present in the original delegation. A busy
 worker's queued follow-up does not add parallel capacity; assign genuinely independent work to

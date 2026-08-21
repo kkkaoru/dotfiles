@@ -218,6 +218,7 @@ impl RoutedBackend {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn retire(&self) {
         let mut receiver = self
             .startup

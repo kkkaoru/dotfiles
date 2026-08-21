@@ -10,6 +10,7 @@ use axum::body::Bytes;
 
 mod drive;
 #[cfg(test)]
+#[allow(unused_imports)]
 pub(in crate::anthropic::stream) use drive::prepare_first_activity_delay;
 
 pub(in crate::anthropic) struct PreparedStream {
@@ -28,9 +29,10 @@ pub(super) fn subagent_start_status(
     model: &str,
     _effort: Option<&str>,
 ) -> Option<String> {
-    if !is_subagent || crate::command_code_acp::is_command_code_model(model) {
+    if !is_subagent {
         return None;
     }
+    let _ = model;
     // Never paint visible launch prose into the first thinking block.
     // Claude Code 2.1 collapses that tip to "Wandering…", and later ▶ Bash /
     // keepalive chrome appended to the same (or follow-on) thinking stream
@@ -51,7 +53,9 @@ pub(super) fn prime_subagent_sse(
         .expect("new streaming response channel has capacity");
     // The response body itself supplies SSE comment keepalives while preparation
     // is quiet. Do not synthesize a thinking block here: a silent Cline turn
-    // must stay block-free until real CoT or ACP progress arrives.
+    // must stay block-free until real CoT or ACP progress arrives. If the turn
+    // still has zero blocks at finish, inject visible assistant text before
+    // `end_turn` — an empty close after `message_start` is "No assistant messages found".
     let _ = is_subagent;
     true
 }

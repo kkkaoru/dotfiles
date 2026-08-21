@@ -297,6 +297,18 @@ mod tests {
         assert!(catalog.contains("catalog-model"));
         assert!(catalog.contains("active model catalog"));
         assert!(!catalog.contains("not configured"));
+
+        let nested = BlockedSubagentReason::NestedLaunch.notice(None);
+        assert_eq!(
+            nested,
+            "Nested SubAgent sessions must not launch Agent/Task. The parent session owns fan-out. Continue the delegated task with the tools you have. SendMessage({to}) is still allowed to continue an existing worker."
+        );
+
+        let cap = BlockedSubagentReason::LiveCap.notice(None);
+        assert_eq!(
+            cap,
+            "The live Agent cap was reached, including nested workers, so a new Agent/Task launch was not started. Continue an existing worker with SendMessage({to}) if that tool is listed."
+        );
     }
 
     #[test]

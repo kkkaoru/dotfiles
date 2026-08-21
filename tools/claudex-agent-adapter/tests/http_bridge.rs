@@ -891,8 +891,10 @@ async fn handles_retry_failed_turn_and_detached_errors() {
         .text()
         .await
         .expect("read detached failure stream");
-    assert!(detached.contains("event: error"));
+    assert!(detached.contains("\"type\":\"text_delta\""));
     assert!(detached.contains("detached failure"));
+    assert!(detached.contains("event: message_stop"));
+    assert!(!detached.contains("event: error"));
 }
 
 #[tokio::test]

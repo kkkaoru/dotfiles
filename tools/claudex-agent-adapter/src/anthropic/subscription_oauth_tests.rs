@@ -45,7 +45,7 @@ fn dummy_request(model: &str) -> MessagesRequest {
 fn opus_luna_and_cursor_bridge() -> Bridge {
     let backend = AgentBackend::spawn_routes(&[
         BackendRoute::new("gpt-5.6-luna", BackendKind::CodexAppServer),
-        BackendRoute::new("auto", BackendKind::ConfiguredAcp),
+        BackendRoute::new("auto", BackendKind::PiGateway),
     ]);
     let mut catalog = ModelCatalog::default();
     catalog
@@ -418,6 +418,10 @@ fn subscription_auth_failover_skips_exhausted_luna_and_picks_cursor() {
 }
 
 #[test]
+#[expect(
+    clippy::unnecessary_mut_passed,
+    reason = "mutable request call shape documents legacy preflight compatibility"
+)]
 fn exhausted_provider_then_expired_oauth_returns_to_a_sibling_provider() {
     let root = tempfile::tempdir().expect("usage then oauth fixture");
     write_credentials_with_refresh(
@@ -597,8 +601,7 @@ fn subscription_auth_failover_without_worker_effort_still_rewrites() {
         millis(UNIX_EPOCH + Duration::from_secs(1)),
         Some(millis(UNIX_EPOCH + Duration::from_secs(2))),
     );
-    let backend =
-        AgentBackend::spawn_routes(&[BackendRoute::new("auto", BackendKind::ConfiguredAcp)]);
+    let backend = AgentBackend::spawn_routes(&[BackendRoute::new("auto", BackendKind::PiGateway)]);
     let bridge = Bridge::new_with_backend(backend, "claude-opus-5".to_owned())
         .with_usage_limit_cache_home(root.path());
     let mut request = dummy_request("claude-opus-5");

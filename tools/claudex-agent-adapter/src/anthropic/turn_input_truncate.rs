@@ -1,7 +1,10 @@
 use serde_json::{Value, json};
 
 use super::super::content::serialized_len;
-use super::{FULL_HISTORY_HEADER, MAX_TURN_INPUT_BYTES, TRUNCATED_HISTORY_HEADER, utf8_suffix};
+use super::{
+    FULL_HISTORY_HEADER, MAX_TURN_INPUT_BYTES, TRUNCATED_HISTORY_HEADER, TRUNCATED_INPUT_NOTICE,
+    utf8_suffix,
+};
 
 pub(in crate::anthropic) fn bounded_history(
     messages: &[Value],
@@ -15,17 +18,7 @@ pub(in crate::anthropic) fn bounded_history(
         );
     }
     let budget = max_bytes.saturating_sub(TRUNCATED_HISTORY_HEADER.len());
-    let mut start = messages.len();
-    let mut retained_bytes = 2;
-    for (index, message) in messages.iter().enumerate().rev() {
-        let separator = usize::from(start < messages.len());
-        let next = serialized_len(message) + separator;
-        if retained_bytes + next > budget {
-            break;
-        }
-        retained_bytes += next;
-        start = index;
-    }
+    let start = retained_suffix_start(messages, budget);
     let history = if start == messages.len() {
         oversized_latest_message(messages.last(), budget)
     } else {
@@ -37,6 +30,47 @@ pub(in crate::anthropic) fn bounded_history(
         "truncated reconstructed transcript before provider turn/start"
     );
     (TRUNCATED_HISTORY_HEADER, history)
+}
+
+pub(in crate::anthropic) fn truncated_request_messages(
+    messages: &[Value],
+    max_bytes: usize,
+) -> Vec<Value> {
+    if serialized_len(&messages) <= max_bytes {
+        return messages.to_vec();
+    }
+    let start = retained_suffix_start(messages, max_bytes);
+    if start < messages.len() {
+        return messages[start..].to_vec();
+    }
+    truncated_latest_request_message(messages.last(), max_bytes)
+}
+
+fn retained_suffix_start(messages: &[Value], budget: usize) -> usize {
+    let mut start = messages.len();
+    let mut retained_bytes = 2;
+    for (index, message) in messages.iter().enumerate().rev() {
+        let separator = usize::from(start < messages.len());
+        let next = serialized_len(message) + separator;
+        if retained_bytes + next > budget {
+            break;
+        }
+        retained_bytes += next;
+        start = index;
+    }
+    start
+}
+
+fn truncated_latest_request_message(message: Option<&Value>, budget: usize) -> Vec<Value> {
+    let Some(message) = message else {
+        return Vec::new();
+    };
+    let serialized = serde_json::to_string(message).unwrap_or_default();
+    let excerpt = utf8_suffix(&serialized, budget.min(MAX_TURN_INPUT_BYTES / 4));
+    vec![json!({
+        "role": message.get("role").and_then(Value::as_str).unwrap_or("user"),
+        "content": [{"type":"text","text": format!("{TRUNCATED_INPUT_NOTICE}\n{excerpt}")}]
+    })]
 }
 
 pub(in crate::anthropic) fn oversized_latest_message(

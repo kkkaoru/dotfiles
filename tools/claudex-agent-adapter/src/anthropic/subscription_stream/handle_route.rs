@@ -1,10 +1,45 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde_json::Value;
 
 use super::SubscriptionStream;
 use super::launch_prep::{
-    note_reused_subagent_launch, record_prepared_agent_intent, reject_unavailable_subagent_model,
+    note_reused_subagent_launch, record_prepared_agent_intent,
+    reject_nested_or_capped_agent_launch, reject_unavailable_subagent_model,
 };
+
+pub(super) const SEND_MESSAGE_REQUIRES_TO: &str =
+    "SendMessage requires `to` with the exact prior Agent/Task agentId; it was not executed.";
+
+fn send_message_has_recipient(input: &Value) -> bool {
+    input
+        .get("to")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .is_some_and(|value| !value.is_empty())
+}
+
+fn route_non_agent_tool_input(name: &str, id: &str, input: &Value) -> Result<(Value, Value)> {
+    if name == "SendMessage" {
+        return route_send_message_input(id, input);
+    }
+    let cloned = input.clone();
+    Ok((cloned.clone(), cloned))
+}
+
+fn route_send_message_input(id: &str, input: &Value) -> Result<(Value, Value)> {
+    if !send_message_has_recipient(input) {
+        bail!(SEND_MESSAGE_REQUIRES_TO);
+    }
+    let public = crate::anthropic::agent_effort::prepare_arguments_for_user(
+        "SendMessage",
+        id,
+        input,
+        &[],
+        &Value::Null,
+    )
+    .1;
+    Ok((input.clone(), public))
+}
 
 impl SubscriptionStream {
     #[cfg(test)]
@@ -26,8 +61,7 @@ impl SubscriptionStream {
         input: &Value,
     ) -> Result<(Value, Value)> {
         if !crate::anthropic::agent_effort::is_agent_tool(name) {
-            let cloned = input.clone();
-            return Ok((cloned.clone(), cloned));
+            return route_non_agent_tool_input(name, id, input);
         }
         let context = self.tool_context.as_ref().ok_or_else(|| {
             anyhow::Error::new(
@@ -49,6 +83,18 @@ impl SubscriptionStream {
             &context.model_catalog,
         );
         note_reused_subagent_launch(context, name, &mut routed_input);
+        if crate::anthropic::subagent_reuse::is_send_message_follow_up(&routed_input) {
+            let public = crate::anthropic::agent_effort::prepare_arguments_for_user(
+                "SendMessage",
+                id,
+                &routed_input,
+                &context.user_messages,
+                &context.system,
+            )
+            .1;
+            return Ok((routed_input, public));
+        }
+        reject_nested_or_capped_agent_launch(context, &routed_input)?;
         reject_unavailable_subagent_model(context, &routed_input)?;
         if routed_input.get("claudex_model").is_none() {
             tracing::warn!(

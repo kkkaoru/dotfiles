@@ -86,9 +86,7 @@ impl RoutedBackends {
             model: model.to_owned(),
             ..template
         };
-        // Keep dynamic models on the same configured ACP child when the launch
-        // contract is session-scoped and identical.
-        let startup = startup_for_route(&route, &self.codex_startup, &self.configured_acp_startups);
+        let startup = startup_for_route(&route, &self.codex_startup);
         let route = Arc::new(RoutedBackend::lazy(route, startup));
         dynamic.push(Arc::clone(&route));
         Ok((self.configured.len() + dynamic.len() - 1, route))

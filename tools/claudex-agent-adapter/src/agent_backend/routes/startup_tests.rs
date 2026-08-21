@@ -4,8 +4,8 @@ use super::super::{AgentBackend, BackendStartup, StartupState};
 use super::publish_result_for_generation;
 
 fn alive_backend() -> Arc<AgentBackend> {
-    Arc::new(AgentBackend::Grok(
-        crate::grok_acp::GrokAcp::alive_for_test(),
+    Arc::new(AgentBackend::Pi(
+        crate::pi_gateway::PiGateway::alive_for_test(),
     ))
 }
 

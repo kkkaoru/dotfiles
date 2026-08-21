@@ -30,6 +30,20 @@ struct SessionBurst {
     open: bool,
 }
 
+impl SessionBurst {
+    fn remains_open(&mut self, now: Instant) -> bool {
+        let opened_at = self.opened_at.unwrap_or(self.first);
+        if now.duration_since(opened_at) <= OPEN_TTL {
+            return true;
+        }
+        self.first = now;
+        self.opened_at = None;
+        self.count = 0;
+        self.open = false;
+        false
+    }
+}
+
 impl HandoverCircuit {
     pub(super) fn is_open(&self, session_id: &str) -> bool {
         let Ok(mut sessions) = self.sessions.lock() else {
@@ -69,16 +83,8 @@ impl HandoverCircuit {
                 count: 0,
                 open: false,
             });
-        if burst.open {
-            let opened_at = burst.opened_at.unwrap_or(burst.first);
-            if now.duration_since(opened_at) > OPEN_TTL {
-                burst.first = now;
-                burst.opened_at = None;
-                burst.count = 0;
-                burst.open = false;
-            } else {
-                return true;
-            }
+        if burst.open && burst.remains_open(now) {
+            return true;
         }
         if now.duration_since(burst.first) > BURST_WINDOW {
             burst.first = now;

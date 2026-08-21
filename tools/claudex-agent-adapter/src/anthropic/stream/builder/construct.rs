@@ -2,8 +2,9 @@ use std::{collections::HashSet, time::Instant};
 
 use super::super::sanitize::sanitize_committed_blocks;
 use super::super::thinking::ThinkingState;
-use super::SegmentBuilder;
+use super::{SSE_INDEX_PAD, SegmentBuilder};
 use crate::anthropic::Usage;
+use serde_json::json;
 
 impl SegmentBuilder {
     pub(in crate::anthropic::stream) fn new(input_tokens: u64) -> Self {
@@ -38,6 +39,7 @@ impl SegmentBuilder {
             },
             last_turn_progress: Vec::new(),
             streaming_tool: None,
+            consecutive_invalid_tool_json: 0,
         }
     }
 
@@ -66,9 +68,13 @@ impl SegmentBuilder {
     ) -> Self {
         Self::new(input_tokens)
             .with_subagent(is_subagent)
-            .with_command_code_progress(
-                is_subagent && crate::command_code_acp::is_command_code_model(model),
-            )
+            .with_command_code_progress(crate::anthropic::is_command_code_model(model))
+    }
+
+    pub(in crate::anthropic::stream) fn with_reserved_sse_slots(mut self, count: usize) -> Self {
+        self.blocks
+            .extend(std::iter::repeat_n(json!({"type": SSE_INDEX_PAD}), count));
+        self
     }
 
     pub(in crate::anthropic::stream) fn is_command_code_subagent(&self) -> bool {
@@ -107,6 +113,7 @@ impl SegmentBuilder {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(in crate::anthropic::stream) fn backdate_last_visible_provider_activity(
         &mut self,
         elapsed: std::time::Duration,
@@ -173,6 +180,10 @@ impl SegmentBuilder {
         session: &crate::anthropic::Session,
     ) {
         session.record_turn_progress(self.last_turn_progress.clone());
+    }
+
+    pub(in crate::anthropic::stream) fn next_sse_index(&self) -> usize {
+        self.blocks.len()
     }
 
     pub(in crate::anthropic::stream) fn has_committed_output(&self) -> bool {

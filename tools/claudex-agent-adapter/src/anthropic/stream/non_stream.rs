@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 use serde_json::Value;
 
 use super::{Bridge, NextEvent, Segment, SegmentBuilder, Session, StreamSender, next_event};
-use crate::anthropic::segment::EMPTY_ACP_END_TURN;
+use crate::anthropic::segment::EMPTY_ASSISTANT_TURN;
 
 impl Bridge {
     pub(in crate::anthropic) async fn wait_for_segment(
@@ -69,7 +69,7 @@ impl Bridge {
 
 fn break_segment_or_empty(segment: Segment) -> Result<Segment> {
     if segment.is_empty_end_turn() {
-        bail!("{EMPTY_ACP_END_TURN}");
+        bail!("{EMPTY_ASSISTANT_TURN}");
     }
     Ok(segment)
 }

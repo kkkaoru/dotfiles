@@ -45,6 +45,7 @@ impl Bridge {
                 ..Usage::default()
             },
             web_evidence: WebEvidenceSummary::default(),
+            next_sse_index: 0,
         };
         Ok(anthropic_response(segment, &request.model))
     }
@@ -89,6 +90,7 @@ impl Bridge {
                 subagent_reuse: Arc::clone(&self.subagent_reuse),
                 auth_cache: self.provider_auth_cache_path(),
                 disabled_subagent_models: request.disabled_subagent_models.clone(),
+                is_subagent,
             }),
         }
     }

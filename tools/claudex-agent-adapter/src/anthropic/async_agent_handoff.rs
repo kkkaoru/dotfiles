@@ -1,12 +1,6 @@
-use std::sync::Arc;
-
 use axum::{body::Body, http::Response};
 
-use super::{
-    Bridge, MessagesRequest,
-    content::{ToolResult, collect_turn_tool_results, trailing_user_messages},
-    internal_notification,
-};
+use super::{Bridge, MessagesRequest, content::trailing_user_messages, internal_notification};
 pub(super) const ASYNC_LAUNCH_PREFIX: &str = "Async agent launched successfully.";
 pub(super) const BACKGROUND_MARKER: &str = "The agent is working in the background.";
 
@@ -18,26 +12,18 @@ fn background_handoff_text(launch_count: usize) -> String {
     }
 }
 
-/// Keep the parent provider turn open when Claude Code only acked a partial
-/// fan-out. The scheduler owns exact multi-scope cardinality (one scope → one
-/// worker), so handoff must use that bounded target instead of a second floor.
-fn should_defer_background_handoff(request: &MessagesRequest, launch_count: usize) -> bool {
-    use crate::parallel_scheduler::ParallelScheduler;
-
-    should_defer_background_handoff_with(ParallelScheduler::shared(), request, launch_count)
+/// Keep the parent provider turn open only for a post-ack steering user
+/// message. A completed launch-ack round is short status, not another
+/// generation that launches more workers after launch chrome.
+fn should_defer_background_handoff(request: &MessagesRequest, _launch_count: usize) -> bool {
+    should_defer_background_handoff_with(request)
 }
 
-fn should_defer_background_handoff_with(
-    scheduler: &crate::parallel_scheduler::ParallelScheduler,
-    request: &MessagesRequest,
-    launch_count: usize,
-) -> bool {
+fn should_defer_background_handoff_with(request: &MessagesRequest) -> bool {
     // Claude Code may append a text-only steering user message after the async
-    // ack. That path must still hand control back so the main prompt can react.
-    if has_post_ack_steering(request) {
-        return false;
-    }
-    launch_count < scheduler.decision_for_request(request).target_workers
+    // ack. Defer the chrome handoff so steering reaches the parent provider
+    // turn instead of skipping it.
+    has_post_ack_steering(request)
 }
 
 fn has_post_ack_steering(request: &MessagesRequest) -> bool {
@@ -66,11 +52,52 @@ fn is_text_only_user_message(message: &serde_json::Value) -> bool {
     }
 }
 
+pub(crate) fn acknowledged_background_launch_count(request: &MessagesRequest) -> Option<usize> {
+    let round_ids = latest_agent_tool_round_ids(request)?;
+    trailing_user_messages(&request.messages)
+        .iter()
+        .find_map(|message| exact_async_launch_acknowledgement(message, &round_ids))
+        .map(|ids| ids.len())
+}
+
+fn completed_launch_ack_status(request: &MessagesRequest) -> Option<Response<Body>> {
+    if super::agent_effort::is_subagent_request(request) {
+        return None;
+    }
+    let count = acknowledged_background_launch_count(request)?;
+    if should_defer_background_handoff(request, count) {
+        return None;
+    }
+    tracing::info!(
+        launch_count = count,
+        "skipping provider generation after completed native background launch ack"
+    );
+    let mut status = request.clone();
+    status.stream = false;
+    Some(internal_notification::acknowledge_with_text(
+        &status,
+        &background_handoff_text(count),
+    ))
+}
+
 impl Bridge {
-    pub(super) async fn async_agent_launch_handoff(
+    pub(super) fn launch_ack_without_provider_turn(
         &self,
         request: &MessagesRequest,
     ) -> Option<Response<Body>> {
+        let _ = self.async_agent_launch_handoff(request);
+        completed_launch_ack_status(request)
+    }
+
+    pub(super) fn async_agent_launch_handoff(
+        &self,
+        request: &MessagesRequest,
+    ) -> Option<Response<Body>> {
+        // Nested Agent launches inside an implementing SubAgent must keep that
+        // parent turn open. The background-ack chrome is not the worker result.
+        if super::agent_effort::is_subagent_request(request) {
+            return None;
+        }
         let round_tool_use_ids = latest_agent_tool_round_ids(request)?;
         // Ack may sit on an earlier trailing user message when Claude Code
         // appends a text-only steering message after the tool_results.
@@ -85,81 +112,26 @@ impl Bridge {
             .agent_efforts
             .background_launches(&tool_use_ids)
             .is_some();
-        if should_defer_background_handoff(request, tool_use_ids.len()) {
-            tracing::info!(
-                launch_count = tool_use_ids.len(),
-                recorded_background,
-                "deferring native background handoff until scheduler SubAgent target is met"
-            );
-            return None;
-        }
-        let results = collect_turn_tool_results(&request.messages);
-        if !self
-            .cancel_handed_off_provider_session(&results, &tool_use_ids)
-            .await
-        {
-            return None;
-        }
+        let defer = should_defer_background_handoff(request, tool_use_ids.len());
         tracing::info!(
             launch_count = tool_use_ids.len(),
             recorded_background,
-            "returned control after native Claude Code background Agent launch"
+            defer,
+            "native Claude Code background Agent launch ack is not parent completion"
         );
-        // Claude Code renders the launch/result in its native task panel from
-        // the tool result. A visible, concise acknowledgement is still
-        // required: an empty end_turn makes Claude Code inject a synthetic
-        // "previous response had no visible output" user message and start a
-        // duplicate provider turn, which queues the next user input.
-        let text = background_handoff_text(tool_use_ids.len());
-        Some(internal_notification::acknowledge_with_text(request, &text))
-    }
-    async fn cancel_handed_off_provider_session(
-        &self,
-        results: &[ToolResult],
-        async_launch_ids: &[String],
-    ) -> bool {
-        let Some(session) = self.find_result_session(results).await else {
-            return true;
-        };
-        let pending_ids = session
-            .pending_tools
-            .lock()
-            .await
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        if !pending_ids.is_empty()
-            && pending_tools_outside_async_launches(&pending_ids, async_launch_ids)
-        {
-            // Only disconnect when every still-pending tool belongs to this
-            // background launch acknowledgement. Leftover non-agent tools must
-            // keep the provider turn open.
-            return false;
-        }
-        let ready = self
-            .app_for_session(&session)
-            .ensure_thread_ready(&session.thread_id)
-            .await;
-        if ready.is_err() {
-            return false;
-        }
-        let events = Arc::new(
-            self.app_for_session(&session)
-                .subscribe_thread(&session.thread_id),
-        );
-        // Do not abort the shared Codex provider; reject and drain this turn.
-        self.disconnect_stream_for_async_handoff(&session, events)
-            .await;
-        true
+        // ASYNC_LAUNCH_PREFIX + BACKGROUND_MARKER is launch chrome, not a
+        // completed parent turn. Do not cancel or disconnect: the parent must
+        // receive a real provider turn so it can SendMessage.
+        None
     }
 }
 
 #[path = "async_agent_handoff_parse.rs"]
 mod parse;
+use parse::latest_agent_tool_round_ids;
 pub(crate) use parse::{agent_tool_round_ids, exact_async_launch_acknowledgement};
 #[cfg(test)]
 use parse::{append_strict_result_text, async_launch_tool_results, strict_result_text};
-use parse::{latest_agent_tool_round_ids, pending_tools_outside_async_launches};
 
 #[cfg(test)]
 #[path = "async_agent_handoff_extra_tests.rs"]

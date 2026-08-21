@@ -35,9 +35,5 @@ such commands to the background while their input pipe is still full. Use the de
 tools or a short file-based input instead. If a terminal command is backgrounded, poll it once; if
 it makes no progress, stop it and retry with a non-streaming file operation instead of waiting
 indefinitely.
-Nested Agent/Task delegation is allowed when useful. Always use the Claude Code `Agent`/`Task`
-tools (never Grok `spawn_subagent`) so Claudex tracks nested workers in the agents panel. For
-another Grok child, use `subagent_type: claudex-grok` with `claudex_model: grok-4.6` and
-`claudex_effort: medium` and `run_in_background: true`. For a different provider, return the work to
-the main orchestrator or use the exact `selected_workers` entry for that lane. Do not invent
-invisible Grok-native SubAgents.
+Complete the work with the supplied tools. Do not nest Agent/Task or Grok `spawn_subagent`; the
+parent session owns fan-out. Continue peers only with SendMessage({to}). Do not invent nested Claudex Agent launches from this worker.

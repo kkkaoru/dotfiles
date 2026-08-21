@@ -26,6 +26,10 @@ async fn wait_for_health(client: &Client, url: &str) -> reqwest::Response {
 }
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "CLI route parsing matrix is kept together for auditability"
+)]
 fn parses_pi_provider_interface_and_preserves_default_route() {
     let route = r#"{"model":"m","backend":"codex-app-server","piProvider":"openai-codex","piModel":"gpt-5.6-luna"}"#;
     let omitted = parse_command(
@@ -206,7 +210,7 @@ fn assert_cli_shape_failures_routes_and_limits() {
                 "--model",
                 "m",
                 "--backend-route",
-                "m=grok-acp",
+                "m=codex-app-server",
                 "--backend-route",
                 "m=codex-app-server",
             ],
@@ -282,7 +286,7 @@ fn rejects_an_invalid_backend_route_concurrency_limit() {
         "--model",
         "m",
         "--backend-route-json",
-        r#"{"model":"m","backend":"grok-acp","maxConcurrency":0}"#,
+        r#"{"model":"m","backend":"pi-gateway","piProvider":"xai","piModel":"m","maxConcurrency":0}"#,
     ]
     .into_iter()
     .map(OsString::from)
@@ -301,8 +305,8 @@ fn assert_parses_valid_cli_options_part1() {
             "serve",
             "--model",
             "grok-4.6",
-            "--backend-route",
-            "grok-4.6=grok-acp",
+            "--backend-route-json",
+            r#"{"model":"grok-4.6","backend":"pi-gateway","piProvider":"xai","piModel":"grok-4.6"}"#,
             "--worker-route-json",
             r#"{"agent":"claudex-grok","model":"grok-4.6","effort":"medium"}"#,
             "--search-worker-route-json",
@@ -470,7 +474,7 @@ fn parses_provider_defaults_and_rejects_non_utf8_option_names() {
     let path = root.path().join("providers.json");
     std::fs::write(
         &path,
-        r#"{"version":1,"mainProviders":["vendor"],"providers":[{"id":"vendor","agent":"worker","defaultModel":"vendor-default","effort":"high","modelPrefixes":["vendor-"],"backend":"configured-acp","acp":{"program":"vendor","arguments":["--model","{model}"]}}],"fallback":{"agent":"fallback","model":"sonnet","effort":"high"}}"#,
+        r#"{"version":1,"mainProviders":["vendor"],"providers":[{"id":"vendor","agent":"worker","defaultModel":"vendor-default","effort":"high","modelPrefixes":["vendor-"],"piProvider":"vendor","piModel":"vendor-default","backend":"pi-gateway"}],"fallback":{"agent":"fallback","model":"sonnet","effort":"high"}}"#,
     )
     .expect("provider config");
     let command = parse_command(
@@ -532,7 +536,7 @@ fn expands_provider_config_and_internal_route_json() {
     let path = root.path().join("providers.json");
     std::fs::write(
         &path,
-        r#"{"version":1,"mainProviders":["vendor"],"providers":[{"id":"vendor","agent":"worker","defaultModel":"vendor-default","effort":"high","modelPrefixes":["vendor-"],"selectableModels":["vendor-terra"],"backend":"configured-acp","acp":{"program":"vendor","arguments":["--model","{model}"]}}],"fallback":{"agent":"fallback","model":"sonnet","effort":"high"}}"#,
+        r#"{"version":1,"mainProviders":["vendor"],"providers":[{"id":"vendor","agent":"worker","defaultModel":"vendor-default","effort":"high","modelPrefixes":["vendor-"],"selectableModels":["vendor-terra"],"piProvider":"vendor","piModel":"vendor-default","backend":"pi-gateway"}],"fallback":{"agent":"fallback","model":"sonnet","effort":"high"}}"#,
     )
     .expect("provider config");
     let command = parse_command(
@@ -551,7 +555,7 @@ fn expands_provider_config_and_internal_route_json() {
         panic!("serve command expected");
     };
     assert_eq!(options.model, "vendor-next");
-    assert_eq!(options.routes[0].backend, BackendKind::ConfiguredAcp);
+    assert_eq!(options.routes[0].backend, BackendKind::PiGateway);
     assert_eq!(
         options.model_catalog.selectable_models(),
         &["vendor-terra".to_owned()]
@@ -675,6 +679,10 @@ async fn dispatches_a_successful_hot_swap_through_the_runtime_command() {
     server.await.expect("hot-swap fixture server");
 }
 
+#[expect(
+    clippy::excessive_nesting,
+    reason = "test-only HTTP framing parser remains local and explicit"
+)]
 async fn read_complete_hot_swap_request(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
     const MAX_REQUEST_BYTES: usize = 64 * 1024;
 
@@ -781,16 +789,6 @@ async fn dispatches_external_runtime_commands_before_starting_a_service() {
     .await
     .expect_err("serve must fail closed before binding a public listener");
     assert!(error.to_string().contains("ANTHROPIC_AUTH_TOKEN"));
-}
-
-#[tokio::test]
-async fn dispatches_the_mcp_command_when_stdin_is_at_eof() {
-    assert_eq!(
-        run(["adapter".into(), "mcp-claudex-launch".into()])
-            .await
-            .expect("MCP stdio command at EOF"),
-        0
-    );
 }
 
 #[tokio::test]

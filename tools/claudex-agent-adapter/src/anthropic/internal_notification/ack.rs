@@ -46,6 +46,7 @@ pub(crate) fn acknowledge_with_text(request: &MessagesRequest, text: &str) -> Re
                     ..Usage::default()
                 },
                 web_evidence: WebEvidenceSummary::default(),
+                next_sse_index: 0,
             },
             &request.model,
         );

@@ -5,8 +5,6 @@ use tokio::sync::mpsc;
 
 use super::{Bridge, MessagesRequest, Segment, Session, model_concurrency::Ticket};
 
-mod acp_launch_queue;
-pub(in crate::anthropic) mod acp_tool_bridge;
 mod builder;
 mod context_retry;
 mod context_window;
@@ -14,6 +12,7 @@ mod control;
 mod disconnect;
 mod drive;
 mod drive_finish;
+mod empty_turn;
 mod event_consume;
 mod non_stream;
 mod prepare;

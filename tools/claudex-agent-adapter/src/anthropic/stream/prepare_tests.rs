@@ -36,9 +36,9 @@ fn dummy_request(model: &str) -> MessagesRequest {
 }
 
 fn qwen_cursor_bridge() -> Bridge {
-    let mut qwen = BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp);
+    let mut qwen = BackendRoute::new(QWEN_CLOUD, BackendKind::PiGateway);
     qwen.max_concurrency = Some(3);
-    let mut cursor = BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp);
+    let mut cursor = BackendRoute::new(CURSOR_AUTO, BackendKind::PiGateway);
     cursor.max_concurrency = Some(3);
     let backend = AgentBackend::spawn_routes(&[qwen, cursor]);
     let mut catalog = ModelCatalog::default();
@@ -165,7 +165,7 @@ async fn acquire_prepared_permit_errors_when_timeout_has_no_sibling() {
         }
     }
 
-    let mut qwen = BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp);
+    let mut qwen = BackendRoute::new(QWEN_CLOUD, BackendKind::PiGateway);
     qwen.max_concurrency = Some(3);
     let backend = AgentBackend::spawn_routes(&[qwen]);
     let mut catalog = ModelCatalog::default();

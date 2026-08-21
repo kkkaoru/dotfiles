@@ -9,15 +9,11 @@ use anyhow::{Result, bail};
 use crate::agent_backend::{BackendKind, BackendRoute};
 
 const CODEX_PROGRAM_ENV: &str = "CLAUDEX_CODEX_PROGRAM";
-const COPILOT_PROGRAM_ENV: &str = "CLAUDEX_COPILOT_PROGRAM";
-const GROK_PROGRAM_ENV: &str = "CLAUDEX_GROK_PROGRAM";
 const PI_PROGRAM_ENV: &str = "CLAUDEX_PI_PROGRAM";
-const GROK_PLUGIN_DIR_ENV: &str = "CLAUDEX_GROK_PLUGIN_DIR";
 
 #[derive(Debug, Hash)]
 pub(super) struct DaemonProgramIdentity {
     programs: Vec<(String, PathBuf)>,
-    grok_plugin_directory: Option<PathBuf>,
 }
 
 pub(super) fn identity(routes: &[BackendRoute]) -> DaemonProgramIdentity {
@@ -31,17 +27,7 @@ pub(super) fn identity(routes: &[BackendRoute]) -> DaemonProgramIdentity {
             (route.model.clone(), normalized)
         })
         .collect();
-    let grok_plugin_directory = routes
-        .iter()
-        .any(|route| route.acp.is_none() && route.backend == BackendKind::GrokAcp)
-        .then(|| std::env::var_os(GROK_PLUGIN_DIR_ENV))
-        .flatten()
-        .map(PathBuf::from)
-        .map(|path| path.canonicalize().unwrap_or(path));
-    DaemonProgramIdentity {
-        programs,
-        grok_plugin_directory,
-    }
+    DaemonProgramIdentity { programs }
 }
 
 pub(super) fn validate(routes: &[BackendRoute]) -> Result<()> {
@@ -60,19 +46,10 @@ pub(super) fn validate(routes: &[BackendRoute]) -> Result<()> {
 }
 
 fn route_program(route: &BackendRoute) -> OsString {
-    if let Some(acp) = &route.acp {
-        return OsString::from(&acp.program);
-    }
     let (environment, fallback) = match route.backend {
         BackendKind::CodexAppServer => (CODEX_PROGRAM_ENV, "codex"),
-        BackendKind::CopilotAcp => (COPILOT_PROGRAM_ENV, "copilot"),
-        BackendKind::GrokAcp => (GROK_PROGRAM_ENV, "grok"),
         BackendKind::PiGateway => (PI_PROGRAM_ENV, "pi"),
-        BackendKind::ConfiguredAcp => ("", ""),
     };
-    if environment.is_empty() {
-        return OsString::new();
-    }
     std::env::var_os(environment).unwrap_or_else(|| fallback.into())
 }
 

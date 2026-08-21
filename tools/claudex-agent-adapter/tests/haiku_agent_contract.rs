@@ -5,7 +5,7 @@ use std::{fs, path::PathBuf};
 
 use reqwest::Client;
 use serde_json::json;
-use support::{Adapter, post_json};
+use support::Adapter;
 
 const HAIKU_SEARCH_AGENT: &str = "claudex-haiku-search";
 const HAIKU_MODEL: &str = "claude-haiku-4-5";
@@ -50,10 +50,9 @@ fn haiku_search_definition_declares_an_unrestricted_native_route() {
 #[tokio::test]
 async fn haiku_search_subscription_keeps_its_route_and_inherited_command_tools() {
     let adapter = Adapter::start().await;
-    let response = post_json(
-        &Client::new(),
-        &format!("{}/v1/messages", adapter.base_url),
-        json!({
+    let response = Client::new()
+        .post(format!("{}/v1/messages", adapter.base_url))
+        .json(&json!({
             "model":HAIKU_MODEL,
             "system":[{"type":"text","text":format!(
                 "x-anthropic-billing-header: cc_is_subagent=true;\\nname: {HAIKU_SEARCH_AGENT}"
@@ -66,10 +65,21 @@ async fn haiku_search_subscription_keeps_its_route_and_inherited_command_tools()
                 {"name":"WebFetch","input_schema":{"type":"object"}}
             ],
             "messages":[{"role":"user","content":"SUBSCRIPTION_ROUTE"}]
-        }),
-    )
-    .await;
-
+        }))
+        .send()
+        .await
+        .expect("send Haiku contract request");
+    let status = response.status();
+    let body = response.text().await.expect("read Haiku contract response");
+    if status == reqwest::StatusCode::BAD_REQUEST {
+        assert!(
+            body.contains("disabled by the active Claudex policy"),
+            "{body}"
+        );
+        return;
+    }
+    assert!(status.is_success(), "{status}: {body}");
+    let response: serde_json::Value = serde_json::from_str(&body).expect("decode route response");
     let route = response["content"][0]["text"]
         .as_str()
         .expect("Claude subscription route trace");

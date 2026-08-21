@@ -7,6 +7,16 @@ use super::{
 use crate::anthropic::agent_routing;
 
 const ASSIGNED_WORKTREE_PROMPT_GUARD: &str = "Runtime worktree rule: the worktree and cwd assigned by Claude Code are authoritative. Do not switch to a preferred or existing worktree path named in the task. Do not call EnterWorktree or ExitWorktree, use git -C, or cd outside the assigned directory. If the requested target differs, report the conflict to the parent instead of changing directories.";
+const AGENT_PUBLIC_KEYS: [&str; 7] = [
+    "description",
+    "prompt",
+    "subagent_type",
+    "name",
+    "run_in_background",
+    "isolation",
+    "effort",
+];
+const SEND_MESSAGE_PUBLIC_KEYS: [&str; 3] = ["to", "summary", "message"];
 
 #[cfg(test)]
 pub(in crate::anthropic) fn prepare_arguments(
@@ -93,8 +103,19 @@ fn sanitize_public_tool_arguments(
     public.remove(ADAPTER_EFFORT);
     public.remove(ADAPTER_MODEL);
     public.remove(IMPLICIT_MODEL);
+    // Claude Code Agent/Task dropped `resume` in v2.1.77. Extra keys with
+    // additionalProperties:false surface as "Invalid tool parameters".
+    public.remove("resume");
+    public.remove("resume_from");
+    if tool_name == "SendMessage" {
+        public.retain(|key, _| SEND_MESSAGE_PUBLIC_KEYS.contains(&key.as_str()));
+        return arguments.clone();
+    }
     if is_agent_tool(tool_name) {
         public.remove("model");
+        public.remove("cwd");
+        public.remove("background");
+        public.remove("capability_mode");
         public.insert(
             "run_in_background".to_owned(),
             Value::Bool(background_launch::agent_launch_is_background(
@@ -102,6 +123,29 @@ fn sanitize_public_tool_arguments(
                 user_messages,
             )),
         );
+        public.retain(|key, _| AGENT_PUBLIC_KEYS.contains(&key.as_str()));
+    }
+    if tool_name == "Bash" {
+        promote_bash_command(public);
     }
     arguments.clone()
+}
+
+fn promote_bash_command(public: &mut serde_json::Map<String, Value>) {
+    if public
+        .get("command")
+        .and_then(Value::as_str)
+        .is_some_and(|command| !command.is_empty())
+    {
+        return;
+    }
+    let alias = ["cmd", "script", "bash"]
+        .into_iter()
+        .find_map(|key| match public.remove(key) {
+            Some(Value::String(command)) if !command.is_empty() => Some(command),
+            _ => None,
+        });
+    if let Some(command) = alias {
+        public.insert("command".to_owned(), Value::String(command));
+    }
 }

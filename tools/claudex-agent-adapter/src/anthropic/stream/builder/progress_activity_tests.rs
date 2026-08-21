@@ -416,10 +416,17 @@ impl ClineSseClient {
         assert_eq!(self.message_delta_count, 1, "exactly one message_delta");
         assert_eq!(self.message_stop_count, 1, "exactly one message_stop");
         assert_eq!(self.open_block, None, "all content blocks must be closed");
-        assert!(
-            self.blocks.is_empty(),
-            "blank Cline turn must not commit client blocks: {:?}",
+        assert_eq!(
+            self.blocks.len(),
+            1,
+            "blank Cline turn must emit substitute text: {:?}",
             self.blocks
+        );
+        assert_eq!(self.blocks[0].0, 0);
+        assert_eq!(self.blocks[0].1["type"], "text");
+        assert_eq!(
+            self.blocks[0].1["text"],
+            "Provider completed with no assistant content. The route returned no assistant text or tools. This is a failure, not a completed result."
         );
         assert!(
             self.events.iter().all(|event| {

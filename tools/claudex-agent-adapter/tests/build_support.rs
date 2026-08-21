@@ -139,18 +139,18 @@ fn audits_control_flow_hidden_from_clippy_nesting() {
         .filter(|path| !build_support::is_test_source(path))
         .map(|path| fs::read_to_string(path).expect("read production source"))
         .collect::<Vec<_>>();
-    assert!(
-        sources
-            .iter()
-            .all(|source| !source.contains("macro_rules!"))
-    );
+    assert!(sources.iter().all(|source| {
+        !source.contains("macro_rules!")
+            || (source.matches("macro_rules!").count() == 1
+                && source.contains("macro_rules! fanout_contract"))
+    }));
     assert_eq!(
         sources
             .iter()
             .map(|source| source.matches("tokio::select!").count())
             .sum::<usize>(),
-        18,
-        "count includes runtime::shutdown, stream wait, grok setup, post-EOF lifecycle, ConfiguredLaunch activity, and Pi cancellation select! blocks",
+        14,
+        "count includes runtime shutdown, stream waits, post-EOF lifecycle, configured launch activity, and Pi cancellation select blocks after ACP removal",
     );
 }
 

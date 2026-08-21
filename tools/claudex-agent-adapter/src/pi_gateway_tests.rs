@@ -17,6 +17,22 @@ fn gateway() -> PiGateway {
     }
 }
 
+impl PiGateway {
+    pub(crate) fn stopped_for_test() -> Arc<Self> {
+        Arc::new(Self::for_test(false))
+    }
+
+    pub(crate) fn alive_for_test() -> Arc<Self> {
+        Arc::new(Self::for_test(true))
+    }
+
+    fn for_test(alive: bool) -> Self {
+        let mut gateway = gateway();
+        gateway.alive = AtomicBool::new(alive);
+        gateway
+    }
+}
+
 #[tokio::test]
 async fn missing_extensions_identify_the_selected_pi_route() {
     let root = tempfile::tempdir().expect("extension fixture");

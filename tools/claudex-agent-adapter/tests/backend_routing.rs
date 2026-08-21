@@ -4,7 +4,6 @@ use claudex_agent_adapter::{
     agent_backend::{AgentBackend, BackendKind, BackendRoute},
     anthropic::Bridge,
     app_server::AppServer,
-    grok_acp::GrokAcp,
     http_router, provider_config,
 };
 use reqwest::Client;
@@ -27,23 +26,24 @@ async fn routes_main_and_subagent_models_to_coexisting_backends() {
     )
     .await
     .expect("start Codex backend");
-    let grok = GrokAcp::spawn_with_program(
-        "grok-model",
-        coverage_profile::wrapped_program(root.path(), env!("CARGO_BIN_EXE_grok-acp-mock")),
-        root.path().to_owned(),
+    let spark = AppServer::spawn_with_program(
+        "spark-model",
+        coverage_profile::wrapped_program(root.path(), env!("CARGO_BIN_EXE_codex-mock")),
+        &source,
+        &root.path().join("spark-home"),
     )
     .await
-    .expect("start Grok backend");
+    .expect("start Spark Codex backend");
     let backend = AgentBackend::routed(vec![
         ("gpt-model".to_owned(), AgentBackend::codex(codex)),
-        ("grok-model".to_owned(), AgentBackend::grok(grok)),
+        ("spark-model".to_owned(), AgentBackend::codex(spark)),
     ]);
     assert!(backend.is_alive());
     assert!(backend.supports_model("gpt-model"));
-    assert_eq!(backend.models(), ["gpt-model", "grok-model"]);
+    assert_eq!(backend.models(), ["gpt-model", "spark-model"]);
     assert_eq!(
         backend.route_descriptions(),
-        ["gpt-model=codex-app-server", "grok-model=grok-acp"]
+        ["gpt-model=codex-app-server", "spark-model=codex-app-server"]
     );
     assert!(
         backend
@@ -69,12 +69,6 @@ async fn routes_main_and_subagent_models_to_coexisting_backends() {
             .await
             .is_err()
     );
-    assert!(
-        backend
-            .respond_for_model("grok-model", json!(996), json!({}))
-            .await
-            .is_err()
-    );
     let bridge = Arc::new(Bridge::new_with_backend(
         Arc::clone(&backend),
         "gpt-model".to_owned(),
@@ -90,9 +84,9 @@ async fn routes_main_and_subagent_models_to_coexisting_backends() {
     let client = Client::new();
     let url = format!("http://{address}/v1/messages");
     let codex_response = request(&client, &url, "gpt-model").await;
-    let grok_response = request(&client, &url, "grok-model").await;
+    let spark_response = request(&client, &url, "spark-model").await;
     assert_eq!(response_text(&codex_response), "OK");
-    assert_eq!(response_text(&grok_response), "GROK_ACP_STREAM_OK");
+    assert_eq!(response_text(&spark_response), "OK");
     server.abort();
 }
 
@@ -205,16 +199,17 @@ async fn isolates_parallel_sessions_across_worker_threads_and_backends() {
     )
     .await
     .unwrap();
-    let grok = GrokAcp::spawn_with_program(
-        "grok-model",
-        coverage_profile::wrapped_program(root.path(), env!("CARGO_BIN_EXE_grok-acp-mock")),
-        root.path().to_owned(),
+    let spark = AppServer::spawn_with_program(
+        "spark-model",
+        coverage_profile::wrapped_program(root.path(), env!("CARGO_BIN_EXE_routing-codex-mock")),
+        &source,
+        &root.path().join("parallel-spark-home"),
     )
     .await
     .unwrap();
     let backend = AgentBackend::routed(vec![
         ("gpt-model".to_owned(), AgentBackend::codex(codex)),
-        ("grok-model".to_owned(), AgentBackend::grok(grok)),
+        ("spark-model".to_owned(), AgentBackend::codex(spark)),
     ]);
     let bridge = Arc::new(Bridge::new_with_backend(backend, "gpt-model".to_owned()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -225,27 +220,25 @@ async fn isolates_parallel_sessions_across_worker_threads_and_backends() {
             .unwrap();
     });
 
-    // Prove Codex and Grok routes progress concurrently without sharing session
-    // state. Keep each wave to one pair so the single-threaded ACP LocalSet is
-    // not overwhelmed by mock permission fan-out.
+    // Prove two Codex routes progress concurrently without sharing session state.
     for pair in 0..10 {
-        let codex_url = url.clone();
-        let grok_url = url.clone();
-        let codex_index = pair * 2;
-        let grok_index = pair * 2 + 1;
-        let codex_task = tokio::spawn(assert_parallel_response(
-            codex_url,
+        let gpt_url = url.clone();
+        let spark_url = url.clone();
+        let gpt_index = pair * 2;
+        let spark_index = pair * 2 + 1;
+        let gpt_task = tokio::spawn(assert_parallel_response(
+            gpt_url,
             "gpt-model",
-            codex_index,
+            gpt_index,
             "CODEX_ROUTED_OK",
         ));
-        let grok_task = tokio::spawn(assert_parallel_response(
-            grok_url,
-            "grok-model",
-            grok_index,
-            "GROK_ACP_STREAM_OK",
+        let spark_task = tokio::spawn(assert_parallel_response(
+            spark_url,
+            "spark-model",
+            spark_index,
+            "CODEX_ROUTED_OK",
         ));
-        tokio::try_join!(codex_task, grok_task).expect("mixed Codex/Grok pair must complete");
+        tokio::try_join!(gpt_task, spark_task).expect("mixed Codex pair must complete");
     }
     server.abort();
 }

@@ -79,12 +79,3 @@ pub(super) fn acknowledge_internal_notification(request: &MessagesRequest) -> Re
     );
     super::internal_notification::acknowledge(request)
 }
-
-pub(super) fn log_native_background_handoff() {
-    tracing::info!(
-        target: "claudex.provider",
-        log_event = "provider_turn_skipped",
-        reason = "native_background_handoff",
-        "provider turn skipped after native background handoff"
-    );
-}

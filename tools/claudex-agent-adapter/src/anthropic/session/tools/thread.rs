@@ -31,29 +31,20 @@ pub(in crate::anthropic) fn thread_start_params_for_mode(
         .or_else(|| cwd_from_system(&system))
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(isolated_runtime_cwd);
-    let command_code = crate::command_code_acp::is_command_code_model(model);
     let launch_owner = super::super::super::request_identity::claude_session_id(request);
+    if crate::anthropic::is_command_code_model(model) {
+        return command_code_thread_start_params(request, model, &cwd, dynamic_tools, launch_owner);
+    }
     let is_subagent = super::super::super::agent_effort::is_subagent_request(request);
     let acp_role = if is_subagent {
         "worker"
     } else {
         "orchestrator"
     };
-    if command_code {
-        // Muse Spark headless greets / reconstructs dirty git when Claudex
-        // ACP_NATIVE dumps land in `cmd -p`. Keep cwd only; the ACP shim slims
-        // the delegated task itself.
-        return command_code_thread_start_params(
-            model,
-            &cwd,
-            dynamic_tools,
-            &launch_owner,
-            acp_role,
-        );
-    }
     let acp_native = web_search_mode.uses_provider_native_agent_loop();
+    // Codex threadStart: baseInstructions is Claude system only. Developer
+    // corpus is sent once in developerInstructions (not copied into base).
     let developer_instructions = build_developer_instructions(request, is_subagent, acp_native);
-    let base_instructions = system_with_developer_instructions(&system, &developer_instructions);
     let web_search_enabled = web_search_mode == WebSearchMode::CodexNative
         && request
             .tools
@@ -67,7 +58,7 @@ pub(in crate::anthropic) fn thread_start_params_for_mode(
     json!({
         "model": model,
         "cwd": cwd,
-        "baseInstructions": base_instructions,
+        "baseInstructions": system,
         "developerInstructions": developer_instructions,
         "dynamicTools": dynamic_tools,
         "environments": [],
@@ -102,17 +93,17 @@ pub(in crate::anthropic) fn system_with_developer_instructions(
 }
 
 fn command_code_thread_start_params(
+    request: &MessagesRequest,
     model: &str,
     cwd: &str,
     dynamic_tools: Vec<Value>,
-    launch_owner: &Option<String>,
-    acp_role: &str,
+    launch_owner: Option<String>,
 ) -> Value {
     json!({
         "model": model,
         "cwd": cwd,
         "baseInstructions": "",
-        "developerInstructions": "",
+        "developerInstructions": build_developer_instructions(request, true, true),
         "dynamicTools": dynamic_tools,
         "environments": [],
         "ephemeral": true,
@@ -120,7 +111,7 @@ fn command_code_thread_start_params(
         "sandbox": "danger-full-access",
         "personality": "none",
         "claudexLaunchOwner": launch_owner,
-        "claudexAcpRole": acp_role,
+        "claudexAcpRole": "worker",
         "config": {
             "web_search": "disabled",
             "features": {

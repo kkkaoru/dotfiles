@@ -22,7 +22,8 @@ for status after each phase, emit it only between native tool work, never as the
 not end after a toolless status-only message. Do not emit canned ●/▶/✓/Status:/still-working
 lines; Claudex already syncs native thinking/? elapsed, last tool, and display-only web cards to
 the parent TUI.
-Do not invent nested Claudex Agent launches from this worker.
+Do not invent nested Claudex Agent launches from this worker. Do not nest Agent/Task or
+spawn_subagent; continue peers only with SendMessage({to}).
 Do not load Claudex routing tables, Claude Code skills, or ctx-agent-history-search; those dumps
 belong to the parent orchestrator, not Muse Spark.
 Do not confuse this Command Code Muse Spark 1.2 Contributor route (`claudex-command-code-muse-spark-1-2-contributor`)

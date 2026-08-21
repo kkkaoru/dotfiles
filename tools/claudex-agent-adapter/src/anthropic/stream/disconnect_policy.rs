@@ -28,7 +28,7 @@ impl Bridge {
         {
             Ok(TurnCancellation::Settled) => {
                 let _ = self.reject_pending_disconnected_tools(session).await;
-                self.remove_session(session).await;
+                self.pause_or_remove_disconnected_session(session).await;
             }
             Ok(TurnCancellation::Unsupported) => {
                 self.handle_unsupported_disconnect(session, events, abort_visible_tool_provider)
@@ -41,6 +41,19 @@ impl Bridge {
             }
         }
         StreamTurn::Disconnected
+    }
+
+    async fn pause_or_remove_disconnected_session(&self, session: &Arc<Session>) {
+        if session.claude_session_id.is_none() {
+            self.remove_session(session).await;
+            return;
+        }
+        // Claude Code TaskStop / SSE close pauses the SubAgent.
+        // Keep the Pi/provider thread so SendMessage({to}) can continue
+        // the same session instead of spawning another. Agent({resume}) was removed.
+        if let Ok(mut activity) = session.last_activity.lock() {
+            *activity = std::time::Instant::now();
+        }
     }
 
     pub(super) async fn handle_unsupported_disconnect(
@@ -164,7 +177,7 @@ mod tests {
 
     #[tokio::test]
     async fn unsupported_visible_disconnect_discards_pending_tools_when_abort_is_unavailable() {
-        let routes = [BackendRoute::new("worker", BackendKind::ConfiguredAcp)];
+        let routes = [BackendRoute::new("worker", BackendKind::PiGateway)];
         let bridge =
             Bridge::new_with_backend(AgentBackend::spawn_routes(&routes), "worker".to_owned());
         let session = Arc::new(Session {
@@ -201,5 +214,77 @@ mod tests {
             session.pending_tools.lock().await.is_empty(),
             "visible disconnect must discard tool results before attempting provider abort"
         );
+    }
+
+    #[tokio::test]
+    async fn settled_disconnect_keeps_a_claude_session_paused_for_send_message_continue() {
+        let copilot = crate::pi_gateway::PiGateway::alive_for_test();
+        let bridge = Bridge::new_with_backend(AgentBackend::pi(copilot), "worker".to_owned());
+        let session = Arc::new(Session {
+            thread_id: "0:thread".to_owned(),
+            model: "worker".to_owned(),
+            disabled_subagent_models: BTreeSet::new(),
+            signature: Arc::from("signature"),
+            transcript: Mutex::new(Vec::new()),
+            pending_tools: Mutex::new(HashMap::new()),
+            consumed_tool_ids: Mutex::new(HashSet::new()),
+            external_tool_names: HashMap::new(),
+            launch_availability: Default::default(),
+            client_user_id: None,
+            claude_session_id: Some("claude-session".to_owned()),
+            gate: Arc::new(Mutex::new(())),
+            last_activity: std::sync::Mutex::new(Instant::now()),
+            pending_since: std::sync::Mutex::new(None),
+            turn_progress: Default::default(),
+            adopted_thread_id: Default::default(),
+            _slot: Arc::clone(&bridge.session_slots)
+                .try_acquire_owned()
+                .expect("session slot"),
+        });
+        bridge.sessions.lock().await.push(Arc::clone(&session));
+        bridge
+            .disconnect_stream_with_policy(
+                &session,
+                Arc::new(ThreadEventDispatcher::default().subscribe("thread")),
+                true,
+            )
+            .await;
+        assert_eq!(bridge.sessions.lock().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn settled_disconnect_removes_a_session_without_a_claude_session_id() {
+        let copilot = crate::pi_gateway::PiGateway::alive_for_test();
+        let bridge = Bridge::new_with_backend(AgentBackend::pi(copilot), "worker".to_owned());
+        let session = Arc::new(Session {
+            thread_id: "0:thread".to_owned(),
+            model: "worker".to_owned(),
+            disabled_subagent_models: BTreeSet::new(),
+            signature: Arc::from("signature"),
+            transcript: Mutex::new(Vec::new()),
+            pending_tools: Mutex::new(HashMap::new()),
+            consumed_tool_ids: Mutex::new(HashSet::new()),
+            external_tool_names: HashMap::new(),
+            launch_availability: Default::default(),
+            client_user_id: None,
+            claude_session_id: None,
+            gate: Arc::new(Mutex::new(())),
+            last_activity: std::sync::Mutex::new(Instant::now()),
+            pending_since: std::sync::Mutex::new(None),
+            turn_progress: Default::default(),
+            adopted_thread_id: Default::default(),
+            _slot: Arc::clone(&bridge.session_slots)
+                .try_acquire_owned()
+                .expect("session slot"),
+        });
+        bridge.sessions.lock().await.push(Arc::clone(&session));
+        bridge
+            .disconnect_stream_with_policy(
+                &session,
+                Arc::new(ThreadEventDispatcher::default().subscribe("thread")),
+                true,
+            )
+            .await;
+        assert!(bridge.sessions.lock().await.is_empty());
     }
 }

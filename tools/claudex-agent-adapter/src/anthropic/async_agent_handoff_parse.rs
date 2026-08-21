@@ -4,19 +4,6 @@ use serde_json::Value;
 
 use super::{ASYNC_LAUNCH_PREFIX, BACKGROUND_MARKER, MessagesRequest};
 
-pub(super) fn pending_tools_outside_async_launches(
-    pending_ids: &[String],
-    async_launch_ids: &[String],
-) -> bool {
-    let async_set = async_launch_ids
-        .iter()
-        .map(String::as_str)
-        .collect::<HashSet<_>>();
-    pending_ids
-        .iter()
-        .any(|pending_id| !async_set.contains(pending_id.as_str()))
-}
-
 /// Collect successful async background-launch tool_result IDs from a user
 /// message. Non-result blocks and ordinary tool results are ignored so a mixed
 /// Claude Code continuation can still hand control back once every Agent/Task

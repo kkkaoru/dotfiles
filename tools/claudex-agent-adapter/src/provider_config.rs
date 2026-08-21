@@ -1,4 +1,4 @@
-use crate::agent_backend::{AcpLaunch, BackendKind, BackendRoute, WebSearchMode};
+use crate::agent_backend::{BackendKind, BackendRoute, WebSearchMode};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -70,8 +70,6 @@ struct Provider {
     #[serde(default)]
     pub(super) selectable_models: Vec<String>,
     backend: BackendKind,
-    #[serde(default)]
-    acp: Option<AcpLaunch>,
     #[serde(default)]
     web_search_mode: WebSearchMode,
 }

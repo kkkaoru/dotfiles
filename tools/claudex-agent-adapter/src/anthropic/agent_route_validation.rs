@@ -17,6 +17,8 @@ pub(in crate::anthropic) enum BlockedSubagentReason {
     PolicyDisabled,
     Cooldown,
     CatalogResolution,
+    NestedLaunch,
+    LiveCap,
 }
 
 impl BlockedSubagentReason {
@@ -51,6 +53,13 @@ impl BlockedSubagentReason {
                     )
                 },
             ),
+            Self::NestedLaunch => {
+                crate::anthropic::subagent_reuse::NESTED_SUBAGENT_LAUNCH_NOTICE.to_owned()
+            }
+            Self::LiveCap => {
+                "The live Agent cap was reached, including nested workers, so a new Agent/Task launch was not started. Continue an existing worker with SendMessage({to}) if that tool is listed."
+                    .to_owned()
+            }
         }
     }
 }
@@ -93,6 +102,22 @@ impl BlockedSubagentError {
         )
     }
 
+    pub(super) fn nested_launch() -> Self {
+        Self::new(
+            BlockedSubagentReason::NestedLaunch,
+            None,
+            "nested SubAgent sessions must not launch Agent/Task",
+        )
+    }
+
+    pub(super) fn live_cap() -> Self {
+        Self::new(
+            BlockedSubagentReason::LiveCap,
+            None,
+            "live Agent cap including nested workers was reached",
+        )
+    }
+
     #[cfg(test)]
     pub(super) fn reason(&self) -> BlockedSubagentReason {
         self.reason
@@ -100,6 +125,13 @@ impl BlockedSubagentError {
 
     pub(super) fn notice(&self) -> String {
         self.reason.notice(self.model.as_deref())
+    }
+
+    pub(super) fn continues_batch(&self) -> bool {
+        matches!(
+            self.reason,
+            BlockedSubagentReason::NestedLaunch | BlockedSubagentReason::LiveCap
+        )
     }
 
     fn new(

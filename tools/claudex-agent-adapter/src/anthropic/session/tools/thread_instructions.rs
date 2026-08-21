@@ -48,10 +48,6 @@ pub(in crate::anthropic) fn build_developer_instructions(
     developer_instructions.push_str("\n\n");
     developer_instructions.push_str(super::super::WORKTREE_TARGET_INSTRUCTIONS);
     developer_instructions.push_str("\n\n");
-    developer_instructions.push_str(&super::super::parallel_scheduler_instructions(request));
-    developer_instructions.push_str("\n\n");
-    developer_instructions.push_str(super::super::SUBAGENT_LIFECYCLE_INSTRUCTIONS);
-    developer_instructions.push_str("\n\n");
     developer_instructions.push_str(super::super::super::super::SUBAGENT_RESULT_PROTOCOL);
     developer_instructions.push_str(
         "\n\nCommand execution is available to every routed worker. If Claude Code supplies a shell, Bash, unified-exec, or command tool, use it when the active task requires it; do not refuse an available command tool because the backend is Codex, Grok, OpenCode, or Cursor.",
@@ -59,10 +55,15 @@ pub(in crate::anthropic) fn build_developer_instructions(
     if is_subagent {
         developer_instructions.push_str("\n\n");
         developer_instructions.push_str(super::super::SUBAGENT_MAIN_ONLY_TOOLS_INSTRUCTIONS);
-    } else {
-        developer_instructions.push_str("\n\n");
-        developer_instructions.push_str(super::super::ORCHESTRATOR_INSTRUCTIONS);
+        return developer_instructions;
     }
+    developer_instructions.push_str("\n\n");
+    developer_instructions.push_str(super::super::SUBAGENT_LIFECYCLE_INSTRUCTIONS);
+    developer_instructions.push_str("\n\n");
+    developer_instructions.push_str(super::super::ORCHESTRATOR_INSTRUCTIONS);
+    // Turn-varying scheduler last, matching subscription prompt-cache order.
+    developer_instructions.push_str("\n\n");
+    developer_instructions.push_str(&super::super::parallel_scheduler_instructions(request));
     developer_instructions
 }
 

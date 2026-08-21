@@ -37,12 +37,9 @@ impl RoutedBackends {
             .find(model)
             .map(|r| r.template.clone())
             .or_else(|| self.prefix_template(model).cloned())?;
-        let pins = route.backend == BackendKind::GrokAcp
-            || route
-                .acp
-                .as_ref()
-                .is_some_and(|a| a.arguments.iter().any(|x| x.contains("{effort}")));
-        pins.then_some(route.effort).flatten()
+        (route.backend == BackendKind::PiGateway)
+            .then_some(route.effort)
+            .flatten()
     }
 
     pub(in crate::agent_backend) fn descriptions(&self) -> Vec<String> {

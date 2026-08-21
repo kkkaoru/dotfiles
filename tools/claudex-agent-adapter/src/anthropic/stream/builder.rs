@@ -23,6 +23,8 @@ mod web_provenance;
 
 pub(super) use super::tool_call_parser::{parse_tool_call, parse_tool_delta, parse_tool_start};
 
+pub(super) const SSE_INDEX_PAD: &str = "sse_index_pad";
+
 pub(in crate::anthropic) struct SegmentBuilder {
     pub(super) blocks: Vec<Value>,
     pub(super) thinking: ThinkingState,
@@ -85,13 +87,19 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// Pi `toolcall_start` card that is already on the SSE wire. Completed by
     /// `item/tool/call` so Claude Code does not get a second tool_use block.
     pub(super) streaming_tool: Option<StreamingToolUse>,
+    /// Consecutive empty, unparsed, or invalid tool JSON payloads on this
+    /// stream. Reset when a tool JSON payload is complete and usable.
+    pub(super) consecutive_invalid_tool_json: u8,
 }
 
 pub(super) struct StreamingToolUse {
     pub(super) call_id: String,
     pub(super) tool_use_id: String,
     pub(super) index: usize,
+    pub(super) name: String,
     pub(super) partial_json: String,
+    pub(super) json_emitted: bool,
+    pub(super) sse_started: bool,
 }
 
 impl SegmentBuilder {

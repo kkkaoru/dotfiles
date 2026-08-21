@@ -3,9 +3,21 @@ use std::collections::HashMap;
 use serde_json::json;
 
 use super::{
+    SegmentBuilder,
     batch::ensure_background_batch_launch,
     external_tool::{requested_external_tool_name, unrequested_tool_reply},
 };
+
+#[test]
+fn reserved_sse_slots_advance_the_next_index() {
+    assert_eq!(SegmentBuilder::new(1).next_sse_index(), 0);
+    assert_eq!(
+        SegmentBuilder::new(1)
+            .with_reserved_sse_slots(2)
+            .next_sse_index(),
+        2
+    );
+}
 
 #[test]
 fn leaves_non_object_batch_arguments_unchanged() {
@@ -44,4 +56,16 @@ fn invented_advisor_calls_continue_without_a_hard_tool_error() {
     let (other_text, other_success) = unrequested_tool_reply("unrequested");
     assert!(!other_success);
     assert!(other_text.contains("unrequested"));
+}
+
+#[test]
+fn listed_send_message_is_required_to_emit_follow_up() {
+    let listed = HashMap::from([("cc_SendMessage_3".to_owned(), "SendMessage".to_owned())]);
+    let missing = HashMap::from([("cc_Agent_0".to_owned(), "Agent".to_owned())]);
+    assert!(crate::anthropic::subagent_reuse::has_listed_send_message(
+        listed.values()
+    ));
+    assert!(!crate::anthropic::subagent_reuse::has_listed_send_message(
+        missing.values()
+    ));
 }

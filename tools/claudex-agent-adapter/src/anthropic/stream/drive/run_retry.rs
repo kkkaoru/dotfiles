@@ -1,11 +1,43 @@
 use std::sync::Arc;
 
-use super::super::super::{SegmentBuilder, StreamSender, protocol::send_stream_graceful_stop};
+use super::super::super::{
+    SegmentBuilder, StreamSender,
+    protocol::{send_empty_turn_or_overflow_error, send_stream_graceful_stop_for_error_at},
+};
 use super::super::ContextRetryStream;
 use crate::anthropic::{
     ActiveTurn, Bridge, model_concurrency::ModelPermit,
     usage_limit_failover::streaming_provider_retry,
 };
+
+async fn stop_retry_after_message_start(
+    sender: &StreamSender,
+    next_sse_index: usize,
+    error: &anyhow::Error,
+) {
+    send_stream_graceful_stop_for_error_at(sender, next_sse_index, error).await;
+}
+
+fn rewrite_usage_limit_failover(
+    bridge: &Bridge,
+    exhausted_model: &str,
+    is_subagent: bool,
+    mut retry: crate::anthropic::ContextRetry,
+) -> Option<crate::anthropic::ContextRetry> {
+    let failover =
+        streaming_provider_retry(bridge.failover_for_stream_turn(exhausted_model, is_subagent))?;
+    tracing::warn!(
+        exhausted_model,
+        failover_model = %failover.model,
+        is_subagent,
+        "retrying stream on a sibling provider after provider exhaustion"
+    );
+    retry.request.model = failover.model;
+    if let Some(effort) = failover.effort {
+        retry.effort = Some(effort);
+    }
+    Some(retry)
+}
 
 impl Bridge {
     pub(in crate::anthropic::stream) async fn retry_provider_stream(
@@ -34,7 +66,7 @@ impl Bridge {
             Err(retry_error) => {
                 drop(model_permit);
                 tracing::warn!(?retry_error, "provider retry failed after message_start");
-                send_stream_graceful_stop(&sender).await;
+                stop_retry_after_message_start(&sender, 0, &retry_error).await;
             }
         }
     }
@@ -57,7 +89,8 @@ impl Bridge {
                 error = ?input.error,
                 "context retry unavailable after message_start"
             );
-            send_stream_graceful_stop(&input.sender).await;
+            send_empty_turn_or_overflow_error(&input.sender, input.next_sse_index, &input.error)
+                .await;
             return;
         };
         let retried = match self
@@ -67,7 +100,12 @@ impl Bridge {
             Ok(retried) => retried,
             Err(error) => {
                 tracing::warn!(?error, "context window retry failed after message_start");
-                send_stream_graceful_stop(&input.sender).await;
+                let reported = anyhow::anyhow!(
+                    "context window retry failed after {}: {error:#}",
+                    input.error
+                );
+                send_empty_turn_or_overflow_error(&input.sender, input.next_sse_index, &reported)
+                    .await;
                 return;
             }
         };
@@ -96,40 +134,26 @@ impl Bridge {
         self.note_provider_exhaustion(&input.error, Some(&session.model));
         drop(gate);
         let exhausted_model = session.model.clone();
-        let Some(mut retry) = retry else {
+        let Some(retry) = retry else {
             self.remove_session(&session).await;
             tracing::warn!(
                 error = ?input.error,
                 "usage-limit retry unavailable after message_start"
             );
-            send_stream_graceful_stop(&input.sender).await;
+            stop_retry_after_message_start(&input.sender, input.next_sse_index, &input.error).await;
             return;
         };
-        // SubAgent empty-ACP/billing failures must switch to a sibling Provider
-        // (for example Qwen Cloud). Subscription failover cannot continue an
-        // already-open SubAgent SSE stream, so the old path returned the empty
-        // ACP error to Claude Code and killed the agent.
-        let Some(failover) = streaming_provider_retry(
-            self.failover_for_stream_turn(&exhausted_model, input.is_subagent),
-        ) else {
+        let Some(retry) =
+            rewrite_usage_limit_failover(&self, &exhausted_model, input.is_subagent, retry)
+        else {
             self.remove_session(&session).await;
             tracing::warn!(
                 error = ?input.error,
                 "usage-limit failover unavailable after message_start"
             );
-            send_stream_graceful_stop(&input.sender).await;
+            stop_retry_after_message_start(&input.sender, input.next_sse_index, &input.error).await;
             return;
         };
-        tracing::warn!(
-            exhausted_model = %exhausted_model,
-            failover_model = %failover.model,
-            is_subagent = input.is_subagent,
-            "retrying stream on a sibling provider after provider exhaustion"
-        );
-        retry.request.model = failover.model;
-        if let Some(effort) = failover.effort {
-            retry.effort = Some(effort);
-        }
         let retried = match self
             .retry_after_context_window(retry, &session, input_tokens)
             .await
@@ -137,7 +161,7 @@ impl Bridge {
             Ok(retried) => retried,
             Err(error) => {
                 tracing::warn!(?error, "usage-limit retry failed after message_start");
-                send_stream_graceful_stop(&input.sender).await;
+                stop_retry_after_message_start(&input.sender, input.next_sse_index, &error).await;
                 return;
             }
         };

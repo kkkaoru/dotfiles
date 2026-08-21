@@ -11,16 +11,6 @@ impl AgentBackend {
     pub async fn request(&self, method: &str, params: Value) -> Result<Value> {
         match self {
             Self::Codex(server) => server.request(method, params).await,
-            Self::Copilot(agent) if method == "thread/start" => agent.create_session(params).await,
-            Self::Copilot(_) => bail!("Copilot ACP does not support backend request `{method}`"),
-            Self::ConfiguredAcp(agent) if method == "thread/start" => {
-                agent.create_session(params).await
-            }
-            Self::ConfiguredAcp(_) => {
-                bail!("configured ACP does not support backend request `{method}`")
-            }
-            Self::Grok(agent) if method == "thread/start" => agent.create_session(params).await,
-            Self::Grok(_) => bail!("Grok ACP does not support backend request `{method}`"),
             Self::Pi(gateway) if method == "thread/start" => Ok(gateway.create_thread()),
             Self::Pi(_) => bail!("Pi gateway does not support backend request `{method}`"),
             Self::Routed(routes) if method == "thread/start" => {
@@ -47,14 +37,6 @@ impl AgentBackend {
     pub async fn request_detached(self: &Arc<Self>, method: &str, mut params: Value) -> Result<()> {
         match self.as_ref() {
             Self::Codex(server) => server.request_detached(method, params).await,
-            Self::Copilot(agent) if method == "turn/start" => agent.start_turn(params).await,
-            Self::Copilot(_) => bail!("Copilot ACP does not support backend request `{method}`"),
-            Self::ConfiguredAcp(agent) if method == "turn/start" => agent.start_turn(params).await,
-            Self::ConfiguredAcp(_) => {
-                bail!("configured ACP does not support backend request `{method}`")
-            }
-            Self::Grok(agent) if method == "turn/start" => agent.start_turn(params).await,
-            Self::Grok(_) => bail!("Grok ACP does not support backend request `{method}`"),
             Self::Pi(gateway) if method == "turn/start" => gateway.start_turn(params).await,
             Self::Pi(_) => bail!("Pi gateway does not support backend request `{method}`"),
             Self::Routed(routes) if method == "turn/start" => {
@@ -66,10 +48,6 @@ impl AgentBackend {
                 let (index, raw_id) = routed_thread(&thread_id);
                 params["threadId"] = json!(raw_id);
                 let route = routes.route(index);
-                // A session-scoped configured ACP child can serve several
-                // routed models. Preserve the route target on turn/start;
-                // otherwise a request that omits `model` would fall back to
-                // whichever model first booted the shared child.
                 params["model"] = json!(route.model.clone());
                 let backend = route.get().await?;
                 Box::pin(backend.request_detached(method, params)).await
@@ -83,11 +61,6 @@ impl AgentBackend {
     pub async fn respond(&self, id: Value, result: Value) -> Result<()> {
         match self {
             Self::Codex(server) => server.respond(id, result).await,
-            Self::Copilot(_) => bail!("Copilot ACP did not request Claude Code tool result {id}"),
-            Self::ConfiguredAcp(_) => {
-                bail!("configured ACP did not request Claude Code tool result {id}")
-            }
-            Self::Grok(_) => bail!("Grok ACP did not request Claude Code tool result {id}"),
             Self::Pi(_) => Ok(()),
             Self::Routed(routes) => {
                 let backend = routes
@@ -104,11 +77,6 @@ impl AgentBackend {
     pub async fn respond_for_model(&self, model: &str, id: Value, result: Value) -> Result<()> {
         match self {
             Self::Codex(server) => server.respond(id, result).await,
-            Self::Copilot(_) => bail!("Copilot ACP did not request Claude Code tool result {id}"),
-            Self::ConfiguredAcp(_) => {
-                bail!("configured ACP did not request Claude Code tool result {id}")
-            }
-            Self::Grok(_) => bail!("Grok ACP did not request Claude Code tool result {id}"),
             Self::Pi(_) => Ok(()),
             Self::Routed(routes) => {
                 let route = routes

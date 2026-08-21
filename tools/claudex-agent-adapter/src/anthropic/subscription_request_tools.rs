@@ -14,13 +14,8 @@ pub(in crate::anthropic) fn requested_tools_for_request(
     request: &MessagesRequest,
     omit_task_bookkeeping: bool,
 ) -> Vec<String> {
-    let allow_team_messages = crate::anthropic::subagent_reuse::agent_teams_enabled(request);
     let hide_main_only_tools = crate::anthropic::agent_effort::is_subagent_request(request);
     let mut provider_tools = request.tools.clone();
-    if !allow_team_messages {
-        provider_tools
-            .retain(|tool| tool.get("name").and_then(Value::as_str) != Some("SendMessage"));
-    }
     if hide_main_only_tools {
         provider_tools.retain(|tool| {
             !tool

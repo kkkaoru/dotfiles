@@ -4,9 +4,28 @@ use anyhow::Result;
 use serde_json::Value;
 
 use super::super::super::{
-    ActiveTurn, Bridge, MessagesRequest, SelectedSession, Session, content::ToolResult,
+    ActiveTurn, Bridge, MessagesRequest, SelectedSession, Session,
+    content::ToolResult,
+    request_identity,
+    turn_input::{MAX_TURN_INPUT_BYTES, latest_user_messages, truncated_request_messages},
 };
 use super::StartSelectedTurn;
+
+fn truncated_extras_for_retry(bridge: &Bridge, request: &MessagesRequest) -> Vec<Value> {
+    let model = bridge.request_model(request);
+    let provider = bridge.app_for(request_identity::claude_session_id(request).as_deref());
+    let max_bytes = provider
+        .max_context_tokens_for_model(&model)
+        .and_then(|limit| usize::try_from(limit).ok())
+        .map(|limit| limit.saturating_mul(4).min(MAX_TURN_INPUT_BYTES))
+        .unwrap_or(MAX_TURN_INPUT_BYTES);
+    let messages = if crate::anthropic::is_command_code_model(&model) {
+        latest_user_messages(&request.messages)
+    } else {
+        request.messages.clone()
+    };
+    truncated_request_messages(&messages, max_bytes)
+}
 
 impl Bridge {
     pub(super) async fn kick_off_selected_turn(
@@ -35,10 +54,11 @@ impl Bridge {
 
     pub(in crate::anthropic) async fn retry_after_context_window(
         &self,
-        retry: super::super::super::ContextRetry,
+        mut retry: super::super::super::ContextRetry,
         previous: &Arc<Session>,
         input_tokens: u64,
     ) -> Result<ActiveTurn> {
+        retry.request.messages = truncated_extras_for_retry(self, &retry.request);
         let signature = Arc::clone(&previous.signature);
         self.remove_session(previous).await;
         let effort = retry.effort.clone();

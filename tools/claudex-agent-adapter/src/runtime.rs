@@ -26,7 +26,6 @@ pub(super) enum RuntimeCommand {
     Ensure(AdapterOptions),
     HotSwap(AdapterOptions, bool),
     Launch(AdapterOptions, Vec<OsString>, bool),
-    McpClaudexLaunch,
     PruneCache(Option<PathBuf>),
     Serve(AdapterOptions),
 }
@@ -47,11 +46,6 @@ pub async fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<i32> {
         }
         RuntimeCommand::Launch(options, arguments, inherit_claude_model) => {
             launcher::run_claude(options, arguments, inherit_claude_model).await?
-        }
-        RuntimeCommand::McpClaudexLaunch => {
-            crate::logging::init();
-            crate::launch_mcp::run_stdio()?;
-            0
         }
         RuntimeCommand::PruneCache(root) => {
             println!("{}", prune_cache_tree(root)?);

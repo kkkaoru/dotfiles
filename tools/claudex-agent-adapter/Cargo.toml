@@ -11,24 +11,12 @@ name = "claudex-agent-adapter"
 path = "src/main.rs"
 
 [[bin]]
-name = "command-code-acp"
-path = "bins/command-code-acp.rs"
-
-[[bin]]
-name = "command-code-cmd-mock"
-path = "tests/fixtures/command_code_cmd_mock.rs"
-
-[[bin]]
 name = "claude-mock"
 path = "tests/fixtures/claude_mock.rs"
 
 [[bin]]
 name = "codex-mock"
 path = "tests/fixtures/codex_mock.rs"
-
-[[bin]]
-name = "grok-acp-mock"
-path = "tests/fixtures/grok_acp_mock.rs"
 
 [[bin]]
 name = "stale-adapter-mock"
@@ -59,9 +47,7 @@ too_many_lines = "deny"
 unimplemented = "deny"
 
 [dependencies]
-agent-client-protocol = { version = "=0.10.4", features = ["unstable_session_model", "unstable_boolean_config"] }
 anyhow = "1.0"
-async-trait = "0.1"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 libc = "0.2"
 reqwest = { version = "0.12", default-features = false, features = ["json"] }

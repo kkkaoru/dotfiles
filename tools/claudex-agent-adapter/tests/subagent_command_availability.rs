@@ -4,14 +4,8 @@ mod support;
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
-use claudex_agent_adapter::{
-    agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute, WebSearchMode},
-    anthropic::Bridge,
-    http_router,
-};
 use reqwest::Client;
 use serde_json::Value;
 use serde_json::json;
@@ -126,6 +120,11 @@ fn opencode_provider_maps_to_pi_gateway() {
 }
 
 #[test]
+#[expect(
+    clippy::cognitive_complexity,
+    clippy::too_many_lines,
+    reason = "worker route capability matrix is intentionally exhaustive"
+)]
 fn configured_worker_routes_are_command_capable() {
     let root = repository_root();
     let codex_config =
@@ -141,14 +140,6 @@ fn configured_worker_routes_are_command_capable() {
             "Codex app-server routes must enable {feature}"
         );
     }
-    let grok_command = fs::read_to_string(
-        root.join("tools/claudex-agent-adapter/src/grok_acp/connection_command.rs"),
-    )
-    .expect("Grok ACP command source");
-    assert!(
-        grok_command.contains("--always-approve"),
-        "Grok ACP routes must allow command tools"
-    );
     let config: Value = serde_json::from_str(
         &fs::read_to_string(root.join(".config/claudex/providers.json"))
             .expect("provider configuration"),
@@ -343,64 +334,6 @@ async fn codex_subagent_child_exposes_bash_and_accepts_a_harmless_git_gh_result(
     )
     .await;
     assert_eq!(completed["content"][0]["text"], "CLAUDEX_COMMAND_PROBE_OK");
-}
-
-#[tokio::test]
-async fn configured_acp_subagent_approves_and_executes_the_git_gh_probe() {
-    let fixture = tempfile::tempdir().expect("configured ACP command probe fixture");
-    let model = "command-probe-model";
-    let backend = AgentBackend::spawn_routes(&[BackendRoute {
-        model: model.to_owned(),
-        backend: BackendKind::ConfiguredAcp,
-        effort: None,
-        model_provider: None,
-        model_catalog_json: None,
-        pi_provider: None,
-        pi_model: None,
-        pi_extensions: Vec::new(),
-        max_context_tokens: None,
-        max_concurrency: None,
-        model_prefixes: Vec::new(),
-        acp: Some(AcpLaunch {
-            program: support::coverage_profile::wrapped_program_string(
-                fixture.path(),
-                env!("CARGO_BIN_EXE_grok-acp-mock"),
-            ),
-            arguments: vec!["--mode".to_owned(), "command-probe".to_owned()],
-        }),
-        web_search_mode: WebSearchMode::default(),
-    }]);
-    let bridge = Arc::new(Bridge::new_with_backend(
-        Arc::clone(&backend),
-        model.to_owned(),
-    ));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind configured ACP command adapter");
-    let url = format!(
-        "http://{}/v1/messages",
-        listener.local_addr().expect("adapter address")
-    );
-    let server = tokio::spawn(async move {
-        axum::serve(listener, http_router(bridge, model.to_owned(), None))
-            .await
-            .expect("serve configured ACP command adapter");
-    });
-
-    let response = post_json(
-        &Client::new(),
-        &url,
-        json!({
-            "model":model,
-            "system":"cc_is_subagent=true\n<claudex-agent-id>toolu_acp_command_probe</claudex-agent-id>",
-            "messages":[{"role":"user","content":"Run the command capability probe."}]
-        }),
-    )
-    .await;
-    assert_eq!(response["content"][0]["text"], "ACP_COMMAND_PROBE_OK");
-
-    server.abort();
-    backend.shutdown().await;
 }
 
 fn bash_tool() -> Value {

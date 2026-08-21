@@ -14,7 +14,4 @@ implicit read-only, plan-only, no-edit, no-build, or no-deploy restriction; only
 user instruction may narrow those permissions.
 For related follow-ups delivered to this same agent, build on the existing context and re-inspect
 only changed evidence unless full revalidation is necessary.
-Nested Agent/Task delegation is allowed when useful. Before each nested launch, follow the current
-injected `selected_workers` routing, choose the corresponding claudex worker agent, and pass its
-exact `claudex_model` and `claudex_effort`. Do not use generic `claude` or blindly inherit this
-worker's route when current usage selects another worker or the fallback.
+Complete the work with the supplied tools. Do not nest Agent/Task or spawn_subagent; the parent session owns fan-out. Continue peers only with SendMessage({to}). Do not invent nested Claudex Agent launches from this worker.

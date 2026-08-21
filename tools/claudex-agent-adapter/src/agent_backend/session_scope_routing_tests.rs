@@ -44,27 +44,20 @@ async fn assert_respond_finds_unique_started_pool(model: &str) {
     let AgentBackend::SessionScoped(scopes) = scoped.as_ref() else {
         panic!("expected SessionScoped backends");
     };
-    let leaf = Arc::new(AgentBackend::Grok(
-        crate::grok_acp::GrokAcp::alive_for_test(),
+    let leaf = Arc::new(AgentBackend::Pi(
+        crate::pi_gateway::PiGateway::alive_for_test(),
     ));
     scopes.insert_scope_for_test(
         "tui-session",
         AgentBackend::routed(vec![(model.to_owned(), Arc::clone(&leaf))]),
     );
     let _ = scopes.scope(None);
-    let error = scoped
+    scoped
         .respond_for_model(model, serde_json::json!(1), serde_json::json!({}))
         .await
-        .expect_err("Grok leaf rejects Claude tool results");
-    let message = error.to_string();
-    assert!(
-        !message.contains("not initialized"),
-        "{model}: tool result must not hit the uninitialized anonymous pool: {message}"
-    );
-    assert!(
-        message.contains("Grok ACP"),
-        "{model}: expected the started Claude-session pool: {message}"
-    );
+        .unwrap_or_else(|error| {
+            panic!("{model}: Pi leaf must accept Claude tool results on the started pool: {error}")
+        });
 }
 
 #[tokio::test]
@@ -76,8 +69,8 @@ async fn top_level_respond_does_not_guess_when_two_sessions_started_the_same_mod
         panic!("expected SessionScoped backends");
     };
     for id in ["tui-a", "tui-b"] {
-        let leaf = Arc::new(AgentBackend::Grok(
-            crate::grok_acp::GrokAcp::alive_for_test(),
+        let leaf = Arc::new(AgentBackend::Pi(
+            crate::pi_gateway::PiGateway::alive_for_test(),
         ));
         scopes.insert_scope_for_test(id, AgentBackend::routed(vec![(model.to_owned(), leaf)]));
     }

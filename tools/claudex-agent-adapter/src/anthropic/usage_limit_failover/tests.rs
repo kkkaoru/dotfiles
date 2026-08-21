@@ -2,19 +2,23 @@ use serde_json::Value;
 use std::time::{Duration, SystemTime};
 
 use crate::agent_backend::{AgentBackend, BackendKind, BackendRoute};
+
 use crate::anthropic::provider_auth_cooldown;
 use crate::anthropic::request_routing::RouteDecision;
 use crate::anthropic::{Bridge, MessagesRequest};
+
 use crate::provider_config::ModelCatalog;
 
 use super::super::segment::EMPTY_ACP_END_TURN;
 use super::{UsageLimitFailover, should_failover_provider_error, streaming_provider_retry};
 
 const CLINE_FLASH: &str = "cline-pass/deepseek-v4-flash";
-const GROK_46: &str = "grok-4.6";
 const QWEN_CLOUD: &str = "qwen3.8-max-preview";
+
 const CURSOR_AUTO: &str = "auto";
+
 const SPARK: &str = "gpt-5.3-codex-spark";
+
 const LUNA: &str = "gpt-5.6-luna";
 
 /// Exact Claude Code / TUI wording from session `fa522331-…`
@@ -28,16 +32,14 @@ Configured ACP completed with no assistant content (provider likely unavailable 
 Cline Credits models return empty end_turn when balance is $0 — use Qwen Cloud `qwen3.8-max-preview` / \
 `claudex-qwen`, or top up Credits). This is a server-side issue, usually temporary — try again in a moment. \
 If it persists, check your inference gateway (127.0.0.1:54304).";
-const GROK_402_BALANCE_EXHAUSTED: &str = "Configured ACP prompt failed: \
-http_status:402 Payment Required: usage balance exhausted";
 
 fn cline_and_qwen_bridge() -> Bridge {
     let cache_home = Box::leak(Box::new(
         tempfile::tempdir().expect("isolated failover cache"),
     ));
     let backend = AgentBackend::spawn_routes(&[
-        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
-        BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp),
+        BackendRoute::new(CLINE_FLASH, BackendKind::PiGateway),
+        BackendRoute::new(QWEN_CLOUD, BackendKind::PiGateway),
     ]);
     let mut catalog = ModelCatalog::default();
     catalog
@@ -62,31 +64,11 @@ fn cline_and_qwen_bridge() -> Bridge {
         .with_usage_limit_cache_home(cache_home.path())
 }
 
-fn grok_and_qwen_bridge() -> Bridge {
-    let cache_home = Box::leak(Box::new(
-        tempfile::tempdir().expect("isolated Grok failover cache"),
-    ));
-    let backend = AgentBackend::spawn_routes(&[
-        BackendRoute::new(GROK_46, BackendKind::GrokAcp),
-        BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp),
-    ]);
-    let mut catalog = ModelCatalog::default();
-    catalog
-        .set_worker_routes(vec![
-            crate::provider_config::WorkerRoute::new("claudex-grok", GROK_46, "medium"),
-            crate::provider_config::WorkerRoute::new("claudex-qwen", QWEN_CLOUD, "high"),
-        ])
-        .expect("install Grok and Qwen workers");
-    Bridge::new_with_backend(backend, GROK_46.to_owned())
-        .with_model_catalog(catalog)
-        .with_usage_limit_cache_home(cache_home.path())
-}
-
 #[test]
 fn prefers_configured_subscription_fallback_before_other_providers() {
     let backend = AgentBackend::spawn_routes(&[
         BackendRoute::new("fugu", BackendKind::CodexAppServer),
-        BackendRoute::new("grok-4.6", BackendKind::GrokAcp),
+        BackendRoute::new("gpt-5.6-luna", BackendKind::CodexAppServer),
     ]);
     let mut catalog = ModelCatalog::default();
     catalog
@@ -156,56 +138,6 @@ fn treats_429_rate_limit_as_failover_trigger() {
 }
 
 #[test]
-fn grok_payment_required_balance_exhaustion_cools_only_grok_and_rewrites_to_qwen() {
-    use std::time::SystemTime;
-
-    use crate::anthropic::{provider_auth_cooldown, usage_limit_cooldown};
-
-    let root = tempfile::tempdir().expect("Grok 402 cooldown fixture");
-    let bridge = grok_and_qwen_bridge().with_usage_limit_cache_home(root.path());
-    let error = anyhow::anyhow!(GROK_402_BALANCE_EXHAUSTED);
-
-    assert!(should_failover_provider_error(&error));
-    assert!(!bridge.subagent_provider_is_exhausted(GROK_46));
-    bridge.note_provider_exhaustion(&error, Some(GROK_46));
-
-    assert!(
-        bridge.subagent_provider_is_exhausted(GROK_46),
-        "the exhausted Grok worker must be unavailable to subsequent SubAgents"
-    );
-    assert!(provider_auth_cooldown::scope_is_cooling_down_at(
-        bridge.provider_auth_cache_path().as_deref(),
-        GROK_46,
-        SystemTime::now(),
-    ));
-    assert!(
-        !bridge.subagent_provider_is_exhausted(QWEN_CLOUD),
-        "Grok 402 must not cool down a healthy sibling"
-    );
-    assert!(
-        !usage_limit_cooldown::codex_app_server_is_cooling_down_at(
-            bridge.usage_limit_cache_path().as_deref(),
-            SystemTime::now(),
-        ),
-        "Grok provider balance must not set the global Codex cooldown"
-    );
-
-    let mut request = dummy_request(GROK_46);
-    let mut effort = Some("high".to_owned());
-    let route = bridge
-        .rewrite_exhausted_subagent_request(
-            &mut request,
-            RouteDecision::Provider,
-            &mut effort,
-            true,
-        )
-        .expect("Grok cooldown must choose a sibling provider");
-    assert_eq!(request.model, QWEN_CLOUD, "must not reuse exhausted Grok");
-    assert_eq!(effort.as_deref(), Some("high"));
-    assert_eq!(route, RouteDecision::Provider);
-}
-
-#[test]
 fn treats_empty_acp_billing_as_failover_trigger() {
     assert!(should_failover_provider_error(&anyhow::anyhow!(
         EMPTY_ACP_END_TURN
@@ -224,221 +156,6 @@ fn cline_credits_insufficient_balance_does_not_failover() {
         "ConfiguredLaunch ACP prompt failed: Internal error: Insufficient balance. \
 Add credits at https://app.cline.bot/credits or retry with a different model."
     )));
-}
-
-#[test]
-fn prefers_qwen_cloud_sibling_for_cline_empty_acp() {
-    let failover = cline_and_qwen_bridge()
-        .subagent_provider_failover_for(CLINE_FLASH)
-        .expect("sibling provider");
-    assert_eq!(failover.model, QWEN_CLOUD);
-    assert_eq!(failover.route, RouteDecision::Provider);
-    assert_eq!(failover.effort.as_deref(), Some("high"));
-}
-
-#[test]
-fn codex_luna_failover_prefers_catalog_opencode_and_skips_cline() {
-    const CODEX_LUNA: &str = "codex-luna-from-catalog";
-    const OPENCODE_LUNA: &str = "opencode-go/catalog-luna";
-    let cache_home = Box::leak(Box::new(
-        tempfile::tempdir().expect("isolated luna failover cache"),
-    ));
-    let backend = AgentBackend::spawn_routes(&[
-        BackendRoute::new(CODEX_LUNA, BackendKind::CodexAppServer),
-        BackendRoute::new(OPENCODE_LUNA, BackendKind::ConfiguredAcp),
-        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
-        BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp),
-    ]);
-    let mut catalog = ModelCatalog::default();
-    catalog
-        .set_worker_routes(vec![
-            crate::provider_config::WorkerRoute::new("claudex-gpt", CODEX_LUNA, "max"),
-            crate::provider_config::WorkerRoute::new("claudex-opencode-gpt", OPENCODE_LUNA, "max"),
-            crate::provider_config::WorkerRoute::new(
-                "claudex-cline-deepseek-flash",
-                CLINE_FLASH,
-                "xhigh",
-            ),
-            crate::provider_config::WorkerRoute::new("claudex-qwen", QWEN_CLOUD, "high"),
-        ])
-        .expect("install workers");
-    let bridge = Bridge::new_with_backend(backend, CODEX_LUNA.to_owned())
-        .with_model_catalog(catalog)
-        .with_usage_limit_cache_home(cache_home.path());
-    let failover = bridge
-        .subagent_provider_failover_for(CODEX_LUNA)
-        .expect("opencode go luna sibling");
-    assert_eq!(failover.model, OPENCODE_LUNA);
-    assert_ne!(failover.model, CLINE_FLASH);
-    let opencode_failover = bridge
-        .subagent_provider_failover_for(OPENCODE_LUNA)
-        .expect("non-cline sibling");
-    assert_ne!(opencode_failover.model, CLINE_FLASH);
-    assert_ne!(opencode_failover.model, CODEX_LUNA);
-}
-
-#[test]
-fn opencode_luna_failover_keeps_generic_candidate_order() {
-    const OPENCODE_LUNA: &str = "opencode-go/catalog-luna";
-    let cache_home = Box::leak(Box::new(
-        tempfile::tempdir().expect("isolated opencode luna failover cache"),
-    ));
-    let backend = AgentBackend::spawn_routes(&[
-        BackendRoute::new(OPENCODE_LUNA, BackendKind::ConfiguredAcp),
-        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
-    ]);
-    let mut catalog = ModelCatalog::default();
-    catalog
-        .set_worker_routes(vec![
-            crate::provider_config::WorkerRoute::new("claudex-opencode-gpt", OPENCODE_LUNA, "max"),
-            crate::provider_config::WorkerRoute::new(
-                "claudex-cline-deepseek-flash",
-                CLINE_FLASH,
-                "xhigh",
-            ),
-        ])
-        .expect("install opencode and cline workers");
-    let bridge = Bridge::new_with_backend(backend, OPENCODE_LUNA.to_owned())
-        .with_model_catalog(catalog)
-        .with_usage_limit_cache_home(cache_home.path());
-    let failover = bridge
-        .subagent_provider_failover_for(OPENCODE_LUNA)
-        .expect("generic sibling provider");
-    assert_eq!(failover.model, CLINE_FLASH);
-}
-
-#[test]
-fn gpt_luna_failover_prefers_catalog_opencode_worker_not_pinned_id() {
-    const CODEX_LUNA: &str = "codex-luna-from-catalog";
-    const OPENCODE_LUNA: &str = "opencode-go/catalog-luna";
-    let cache_home = Box::leak(Box::new(
-        tempfile::tempdir().expect("isolated catalog luna failover cache"),
-    ));
-    let backend = AgentBackend::spawn_routes(&[
-        BackendRoute::new(CODEX_LUNA, BackendKind::CodexAppServer),
-        BackendRoute::new(OPENCODE_LUNA, BackendKind::ConfiguredAcp),
-        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
-        BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp),
-    ]);
-    let mut catalog = ModelCatalog::default();
-    catalog
-        .set_worker_routes(vec![
-            crate::provider_config::WorkerRoute::new("claudex-gpt", CODEX_LUNA, "max"),
-            crate::provider_config::WorkerRoute::new("claudex-opencode-gpt", OPENCODE_LUNA, "max"),
-            crate::provider_config::WorkerRoute::new(
-                "claudex-cline-deepseek-flash",
-                CLINE_FLASH,
-                "xhigh",
-            ),
-            crate::provider_config::WorkerRoute::new("claudex-qwen", QWEN_CLOUD, "high"),
-        ])
-        .expect("install workers");
-    let bridge = Bridge::new_with_backend(backend, CODEX_LUNA.to_owned())
-        .with_model_catalog(catalog)
-        .with_usage_limit_cache_home(cache_home.path());
-    let failover = bridge
-        .subagent_provider_failover_for(CODEX_LUNA)
-        .expect("catalog opencode go luna sibling");
-    assert_eq!(failover.model, OPENCODE_LUNA);
-    assert_ne!(failover.model, CLINE_FLASH);
-}
-
-#[test]
-fn gpt_luna_failover_skips_cline_when_catalog_has_no_opencode_worker() {
-    const CODEX_LUNA: &str = "codex-luna-from-catalog";
-    let cache_home = Box::leak(Box::new(
-        tempfile::tempdir().expect("isolated luna without opencode cache"),
-    ));
-    let backend = AgentBackend::spawn_routes(&[
-        BackendRoute::new(CODEX_LUNA, BackendKind::CodexAppServer),
-        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
-        BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp),
-    ]);
-    let mut catalog = ModelCatalog::default();
-    catalog
-        .set_worker_routes(vec![
-            crate::provider_config::WorkerRoute::new("claudex-gpt", CODEX_LUNA, "max"),
-            crate::provider_config::WorkerRoute::new(
-                "claudex-cline-deepseek-flash",
-                CLINE_FLASH,
-                "xhigh",
-            ),
-            crate::provider_config::WorkerRoute::new("claudex-qwen", QWEN_CLOUD, "high"),
-        ])
-        .expect("install workers");
-    let bridge = Bridge::new_with_backend(backend, CODEX_LUNA.to_owned())
-        .with_model_catalog(catalog)
-        .with_usage_limit_cache_home(cache_home.path());
-    let failover = bridge
-        .subagent_provider_failover_for(CODEX_LUNA)
-        .expect("non-cline sibling when opencode worker is absent");
-    assert_ne!(failover.model, CLINE_FLASH);
-    assert_ne!(failover.model, CODEX_LUNA);
-}
-
-#[test]
-fn gpt_luna_failover_ignores_opencode_id_that_is_not_a_candidate() {
-    const CODEX_LUNA: &str = "codex-luna-from-catalog";
-    const ABSENT_OPENCODE: &str = "opencode-go/absent-from-candidates";
-    let cache_home = Box::leak(Box::new(
-        tempfile::tempdir().expect("isolated luna absent opencode cache"),
-    ));
-    let backend = AgentBackend::spawn_routes(&[
-        BackendRoute::new(CODEX_LUNA, BackendKind::CodexAppServer),
-        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
-        BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp),
-    ]);
-    let mut catalog = ModelCatalog::default();
-    catalog
-        .set_worker_routes(vec![
-            crate::provider_config::WorkerRoute::new("claudex-gpt", CODEX_LUNA, "max"),
-            crate::provider_config::WorkerRoute::new(
-                "claudex-cline-deepseek-flash",
-                CLINE_FLASH,
-                "xhigh",
-            ),
-            crate::provider_config::WorkerRoute::new("claudex-qwen", QWEN_CLOUD, "high"),
-        ])
-        .expect("install workers");
-    catalog
-        .set_auxiliary_worker_routes(vec![crate::provider_config::WorkerRoute::new(
-            "claudex-opencode-gpt",
-            ABSENT_OPENCODE,
-            "max",
-        )])
-        .expect("install auxiliary opencode identity");
-    let bridge = Bridge::new_with_backend(backend, CODEX_LUNA.to_owned())
-        .with_model_catalog(catalog)
-        .with_usage_limit_cache_home(cache_home.path());
-    let failover = bridge
-        .subagent_provider_failover_for(CODEX_LUNA)
-        .expect("sibling when preferred opencode is not a candidate");
-    assert_ne!(failover.model, CLINE_FLASH);
-    assert_ne!(failover.model, ABSENT_OPENCODE);
-}
-
-#[test]
-fn regression_subagent_empty_acp_no_longer_dies_on_subscription_stream() {
-    // Historical bug (fa522331 horse-racing TUI):
-    // empty Cline ACP was classified as usage-limit and failover_for() returned
-    // Subscription. streaming_provider_retry(Subscription) is None, so the
-    // already-open SubAgent SSE turn emitted EMPTY_ACP_END_TURN to Claude Code
-    // ("Agent terminated early due to an API error").
-    let bridge = cline_and_qwen_bridge();
-    let outer_style = bridge.usage_limit_failover_for(CLINE_FLASH);
-    assert_eq!(
-        outer_style.as_ref().map(|failover| failover.route),
-        Some(RouteDecision::Subscription)
-    );
-    assert!(
-        streaming_provider_retry(outer_style).is_none(),
-        "subscription cannot continue an already-open SubAgent stream"
-    );
-
-    let retry = streaming_provider_retry(bridge.failover_for_stream_turn(CLINE_FLASH, true))
-        .expect("SubAgent empty ACP must retry a sibling Provider");
-    assert_eq!(retry.model, QWEN_CLOUD);
-    assert_eq!(retry.route, RouteDecision::Provider);
 }
 
 #[test]
@@ -473,11 +190,6 @@ fn empty_acp_records_cline_cooldown_without_codex_usage_limit() {
         bridge.usage_limit_cache_path().as_deref(),
         SystemTime::now(),
     ));
-    assert!(
-        streaming_provider_retry(bridge.failover_for_stream_turn(CLINE_FLASH, true))
-            .is_some_and(|retry| retry.model == QWEN_CLOUD),
-        "after Cline cooldown, SubAgent stream must still land on Qwen Cloud"
-    );
 }
 
 #[test]
@@ -515,36 +227,13 @@ fn records_429_cooldown_per_model_without_backend_usage_limit() {
     ));
 }
 
-#[test]
-fn rewrites_exhausted_cline_nested_launch_onto_named_qwen_worker() {
-    let root = tempfile::tempdir().expect("rewrite fixture");
-    let bridge = cline_and_qwen_bridge().with_usage_limit_cache_home(root.path());
-    bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
-    let mut arguments = serde_json::json!({
-        "subagent_type": "general-purpose",
-        "claudex_model": CLINE_FLASH,
-        "claudex_effort": "xhigh",
-        "prompt": "continue after empty ACP"
-    });
-
-    bridge.rewrite_exhausted_agent_launch_with_quota(&mut arguments, &[], &Value::Null);
-
-    assert_eq!(arguments["subagent_type"], "claudex-qwen");
-    assert_eq!(arguments["claudex_model"], QWEN_CLOUD);
-    assert_eq!(arguments["claudex_effort"], "high");
-    assert!(
-        !bridge.subagent_provider_is_exhausted(QWEN_CLOUD),
-        "Qwen sibling must remain launchable after Cline cooldown"
-    );
-}
-
 fn cline_qwen_cursor_bridge() -> Bridge {
-    let mut qwen = BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp);
+    let mut qwen = BackendRoute::new(QWEN_CLOUD, BackendKind::PiGateway);
     qwen.max_concurrency = Some(3);
     let backend = AgentBackend::spawn_routes(&[
-        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
+        BackendRoute::new(CLINE_FLASH, BackendKind::PiGateway),
         qwen,
-        BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp),
+        BackendRoute::new(CURSOR_AUTO, BackendKind::PiGateway),
     ]);
     let mut catalog = ModelCatalog::default();
     catalog
@@ -603,36 +292,6 @@ fn dummy_request(model: &str) -> MessagesRequest {
 }
 
 #[test]
-fn rewrites_exhausted_cline_http_subagent_request_onto_qwen() {
-    // Historical bug: outer Subscription launched claudex-cline-deepseek-flash
-    // after Cline empty-ACP cooldown. message_router hard-rejected with
-    // `502 provider for model 'cline-pass/deepseek-v4-flash' is cooling down`.
-    let root = tempfile::tempdir().expect("http rewrite fixture");
-    let bridge = cline_and_qwen_bridge().with_usage_limit_cache_home(root.path());
-    bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
-    let mut request = dummy_request(CLINE_FLASH);
-    let mut effort = Some("xhigh".to_owned());
-    let (route, routing_summary_searches) =
-        super::super::agent_routing::count_routing_summary_searches(|| {
-            bridge
-                .rewrite_exhausted_subagent_request(
-                    &mut request,
-                    RouteDecision::Provider,
-                    &mut effort,
-                    true,
-                )
-                .expect("sibling rewrite")
-        });
-    assert_eq!(request.model, QWEN_CLOUD);
-    assert_eq!(effort.as_deref(), Some("high"));
-    assert_eq!(route, RouteDecision::Provider);
-    assert_eq!(
-        routing_summary_searches, 1,
-        "SubAgent cooldown failover must retain exactly one routing-summary lookup"
-    );
-}
-
-#[test]
 fn exhausted_ollama_glm_subagent_http_is_rejected() {
     let root = tempfile::tempdir().expect("ollama glm fixture");
     let mut route = BackendRoute::new("glm-5.2:cloud", BackendKind::CodexAppServer);
@@ -686,7 +345,7 @@ fn exhausted_ollama_glm_subagent_http_is_rejected() {
 fn exhausted_subagent_without_sibling_still_rejects() {
     let root = tempfile::tempdir().expect("no sibling fixture");
     let backend =
-        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp)]);
+        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::PiGateway)]);
     let mut catalog = ModelCatalog::default();
     catalog
         .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
@@ -785,7 +444,7 @@ fn concurrency_preflight_skips_non_subagent_and_non_provider_routes() {
 
 #[tokio::test]
 async fn saturated_model_without_sibling_stays_on_the_same_provider() {
-    let mut qwen = BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp);
+    let mut qwen = BackendRoute::new(QWEN_CLOUD, BackendKind::PiGateway);
     qwen.max_concurrency = Some(3);
     let backend = AgentBackend::spawn_routes(&[qwen]);
     let mut catalog = ModelCatalog::default();
@@ -814,69 +473,6 @@ async fn saturated_model_without_sibling_stays_on_the_same_provider() {
             .reticket_after_concurrency_timeout(&mut request, &mut effort)
             .is_none()
     );
-}
-
-#[tokio::test]
-async fn saturated_qwen_subagent_preflight_moves_to_a_free_sibling() {
-    let bridge = cline_qwen_cursor_bridge();
-    let _permits = saturate_qwen_subagent_slots(&bridge).await;
-    let mut request = dummy_request(QWEN_CLOUD);
-    let mut effort = Some("high".to_owned());
-    let route = bridge.apply_concurrency_preflight(
-        &mut request,
-        RouteDecision::Provider,
-        &mut effort,
-        true,
-    );
-    // Remaining ACP candidates are alphabetical after preferred Qwen, so
-    // `auto` (Cursor) is chosen before Cline when Qwen slots are full.
-    assert_eq!(request.model, CURSOR_AUTO);
-    assert_eq!(effort.as_deref(), Some("high"));
-    assert_eq!(route, RouteDecision::Provider);
-}
-
-#[tokio::test]
-async fn cline_cooldown_plus_saturated_qwen_rewrites_onto_cursor() {
-    // Horse-racing TUI: Cline empty-ACP failovers piled onto Qwen until
-    // admission timed out. Sibling selection must skip both exhausted Cline
-    // and slot-saturated Qwen.
-    let root = tempfile::tempdir().expect("capacity fixture");
-    let bridge = cline_qwen_cursor_bridge().with_usage_limit_cache_home(root.path());
-    bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
-    let _permits = saturate_qwen_subagent_slots(&bridge).await;
-
-    let mut request = dummy_request(CLINE_FLASH);
-    let mut effort = Some("xhigh".to_owned());
-    let route = bridge
-        .rewrite_exhausted_subagent_request(
-            &mut request,
-            RouteDecision::Provider,
-            &mut effort,
-            true,
-        )
-        .expect("sibling rewrite");
-    let route = bridge.apply_concurrency_preflight(&mut request, route, &mut effort, true);
-
-    assert_eq!(request.model, CURSOR_AUTO);
-    assert_eq!(effort.as_deref(), Some("high"));
-    assert_eq!(route, RouteDecision::Provider);
-}
-
-#[tokio::test]
-async fn admission_timeout_retickets_onto_a_free_sibling() {
-    let bridge = cline_qwen_cursor_bridge();
-    let _permits = saturate_qwen_subagent_slots(&bridge).await;
-    let mut request = dummy_request(QWEN_CLOUD);
-    let mut effort = Some("high".to_owned());
-    let ticket = bridge
-        .reticket_after_concurrency_timeout(&mut request, &mut effort)
-        .expect("sibling reticket");
-    assert!(
-        ticket.is_none(),
-        "Cursor has no maxConcurrency, so the sibling starts without a ticket"
-    );
-    assert_eq!(request.model, CURSOR_AUTO);
-    assert_eq!(effort.as_deref(), Some("high"));
 }
 
 /// Exact TUI wording from fa522331 multi-SubAgent launch onto Qwen.
@@ -927,6 +523,7 @@ fn records_qwen_token_plan_cooldown_without_codex_usage_limit() {
 }
 
 const TUI_OPENCODE_WEEKLY: &str = "AI_APICallError: Weekly usage limit reached. Resets in 4 days.";
+
 const OPENCODE_FLASH: &str = "opencode-go/deepseek-v4-flash";
 
 fn opencode_and_codex_bridge() -> Bridge {
@@ -934,7 +531,7 @@ fn opencode_and_codex_bridge() -> Bridge {
         tempfile::tempdir().expect("isolated opencode cache"),
     ));
     let backend = AgentBackend::spawn_routes(&[
-        BackendRoute::new(OPENCODE_FLASH, BackendKind::ConfiguredAcp),
+        BackendRoute::new(OPENCODE_FLASH, BackendKind::PiGateway),
         BackendRoute::new(SPARK, BackendKind::CodexAppServer),
     ]);
     Bridge::new_with_backend(backend, OPENCODE_FLASH.to_owned())
@@ -971,65 +568,6 @@ fn records_opencode_weekly_quota_without_codex_usage_limit() {
 }
 
 #[test]
-fn multi_subagent_rewrite_skips_qwen_after_token_plan_quota() {
-    // Historical bug: Cline empty-ACP failovers always preferred Qwen, even after
-    // Qwen's token-plan was exhausted, so parallel SubAgent launches 502'd.
-    let root = tempfile::tempdir().expect("multi-subagent quota fixture");
-    let bridge = cline_qwen_cursor_bridge().with_usage_limit_cache_home(root.path());
-    bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
-    bridge.note_provider_exhaustion(&anyhow::anyhow!(TUI_QWEN_TOKEN_PLAN), Some(QWEN_CLOUD));
-
-    let mut arguments = serde_json::json!({
-        "subagent_type": "general-purpose",
-        "claudex_model": CLINE_FLASH,
-        "claudex_effort": "xhigh",
-        "prompt": "continue after quota"
-    });
-    bridge.rewrite_exhausted_agent_launch_with_quota(&mut arguments, &[], &Value::Null);
-    assert_eq!(arguments["subagent_type"], "claudex-cursor");
-    assert_eq!(arguments["claudex_model"], CURSOR_AUTO);
-    assert_eq!(arguments["claudex_effort"], "high");
-
-    let mut request = dummy_request(CLINE_FLASH);
-    let mut effort = Some("xhigh".to_owned());
-    let route = bridge
-        .rewrite_exhausted_subagent_request(
-            &mut request,
-            RouteDecision::Provider,
-            &mut effort,
-            true,
-        )
-        .expect("remaining sibling");
-    assert_eq!(request.model, CURSOR_AUTO);
-    assert_eq!(effort.as_deref(), Some("high"));
-    assert_eq!(route, RouteDecision::Provider);
-
-    let retry = streaming_provider_retry(bridge.failover_for_stream_turn(QWEN_CLOUD, true))
-        .expect("explicit Qwen SubAgent must leave exhausted token-plan");
-    assert_eq!(retry.model, CURSOR_AUTO);
-}
-
-#[test]
-fn explicit_qwen_subagent_is_rewritten_after_token_plan_quota() {
-    let root = tempfile::tempdir().expect("explicit qwen fixture");
-    let bridge = cline_qwen_cursor_bridge().with_usage_limit_cache_home(root.path());
-    bridge.note_provider_exhaustion(&anyhow::anyhow!(TUI_QWEN_TOKEN_PLAN), Some(QWEN_CLOUD));
-    let mut request = dummy_request(QWEN_CLOUD);
-    let mut effort = Some("high".to_owned());
-    let route = bridge
-        .rewrite_exhausted_subagent_request(
-            &mut request,
-            RouteDecision::Provider,
-            &mut effort,
-            true,
-        )
-        .expect("sibling rewrite");
-    assert_eq!(request.model, CURSOR_AUTO);
-    assert_eq!(effort.as_deref(), Some("high"));
-    assert_eq!(route, RouteDecision::Provider);
-}
-
-#[test]
 fn outer_turn_is_not_rewritten_by_concurrency_preflight() {
     let bridge = cline_qwen_cursor_bridge();
     let mut request = dummy_request(QWEN_CLOUD);
@@ -1041,123 +579,6 @@ fn outer_turn_is_not_rewritten_by_concurrency_preflight() {
         false,
     );
     assert_eq!(request.model, QWEN_CLOUD);
-    assert_eq!(effort.as_deref(), Some("high"));
-    assert_eq!(route, RouteDecision::Provider);
-}
-
-fn write_usage_routing_qwen_exhausted(home: &std::path::Path) {
-    let dir = home.join(".cache/claudex");
-    std::fs::create_dir_all(&dir).expect("usage-routing dir");
-    let created = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock")
-        .as_secs_f64();
-    let body = serde_json::json!({
-        "created_at": created,
-        "configuration_key": "test",
-        "summary": {
-            "providers": {
-                "qwen": {
-                    "available": false,
-                    "reason": "exhausted",
-                    "model": QWEN_CLOUD,
-                    "agent": "claudex-qwen"
-                },
-                "cursor": {
-                    "available": true,
-                    "reason": "available-cursor-quota",
-                    "model": CURSOR_AUTO,
-                    "agent": "claudex-cursor"
-                }
-            },
-            "selected_workers": [{
-                "agent": "claudex-cursor",
-                "model": CURSOR_AUTO,
-                "effort": "high"
-            }],
-            "disabled_subagent_models": [QWEN_CLOUD]
-        }
-    });
-    std::fs::write(
-        dir.join("usage-routing.json"),
-        serde_json::to_vec(&body).expect("usage-routing json"),
-    )
-    .expect("write usage-routing");
-}
-
-fn qwen_exhausted_routing_messages() -> Vec<Value> {
-    vec![serde_json::json!({
-        "role": "user",
-        "content": format!(
-            r#"Claudex routing for this turn: {{"providers":{{"qwen":{{"available":false,"reason":"exhausted","model":"{QWEN_CLOUD}"}}}},"selected_workers":[{{"agent":"claudex-cursor","model":"{CURSOR_AUTO}","effort":"high"}}],"disabled_subagent_models":["{QWEN_CLOUD}"]}}"#
-        )
-    })]
-}
-
-#[test]
-fn usage_routing_quota_skips_qwen_on_multi_subagent_generation() {
-    // Historical bug: CodexBar/route-usage already marked Qwen token-plan
-    // exhausted, but Cline empty-ACP failover still preferred Qwen so parallel
-    // SubAgent launches 502'd before any cooldown file existed.
-    let root = tempfile::tempdir().expect("usage-routing quota fixture");
-    write_usage_routing_qwen_exhausted(root.path());
-    let bridge = cline_qwen_cursor_bridge().with_usage_limit_cache_home(root.path());
-    assert!(
-        bridge.subagent_provider_is_exhausted(QWEN_CLOUD),
-        "live usage-routing quota must cool down Qwen before any ACP 502"
-    );
-    assert!(!bridge.subagent_provider_is_exhausted(CLINE_FLASH));
-
-    bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
-    let failover = bridge
-        .subagent_provider_failover_for(CLINE_FLASH)
-        .expect("remaining sibling");
-    assert_eq!(failover.model, CURSOR_AUTO);
-
-    let mut arguments = serde_json::json!({
-        "subagent_type": "general-purpose",
-        "claudex_model": CLINE_FLASH,
-        "claudex_effort": "xhigh",
-        "prompt": "parallel after quota view"
-    });
-    bridge.rewrite_exhausted_agent_launch_with_quota(&mut arguments, &[], &Value::Null);
-    assert_eq!(arguments["subagent_type"], "claudex-cursor");
-    assert_eq!(arguments["claudex_model"], CURSOR_AUTO);
-    assert_eq!(arguments["claudex_effort"], "high");
-}
-
-#[test]
-fn prompt_snapshot_quota_rewrites_explicit_qwen_without_cooldown() {
-    let root = tempfile::tempdir().expect("prompt quota fixture");
-    let bridge = cline_qwen_cursor_bridge().with_usage_limit_cache_home(root.path());
-    assert!(
-        !bridge.subagent_provider_is_exhausted(QWEN_CLOUD),
-        "no cooldown file and no usage-routing cache"
-    );
-
-    let mut arguments = serde_json::json!({
-        "subagent_type": "claudex-qwen",
-        "claudex_model": QWEN_CLOUD,
-        "claudex_effort": "high",
-        "prompt": "explicit qwen after quota snapshot"
-    });
-    let messages = qwen_exhausted_routing_messages();
-    bridge.rewrite_exhausted_agent_launch_with_quota(&mut arguments, &messages, &Value::Null);
-    assert_eq!(arguments["subagent_type"], "claudex-cursor");
-    assert_eq!(arguments["claudex_model"], CURSOR_AUTO);
-
-    let mut request = dummy_request(QWEN_CLOUD);
-    request.messages = qwen_exhausted_routing_messages();
-    let mut effort = Some("high".to_owned());
-    let route = bridge
-        .rewrite_exhausted_subagent_request(
-            &mut request,
-            RouteDecision::Provider,
-            &mut effort,
-            true,
-        )
-        .expect("snapshot rewrite");
-    assert_eq!(request.model, CURSOR_AUTO);
     assert_eq!(effort.as_deref(), Some("high"));
     assert_eq!(route, RouteDecision::Provider);
 }
@@ -1243,7 +664,7 @@ fn subagent_provider_failover_for_non_acp_returns_none() {
 #[test]
 fn usage_limit_failover_for_returns_configured_fallback() {
     let backend =
-        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp)]);
+        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::PiGateway)]);
     let mut catalog = ModelCatalog::default();
     catalog
         .set_auxiliary_worker_routes(vec![crate::provider_config::WorkerRoute::new(
@@ -1259,15 +680,6 @@ fn usage_limit_failover_for_returns_configured_fallback() {
         .expect("fallback target");
     assert_eq!(failover.model, "claude-sonnet-5");
     assert_eq!(failover.effort.as_deref(), Some("high"));
-}
-
-#[test]
-fn failover_for_stream_turn_subagent_true_uses_provider_then_subscription() {
-    let bridge = cline_and_qwen_bridge();
-    let sibling = bridge
-        .failover_for_stream_turn(CLINE_FLASH, true)
-        .expect("subagent stream failover");
-    assert_eq!(sibling.route, RouteDecision::Provider);
 }
 
 #[test]
@@ -1295,6 +707,10 @@ fn model_uses_codex_app_server_false_branch() {
 }
 
 #[test]
+#[expect(
+    clippy::unnecessary_mut_passed,
+    reason = "mutable request call shape documents legacy preflight compatibility"
+)]
 fn apply_usage_limit_preflight_skips_subagent() {
     let bridge = cline_and_qwen_bridge();
     let mut request = dummy_request(CLINE_FLASH);
@@ -1307,6 +723,10 @@ fn apply_usage_limit_preflight_skips_subagent() {
 }
 
 #[test]
+#[expect(
+    clippy::unnecessary_mut_passed,
+    reason = "mutable request call shape documents legacy preflight compatibility"
+)]
 fn apply_usage_limit_preflight_skips_non_provider_route() {
     let bridge = cline_and_qwen_bridge();
     let mut request = dummy_request(CLINE_FLASH);
@@ -1324,6 +744,10 @@ fn apply_usage_limit_preflight_skips_non_provider_route() {
 }
 
 #[test]
+#[expect(
+    clippy::unnecessary_mut_passed,
+    reason = "mutable request call shape documents legacy preflight compatibility"
+)]
 fn apply_usage_limit_preflight_activates_when_auth_cooling_down() {
     let root = tempfile::tempdir().expect("preflight auth fixture");
     let bridge = cline_and_qwen_bridge().with_usage_limit_cache_home(root.path());
@@ -1343,6 +767,10 @@ fn apply_usage_limit_preflight_activates_when_auth_cooling_down() {
 }
 
 #[test]
+#[expect(
+    clippy::unnecessary_mut_passed,
+    reason = "mutable request call shape documents legacy preflight compatibility"
+)]
 fn apply_usage_limit_preflight_rewrites_effort_from_configured_fallback() {
     let root = tempfile::tempdir().expect("preflight effort fixture");
     let bridge = cline_and_qwen_bridge().with_usage_limit_cache_home(root.path());
@@ -1361,10 +789,14 @@ fn apply_usage_limit_preflight_rewrites_effort_from_configured_fallback() {
 }
 
 #[test]
+#[expect(
+    clippy::unnecessary_mut_passed,
+    reason = "mutable request call shape documents legacy preflight compatibility"
+)]
 fn apply_usage_limit_preflight_keeps_provider_when_cooling_down_without_failover() {
     let root = tempfile::tempdir().expect("preflight no failover fixture");
     let backend =
-        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp)]);
+        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::PiGateway)]);
     let bridge = Bridge::new_with_backend(backend, CLINE_FLASH.to_owned())
         .with_usage_limit_cache_home(root.path());
     bridge.note_provider_exhaustion(
@@ -1399,7 +831,7 @@ fn codex_usage_limit_is_active_true() {
     let root = tempfile::tempdir().expect("codex limit fixture");
     let backend = AgentBackend::spawn_routes(&[
         BackendRoute::new("fugu", BackendKind::CodexAppServer),
-        BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp),
+        BackendRoute::new(QWEN_CLOUD, BackendKind::PiGateway),
     ]);
     let bridge = Bridge::new_with_backend(backend, "fugu".to_owned())
         .with_usage_limit_cache_home(root.path());
@@ -1415,7 +847,7 @@ fn spark_luna_cursor_bridge() -> Bridge {
     let backend = AgentBackend::spawn_routes(&[
         BackendRoute::new(SPARK, BackendKind::CodexAppServer),
         BackendRoute::new(LUNA, BackendKind::CodexAppServer),
-        BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp),
+        BackendRoute::new(CURSOR_AUTO, BackendKind::PiGateway),
     ]);
     let mut catalog = ModelCatalog::default();
     catalog
@@ -1632,7 +1064,7 @@ fn disabled_subagent_model_without_sibling_hard_blocks() {
     )
     .expect("write usage-routing");
     let backend =
-        AgentBackend::spawn_routes(&[BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp)]);
+        AgentBackend::spawn_routes(&[BackendRoute::new(CURSOR_AUTO, BackendKind::PiGateway)]);
     let mut catalog = ModelCatalog::default();
     catalog
         .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
@@ -1693,7 +1125,7 @@ fn provider_exhaustion_cooldown_reason_hard_blocks_without_sibling() {
     )
     .expect("write usage-routing");
     let backend =
-        AgentBackend::spawn_routes(&[BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp)]);
+        AgentBackend::spawn_routes(&[BackendRoute::new(QWEN_CLOUD, BackendKind::PiGateway)]);
     let mut catalog = ModelCatalog::default();
     catalog
         .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
@@ -1731,7 +1163,7 @@ fn active_auth_cooldown_hard_blocks_without_sibling() {
     provider_auth_cooldown::record_at(Some(&path), CURSOR_AUTO, "401 Unauthorized", now)
         .expect("record active auth cooldown");
     let backend =
-        AgentBackend::spawn_routes(&[BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp)]);
+        AgentBackend::spawn_routes(&[BackendRoute::new(CURSOR_AUTO, BackendKind::PiGateway)]);
     let mut catalog = ModelCatalog::default();
     catalog
         .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
@@ -1775,7 +1207,7 @@ fn active_quota_cooldown_hard_blocks_without_sibling() {
     )
     .expect("record active quota cooldown");
     let backend =
-        AgentBackend::spawn_routes(&[BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp)]);
+        AgentBackend::spawn_routes(&[BackendRoute::new(QWEN_CLOUD, BackendKind::PiGateway)]);
     let mut catalog = ModelCatalog::default();
     catalog
         .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
@@ -1829,7 +1261,7 @@ fn auth_cooldown_boundary_blocks_until_and_releases_at_expiry() {
     });
     std::fs::write(&path, serde_json::to_vec(&cache).expect("json")).expect("write");
     let backend =
-        AgentBackend::spawn_routes(&[BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp)]);
+        AgentBackend::spawn_routes(&[BackendRoute::new(CURSOR_AUTO, BackendKind::PiGateway)]);
     let mut catalog = ModelCatalog::default();
     catalog
         .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
@@ -1933,7 +1365,7 @@ fn note_provider_exhaustion_skips_non_failure_errors() {
 #[test]
 fn usage_limit_failover_for_with_no_configured_fallback() {
     let backend =
-        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp)]);
+        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::PiGateway)]);
     let bridge = Bridge::new_with_backend(backend, CLINE_FLASH.to_owned());
     let failover = bridge.usage_limit_failover_for(CLINE_FLASH);
     assert!(
@@ -1985,46 +1417,15 @@ fn model_uses_codex_app_server_codex_backend() {
 #[test]
 fn model_uses_codex_app_server_non_codex_backend() {
     let backend =
-        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp)]);
+        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::PiGateway)]);
     let bridge = Bridge::new_with_backend(backend, CLINE_FLASH.to_owned());
     assert!(!bridge.model_uses_codex_app_server(CLINE_FLASH));
 }
 
 #[test]
-fn subagent_provider_failover_excluding_with_exhausted_model_skipped() {
-    let root = tempfile::tempdir().expect("failover exclude fixture");
-    let bridge = cline_and_qwen_bridge().with_usage_limit_cache_home(root.path());
-    bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
-    let failover = bridge.subagent_provider_failover_excluding(CLINE_FLASH, None);
-    assert!(
-        failover.as_ref().is_some_and(|f| f.model == QWEN_CLOUD),
-        "must skip exhausted Cline and select Qwen"
-    );
-    assert_eq!(
-        failover.as_ref().map(|f| f.route),
-        Some(RouteDecision::Provider)
-    );
-}
-
-#[tokio::test]
-async fn subagent_provider_failover_excluding_with_capacity_skip() {
-    let bridge = cline_qwen_cursor_bridge();
-    let _permits = saturate_qwen_subagent_slots(&bridge).await;
-    let failover = bridge.subagent_provider_failover_excluding(CLINE_FLASH, None);
-    assert!(
-        failover.as_ref().is_some_and(|f| f.model == CURSOR_AUTO),
-        "must skip capacity-saturated Qwen and select Cursor"
-    );
-    assert_eq!(
-        failover.as_ref().map(|f| f.route),
-        Some(RouteDecision::Provider)
-    );
-}
-
-#[test]
 fn subagent_provider_failover_excluding_with_non_ok_target_kind() {
     let backend = AgentBackend::spawn_routes(&[
-        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
+        BackendRoute::new(CLINE_FLASH, BackendKind::PiGateway),
         BackendRoute::new("codex", BackendKind::CodexAppServer),
     ]);
     let mut catalog = ModelCatalog::default();
@@ -2045,17 +1446,6 @@ fn subagent_provider_failover_excluding_with_non_ok_target_kind() {
 }
 
 #[test]
-fn failover_for_stream_turn_subagent_prefers_provider_with_fallback() {
-    let bridge = cline_and_qwen_bridge();
-    let failover = bridge.failover_for_stream_turn(CLINE_FLASH, true);
-    assert_eq!(
-        failover.as_ref().map(|f| f.route),
-        Some(RouteDecision::Provider),
-        "subagent stream must prefer provider route"
-    );
-}
-
-#[test]
 fn failover_for_stream_turn_outer_uses_subscription_fallback() {
     let bridge = cline_and_qwen_bridge();
     let failover = bridge.failover_for_stream_turn(CLINE_FLASH, false);
@@ -2069,8 +1459,8 @@ fn failover_for_stream_turn_outer_uses_subscription_fallback() {
 #[test]
 fn subagent_failover_is_none_when_no_provider_route_and_no_fallback() {
     let backend = AgentBackend::spawn_routes(&[
-        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
-        BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp),
+        BackendRoute::new(CLINE_FLASH, BackendKind::PiGateway),
+        BackendRoute::new(QWEN_CLOUD, BackendKind::PiGateway),
     ]);
     let mut catalog = ModelCatalog::default();
     catalog
@@ -2099,7 +1489,7 @@ fn subagent_failover_is_none_when_no_provider_route_and_no_fallback() {
 #[test]
 fn note_provider_exhaustion_without_cache_home_does_not_record() {
     let bridge = Bridge::new_with_backend(
-        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp)]),
+        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::PiGateway)]),
         CLINE_FLASH.to_owned(),
     );
     bridge.note_provider_exhaustion(
@@ -2139,37 +1529,10 @@ fn rewrite_exhausted_launch_ignores_non_object_and_fresh_models() {
 }
 
 #[test]
-fn rewrite_exhausted_launch_without_named_worker_drops_effort() {
-    let root = tempfile::tempdir().expect("unnamed failover fixture");
-    let backend = AgentBackend::spawn_routes(&[
-        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
-        BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp),
-    ]);
-    let bridge = Bridge::new_with_backend(backend, CLINE_FLASH.to_owned())
-        .with_usage_limit_cache_home(root.path());
-    bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
-    let mut arguments = serde_json::json!({
-        "claudex_model": CLINE_FLASH,
-        "claudex_effort": "xhigh",
-        "prompt": "continue"
-    });
-    bridge.rewrite_exhausted_agent_launch_with_quota(&mut arguments, &[], &Value::Null);
-    assert_eq!(arguments["claudex_model"], CURSOR_AUTO);
-    assert!(
-        arguments.get("subagent_type").is_none(),
-        "unnamed sibling must not invent a catalog worker type: {arguments:?}"
-    );
-    assert!(
-        arguments.get("claudex_effort").is_none(),
-        "unnamed sibling without launch effort must drop stale effort: {arguments:?}"
-    );
-}
-
-#[test]
 fn rewrite_exhausted_launch_without_sibling_keeps_original() {
     let root = tempfile::tempdir().expect("no sibling fixture");
     let backend =
-        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp)]);
+        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::PiGateway)]);
     let bridge = Bridge::new_with_backend(backend, CLINE_FLASH.to_owned())
         .with_usage_limit_cache_home(root.path());
     bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
@@ -2179,89 +1542,6 @@ fn rewrite_exhausted_launch_without_sibling_keeps_original() {
     });
     bridge.rewrite_exhausted_agent_launch_with_quota(&mut arguments, &[], &Value::Null);
     assert_eq!(arguments["claudex_model"], CLINE_FLASH);
-}
-
-#[test]
-fn rewrite_exhausted_http_subagent_without_catalog_effort_keeps_caller_effort() {
-    let root = tempfile::tempdir().expect("unnamed http failover fixture");
-    let backend = AgentBackend::spawn_routes(&[
-        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
-        BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp),
-    ]);
-    let bridge = Bridge::new_with_backend(backend, CLINE_FLASH.to_owned())
-        .with_usage_limit_cache_home(root.path());
-    bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
-    let mut request = dummy_request(CLINE_FLASH);
-    let mut effort = Some("xhigh".to_owned());
-    let route = bridge
-        .rewrite_exhausted_subagent_request(
-            &mut request,
-            RouteDecision::Provider,
-            &mut effort,
-            true,
-        )
-        .expect("sibling rewrite");
-    assert_eq!(request.model, CURSOR_AUTO);
-    assert_eq!(effort.as_deref(), Some("xhigh"));
-    assert_eq!(route, RouteDecision::Provider);
-}
-
-#[tokio::test]
-async fn saturated_preflight_and_reticket_without_catalog_effort_keep_caller_effort() {
-    let mut qwen = BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp);
-    qwen.max_concurrency = Some(3);
-    let backend = AgentBackend::spawn_routes(&[
-        qwen,
-        BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp),
-    ]);
-    let bridge = Bridge::new_with_backend(backend, QWEN_CLOUD.to_owned());
-    let _permits = saturate_qwen_subagent_slots(&bridge).await;
-
-    let mut request = dummy_request(QWEN_CLOUD);
-    let mut effort = Some("high".to_owned());
-    let route = bridge.apply_concurrency_preflight(
-        &mut request,
-        RouteDecision::Provider,
-        &mut effort,
-        true,
-    );
-    assert_eq!(request.model, CURSOR_AUTO);
-    assert_eq!(effort.as_deref(), Some("high"));
-    assert_eq!(route, RouteDecision::Provider);
-
-    let mut retry = dummy_request(QWEN_CLOUD);
-    let mut retry_effort = Some("high".to_owned());
-    let ticket = bridge
-        .reticket_after_concurrency_timeout(&mut retry, &mut retry_effort)
-        .expect("sibling reticket");
-    assert!(ticket.is_none());
-    assert_eq!(retry.model, CURSOR_AUTO);
-    assert_eq!(retry_effort.as_deref(), Some("high"));
-}
-
-#[test]
-fn subagent_failover_without_preferred_qwen_still_picks_a_sibling() {
-    let backend = AgentBackend::spawn_routes(&[
-        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
-        BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp),
-    ]);
-    let mut catalog = ModelCatalog::default();
-    catalog
-        .set_worker_routes(vec![
-            crate::provider_config::WorkerRoute::new(
-                "claudex-cline-deepseek-flash",
-                CLINE_FLASH,
-                "xhigh",
-            ),
-            crate::provider_config::WorkerRoute::new("claudex-cursor", CURSOR_AUTO, "high"),
-        ])
-        .expect("install workers");
-    let bridge =
-        Bridge::new_with_backend(backend, CLINE_FLASH.to_owned()).with_model_catalog(catalog);
-    let failover = bridge
-        .subagent_provider_failover_for(CLINE_FLASH)
-        .expect("cursor sibling");
-    assert_eq!(failover.model, CURSOR_AUTO);
 }
 
 #[tokio::test]
@@ -2431,35 +1711,9 @@ exit 1
 }
 
 #[test]
-fn subagent_provider_failover_skips_missing_preferred_qwen_candidate() {
-    let backend = AgentBackend::spawn_routes(&[
-        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
-        BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp),
-    ]);
-    let mut catalog = ModelCatalog::default();
-    catalog
-        .set_worker_routes(vec![
-            crate::provider_config::WorkerRoute::new(
-                "claudex-cline-deepseek-flash",
-                CLINE_FLASH,
-                "xhigh",
-            ),
-            crate::provider_config::WorkerRoute::new("claudex-cursor", CURSOR_AUTO, "high"),
-        ])
-        .expect("install workers without preferred qwen");
-    let bridge =
-        Bridge::new_with_backend(backend, CLINE_FLASH.to_owned()).with_model_catalog(catalog);
-    let failover = bridge
-        .subagent_provider_failover_excluding(CLINE_FLASH, None)
-        .expect("cursor sibling");
-    assert_eq!(failover.model, CURSOR_AUTO);
-    assert_eq!(failover.route, RouteDecision::Provider);
-}
-
-#[test]
 fn usage_limit_failover_for_returns_subscription_fallback() {
     let backend =
-        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp)]);
+        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::PiGateway)]);
     let mut catalog = ModelCatalog::default();
     catalog
         .set_auxiliary_worker_routes(vec![crate::provider_config::WorkerRoute::new(

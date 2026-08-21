@@ -7,12 +7,11 @@ use serde_json::Value;
 
 #[cfg(test)]
 use super::MessagesRequest;
-use super::store::{
-    CLAIM_TTL_SECONDS, ClaimRecord, ClaimRequest, current_pid, normalize_scope, unix_seconds,
-};
+use super::records::launch_model;
+use super::store::{CLAIM_TTL_SECONDS, ClaimRecord, ClaimRequest, current_pid, unix_seconds};
 use super::{
-    LaunchRecord, SessionState, SubagentReuseRegistry, launch_model, records, reuse_enabled,
-    scope_is_occupied, summarize_scope,
+    LaunchRecord, SessionState, SubagentReuseRegistry, records, reuse_enabled, scope_is_occupied,
+    summarize_scope,
 };
 
 impl SubagentReuseRegistry {
@@ -52,8 +51,12 @@ impl SubagentReuseRegistry {
             .any(|claim| {
                 claim.expires_unix_seconds > now
                     && claim.session_id == session_id
-                    && normalize_scope(&claim.scope) == scope_key
-                    && models_overlap(model, claim.model.as_deref())
+                    && records::occupancy_matches(
+                        &claim.scope,
+                        claim.model.as_deref(),
+                        &scope_key,
+                        model,
+                    )
             })
     }
 
@@ -73,55 +76,9 @@ impl SubagentReuseRegistry {
             return false;
         }
         let model = launch_model(arguments).map(str::to_owned);
-        let now = unix_seconds();
-        let expires = now.saturating_add(CLAIM_TTL_SECONDS);
-        let claim = if let Some(store) = &self.store {
-            match store.acquire_claim(
-                ClaimRequest {
-                    session_id: session_id.to_owned(),
-                    scope: scope.clone(),
-                    model: model.clone(),
-                    owner: self.owner.clone(),
-                    pid: current_pid(),
-                    tool_use_id: tool_use_id.to_owned(),
-                    expires_unix_seconds: expires,
-                },
-                now,
-            ) {
-                Ok(claim) => claim,
-                Err(error) => {
-                    tracing::warn!(%error, session_id, "could not acquire SubAgent admission claim");
-                    None
-                }
-            }
-        } else {
-            let mut claims = self
-                .claims
-                .lock()
-                .expect("SubAgent claim registry poisoned");
-            claims.retain(|_, claim| claim.expires_unix_seconds > now);
-            if claims.values().any(|claim| {
-                claim.session_id == session_id
-                    && normalize_scope(&claim.scope) == normalize_scope(&scope)
-                    && models_overlap(model.as_deref(), claim.model.as_deref())
-            }) {
-                None
-            } else {
-                let claim = ClaimRecord {
-                    session_id: session_id.to_owned(),
-                    scope: scope.clone(),
-                    model: model.clone(),
-                    owner: self.owner.clone(),
-                    pid: current_pid(),
-                    created_revision: claims.len() as u64 + 1,
-                    expires_unix_seconds: expires,
-                    tool_use_id: tool_use_id.to_owned(),
-                };
-                claims.insert(tool_use_id.to_owned(), claim.clone());
-                Some(claim)
-            }
-        };
-        let Some(claim) = claim else {
+        let Some(claim) =
+            self.acquire_inflight_claim(session_id, &scope, model.as_deref(), tool_use_id)
+        else {
             return false;
         };
         self.claims
@@ -144,6 +101,72 @@ impl SubagentReuseRegistry {
             }),
         );
         true
+    }
+
+    fn acquire_inflight_claim(
+        &self,
+        session_id: &str,
+        scope: &str,
+        model: Option<&str>,
+        tool_use_id: &str,
+    ) -> Option<ClaimRecord> {
+        let now = unix_seconds();
+        let expires = now.saturating_add(CLAIM_TTL_SECONDS);
+        let Some(store) = &self.store else {
+            return self.acquire_memory_claim(session_id, scope, model, tool_use_id, now, expires);
+        };
+        match store.acquire_claim(
+            ClaimRequest {
+                session_id: session_id.to_owned(),
+                scope: scope.to_owned(),
+                model: model.map(str::to_owned),
+                owner: self.owner.clone(),
+                pid: current_pid(),
+                tool_use_id: tool_use_id.to_owned(),
+                expires_unix_seconds: expires,
+            },
+            now,
+        ) {
+            Ok(claim) => claim,
+            Err(error) => {
+                tracing::warn!(%error, session_id, "could not acquire SubAgent admission claim");
+                None
+            }
+        }
+    }
+
+    fn acquire_memory_claim(
+        &self,
+        session_id: &str,
+        scope: &str,
+        model: Option<&str>,
+        tool_use_id: &str,
+        now: u64,
+        expires: u64,
+    ) -> Option<ClaimRecord> {
+        let mut claims = self
+            .claims
+            .lock()
+            .expect("SubAgent claim registry poisoned");
+        claims.retain(|_, claim| claim.expires_unix_seconds > now);
+        if claims.values().any(|claim| {
+            claim.session_id == session_id
+                && records::occupancy_matches(&claim.scope, claim.model.as_deref(), scope, model)
+        }) {
+            return None;
+        }
+        let claim = ClaimRecord {
+            session_id: session_id.to_owned(),
+            scope: scope.to_owned(),
+            model: model.map(str::to_owned),
+            owner: self.owner.clone(),
+            pid: current_pid(),
+            created_revision: claims.len() as u64 + 1,
+            expires_unix_seconds: expires,
+            tool_use_id: tool_use_id.to_owned(),
+        };
+        claims.insert(tool_use_id.to_owned(), claim.clone());
+        Some(claim)
     }
 
     #[cfg(test)]
@@ -183,6 +206,17 @@ impl SubagentReuseRegistry {
             .lock()
             .expect("SubAgent reuse registry poisoned")
             .clear();
+    }
+
+    #[cfg(test)]
+    pub(in crate::anthropic) fn queued_follow_up_messages(&self, session_id: &str) -> Vec<String> {
+        self.queued_follow_ups
+            .lock()
+            .expect("SubAgent follow-up queue poisoned")
+            .iter()
+            .filter(|item| item.session_id == session_id)
+            .map(|item| item.message.clone())
+            .collect()
     }
 
     #[cfg(test)]
@@ -286,6 +320,7 @@ impl SubagentReuseRegistry {
     }
 }
 
+#[cfg(test)]
 fn models_overlap(left: Option<&str>, right: Option<&str>) -> bool {
     match (left, right) {
         (Some(left), Some(right)) => left.eq_ignore_ascii_case(right),

@@ -52,18 +52,27 @@ impl Bridge {
         query: &str,
         session_id: Option<&str>,
     ) -> anyhow::Result<crate::web_search::SearchResponse> {
-        if let Some(model) = self.session_model(session_id).await {
-            if self.app.web_search_mode(&model) == crate::web_search::WebSearchMode::DelegatePi {
-                if let Some((provider, pi_model)) = self.app.pi_identity(&model) {
-                    if let Some(response) =
-                        crate::web_search::run_pi(&self.app, &provider, &pi_model, query).await?
-                    {
-                        return Ok(response);
-                    }
-                }
-            }
+        if let Some(response) = self.run_session_pi_search(query, session_id).await? {
+            return Ok(response);
         }
         crate::web_search::run(&self.app, self.model_catalog.search_worker_routes(), query).await
+    }
+
+    async fn run_session_pi_search(
+        &self,
+        query: &str,
+        session_id: Option<&str>,
+    ) -> anyhow::Result<Option<crate::web_search::SearchResponse>> {
+        let Some(model) = self.session_model(session_id).await else {
+            return Ok(None);
+        };
+        if self.app.web_search_mode(&model) != crate::web_search::WebSearchMode::DelegatePi {
+            return Ok(None);
+        }
+        let Some((provider, pi_model)) = self.app.pi_identity(&model) else {
+            return Ok(None);
+        };
+        crate::web_search::run_pi(&self.app, &provider, &pi_model, query).await
     }
 
     async fn session_model(&self, session_id: Option<&str>) -> Option<String> {

@@ -35,8 +35,8 @@ fn test_session(claude_session_id: Option<&str>) -> Session {
 }
 
 async fn settled_bridge() -> Bridge {
-    let leaf = Arc::new(AgentBackend::Copilot(
-        crate::copilot_acp::CopilotAcp::settled_for_test().await,
+    let leaf = Arc::new(AgentBackend::Pi(
+        crate::pi_gateway::PiGateway::alive_for_test(),
     ));
     let backend = AgentBackend::routed(vec![("main".to_owned(), leaf)]);
     Bridge::new_with_backend(backend, "main".to_owned())
@@ -113,7 +113,7 @@ async fn drain_skips_queued_entries_without_a_prompt() {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("time")
         .as_secs_f64();
-    let owned = crate::launch_mcp::launch_queue_path(&queue_dir, Some("scope-empty"));
+    let owned = queue_dir.join("launch-queue.scope-empty.jsonl");
     std::fs::write(
         &owned,
         format!(

@@ -8,5 +8,4 @@ exec "$DOTPATH/tools/claudex-agent-adapter/scripts/cargo-ephemeral.sh" +1.97.1 i
     --force \
     --path "$DOTPATH/tools/claudex-agent-adapter" \
     --root "${CARGO_HOME:-$HOME/.cargo}" \
-    --bin claudex-agent-adapter \
-    --bin command-code-acp
+    --bin claudex-agent-adapter

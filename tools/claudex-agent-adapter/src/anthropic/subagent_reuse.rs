@@ -8,6 +8,8 @@ use std::{
 };
 
 use super::MessagesRequest;
+mod enforcement;
+pub(in crate::anthropic) use enforcement::{should_reject_live_cap, should_reject_nested_launch};
 mod guidance;
 mod limits;
 mod records;
@@ -20,26 +22,39 @@ use guidance::REUSE_GUIDANCE_MARKER;
 pub(super) use guidance::{agent_teams_enabled, value_text};
 use guidance::{append_reuse_guidance, has_send_message_tool, system_contains_marker};
 pub(super) use limits::{
-    is_launch_tool, max_subagents_per_session, reuse_enabled, session_id,
-    should_expose_launch_tools,
+    NESTED_SUBAGENT_LAUNCH_NOTICE, is_launch_tool, max_subagents_per_session,
+    nested_subagent_launch_notice, reuse_enabled, session_id, should_expose_launch_tools,
 };
+#[cfg(test)]
+pub(in crate::anthropic) use records::already_has_resume;
 pub(in crate::anthropic) use records::live_agent_task_ids;
 use records::{
-    LaunchRecord, already_has_resume, apply_transcript, find_reusable_launch, launch_model,
-    scope_is_occupied, summarize_scope,
+    LaunchRecord, apply_transcript, explicit_follow_up_recipient, find_reusable_launch,
+    follow_up_message, scope_is_occupied, send_message_follow_up_arguments, summarize_scope,
 };
+pub(in crate::anthropic) use records::{has_listed_send_message, is_send_message_follow_up};
 use shadow::ShadowLedger;
 use store::{
     CACHE_FILE_NAME, ClaimRecord, SessionState, Store, reuse_recipients, set_limit_metadata,
 };
 
 pub(crate) const MAX_SUBAGENTS_PER_SESSION_ENV: &str = "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION";
-pub(crate) const DEFAULT_MAX_SUBAGENTS_PER_SESSION: usize = 1_024;
+#[cfg(test)]
+pub(crate) const DEFAULT_MAX_SUBAGENTS_PER_SESSION: usize = limits::DEFAULT_MAX_SUBAGENTS;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct QueuedFollowUp {
+    session_id: String,
+    scope: String,
+    model: Option<String>,
+    message: String,
+}
 
 pub(super) struct SubagentReuseRegistry {
     states: Mutex<HashMap<String, SessionState>>,
     session_revisions: Mutex<HashMap<String, u64>>,
     claims: Mutex<HashMap<String, ClaimRecord>>,
+    queued_follow_ups: Mutex<Vec<QueuedFollowUp>>,
     shadow: ShadowLedger,
     store: Option<Store>,
     owner: String,
@@ -51,6 +66,7 @@ impl Default for SubagentReuseRegistry {
             states: Mutex::new(HashMap::new()),
             session_revisions: Mutex::new(HashMap::new()),
             claims: Mutex::new(HashMap::new()),
+            queued_follow_ups: Mutex::new(Vec::new()),
             shadow: ShadowLedger::default(),
             store: None,
             owner: owner_token(),
@@ -73,6 +89,7 @@ impl SubagentReuseRegistry {
             states: Mutex::new(loaded.sessions),
             session_revisions: Mutex::new(loaded.session_revisions),
             claims: Mutex::new(HashMap::new()),
+            queued_follow_ups: Mutex::new(Vec::new()),
             shadow: ShadowLedger::default(),
             store: Some(store),
             owner: owner_token(),
@@ -87,6 +104,7 @@ impl SubagentReuseRegistry {
             states: Mutex::new(loaded.sessions),
             session_revisions: Mutex::new(loaded.session_revisions),
             claims: Mutex::new(HashMap::new()),
+            queued_follow_ups: Mutex::new(Vec::new()),
             shadow: ShadowLedger::default(),
             store: Some(store),
             owner: owner_token(),
@@ -111,4 +129,10 @@ fn owner_token() -> String {
         std::process::id(),
         NEXT_OWNER.fetch_add(1, Ordering::Relaxed)
     )
+}
+
+#[cfg(test)]
+pub(in crate::anthropic) fn reuse_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }

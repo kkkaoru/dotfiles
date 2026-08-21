@@ -2779,6 +2779,10 @@ fn spawn_health_response(mut stream: std::net::TcpStream, health: String, auth: 
     });
 }
 
+#[expect(
+    clippy::excessive_nesting,
+    reason = "test-only HTTP framing parser remains local and explicit"
+)]
 fn read_complete_http_request(stream: &mut impl Read) -> String {
     const MAX_REQUEST_BYTES: usize = 64 * 1024;
 

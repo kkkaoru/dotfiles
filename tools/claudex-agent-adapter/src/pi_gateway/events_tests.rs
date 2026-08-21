@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{Arc, Mutex, atomic::AtomicBool},
 };
@@ -251,6 +251,51 @@ async fn toolcall_progress_waits_for_name_then_emits_once() {
 }
 
 #[tokio::test]
+async fn toolcall_end_uses_buffered_bash_command_when_event_arguments_are_empty() {
+    let gateway = gateway();
+    let receiver = gateway.events.subscribe("request");
+    let mut state = super::EventTranslateState::default();
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_start","index":0,"toolCallId":"call-bash","name":"Bash"
+            })),
+            &mut state,
+        )
+        .expect("start");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_delta","index":0,"delta":"{\"command\":\"ls -la\"}"
+            })),
+            &mut state,
+        )
+        .expect("delta");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_end","index":0,"toolCallId":"call-bash","name":"Bash",
+                "arguments":{}
+            })),
+            &mut state,
+        )
+        .expect("end");
+    let start = receiver.recv().await.expect("start event");
+    let delta = receiver.recv().await.expect("delta event");
+    let call = receiver.recv().await.expect("call event");
+    assert_eq!(start["method"], "item/tool/start");
+    assert_eq!(delta["method"], "item/tool/delta");
+    assert_eq!(call["method"], "item/tool/call");
+    assert_eq!(call["params"]["arguments"]["command"], "ls -la");
+}
+
+#[tokio::test]
 async fn delta_less_thinking_end_and_text_end_still_stream() {
     let gateway = gateway();
     let receiver = gateway.events.subscribe("request");
@@ -394,17 +439,872 @@ async fn clamps_invalid_usage_subsets_without_underflow() {
 
 #[test]
 fn maps_only_supported_pi_stop_reasons() {
-    for (reason, expected) in [
-        ("stop", "end_turn"),
-        ("length", "max_tokens"),
-        ("toolUse", "tool_use"),
-        ("deferred", "pause_turn"),
-    ] {
-        assert_eq!(
-            super::anthropic_stop_reason(&json!({"reason":reason})).expect("supported reason"),
-            expected
-        );
-    }
+    assert_eq!(
+        super::anthropic_stop_reason(&json!({"reason":"stop"})).expect("supported reason"),
+        "end_turn"
+    );
+    assert_eq!(
+        super::anthropic_stop_reason(&json!({"reason":"length"})).expect("supported reason"),
+        "max_tokens"
+    );
+    assert_eq!(
+        super::anthropic_stop_reason(&json!({"reason":"toolUse"})).expect("supported reason"),
+        "tool_use"
+    );
+    assert_eq!(
+        super::anthropic_stop_reason(&json!({"reason":"deferred"})).expect("supported reason"),
+        "pause_turn"
+    );
     assert!(super::anthropic_stop_reason(&json!({"reason":"pending"})).is_err());
     assert!(super::anthropic_stop_reason(&json!({})).is_err());
+}
+
+#[test]
+fn maps_spawn_subagent_launch_to_agent() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "spawn_subagent",
+        json!({"prompt":"CHILD_OK","description":"smoke"}),
+        &HashSet::new(),
+    )
+    .expect("spawn launch");
+    assert_eq!(name, "Agent");
+    assert_eq!(
+        arguments,
+        json!({"prompt":"CHILD_OK","description":"smoke","run_in_background":true})
+    );
+}
+
+#[test]
+fn maps_prefixed_spawn_subagent_launch_to_agent() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "MCP__spawn_subagent",
+        json!({"prompt":"CHILD_OK"}),
+        &HashSet::new(),
+    )
+    .expect("prefixed spawn launch");
+    assert_eq!(name, "Agent");
+    assert_eq!(
+        arguments,
+        json!({"prompt":"CHILD_OK","run_in_background":true})
+    );
+}
+
+#[test]
+fn leaves_agent_launch_without_resume() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "Agent",
+        json!({"prompt":"CHILD_OK","description":"smoke"}),
+        &HashSet::new(),
+    )
+    .expect("agent launch");
+    assert_eq!(name, "Agent");
+    assert_eq!(
+        arguments,
+        json!({"prompt":"CHILD_OK","description":"smoke"})
+    );
+}
+
+#[test]
+fn maps_spawn_subagent_resume_from_to_send_message() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "spawn_subagent",
+        json!({
+            "prompt":"continue the review",
+            "resume_from":"a0123456789abcdef0"
+        }),
+        &HashSet::from(["SendMessage".to_owned()]),
+    )
+    .expect("listed SendMessage");
+    assert_eq!(name, "SendMessage");
+    assert_eq!(
+        arguments,
+        json!({"to":"a0123456789abcdef0","message":"continue the review"})
+    );
+}
+
+#[test]
+fn maps_agent_resume_from_to_send_message() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "Agent",
+        json!({
+            "prompt":"continue the review",
+            "resume_from":"a0123456789abcdef0"
+        }),
+        &HashSet::from(["SendMessage".to_owned()]),
+    )
+    .expect("listed SendMessage");
+    assert_eq!(name, "SendMessage");
+    assert_eq!(
+        arguments,
+        json!({"to":"a0123456789abcdef0","message":"continue the review"})
+    );
+}
+
+#[test]
+fn maps_agent_resume_alias_to_send_message() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "Agent",
+        json!({
+            "prompt":"continue the review",
+            "resume":"a0123456789abcdef0"
+        }),
+        &HashSet::from(["SendMessage".to_owned()]),
+    )
+    .expect("listed SendMessage");
+    assert_eq!(name, "SendMessage");
+    assert_eq!(
+        arguments,
+        json!({"to":"a0123456789abcdef0","message":"continue the review"})
+    );
+}
+
+#[test]
+fn maps_task_resume_from_to_send_message() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "Task",
+        json!({
+            "prompt":"continue the review",
+            "resume_from":"a0123456789abcdef0"
+        }),
+        &HashSet::from(["SendMessage".to_owned()]),
+    )
+    .expect("listed SendMessage");
+    assert_eq!(name, "SendMessage");
+    assert_eq!(
+        arguments,
+        json!({"to":"a0123456789abcdef0","message":"continue the review"})
+    );
+}
+
+#[test]
+fn maps_agent_to_and_prompt_to_send_message() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "Agent",
+        json!({
+            "prompt":"continue the review",
+            "to":"a0123456789abcdef0"
+        }),
+        &HashSet::from(["SendMessage".to_owned()]),
+    )
+    .expect("listed SendMessage");
+    assert_eq!(name, "SendMessage");
+    assert_eq!(
+        arguments,
+        json!({"to":"a0123456789abcdef0","message":"continue the review"})
+    );
+}
+
+#[test]
+fn maps_message_field_to_send_message() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "spawn_subagent",
+        json!({
+            "message":"continue the review",
+            "resume_from":"a0123456789abcdef0"
+        }),
+        &HashSet::from(["SendMessage".to_owned()]),
+    )
+    .expect("listed SendMessage");
+    assert_eq!(name, "SendMessage");
+    assert_eq!(
+        arguments,
+        json!({"to":"a0123456789abcdef0","message":"continue the review"})
+    );
+}
+
+#[test]
+fn maps_task_field_as_continue_message() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "spawn_subagent",
+        json!({
+            "task":"continue the review",
+            "resume_from":"a0123456789abcdef0"
+        }),
+        &HashSet::from(["SendMessage".to_owned()]),
+    )
+    .expect("listed SendMessage");
+    assert_eq!(name, "SendMessage");
+    assert_eq!(
+        arguments,
+        json!({"to":"a0123456789abcdef0","message":"continue the review"})
+    );
+}
+
+#[test]
+fn normalizes_existing_send_message_to_to_and_message() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "SendMessage",
+        json!({
+            "to":"a0123456789abcdef0",
+            "message":"continue the review",
+            "extra":"drop-me"
+        }),
+        &HashSet::from(["SendMessage".to_owned()]),
+    )
+    .expect("listed SendMessage");
+    assert_eq!(name, "SendMessage");
+    assert_eq!(
+        arguments,
+        json!({"to":"a0123456789abcdef0","message":"continue the review"})
+    );
+}
+
+#[test]
+fn strips_empty_resume_from_on_spawn_subagent_launch() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "spawn_subagent",
+        json!({"prompt":"CHILD_OK","resume_from":""}),
+        &HashSet::new(),
+    )
+    .expect("empty resume launch");
+    assert_eq!(name, "Agent");
+    assert_eq!(
+        arguments,
+        json!({"prompt":"CHILD_OK","run_in_background":true})
+    );
+}
+
+#[test]
+fn strips_whitespace_resume_from_on_agent_launch() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "Agent",
+        json!({"prompt":"CHILD_OK","resume_from":"   "}),
+        &HashSet::new(),
+    )
+    .expect("whitespace resume launch");
+    assert_eq!(name, "Agent");
+    assert_eq!(arguments, json!({"prompt":"CHILD_OK"}));
+}
+
+#[test]
+fn strips_resume_from_without_prompt_from_spawn_subagent() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "spawn_subagent",
+        json!({"resume_from":"a0123456789abcdef0"}),
+        &HashSet::new(),
+    )
+    .expect("resume without prompt");
+    assert_eq!(name, "Agent");
+    assert_eq!(arguments, json!({"run_in_background":true}));
+}
+
+#[test]
+fn remaps_grok_medium_spawn_subagent_type() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "spawn_subagent",
+        json!({
+            "prompt":"CHILD_OK",
+            "subagent_type":"grok-native-medium-plugin-v3:claudex-medium"
+        }),
+        &HashSet::new(),
+    )
+    .expect("grok medium launch");
+    assert_eq!(name, "Agent");
+    assert_eq!(
+        arguments,
+        json!({
+            "prompt":"CHILD_OK",
+            "subagent_type":"claudex-grok",
+            "run_in_background":true
+        })
+    );
+}
+
+#[test]
+fn remaps_claudex_medium_suffix_spawn_subagent_type() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "spawn_subagent",
+        json!({
+            "prompt":"CHILD_OK",
+            "subagent_type":"custom-worker:claudex-medium"
+        }),
+        &HashSet::new(),
+    )
+    .expect("medium suffix launch");
+    assert_eq!(name, "Agent");
+    assert_eq!(arguments["subagent_type"], "claudex-grok");
+    assert_eq!(arguments["run_in_background"], true);
+}
+
+#[test]
+fn keeps_other_spawn_subagent_types() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "spawn_subagent",
+        json!({
+            "prompt":"CHILD_OK",
+            "subagent_type":"claudex-qwen"
+        }),
+        &HashSet::new(),
+    )
+    .expect("other spawn type");
+    assert_eq!(name, "Agent");
+    assert_eq!(
+        arguments,
+        json!({
+            "prompt":"CHILD_OK",
+            "subagent_type":"claudex-qwen",
+            "run_in_background":true
+        })
+    );
+}
+
+#[test]
+fn strips_provider_only_spawn_subagent_fields() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "spawn_subagent",
+        json!({
+            "prompt":"CHILD_OK",
+            "cwd":"/tmp/assigned-worktree",
+            "background":false,
+            "capability_mode":"all"
+        }),
+        &HashSet::new(),
+    )
+    .expect("provider fields launch");
+    assert_eq!(name, "Agent");
+    assert_eq!(
+        arguments,
+        json!({"prompt":"CHILD_OK","run_in_background":true})
+    );
+}
+
+#[test]
+fn maps_instruction_alias_resume_from_to_send_message() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "spawn_subagent",
+        json!({
+            "instruction":"continue the review",
+            "resume_from":"a0123456789abcdef0"
+        }),
+        &HashSet::from(["SendMessage".to_owned()]),
+    )
+    .expect("listed SendMessage");
+    assert_eq!(name, "SendMessage");
+    assert_eq!(
+        arguments,
+        json!({"to":"a0123456789abcdef0","message":"continue the review"})
+    );
+}
+
+#[test]
+fn maps_query_alias_resume_from_to_send_message() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "Agent",
+        json!({
+            "query":"continue the review",
+            "resume_from":"a0123456789abcdef0"
+        }),
+        &HashSet::from(["SendMessage".to_owned()]),
+    )
+    .expect("listed SendMessage");
+    assert_eq!(name, "SendMessage");
+    assert_eq!(
+        arguments,
+        json!({"to":"a0123456789abcdef0","message":"continue the review"})
+    );
+}
+
+#[test]
+fn maps_input_alias_resume_from_to_send_message() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "Task",
+        json!({
+            "input":"continue the review",
+            "to":"a0123456789abcdef0"
+        }),
+        &HashSet::from(["SendMessage".to_owned()]),
+    )
+    .expect("listed SendMessage");
+    assert_eq!(name, "SendMessage");
+    assert_eq!(
+        arguments,
+        json!({"to":"a0123456789abcdef0","message":"continue the review"})
+    );
+}
+
+#[test]
+fn leaves_non_object_agent_arguments() {
+    let (name, arguments) =
+        super::events_finish::mapped_claude_code_tool("Agent", json!(3), &HashSet::new())
+            .expect("non-object agent");
+    assert_eq!(name, "Agent");
+    assert_eq!(arguments, json!(3));
+}
+
+#[test]
+fn wraps_non_object_spawn_subagent_arguments() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "spawn_subagent",
+        json!("go"),
+        &HashSet::new(),
+    )
+    .expect("non-object spawn");
+    assert_eq!(name, "Agent");
+    assert_eq!(arguments, json!({"value":"go","run_in_background":true}));
+}
+
+#[test]
+fn leaves_read_tool_with_resume_from() {
+    let (name, arguments) = super::events_finish::mapped_claude_code_tool(
+        "Read",
+        json!({"path":"CLAUDE.md","resume_from":"a0123456789abcdef0"}),
+        &HashSet::new(),
+    )
+    .expect("read passthrough");
+    assert_eq!(name, "Read");
+    assert_eq!(
+        arguments,
+        json!({"path":"CLAUDE.md","resume_from":"a0123456789abcdef0"})
+    );
+}
+
+#[test]
+fn fail_closed_spawn_resume_without_listed_send_message() {
+    assert!(
+        super::events_finish::mapped_claude_code_tool(
+            "spawn_subagent",
+            json!({
+                "prompt":"continue the review",
+                "resume_from":"a0123456789abcdef0"
+            }),
+            &HashSet::new(),
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn fail_closed_agent_resume_when_only_agent_listed() {
+    assert!(
+        super::events_finish::mapped_claude_code_tool(
+            "Agent",
+            json!({
+                "prompt":"continue the review",
+                "resume_from":"a0123456789abcdef0"
+            }),
+            &HashSet::from(["Agent".to_owned()]),
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn listed_claude_tool_names_reads_original_send_message() {
+    let names = super::events_finish::listed_claude_tool_names(&json!({
+        "tools":[
+            {"name":"Agent"},
+            {"name":"SendMessage"},
+            {"name":"Bash"},
+            {"name":""},
+            {"name":"  "}
+        ]
+    }));
+    assert!(names.contains("SendMessage"));
+    assert!(names.contains("Agent"));
+    assert!(names.contains("Bash"));
+    assert!(!names.contains(""));
+}
+
+#[test]
+fn listed_claude_tool_names_empty_without_tools_array() {
+    let names = super::events_finish::listed_claude_tool_names(&json!({"messages":[]}));
+    assert!(names.is_empty());
+}
+
+#[test]
+fn from_request_tools_lists_send_message_from_pi_request() {
+    let state = super::event_translate_state(&json!({
+        "tools":[{"name":"Agent"},{"name":"SendMessage"}]
+    }));
+    assert!(state.listed_tools.contains("SendMessage"));
+    assert!(state.listed_tools.contains("Agent"));
+}
+
+#[test]
+fn bash_cmd_alias_from_event_is_usable() {
+    let tool = super::ToolCallBuffer {
+        id: "id".to_owned(),
+        name: "Bash".to_owned(),
+        arguments: String::new(),
+        start_emitted: true,
+    };
+    let value = super::events_finish::finished_tool_arguments(
+        &json!({"arguments":{"cmd":"ls -la"}}),
+        &tool,
+    )
+    .expect("cmd alias");
+    assert_eq!(value, json!({"cmd":"ls -la"}));
+}
+
+#[test]
+fn bash_script_alias_from_event_is_usable() {
+    let tool = super::ToolCallBuffer {
+        id: "id".to_owned(),
+        name: "Bash".to_owned(),
+        arguments: String::new(),
+        start_emitted: true,
+    };
+    let value = super::events_finish::finished_tool_arguments(
+        &json!({"arguments":{"script":"ls -la"}}),
+        &tool,
+    )
+    .expect("script alias");
+    assert_eq!(value, json!({"script":"ls -la"}));
+}
+
+#[test]
+fn bash_field_alias_from_event_is_usable() {
+    let tool = super::ToolCallBuffer {
+        id: "id".to_owned(),
+        name: "Bash".to_owned(),
+        arguments: String::new(),
+        start_emitted: true,
+    };
+    let value = super::events_finish::finished_tool_arguments(
+        &json!({"arguments":{"bash":"ls -la"}}),
+        &tool,
+    )
+    .expect("bash alias");
+    assert_eq!(value, json!({"bash":"ls -la"}));
+}
+
+#[test]
+fn non_object_event_arguments_fall_back_to_bash_buffer() {
+    let tool = super::ToolCallBuffer {
+        id: "id".to_owned(),
+        name: "Bash".to_owned(),
+        arguments: r#"{"command":"ls -la"}"#.to_owned(),
+        start_emitted: true,
+    };
+    let value =
+        super::events_finish::finished_tool_arguments(&json!({"arguments":"not-an-object"}), &tool)
+            .expect("buffer");
+    assert_eq!(value, json!({"command":"ls -la"}));
+}
+
+#[test]
+fn invalid_buffered_arguments_without_event_args_error() {
+    let tool = super::ToolCallBuffer {
+        id: "id".to_owned(),
+        name: "Read".to_owned(),
+        arguments: "{".to_owned(),
+        start_emitted: true,
+    };
+    assert!(
+        super::events_finish::finished_tool_arguments(&json!({}), &tool).is_err(),
+        "invalid buffered JSON must fail when the event omitted arguments"
+    );
+}
+
+#[test]
+fn nested_tool_call_arguments_are_used_for_spawn_resume() {
+    let tool = super::ToolCallBuffer {
+        id: "id".to_owned(),
+        name: "spawn_subagent".to_owned(),
+        arguments: String::new(),
+        start_emitted: true,
+    };
+    let value = super::events_finish::finished_tool_arguments(
+        &json!({
+            "toolCall":{
+                "arguments":{
+                    "prompt":"continue the review",
+                    "resume_from":"a0123456789abcdef0"
+                }
+            }
+        }),
+        &tool,
+    )
+    .expect("nested toolCall arguments");
+    assert_eq!(
+        value,
+        json!({
+            "prompt":"continue the review",
+            "resume_from":"a0123456789abcdef0"
+        })
+    );
+}
+
+#[test]
+fn mapped_start_name_rewrites_spawn_subagent_to_agent() {
+    assert_eq!(
+        super::events_finish::mapped_start_tool_name("spawn_subagent"),
+        "Agent"
+    );
+    assert_eq!(
+        super::events_finish::mapped_start_tool_name("MCP__spawn_subagent"),
+        "Agent"
+    );
+    assert_eq!(super::events_finish::mapped_start_tool_name("Bash"), "Bash");
+    assert_eq!(
+        super::events_finish::mapped_start_tool_name("Agent"),
+        "Agent"
+    );
+}
+
+#[tokio::test]
+async fn spawn_subagent_launch_emits_agent_tool_call() {
+    let gateway = gateway();
+    let receiver = gateway.events.subscribe("request");
+    let mut state = super::EventTranslateState::default();
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_start","index":0,"toolCallId":"call-spawn","name":"spawn_subagent"
+            })),
+            &mut state,
+        )
+        .expect("start");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_delta","index":0,"delta":"{\"prompt\":\"CHILD_OK\"}"
+            })),
+            &mut state,
+        )
+        .expect("delta");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_end","index":0,"toolCallId":"call-spawn","name":"spawn_subagent",
+                "arguments":{"prompt":"CHILD_OK","description":"smoke"}
+            })),
+            &mut state,
+        )
+        .expect("end");
+    let start = receiver.recv().await.expect("start event");
+    let delta = receiver.recv().await.expect("delta event");
+    let call = receiver.recv().await.expect("call event");
+    assert_eq!(start["method"], "item/tool/start");
+    assert_eq!(start["params"]["tool"], "Agent");
+    assert_eq!(delta["method"], "item/tool/delta");
+    assert_eq!(call["method"], "item/tool/call");
+    assert_eq!(call["params"]["tool"], "Agent");
+    assert_eq!(
+        call["params"]["arguments"],
+        json!({"prompt":"CHILD_OK","description":"smoke","run_in_background":true})
+    );
+}
+
+#[tokio::test]
+async fn spawn_subagent_resume_from_emits_send_message() {
+    let gateway = gateway();
+    let receiver = gateway.events.subscribe("request");
+    let mut state = super::event_translate_state(&json!({
+        "tools":[{"name":"Agent"},{"name":"SendMessage"}]
+    }));
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_start","index":0,"toolCallId":"call-resume","name":"spawn_subagent"
+            })),
+            &mut state,
+        )
+        .expect("start");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_end","index":0,"toolCallId":"call-resume","name":"spawn_subagent",
+                "arguments":{
+                    "prompt":"continue the review",
+                    "resume_from":"a0123456789abcdef0"
+                }
+            })),
+            &mut state,
+        )
+        .expect("end");
+    let start = receiver.recv().await.expect("start event");
+    let call = receiver.recv().await.expect("call event");
+    assert_eq!(start["params"]["tool"], "SendMessage");
+    assert_eq!(call["params"]["tool"], "SendMessage");
+    assert_eq!(
+        call["params"]["arguments"],
+        json!({"to":"a0123456789abcdef0","message":"continue the review"})
+    );
+    assert!(call["params"]["arguments"].get("resume_from").is_none());
+    assert!(call["params"]["arguments"].get("prompt").is_none());
+}
+
+#[tokio::test]
+async fn spawn_subagent_resume_without_listed_send_message_emits_no_call() {
+    let gateway = gateway();
+    let receiver = gateway.events.subscribe("request");
+    let mut state = super::event_translate_state(&json!({
+        "tools":[{"name":"Agent"},{"name":"Bash"}]
+    }));
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_start","index":0,"toolCallId":"call-drop","name":"spawn_subagent"
+            })),
+            &mut state,
+        )
+        .expect("start");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_end","index":0,"toolCallId":"call-drop","name":"spawn_subagent",
+                "arguments":{
+                    "prompt":"continue the review",
+                    "resume_from":"a0123456789abcdef0"
+                }
+            })),
+            &mut state,
+        )
+        .expect("end");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(20), receiver.recv())
+            .await
+            .is_err(),
+        "unlisted SendMessage continue must not emit item/tool/start or item/tool/call"
+    );
+}
+
+#[tokio::test]
+async fn agent_resume_from_emits_send_message() {
+    let gateway = gateway();
+    let receiver = gateway.events.subscribe("request");
+    let mut state = super::event_translate_state(&json!({
+        "tools":[{"name":"Agent"},{"name":"SendMessage"}]
+    }));
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_start","index":0,"toolCallId":"call-agent","name":"Agent"
+            })),
+            &mut state,
+        )
+        .expect("start");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_end","index":0,"toolCallId":"call-agent","name":"Agent",
+                "arguments":{
+                    "prompt":"continue the review",
+                    "resume":"a0123456789abcdef0"
+                }
+            })),
+            &mut state,
+        )
+        .expect("end");
+    let start = receiver.recv().await.expect("start event");
+    let call = receiver.recv().await.expect("call event");
+    assert_eq!(start["params"]["tool"], "SendMessage");
+    assert_eq!(call["params"]["tool"], "SendMessage");
+    assert_eq!(
+        call["params"]["arguments"],
+        json!({"to":"a0123456789abcdef0","message":"continue the review"})
+    );
+}
+
+#[tokio::test]
+async fn spawn_subagent_resume_prefers_buffered_prompt_over_partial_event_args() {
+    let gateway = gateway();
+    let receiver = gateway.events.subscribe("request");
+    let mut state = super::event_translate_state(&json!({
+        "tools":[{"name":"SendMessage"}]
+    }));
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_start","index":0,"toolCallId":"call-buf","name":"spawn_subagent"
+            })),
+            &mut state,
+        )
+        .expect("start");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_delta","index":0,
+                "delta":"{\"prompt\":\"continue the review\",\"resume_from\":\"a0123456789abcdef0\"}"
+            })),
+            &mut state,
+        )
+        .expect("delta");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_end","index":0,"toolCallId":"call-buf","name":"spawn_subagent",
+                "arguments":{"resume_from":"a0123456789abcdef0"}
+            })),
+            &mut state,
+        )
+        .expect("end");
+    let start = receiver.recv().await.expect("start event");
+    let delta = receiver.recv().await.expect("delta event");
+    let call = receiver.recv().await.expect("call event");
+    assert_eq!(start["params"]["tool"], "SendMessage");
+    assert_eq!(delta["method"], "item/tool/delta");
+    assert_eq!(call["params"]["tool"], "SendMessage");
+    assert_eq!(
+        call["params"]["arguments"],
+        json!({"to":"a0123456789abcdef0","message":"continue the review"})
+    );
+}
+
+#[tokio::test]
+async fn empty_bash_does_not_emit_tool_start() {
+    let gateway = gateway();
+    let receiver = gateway.events.subscribe("request");
+    let mut state = super::EventTranslateState::default();
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_start","index":0,"toolCallId":"call-bash","name":"Bash"
+            })),
+            &mut state,
+        )
+        .expect("start");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_delta","index":0,"delta":"{}"
+            })),
+            &mut state,
+        )
+        .expect("delta");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_end","index":0,"toolCallId":"call-bash","name":"Bash",
+                "arguments":{}
+            })),
+            &mut state,
+        )
+        .expect("end");
+    match tokio::time::timeout(std::time::Duration::from_millis(20), receiver.recv()).await {
+        Err(_) => {}
+        Ok(None) => {}
+        Ok(Some(frame)) => panic!("empty Bash must not emit {frame}"),
+    }
 }

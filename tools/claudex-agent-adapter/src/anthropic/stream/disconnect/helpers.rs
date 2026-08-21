@@ -28,9 +28,6 @@ pub(super) async fn reject_disconnected_tool_with_warning(
     session: &Session,
     request_id: Value,
 ) {
-    if crate::anthropic::stream::acp_tool_bridge::is_acp_bridge_request_id(&request_id) {
-        return;
-    }
     if let Err(error) =
         reject_disconnected_tool(&bridge.app_for_session(session), &session.model, request_id).await
     {

@@ -373,6 +373,7 @@ fn completed_segment() -> Segment {
             ..Usage::default()
         },
         web_evidence: WebEvidenceSummary::default(),
+        next_sse_index: 0,
     }
 }
 

@@ -833,6 +833,11 @@ fn subagent_subscription_omits_main_only_advisor_tool() {
             json!({"name":"Read"}),
             json!({"name":"advisor"}),
             json!({"name":"Bash"}),
+            json!({"name":"Agent"}),
+            json!({"name":"Task"}),
+            json!({"name":"spawn_subagent"}),
+            json!({"name":"cc_Agent_0"}),
+            json!({"name":"SendMessage"}),
         ],
         stream: true,
         output_config: json!({}),
@@ -843,7 +848,35 @@ fn subagent_subscription_omits_main_only_advisor_tool() {
     };
     assert_eq!(
         super::subscription::requested_tools_for_request(&request, true),
-        ["Read", "Bash"]
+        ["Read", "Bash", "SendMessage"]
+    );
+}
+
+#[test]
+fn nested_request_does_not_list_spawn_subagent() {
+    let request = MessagesRequest {
+        model: "grok-4.6".to_owned(),
+        system: json!("cc_is_subagent=true"),
+        messages: vec![],
+        tools: vec![
+            json!({"name":"Read"}),
+            json!({"name":"Agent"}),
+            json!({"name":"Task"}),
+            json!({"name":"spawn_subagent"}),
+            json!({"name":"cc_Agent_0"}),
+            json!({"name":"cc_Task_1"}),
+            json!({"name":"SendMessage"}),
+        ],
+        stream: true,
+        output_config: json!({}),
+        metadata: json!({}),
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+    assert_eq!(
+        super::subscription::requested_tools_for_request(&request, true),
+        ["Read", "SendMessage"]
     );
 }
 
@@ -962,7 +995,7 @@ fn configured_worker_effort_replaces_an_unsupported_explicit_effort() {
 
 #[test]
 fn native_grok_route_effort_overrides_explicit_and_unmatched_request_effort() {
-    let mut route = BackendRoute::new("grok-4.6", BackendKind::GrokAcp);
+    let mut route = BackendRoute::new("grok-4.6", BackendKind::PiGateway);
     route.effort = Some("medium".to_owned());
     let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[route]), "main".to_owned());
     let mut request = MessagesRequest {
@@ -990,8 +1023,7 @@ fn native_grok_route_effort_overrides_explicit_and_unmatched_request_effort() {
         );
     }
 
-    let mut configured =
-        BackendRoute::new("opencode-go/deepseek-v4-flash", BackendKind::ConfiguredAcp);
+    let mut configured = BackendRoute::new("opencode-go/deepseek-v4-flash", BackendKind::PiGateway);
     configured.effort = Some("max".to_owned());
     let configured_bridge =
         Bridge::new_with_backend(AgentBackend::spawn_routes(&[configured]), "main".to_owned());
@@ -999,6 +1031,7 @@ fn native_grok_route_effort_overrides_explicit_and_unmatched_request_effort() {
     request.output_config = json!({"effort":"low"});
     assert_eq!(
         configured_bridge.resolve_request_effort(&request, AgentEffort::Unmatched),
-        Some("low".to_owned())
+        Some("max".to_owned()),
+        "PiGateway launch-scoped effort must override stale request metadata"
     );
 }

@@ -71,8 +71,7 @@ impl Store {
             reap_claims(&mut document.claims, now);
             let occupied = document.claims.values().any(|claim| {
                 claim.session_id == session_id
-                    && scopes_equal(&claim.scope, scope)
-                    && models_overlap(model, claim.model.as_deref())
+                    && super::occupancy_matches(&claim.scope, claim.model.as_deref(), scope, model)
             });
             if document.claims.len() != before {
                 document.revision = document.revision.saturating_add(1);
@@ -102,18 +101,6 @@ pub(crate) fn normalize_scope(scope: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ")
         .to_ascii_lowercase()
-}
-
-fn scopes_equal(left: &str, right: &str) -> bool {
-    normalize_scope(left) == normalize_scope(right)
-}
-
-fn models_overlap(left: Option<&str>, right: Option<&str>) -> bool {
-    match (left, right) {
-        (Some(left), Some(right)) => left.eq_ignore_ascii_case(right),
-        (None, _) => true,
-        (Some(_), None) => false,
-    }
 }
 
 fn reap_claims(claims: &mut HashMap<String, ClaimRecord>, now: u64) {

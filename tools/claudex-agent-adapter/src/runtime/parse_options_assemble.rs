@@ -71,13 +71,17 @@ pub(super) fn assemble_options(mut draft: OptionsDraft) -> Result<ParsedOptions>
 }
 fn enable_pi_routes(routes: &mut [BackendRoute]) -> Result<()> {
     for route in routes {
-        match (&route.pi_provider, &route.pi_model) {
-            (Some(provider), Some(model)) if !provider.is_empty() && !model.is_empty() => {
-                route.backend = BackendKind::PiGateway;
-                route.acp = None;
-            }
-            (None, None) => {}
+        let mapped = match (&route.pi_provider, &route.pi_model) {
+            (Some(provider), Some(model)) if !provider.is_empty() && !model.is_empty() => true,
+            (None, None) => false,
             _ => bail!("Pi route mappings require non-empty piProvider and piModel"),
+        };
+        if !mapped {
+            continue;
+        }
+        route.backend = BackendKind::PiGateway;
+        if route.web_search_mode == crate::web_search::WebSearchMode::AcpNative {
+            route.web_search_mode = crate::web_search::WebSearchMode::DelegatePi;
         }
     }
     Ok(())
@@ -99,15 +103,9 @@ fn validate_routes(routes: &[BackendRoute]) -> Result<()> {
         bail!("Pi route mappings require non-empty piProvider and piModel");
     }
     if routes.iter().any(|route| {
-        route.backend == BackendKind::PiGateway
-            && route.web_search_mode == crate::web_search::WebSearchMode::AcpNative
-    }) {
-        bail!("PiGateway routes cannot use acp-native webSearchMode");
-    }
-    if routes.iter().any(|route| {
         route
             .max_concurrency
-            .is_some_and(|limit| limit == 0 || limit > crate::grok_acp::MAX_MODEL_CONCURRENCY)
+            .is_some_and(|limit| limit == 0 || limit > crate::agent_backend::MAX_MODEL_CONCURRENCY)
     }) {
         bail!("backend route maxConcurrency is out of range");
     }
@@ -147,18 +145,28 @@ mod tests {
         zero.max_concurrency = Some(0);
         assert!(validate_routes(&[zero]).is_err());
         let mut large = route("large");
-        large.max_concurrency = Some(crate::grok_acp::MAX_MODEL_CONCURRENCY + 1);
+        large.max_concurrency = Some(crate::agent_backend::MAX_MODEL_CONCURRENCY + 1);
         assert!(validate_routes(&[large]).is_err());
     }
 
     #[test]
-    fn rejects_acp_native_for_pi_gateway_routes() {
-        let mut bad = route("grok-4.6");
-        bad.backend = BackendKind::PiGateway;
-        bad.pi_provider = Some("xai".to_owned());
-        bad.pi_model = Some("grok-4.6".to_owned());
-        bad.web_search_mode = crate::web_search::WebSearchMode::AcpNative;
-        assert!(validate_routes(&[bad]).is_err());
+    fn maps_acp_native_web_search_to_delegate_pi() {
+        let mut draft = OptionsDraft {
+            model: Some("grok-4.6".to_owned()),
+            ..Default::default()
+        };
+        let mut mapped = route("grok-4.6");
+        mapped.backend = BackendKind::PiGateway;
+        mapped.pi_provider = Some("xai".to_owned());
+        mapped.pi_model = Some("grok-4.6".to_owned());
+        mapped.web_search_mode = crate::web_search::WebSearchMode::AcpNative;
+        draft.routes.push(mapped);
+        let options = assemble_options(draft).expect("map acp-native onto Pi");
+        assert_eq!(
+            options.adapter.routes[0].web_search_mode,
+            crate::web_search::WebSearchMode::DelegatePi
+        );
+        assert_eq!(options.adapter.routes[0].backend, BackendKind::PiGateway);
     }
 
     #[test]

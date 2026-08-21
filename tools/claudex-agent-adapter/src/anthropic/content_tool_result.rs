@@ -1,5 +1,6 @@
 use serde_json::{Value, json};
 
+use super::super::token_efficiency::truncated_tool_result_text;
 use super::{ToolResult, image_data_url, input_text};
 
 pub(super) fn tool_result(block: &Value) -> Option<ToolResult> {
@@ -23,7 +24,7 @@ pub(super) fn tool_result(block: &Value) -> Option<ToolResult> {
 
 fn tool_result_content(content: Option<&Value>) -> Vec<Value> {
     match content {
-        Some(Value::String(text)) => vec![input_text(text)],
+        Some(Value::String(text)) => vec![input_text(&truncated_tool_result_text(text))],
         Some(Value::Array(items)) => items.iter().filter_map(tool_result_item).collect(),
         _ => Vec::new(),
     }
@@ -31,9 +32,9 @@ fn tool_result_content(content: Option<&Value>) -> Vec<Value> {
 
 fn tool_result_item(item: &Value) -> Option<Value> {
     match item.get("type").and_then(Value::as_str) {
-        Some("text") => Some(input_text(
+        Some("text") => Some(input_text(&truncated_tool_result_text(
             item.get("text").and_then(Value::as_str).unwrap_or(""),
-        )),
+        ))),
         Some("image") => image_data_url(item)
             .map(|image_url| json!({ "type": "inputImage", "imageUrl": image_url })),
         _ => None,

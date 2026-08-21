@@ -344,6 +344,7 @@ mod tests {
     }
 
     #[test]
+    #[expect(clippy::excessive_nesting, reason = "retry callback fixture intentionally captures sequential attempts")]
     fn retries_transient_io_then_loads_dedicated_policy() {
         clear_last_good();
         let path = Path::new("/tmp/disabled-subagent-models.emfile.json");

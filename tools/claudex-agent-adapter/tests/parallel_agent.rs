@@ -286,6 +286,9 @@ async fn accepts_main_input_after_background_handoff_and_keeps_task_retrievable(
     let launched =
         post_json_with_body_on_error(&client, &url, request(json!([user.clone()]))).await;
     assert_eq!(launched["stop_reason"], "tool_use");
+    assert_eq!(launched["content"].as_array().unwrap().len(), 1);
+    assert_eq!(launched["content"][0]["name"], "Agent");
+    assert_eq!(launched["content"][0]["input"]["run_in_background"], true);
     let launch_results = background_launch_results(&launched);
     let handoff = post_json_with_body_on_error(
         &client,
@@ -300,7 +303,7 @@ async fn accepts_main_input_after_background_handoff_and_keeps_task_retrievable(
     assert_eq!(handoff["stop_reason"], "end_turn");
     assert_eq!(
         handoff["content"][0]["text"],
-        "3 background agents launched; the main prompt is ready."
+        "Background agent launched; the main prompt is ready."
     );
     assert!(!handoff.to_string().contains("agent-message"));
     assert_follow_up_and_task_output(&client, &url, &user, &launched, &launch_results, &handoff)
@@ -516,7 +519,7 @@ async fn main_user_follow_up_controls_running_subagents_on_a_fresh_session() {
 }
 
 #[tokio::test]
-async fn main_user_follow_up_reads_running_subagent_output_without_mailbox_injection() {
+async fn main_user_follow_up_continues_running_subagent_with_send_message() {
     let _ = Adapter::start_authenticated;
     let _ = support::base_request();
     let adapter = Adapter::start().await;
@@ -546,8 +549,12 @@ async fn main_user_follow_up_reads_running_subagent_output_without_mailbox_injec
     )
     .await;
     assert_eq!(control["stop_reason"], "tool_use");
-    assert_eq!(control["content"][0]["name"], "TaskOutput");
-    assert_eq!(control["content"][0]["input"]["task_id"], "agent-profile-7");
+    assert_eq!(control["content"][0]["name"], "SendMessage");
+    assert_eq!(control["content"][0]["input"]["to"], "agent-profile-7");
+    assert_eq!(
+        control["content"][0]["input"]["message"],
+        "ask the profile worker for its current findings"
+    );
 
     let completed = post_json(
         &client,
@@ -751,7 +758,7 @@ async fn streamed_follow_up_after_a_completed_batch_visibly_launches_a_new_subag
 }
 
 #[tokio::test]
-async fn streamed_related_follow_up_reads_an_active_subagent_without_mailbox_injection() {
+async fn streamed_related_follow_up_continues_an_active_subagent_with_send_message() {
     let adapter = Adapter::start().await;
     let client = Client::new();
     let url = format!("{}/v1/messages", adapter.base_url);
@@ -779,7 +786,7 @@ async fn streamed_related_follow_up_reads_an_active_subagent_without_mailbox_inj
 
     for visible_reuse_fragment in [
         "event: content_block_start",
-        r#""name":"TaskOutput""#,
+        r#""name":"SendMessage""#,
         "agent-profile-7",
         r#""stop_reason":"tool_use""#,
         "event: message_stop",
@@ -790,8 +797,8 @@ async fn streamed_related_follow_up_reads_an_active_subagent_without_mailbox_inj
         );
     }
     assert!(
-        !stream.contains(r#""name":"SendMessage""#),
-        "ordinary follow-up must not expose the mailbox tool: {stream}"
+        !stream.contains(r#""name":"TaskOutput""#),
+        "ordinary continue must use SendMessage({{to}}), not TaskOutput: {stream}"
     );
 }
 

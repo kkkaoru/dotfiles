@@ -2,23 +2,30 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{fmt, str::FromStr};
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+/// Reserved so SubAgent bursts cannot starve interactive user turns.
+const OUTER_TURN_RESERVE: usize = 1;
+pub(crate) const MAX_MODEL_CONCURRENCY: usize =
+    tokio::sync::Semaphore::MAX_PERMITS - OUTER_TURN_RESERVE;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BackendKind {
     CodexAppServer,
-    ConfiguredAcp,
-    CopilotAcp,
-    GrokAcp,
     PiGateway,
+}
+
+impl<'de> Deserialize<'de> for BackendKind {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        String::deserialize(deserializer)?
+            .parse()
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 impl BackendKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::CodexAppServer => "codex-app-server",
-            Self::ConfiguredAcp => "configured-acp",
-            Self::CopilotAcp => "copilot-acp",
-            Self::GrokAcp => "grok-acp",
             Self::PiGateway => "pi-gateway",
         }
     }
@@ -36,13 +43,11 @@ impl FromStr for BackendKind {
     fn from_str(value: &str) -> Result<Self> {
         match value {
             "codex-app-server" => Ok(Self::CodexAppServer),
-            "configured-acp" => Ok(Self::ConfiguredAcp),
-            "copilot-acp" => Ok(Self::CopilotAcp),
-            "grok-acp" => Ok(Self::GrokAcp),
             "pi-gateway" => Ok(Self::PiGateway),
-            _ => bail!(
-                "invalid backend `{value}`; expected codex-app-server, configured-acp, copilot-acp, grok-acp, or pi-gateway"
-            ),
+            "configured-acp" | "copilot-acp" | "grok-acp" => {
+                bail!("invalid backend `{value}`; ACP backends are removed, use pi-gateway")
+            }
+            _ => bail!("invalid backend `{value}`; expected codex-app-server or pi-gateway"),
         }
     }
 }

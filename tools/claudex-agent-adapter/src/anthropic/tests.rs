@@ -28,9 +28,19 @@ fn bridge_requires_atomic_parallel_subagent_launches() {
 }
 
 fn assert_bridge_launch_contract() {
+    assert_bridge_launch_fanout_contract();
+    assert_bridge_resume_contract();
+    assert_bridge_forbids_nested_launches_and_resume_fields();
+}
+
+fn assert_bridge_launch_fanout_contract() {
     assert!(
         BRIDGE_INSTRUCTIONS
             .contains("one ordinary supplied Agent/Task tool call per intended worker")
+    );
+    assert!(
+        BRIDGE_INSTRUCTIONS
+            .contains("Delegated workers must not nest that fan-out; the parent owns it.")
     );
     assert!(BRIDGE_INSTRUCTIONS.contains("Never invent or request an adapter-only batch tool"));
     assert!(BRIDGE_INSTRUCTIONS.contains("exactly that many native launch calls"));
@@ -45,13 +55,33 @@ fn assert_bridge_launch_contract() {
     assert!(BRIDGE_INSTRUCTIONS.contains("never a complete SubAgent answer"));
     assert!(BRIDGE_INSTRUCTIONS.contains("Never copy end-the-turn-with-status"));
     assert!(BRIDGE_INSTRUCTIONS.contains("Avoid serial heavy processing by one worker"));
-    assert!(BRIDGE_INSTRUCTIONS.contains(
-        "reuse compatible workers by setting resume to the exact prior Agent/Task recipient instead of churning processes"
-    ));
     assert!(
         BRIDGE_INSTRUCTIONS
             .contains("invoke Claude Code's supplied dynamic SubAgent tool directly")
     );
+}
+
+fn assert_bridge_resume_contract() {
+    assert!(BRIDGE_INSTRUCTIONS.contains(
+        "continue compatible workers with SendMessage({to: the exact prior Agent/Task recipient}) instead of churning processes"
+    ));
+    assert!(BRIDGE_INSTRUCTIONS.contains(
+        "SendMessage to a subagent is official Claude Code resume and does not require Agent Teams"
+    ));
+    assert!(BRIDGE_INSTRUCTIONS.contains(
+        "If you are a delegated worker, do not nest Agent/Task fan-out; the parent session owns fan-out."
+    ));
+    assert!(BRIDGE_INSTRUCTIONS.contains("never launch a new Agent for the same path"));
+    assert!(BRIDGE_INSTRUCTIONS.contains("never Agent({resume})"));
+    assert!(BRIDGE_INSTRUCTIONS.contains("One writer per file path"));
+    assert!(BRIDGE_INSTRUCTIONS.contains("User 全て中断 is /tasks-style"));
+    assert!(BRIDGE_INSTRUCTIONS.contains("never TaskStop for progress nudges"));
+}
+
+fn assert_bridge_forbids_nested_launches_and_resume_fields() {
+    assert!(!BRIDGE_INSTRUCTIONS.contains("setting resume"));
+    assert!(!BRIDGE_INSTRUCTIONS.contains("SendMessage is reserved"));
+    assert!(!BRIDGE_INSTRUCTIONS.contains("nested launches"));
 }
 
 fn assert_subagent_result_protocol_contract() {
@@ -381,6 +411,7 @@ async fn builds_anthropic_json_and_error_responses() {
                 web_search_requests: 0,
             },
             web_evidence: WebEvidenceSummary::default(),
+            next_sse_index: 0,
         },
         "model",
     );
@@ -432,6 +463,7 @@ async fn exposes_verified_web_evidence_metadata_in_non_stream_response() {
                 ..Usage::default()
             },
             web_evidence: WebEvidenceSummary::from_verified_count(3),
+            next_sse_index: 0,
         },
         "model",
     );

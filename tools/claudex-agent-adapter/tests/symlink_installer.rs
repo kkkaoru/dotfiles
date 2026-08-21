@@ -1,6 +1,10 @@
 use std::{fs, os::unix::fs::symlink, path::Path, process::Command};
 
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "installer filesystem scenario is clearer as one end-to-end test"
+)]
 fn installs_current_claudex_agents_and_prunes_renamed_links() {
     let root = fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))
         .expect("repository root");

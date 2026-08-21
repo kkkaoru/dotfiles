@@ -1,4 +1,4 @@
-use crate::agent_backend::BackendRoute;
+use crate::agent_backend::{BackendRoute, WebSearchMode};
 
 use super::Provider;
 
@@ -29,8 +29,10 @@ impl Provider {
             max_context_tokens: self.max_context_tokens,
             max_concurrency: self.max_concurrency,
             model_prefixes: self.model_prefixes,
-            acp: self.acp,
-            web_search_mode: self.web_search_mode,
+            web_search_mode: match self.web_search_mode {
+                WebSearchMode::AcpNative => WebSearchMode::DelegatePi,
+                mode => mode,
+            },
         }
     }
 }

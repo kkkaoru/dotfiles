@@ -52,6 +52,9 @@ use keepalive::KeepaliveStream;
 use keepalive::streaming_sse_response_with_interval;
 
 pub(in crate::anthropic) async fn send_stream_completion(sender: &StreamSender, segment: &Segment) {
+    // A primed `message_start` plus zero content blocks is HTTP 200 ~510 bytes
+    // and Claude Code reports "No assistant messages found". Never close empty.
+    ensure_visible_assistant_before_stop(sender, segment).await;
     let _ = send_stream_frame(Some(sender), "message_delta", || {
         let mut usage = json!({
             "input_tokens":segment.usage.input_tokens,
@@ -95,11 +98,53 @@ pub(super) async fn send_stream_error(sender: &StreamSender, error: anyhow::Erro
 
 /// Close an already-primed SSE turn without `event: error`.
 ///
-/// Claude Code maps `event: error` / `api_error` after `message_start` to
-/// `API Error: Server error mid-response`. Callers that already queued
-/// `message_start` must use this instead of [`send_stream_error`].
-pub(super) async fn send_stream_graceful_stop(sender: &StreamSender) {
+/// Claude Code maps `event: error` after `message_start` to
+/// `API Error: Server error mid-response`. A zero-block `end_turn` becomes
+/// `No assistant messages found`. Always emit visible assistant text first.
+#[cfg(test)]
+pub(super) async fn send_stream_graceful_stop(sender: &StreamSender, text: &str) {
+    send_stream_graceful_stop_at(sender, 0, text).await;
+}
+
+pub(super) async fn send_stream_graceful_stop_at(sender: &StreamSender, index: usize, text: &str) {
+    send_visible_assistant_text(Some(sender), index, text).await;
     send_terminal_stop(sender, "end_turn").await;
+}
+
+pub(super) async fn send_stream_graceful_stop_for_error(
+    sender: &StreamSender,
+    error: &anyhow::Error,
+) {
+    send_stream_graceful_stop_for_error_at(sender, 0, error).await;
+}
+
+pub(super) async fn send_stream_graceful_stop_for_error_at(
+    sender: &StreamSender,
+    index: usize,
+    error: &anyhow::Error,
+) {
+    let notice = crate::anthropic::segment::primed_empty_turn_notice(&format!("{error:#}"));
+    send_stream_graceful_stop_at(sender, index, &notice).await;
+}
+
+pub(super) async fn send_empty_turn_or_overflow_error(
+    sender: &StreamSender,
+    next_sse_index: usize,
+    error: &anyhow::Error,
+) {
+    send_stream_graceful_stop_for_error_at(sender, next_sse_index, error).await;
+}
+
+async fn ensure_visible_assistant_before_stop(sender: &StreamSender, segment: &Segment) {
+    if !segment.is_empty_end_turn() {
+        return;
+    }
+    send_visible_assistant_text(
+        Some(sender),
+        segment.next_sse_index,
+        crate::anthropic::segment::EMPTY_ASSISTANT_TURN,
+    )
+    .await;
 }
 
 async fn send_terminal_stop(sender: &StreamSender, stop_reason: &'static str) {
@@ -122,6 +167,7 @@ async fn send_terminal_stop(sender: &StreamSender, stop_reason: &'static str) {
 #[path = "protocol_frames.rs"]
 mod frames;
 pub(in crate::anthropic) use frames::send_stream_frame;
+pub(in crate::anthropic::stream) use frames::send_visible_assistant_text;
 #[allow(unused_imports)] // re-exported via stream.rs
 pub(in crate::anthropic) use frames::tool_use_frames;
 pub(super) use frames::{

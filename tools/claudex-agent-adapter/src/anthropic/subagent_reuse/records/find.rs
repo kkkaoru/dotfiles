@@ -47,7 +47,7 @@ fn reuse_priority(status: &str) -> u8 {
     match status {
         "active" => 2,
         "message_queued" => 1,
-        "completed" => 0,
+        "completed" | "stopped" | "paused" => 0,
         _ => 0,
     }
 }

@@ -23,7 +23,8 @@ mod claims;
 mod io;
 mod merge;
 
-pub(crate) use claims::{current_pid, normalize_scope, unix_seconds};
+pub(super) use super::records::occupancy_matches;
+pub(crate) use claims::{current_pid, unix_seconds};
 use io::{StoreLock, create_private_directory};
 use merge::{bound_document, merge_session_state, prune_persisted_state};
 
