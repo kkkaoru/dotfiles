@@ -15,9 +15,10 @@ if [ -z "$REAL_PI" ]; then
   exit 127
 fi
 
+OMLX_CLI="${OMLX_CLI:-/Applications/oMLX.app/Contents/MacOS/omlx-cli}"
 needs_omlx=1
 case "${1-}" in
-  install|remove|uninstall|update|list|config|auth|--help|-h|--version|-v)
+  install|remove|uninstall|update|list|config|auth|--list-models|--help|-h|--version|-v)
     needs_omlx=0
     ;;
 esac
@@ -32,6 +33,12 @@ for arg in "$@"; do
 done
 
 if [ -n "$provider" ] && [ "$provider" != "omlx" ]; then
+  needs_omlx=0
+fi
+
+if [ "$needs_omlx" -eq 1 ] && [ ! -x "$OMLX_CLI" ]; then
+  # Pi remains usable with another provider when the optional local oMLX
+  # installation is absent.
   needs_omlx=0
 fi
 
