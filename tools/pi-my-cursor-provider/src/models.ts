@@ -1,4 +1,4 @@
-import { Cursor, type ModelParameterValue, type ModelSelection, type SDKModel } from "@cursor/sdk";
+import { type ModelParameterValue, type ModelSelection, type SDKModel } from "@cursor/sdk";
 import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import type { Credential, RefreshModelsContext, ThinkingLevel } from "@earendil-works/pi-ai";
 import { createHash } from "node:crypto";
@@ -225,6 +225,7 @@ async function ensureCursorCatalog(apiKey: string | undefined): Promise<void> {
       recordCursorCatalog(cached);
       return;
     }
+    const { Cursor } = await import("@cursor/sdk");
     const catalog = await Cursor.models.list(apiKey ? { apiKey } : undefined);
     recordCursorCatalog(catalog);
     if (apiKey) {
@@ -297,6 +298,7 @@ export async function refreshCursorModels(
     return FALLBACK_CURSOR_MODELS;
   }
   context.signal.throwIfAborted();
+  const { Cursor } = await import("@cursor/sdk");
   const catalog = await Cursor.models.list({ apiKey });
   context.signal.throwIfAborted();
   if (catalog.length === 0) return FALLBACK_CURSOR_MODELS;

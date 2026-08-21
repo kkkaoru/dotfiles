@@ -1,10 +1,16 @@
+// This file runs with Bun.
+
 import process from "node:process";
+import type {
+  Api,
+  Model,
+  OAuthCredentials,
+  OAuthLoginCallbacks,
+  RefreshModelsContext,
+} from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
-import { discoverClinePassModels } from "./src/cline-models.ts";
 import { resolveApiBase, ENV_API_KEY, PROVIDER_NAME } from "./src/env.ts";
-import { handleClinePassError } from "./src/error-handler.ts";
-import { modelsFromClineCatalog, type ModelConfig } from "./src/models.ts";
-import { getApiKey, login, refreshToken } from "./src/oauth.ts";
+import { MODELS, modelsFromClineCatalog, type ModelConfig } from "./src/models.ts";
 
 function toProviderModels(models: readonly ModelConfig[]): ProviderModelConfig[] {
   return models.map((model) => ({
@@ -13,15 +19,45 @@ function toProviderModels(models: readonly ModelConfig[]): ProviderModelConfig[]
   }));
 }
 
-async function loadModels(): Promise<ProviderModelConfig[]> {
+function cloneProviderModel(model: Model<Api>): ProviderModelConfig {
+  return { ...model, input: [...model.input] };
+}
+
+const FALLBACK_MODELS: ProviderModelConfig[] = toProviderModels(MODELS);
+
+function restoreModels(context: RefreshModelsContext): ProviderModelConfig[] {
+  const stored = context.stored?.models;
+  return stored === undefined || stored.length === 0
+    ? FALLBACK_MODELS
+    : stored.map((model) => cloneProviderModel(model));
+}
+
+async function loadModels(context: RefreshModelsContext): Promise<ProviderModelConfig[]> {
+  if (!context.allowNetwork) {
+    return restoreModels(context);
+  }
+  const { discoverClinePassModels } = await import("./src/cline-models.ts");
   const catalog = await discoverClinePassModels();
   return toProviderModels(modelsFromClineCatalog(catalog));
 }
 
-export default async function clinePassExtension(pi: ExtensionAPI): Promise<void> {
+async function login(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+  const module = await import("./src/oauth.ts");
+  return module.login(callbacks);
+}
+
+async function refreshToken(credentials: OAuthCredentials): Promise<OAuthCredentials> {
+  const module = await import("./src/oauth.ts");
+  return module.refreshToken(credentials);
+}
+
+function getApiKey(credentials: OAuthCredentials): string {
+  return credentials.access;
+}
+
+export default function clinePassExtension(pi: ExtensionAPI): void {
   const apiBase = resolveApiBase();
   const envApiKey = process.env[ENV_API_KEY]?.trim();
-  const models = await loadModels();
 
   pi.registerProvider(PROVIDER_NAME, {
     name: "ClinePass",
@@ -29,7 +65,8 @@ export default async function clinePassExtension(pi: ExtensionAPI): Promise<void
     ...(envApiKey === undefined || envApiKey === "" ? {} : { apiKey: `$${ENV_API_KEY}` }),
     api: "openai-completions",
     authHeader: true,
-    models,
+    // Keep startup local; refreshModels performs the optional Cline ACP lookup on demand.
+    models: FALLBACK_MODELS,
     refreshModels: loadModels,
     oauth: {
       name: "ClinePass",
@@ -40,7 +77,8 @@ export default async function clinePassExtension(pi: ExtensionAPI): Promise<void
     },
   });
 
-  pi.on("message_end", (event, context) => {
+  pi.on("message_end", async (event, context) => {
+    const { handleClinePassError } = await import("./src/error-handler.ts");
     handleClinePassError(event, {
       hasUI: context.hasUI,
       ...(context.model === undefined ? {} : { model: context.model }),

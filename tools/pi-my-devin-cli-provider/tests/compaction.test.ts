@@ -10,7 +10,7 @@ vi.mock("../src/runtime.ts", () => ({
   invalidateDevinSessionsForPiSession: mocks.invalidateDevinSessionsForPiSession,
 }));
 
-test("registers session compaction hooks that invalidate Devin sessions", () => {
+test("registers session compaction hooks that invalidate Devin sessions", async () => {
   const events: string[] = [];
   const runners: Array<(event: object, ctx: object) => unknown> = [];
 
@@ -26,19 +26,19 @@ test("registers session compaction hooks that invalidate Devin sessions", () => 
     model: { provider: "devin" },
     sessionManager: { getSessionId: () => "pi-session-1" },
   };
-  runners.forEach((run) => {
-    run({ type: "compact" }, ctx);
-  });
+  for (const run of runners) {
+    await run({ type: "compact" }, ctx);
+  }
   expect(mocks.invalidateDevinSessionsForPiSession).toHaveBeenCalledTimes(2);
   expect(mocks.invalidateDevinSessionsForPiSession).toHaveBeenCalledWith("pi-session-1");
 });
 
-test("skips invalidation when the active model is not Devin", () => {
-  handleDevinCompactionEvent({
+test("skips invalidation when the active model is not Devin", async () => {
+  await handleDevinCompactionEvent({
     model: { provider: "openai" },
     sessionManager: { getSessionId: () => "other-session" },
   });
-  handleDevinCompactionEvent({
+  await handleDevinCompactionEvent({
     model: undefined,
     sessionManager: { getSessionId: () => "no-model" },
   });

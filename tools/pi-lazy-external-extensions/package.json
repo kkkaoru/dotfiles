@@ -1,0 +1,13 @@
+{
+  "name": "@kkkaoru/pi-lazy-external-extensions",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./commandcode.ts",
+      "./antigravity.ts",
+      "./web-access.ts"
+    ]
+  }
+}

@@ -106,6 +106,13 @@ export const FALLBACK_DEVIN_MODELS: ProviderModelConfig[] = FALLBACK_CATALOG.map
   modelConfig(model, ZERO_COST),
 );
 
+function restoreModels(context: RefreshModelsContext): ProviderModelConfig[] {
+  const stored = context.stored?.models;
+  return stored === undefined || stored.length === 0
+    ? FALLBACK_DEVIN_MODELS
+    : stored.map((model) => ({ ...model, input: [...model.input] }));
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -176,6 +183,7 @@ export async function refreshDevinModels(
   context: RefreshModelsContext,
 ): Promise<ProviderModelConfig[]> {
   context.signal.throwIfAborted();
+  if (!context.allowNetwork) return restoreModels(context);
   const result: CommandResult = await runModelCommand(context.signal);
   context.signal.throwIfAborted();
   const models: ProviderModelConfig[] = parseDevinModelCatalog(JSON.parse(result.stdout));

@@ -25,7 +25,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 function refreshContext(): RefreshModelsContext {
   return {
-    allowNetwork: false,
+    allowNetwork: true,
     publish: async () => true,
     signal: new AbortController().signal,
   };
@@ -94,6 +94,16 @@ test("parses family variants, prices, defaults, and invalid entries", async () =
   ]);
   expect(parseDevinModelCatalog(null)).toStrictEqual([]);
   expect(parseDevinModelCatalog({ families: "invalid" })).toStrictEqual([]);
+});
+
+test("uses fallback models during cache-only refresh", async () => {
+  execFileMock.mockClear();
+  const { FALLBACK_DEVIN_MODELS, refreshDevinModels } = await import("../src/models.ts");
+
+  await expect(
+    refreshDevinModels({ ...refreshContext(), allowNetwork: false }),
+  ).resolves.toStrictEqual(FALLBACK_DEVIN_MODELS);
+  expect(execFileMock).not.toHaveBeenCalled();
 });
 
 test("refreshes models through the mocked Devin subprocess", async () => {
