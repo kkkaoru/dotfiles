@@ -1319,6 +1319,12 @@ async fn spawn_subagent_resume_prefers_buffered_prompt_over_partial_event_args()
             &mut state,
         )
         .expect("delta");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(20), receiver.recv())
+            .await
+            .is_err(),
+        "SendMessage must wait for complete terminal arguments"
+    );
     gateway
         .handle_event(
             "thread",
@@ -1331,15 +1337,83 @@ async fn spawn_subagent_resume_prefers_buffered_prompt_over_partial_event_args()
         )
         .expect("end");
     let start = receiver.recv().await.expect("start event");
-    let delta = receiver.recv().await.expect("delta event");
     let call = receiver.recv().await.expect("call event");
     assert_eq!(start["params"]["tool"], "SendMessage");
-    assert_eq!(delta["method"], "item/tool/delta");
     assert_eq!(call["params"]["tool"], "SendMessage");
     assert_eq!(
         call["params"]["arguments"],
         json!({"to":"a0123456789abcdef0","message":"continue the review"})
     );
+}
+
+#[tokio::test]
+async fn done_recovers_unclosed_send_message_from_authoritative_message() {
+    let gateway = gateway();
+    let receiver = gateway.events.subscribe("request");
+    let mut state = super::event_translate_state(&json!({
+        "tools":[{"name":"SendMessage"}]
+    }));
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_start","index":0,"toolCallId":"call-terminal",
+                "name":"SendMessage"
+            })),
+            &mut state,
+        )
+        .expect("start");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_delta","index":0,
+                "delta":"{\"to\":\"main\",\"message\":\"validation passed\"}"
+            })),
+            &mut state,
+        )
+        .expect("delta");
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(20), receiver.recv())
+            .await
+            .is_err(),
+        "SendMessage must not expose a partial streaming card"
+    );
+    assert!(
+        gateway
+            .handle_event(
+                "thread",
+                "request",
+                &event(json!({
+                    "type":"done",
+                    "reason":"toolUse",
+                    "terminal":{"state":"complete","output":"tool_use"},
+                    "message":{
+                        "content":[{
+                            "type":"toolCall","id":"call-terminal","name":"SendMessage",
+                            "arguments":{"to":"main","message":"validation passed"}
+                        }],
+                        "usage":{}
+                    }
+                })),
+                &mut state,
+            )
+            .expect("done")
+    );
+    let start = receiver.recv().await.expect("recovered start event");
+    let call = receiver.recv().await.expect("recovered call event");
+    let _usage = receiver.recv().await.expect("usage event");
+    let done = receiver.recv().await.expect("done event");
+    assert_eq!(start["params"]["tool"], "SendMessage");
+    assert_eq!(call["params"]["tool"], "SendMessage");
+    assert_eq!(
+        call["params"]["arguments"],
+        json!({"to":"main","message":"validation passed"})
+    );
+    assert_eq!(done["params"]["turn"]["providerStopReason"], "tool_use");
+    assert_eq!(done["params"]["turn"]["terminal"]["state"], "complete");
 }
 
 #[tokio::test]

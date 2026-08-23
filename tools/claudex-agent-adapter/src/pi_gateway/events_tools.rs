@@ -63,7 +63,9 @@ impl PiGateway {
         else {
             return Ok(());
         };
-        if skip_start_until_ready(&mapped_name, &mapped, &tool.arguments) {
+        if skip_start_until_ready(&mapped_name, &mapped, &tool.arguments)
+            || mapped_name == "SendMessage"
+        {
             return Ok(());
         }
         let start_name = start_card_tool_name(&tool.name, &mapped_name);

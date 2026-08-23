@@ -34,6 +34,22 @@ pub(super) struct EventTranslateState {
 }
 pub(super) use events_finish::event_translate_state;
 
+fn terminal_tool_call(index: u64, tool: &ToolCallBuffer, content: &[Value]) -> Option<Value> {
+    let block = content
+        .iter()
+        .find(|block| block.get("id").and_then(Value::as_str) == Some(&tool.id))
+        .or_else(|| content.get(index as usize))?;
+    if block.get("type").and_then(Value::as_str) != Some("toolCall") {
+        return None;
+    }
+    Some(json!({
+        "index":index,
+        "toolCallId":block.get("id").cloned().unwrap_or_else(|| json!(tool.id)),
+        "name":block.get("name").cloned().unwrap_or_else(|| json!(tool.name)),
+        "arguments":block.get("arguments").cloned().unwrap_or_else(|| json!({}))
+    }))
+}
+
 impl PiGateway {
     pub(super) fn handle_event(
         &self,
@@ -92,8 +108,9 @@ impl PiGateway {
         thread_id: &str,
         request_id: &str,
         event: &Value,
-        state: &EventTranslateState,
+        state: &mut EventTranslateState,
     ) -> Result<bool> {
+        self.finish_terminal_tool_calls(thread_id, request_id, event, state)?;
         let reported_stop_reason = anthropic_stop_reason(event)?;
         let provider_recoverable =
             event.pointer("/terminal/state").and_then(Value::as_str) == Some("recoverable_error");
@@ -137,6 +154,27 @@ impl PiGateway {
             }),
         );
         Ok(true)
+    }
+
+    fn finish_terminal_tool_calls(
+        &self,
+        thread_id: &str,
+        request_id: &str,
+        event: &Value,
+        state: &mut EventTranslateState,
+    ) -> Result<()> {
+        let Some(content) = event.pointer("/message/content").and_then(Value::as_array) else {
+            return Ok(());
+        };
+        let terminal_calls = state
+            .tools
+            .iter()
+            .filter_map(|(index, tool)| terminal_tool_call(*index, tool, content))
+            .collect::<Vec<_>>();
+        for terminal_call in terminal_calls {
+            self.finish_tool_call(thread_id, request_id, &terminal_call, state)?;
+        }
+        Ok(())
     }
 
     fn dispatch_error_event(&self, request_id: &str, thread_id: &str, event: &Value) {
