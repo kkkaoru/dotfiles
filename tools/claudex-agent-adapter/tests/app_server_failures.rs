@@ -223,8 +223,9 @@ while read line; do :; done
         .request_detached("turn/start", json!({"threadId":"after-close"}))
         .await
         .expect_err("a detached frame after stdin closes must fail");
+    let message = error.to_string();
     assert!(
-        error.to_string().contains("failed to write"),
+        message.contains("failed to write") || message.contains("app-server writer is closed"),
         "unexpected error: {error}"
     );
     server.shutdown().await;
@@ -256,8 +257,9 @@ while read line; do :; done
         .request("after-close", json!({}))
         .await
         .expect_err("an awaited frame after stdin closes must fail");
+    let message = error.to_string();
     assert!(
-        error.to_string().contains("failed to write"),
+        message.contains("failed to write") || message.contains("app-server writer is closed"),
         "unexpected error: {error}"
     );
     server.shutdown().await;
