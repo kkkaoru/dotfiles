@@ -72,10 +72,8 @@ fn completed_launch_ack_status(request: &MessagesRequest) -> Option<Response<Bod
         launch_count = count,
         "skipping provider generation after completed native background launch ack"
     );
-    let mut status = request.clone();
-    status.stream = false;
     Some(internal_notification::acknowledge_with_text(
-        &status,
+        request,
         &background_handoff_text(count),
     ))
 }

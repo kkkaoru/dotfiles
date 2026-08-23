@@ -476,22 +476,23 @@ fn launch_ack_chrome_returns_none() {
 }
 
 #[tokio::test]
-async fn launch_ack_without_provider_turn_returns_short_non_stream_status() {
+async fn launch_ack_without_provider_turn_preserves_streaming_protocol() {
     let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main-model".to_owned());
     let mut request = scheduler_handoff_request("Implement the authentication cache.");
     request.stream = true;
     let response = bridge
         .launch_ack_without_provider_turn(&request)
         .expect("completed launch ack returns a short status");
+    assert_eq!(
+        response.headers()[axum::http::header::CONTENT_TYPE],
+        "text/event-stream"
+    );
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    let body: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(body["stop_reason"], "end_turn");
-    assert_eq!(
-        body["content"][0]["text"],
-        "Background agent launched; the main prompt is ready."
-    );
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(body.contains("Background agent launched; the main prompt is ready."));
+    assert!(body.contains("event: message_stop"));
 }
 
 #[test]
@@ -665,15 +666,16 @@ async fn unmet_scheduler_target_still_returns_short_launch_ack_status() {
     let response = bridge
         .launch_ack_without_provider_turn(&request)
         .expect("completed launch ack is short status, not another generation");
+    assert_eq!(
+        response.headers()[axum::http::header::CONTENT_TYPE],
+        "text/event-stream"
+    );
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    let body: Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!(body["stop_reason"], "end_turn");
-    assert_eq!(
-        body["content"][0]["text"],
-        "Background agent launched; the main prompt is ready."
-    );
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(body.contains("Background agent launched; the main prompt is ready."));
+    assert!(body.contains("event: message_stop"));
 }
 
 #[tokio::test]
