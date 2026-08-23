@@ -69,7 +69,8 @@ impl PiGateway {
                     "itemId":format!(
                         "pi-{}",
                         event.get("index").and_then(Value::as_u64).unwrap_or(0)
-                    )
+                    ),
+                    "deltaChars":event.get("deltaChars").and_then(Value::as_u64).unwrap_or(0)
                 }
             }),
         );

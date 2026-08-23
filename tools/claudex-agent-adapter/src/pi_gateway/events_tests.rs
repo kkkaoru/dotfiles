@@ -61,7 +61,7 @@ fn feed_text_and_thinking(gateway: &PiGateway, state: &mut super::EventTranslate
             .handle_event(
                 "thread",
                 "request",
-                &event(json!({"type":"thinking_progress","index":1})),
+                &event(json!({"type":"thinking_progress","index":1,"deltaChars":5})),
                 state
             )
             .expect("thinking progress")
@@ -159,6 +159,7 @@ fn assert_translated_content(
 ) {
     assert_eq!(text["method"], "item/agentMessage/delta");
     assert_eq!(thinking_progress["method"], "item/reasoning/progress");
+    assert_eq!(thinking_progress["params"]["deltaChars"], 5);
     assert_eq!(thinking["method"], "item/reasoning/summaryTextDelta");
     assert_eq!(thinking["params"]["delta"], "ready");
     assert_eq!(thinking["params"]["summaryIndex"], 0);
@@ -429,7 +430,9 @@ async fn legacy_thinking_hides_raw_deltas_and_emits_only_the_end_result() {
     let thinking = receiver.recv().await.expect("result thinking");
     let complete = receiver.recv().await.expect("thinking complete");
     assert_eq!(start["method"], "item/reasoning/progress");
+    assert_eq!(start["params"]["deltaChars"], 0);
     assert_eq!(delta["method"], "item/reasoning/progress");
+    assert_eq!(delta["params"]["deltaChars"], 0);
     assert_eq!(thinking["method"], "item/reasoning/summaryTextDelta");
     assert_eq!(thinking["params"]["delta"], "The compatibility result.");
     assert_ne!(thinking["params"]["delta"], "why");

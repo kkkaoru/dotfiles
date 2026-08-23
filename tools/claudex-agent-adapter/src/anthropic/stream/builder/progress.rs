@@ -3,7 +3,7 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use super::SegmentBuilder;
+use super::{MAX_PI_REASONING_DELTA_CHARS, PI_REASONING_PROGRESS_INTERVAL, SegmentBuilder};
 use crate::anthropic::stream::{
     protocol::StreamSender,
     sanitize::{is_canned_worker_filler, is_provider_status_line},
@@ -16,6 +16,39 @@ mod progress_activity;
 mod progress_filter;
 
 impl SegmentBuilder {
+    pub(in crate::anthropic::stream) async fn pi_reasoning_progress(
+        &mut self,
+        event: &Value,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        let delta_chars = event
+            .pointer("/params/deltaChars")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(MAX_PI_REASONING_DELTA_CHARS);
+        self.pi_reasoning_updates = self.pi_reasoning_updates.saturating_add(1);
+        self.pi_reasoning_chars = self.pi_reasoning_chars.saturating_add(delta_chars);
+        self.note_provider_turn_activity();
+        if !self.is_subagent
+            || self
+                .last_pi_reasoning_status_at
+                .is_some_and(|last| last.elapsed() < PI_REASONING_PROGRESS_INTERVAL)
+        {
+            return Ok(());
+        }
+        let elapsed = self.turn_started_at.elapsed().as_secs();
+        let status = if self.last_pi_reasoning_status_at.is_none() {
+            "Pi reasoning started\n".to_owned()
+        } else {
+            format!(
+                "Pi reasoning active · {elapsed}s · {} updates · {} chars streamed\n",
+                self.pi_reasoning_updates, self.pi_reasoning_chars
+            )
+        };
+        self.last_pi_reasoning_status_at = Some(std::time::Instant::now());
+        self.stream_progress_text(&status, stream).await
+    }
+
     /// Stream ACP tool progress as thinking chrome (not executable `tool_use`).
     /// SubAgent panels hide assistant text until end_turn; keep one thinking
     /// block open. Canned ●/still-working worker text is dropped.

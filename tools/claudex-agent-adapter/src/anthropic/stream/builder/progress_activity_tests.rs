@@ -23,6 +23,43 @@ fn thinking_has_nested_elapsed_chrome(text: &str) -> bool {
 }
 
 #[tokio::test]
+async fn pi_subagent_reasoning_progress_is_visible_and_rate_limited() {
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    builder
+        .pi_reasoning_progress(&json!({"params":{"itemId":"pi-1","deltaChars":0}}), None)
+        .await
+        .expect("initial Pi reasoning progress");
+    assert_eq!(builder.blocks[0]["thinking"], "Pi reasoning started\n");
+
+    builder
+        .pi_reasoning_progress(&json!({"params":{"itemId":"pi-1","deltaChars":8}}), None)
+        .await
+        .expect("rate-limited Pi reasoning progress");
+    assert_eq!(builder.blocks[0]["thinking"], "Pi reasoning started\n");
+
+    builder.age_turn_for_test(Duration::from_secs(16));
+    builder.age_pi_reasoning_status_for_test(Duration::from_secs(16));
+    builder
+        .pi_reasoning_progress(&json!({"params":{"itemId":"pi-1","deltaChars":12}}), None)
+        .await
+        .expect("periodic Pi reasoning progress");
+    assert_eq!(
+        builder.blocks[0]["thinking"],
+        "Pi reasoning started\nPi reasoning active · 16s · 3 updates · 20 chars streamed\n"
+    );
+}
+
+#[tokio::test]
+async fn pi_main_reasoning_progress_stays_out_of_assistant_output() {
+    let mut builder = SegmentBuilder::new(1);
+    builder
+        .pi_reasoning_progress(&json!({"params":{"itemId":"pi-1","deltaChars":7}}), None)
+        .await
+        .expect("main Pi reasoning progress");
+    assert!(builder.blocks.is_empty());
+}
+
+#[tokio::test]
 async fn grok_reasoning_keepalive_does_not_nest_thinking_chrome() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
     let mut builder = SegmentBuilder::new(1).with_subagent(true);

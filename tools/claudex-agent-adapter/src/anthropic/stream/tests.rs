@@ -3796,6 +3796,34 @@ async fn agent_message_after_tool_does_not_grow_one_thought() {
 }
 
 #[tokio::test]
+async fn pi_reasoning_progress_event_reaches_subagent_thinking() {
+    let (_root, _app, bridge, session) = disconnect_fixture().await;
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::for_turn(1, true, "cline-pass/deepseek-v4-flash");
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "method":"item/reasoning/progress",
+                "params":{"itemId":"pi-1","deltaChars":4}
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("Pi reasoning progress");
+    drop(sender);
+    let output = collect_sse_frames(&mut receiver).await;
+    assert!(
+        output.contains("Pi reasoning started"),
+        "Pi progress must reach native SubAgent thinking: {output}"
+    );
+    assert!(builder.thinking.is_open());
+}
+
+#[tokio::test]
 async fn reasoning_complete_closes_open_thinking() {
     let (_root, _app, bridge, session) = disconnect_fixture().await;
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);

@@ -1,4 +1,8 @@
-use std::{collections::HashSet, ops::ControlFlow, time::Instant};
+use std::{
+    collections::HashSet,
+    ops::ControlFlow,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use serde_json::Value;
@@ -24,6 +28,8 @@ mod web_provenance;
 pub(super) use super::tool_call_parser::{parse_tool_call, parse_tool_delta, parse_tool_start};
 
 pub(super) const SSE_INDEX_PAD: &str = "sse_index_pad";
+pub(super) const PI_REASONING_PROGRESS_INTERVAL: Duration = Duration::from_secs(15);
+pub(super) const MAX_PI_REASONING_DELTA_CHARS: u64 = 1_000_000;
 
 pub(in crate::anthropic) struct SegmentBuilder {
     pub(super) blocks: Vec<Value>,
@@ -43,6 +49,10 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// Last decoded provider event that counts as real progress (not synthetic
     /// keepalive). SubAgent silence judgment keys off this instant.
     last_visible_provider_at: Instant,
+    /// Last privacy-safe Pi reasoning status painted into the SubAgent viewer.
+    last_pi_reasoning_status_at: Option<Instant>,
+    pi_reasoning_updates: u64,
+    pi_reasoning_chars: u64,
     external_tool_calls: usize,
     /// Provider call IDs already shown as progress text. ACP can report the same
     /// call first as ToolCall and again as a populated ToolCallUpdate.
@@ -134,6 +144,9 @@ impl SegmentBuilder {
             }
             Some("item/tool/start") => {
                 self.start_native_tool_use(session, event, stream).await?;
+            }
+            Some("item/reasoning/progress") => {
+                self.pi_reasoning_progress(event, stream).await?;
             }
             Some("item/reasoning/complete") => {
                 self.thinking.close(&mut self.blocks, stream).await?;

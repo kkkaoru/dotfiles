@@ -76,6 +76,7 @@ describe("Pi assistant event mapping", () => {
       type: "thinking_progress",
       id: "request",
       index: 1,
+      deltaChars: 3,
     });
     expect(
       map({
@@ -90,6 +91,18 @@ describe("Pi assistant event mapping", () => {
       id: "request",
       index: 1,
       result: "The edit is ready.",
+    });
+  });
+
+  it("counts Unicode code points without exposing private reasoning", () => {
+    expect(
+      map({ type: "thinking_delta", contentIndex: 1, delta: "考🧠", partial: MESSAGE }),
+    ).toStrictEqual({
+      version: 1,
+      type: "thinking_progress",
+      id: "request",
+      index: 1,
+      deltaChars: 2,
     });
   });
 

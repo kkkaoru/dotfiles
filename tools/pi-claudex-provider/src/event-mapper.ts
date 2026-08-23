@@ -19,6 +19,10 @@ function isToolCall(value: unknown): value is ToolCall {
   );
 }
 
+function codePointLength(value: string): number {
+  return [...value.matchAll(/./gu)].length;
+}
+
 function toolCallAt(
   content: AssistantMessage["content"],
   index: number,
@@ -50,6 +54,7 @@ function mapContentEvent(requestId: string, event: ContentEvent): ServerMessage 
       return serverMessage("thinking_progress", {
         ...common,
         index: event.contentIndex,
+        deltaChars: codePointLength(event.delta),
       });
     }
     case "text_end": {
