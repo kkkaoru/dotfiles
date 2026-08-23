@@ -4,6 +4,8 @@
 set -euo pipefail
 
 REAL_PI=""
+ORIGINAL_ARGC=$#
+ORIGINAL_ARGS=("$@")
 for candidate in "${HOME}/.bun/bin/pi" /opt/homebrew/bin/pi; do
   if [ -x "$candidate" ] && [ "$candidate" != "$0" ]; then
     REAL_PI="$candidate"
@@ -101,4 +103,7 @@ if [ "$needs_omlx" -eq 1 ]; then
   fi
 fi
 
-exec "$REAL_PI" "$@"
+if [ "$ORIGINAL_ARGC" -eq 0 ]; then
+  exec "$REAL_PI"
+fi
+exec "$REAL_PI" "${ORIGINAL_ARGS[@]}"
