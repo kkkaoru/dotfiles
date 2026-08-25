@@ -61,7 +61,7 @@ describe("LoopRuntime commands", () => {
 
     expect(sendUserMessage).toHaveBeenCalledOnce();
     expect(sendUserMessage.mock.calls[0]?.[0]).toBe(
-      "This is a self-paced loop. Perform the task now. Keep the session responsive: when a command is expected to run for a long time and tmux is available, start it in a detached tmux session with output and exit status redirected to files instead of waiting in the foreground. Preserve the tmux session and file paths in the next wakeup prompt, then inspect them on a later tick. Run short commands normally. Before ending, call loop_wakeup only when another useful check remains. Do not schedule another wakeup when the task is complete, blocked on user input, or waiting on external state that cannot be checked later.\n\nTask:\ncheck the build",
+      "This is a self-paced loop. Perform the task now. Before ending, call loop_wakeup only when another useful check remains. Do not schedule another wakeup when the task is complete, blocked on user input, or waiting on external state that cannot be checked later.\n\nTask:\ncheck the build",
     );
     expect(notify).toHaveBeenCalledWith("Started a self-paced loop.", "info");
   });
@@ -71,7 +71,7 @@ describe("LoopRuntime commands", () => {
     runtime.command("", context);
 
     expect(sendUserMessage.mock.calls[0]?.[0]).toBe(
-      "This is a self-paced loop. Perform the task now. Keep the session responsive: when a command is expected to run for a long time and tmux is available, start it in a detached tmux session with output and exit status redirected to files instead of waiting in the foreground. Preserve the tmux session and file paths in the next wakeup prompt, then inspect them on a later tick. Run short commands normally. Before ending, call loop_wakeup only when another useful check remains. Do not schedule another wakeup when the task is complete, blocked on user input, or waiting on external state that cannot be checked later.\n\nTask:\nContinue work already established in this conversation. Act as a steward, not an initiator: finish in-progress work, verification, or clearly authorized maintenance. Do not invent new work or perform irreversible actions without authorization. If nothing actionable remains, say so briefly and stop.",
+      "This is a self-paced loop. Perform the task now. Before ending, call loop_wakeup only when another useful check remains. Do not schedule another wakeup when the task is complete, blocked on user input, or waiting on external state that cannot be checked later.\n\nTask:\nContinue work already established in this conversation. Act as a steward, not an initiator: finish in-progress work, verification, or clearly authorized maintenance. Do not invent new work or perform irreversible actions without authorization. If nothing actionable remains, say so briefly and stop.",
     );
   });
 
@@ -151,7 +151,7 @@ describe("LoopRuntime compaction", () => {
 
     expect(sendUserMessage).toHaveBeenCalledTimes(2);
     expect(sendUserMessage).toHaveBeenLastCalledWith(
-      "This is a self-paced loop. Perform the task now. Keep the session responsive: when a command is expected to run for a long time and tmux is available, start it in a detached tmux session with output and exit status redirected to files instead of waiting in the foreground. Preserve the tmux session and file paths in the next wakeup prompt, then inspect them on a later tick. Run short commands normally. Before ending, call loop_wakeup only when another useful check remains. Do not schedule another wakeup when the task is complete, blocked on user input, or waiting on external state that cannot be checked later.\n\nTask:\ncheck deployment",
+      "This is a self-paced loop. Perform the task now. Before ending, call loop_wakeup only when another useful check remains. Do not schedule another wakeup when the task is complete, blocked on user input, or waiting on external state that cannot be checked later.\n\nTask:\ncheck deployment",
       { deliverAs: "followUp" },
     );
     expect(notify).toHaveBeenLastCalledWith("Continuing loop after compaction.", "info");
@@ -182,47 +182,6 @@ describe("LoopRuntime compaction", () => {
     clearedRuntime.clear();
     clearedRuntime.continueAfterCompaction(false, context);
     expect(sendUserMessage).toHaveBeenCalledTimes(2);
-  });
-});
-
-describe("LoopRuntime tmux detachment", () => {
-  it("detaches a long-timeout bash command while a loop tick is running", () => {
-    const runtime = new LoopRuntime(host, scheduler);
-    const input = { command: "gh run watch 32847265628 --exit-status --compact", timeout: 1200 };
-    runtime.command("watch CI", context);
-
-    expect(runtime.detachLongRunningBash(input)).toBe(true);
-    expect(input.timeout).toBe(30);
-    expect(input.command).toMatch(/tmux new-session -d -s 'pi-loop-/u);
-    expect(input.command).toMatch(/output\.log/u);
-    expect(input.command).toMatch(/exit-status/u);
-    expect(input.command).toMatch(/Schedule a loop_wakeup/u);
-  });
-
-  it("detects known watch commands without a long timeout", () => {
-    const runtime = new LoopRuntime(host, scheduler);
-    const input: { command: string; timeout?: number } = { command: "tail -f server.log" };
-    runtime.command("watch logs", context);
-
-    expect(runtime.detachLongRunningBash(input)).toBe(true);
-    expect(input.timeout).toBe(30);
-  });
-
-  it("leaves short, already-detached, and non-loop commands unchanged", () => {
-    const inactiveRuntime = new LoopRuntime(host, scheduler);
-    expect(
-      inactiveRuntime.detachLongRunningBash({ command: "gh run watch 1", timeout: 1200 }),
-    ).toBe(false);
-
-    const activeRuntime = new LoopRuntime(host, scheduler);
-    activeRuntime.command("check", context);
-    expect(activeRuntime.detachLongRunningBash({ command: "bun test", timeout: 30 })).toBe(false);
-    expect(
-      activeRuntime.detachLongRunningBash({
-        command: "tmux new-session -d -s existing 'gh run watch 1'",
-        timeout: 1200,
-      }),
-    ).toBe(false);
   });
 });
 

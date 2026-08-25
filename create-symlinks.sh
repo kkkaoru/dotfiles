@@ -154,7 +154,7 @@ done
 # ~/.pi is a top-level symlink to this repository. Keep repository-owned
 # extensions inside the managed tree so a fresh clone still installs them.
 mkdir -p "${DOTPATH}/.pi/agent/extensions" "${DOTPATH}/.pi/agent/packages"
-for extension in agmsg loop omlx-lifecycle; do
+for extension in agmsg loop omlx-lifecycle tmux-timeout; do
   extension_path="${DOTPATH}/tools/pi-${extension}-extension"
   if [ -d "$extension_path" ]; then
     link_path "$extension_path" "${DOTPATH}/.pi/agent/extensions/${extension}"

@@ -9,10 +9,6 @@ repeated manual prompts.
   fixed, session-scoped schedule. Supported units are seconds, minutes, hours, and days; intervals
   below one minute are rounded up.
 - Bare `/loop` continues only work already established in the conversation.
-- During an active loop tick, bash calls with a timeout of at least 120 seconds and known watch
-  commands such as `gh run watch`, `watch`, and `tail -f` are automatically rewritten to detached
-  tmux sessions. Logs and exit status are written under the system temporary directory so a later
-  wakeup can inspect them without blocking the active pi session.
 - `/loop list` shows pending jobs; `/loop pause` freezes their remaining delays; `/loop resume`
   continues them; `/loop clear` cancels them.
 
