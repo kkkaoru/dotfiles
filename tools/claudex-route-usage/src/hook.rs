@@ -49,8 +49,14 @@ fn tool_policy_reminder(event_name: &str, delegation_required: bool) -> &'static
             "lookups may stay in main. Bash is allowed in main for lightweight orchestration only. ",
             "Write/Edit/MultiEdit/NotebookEdit denials are also enforced by PreToolUse. ",
             "Match Agent/Task fan-out to independent scopes: one scope uses one ordinary worker. ",
-            "Do not force three workers onto a single question. Consult custom-advisor only for ",
-            "conflicting worker results or high-risk changes, not for ordinary external research."
+            "For an ordinary external-research question, actually launch exactly one preferred ",
+            "worker before drawing conclusions; do not fan out speculatively. selected_workers is ",
+            "routing metadata, not evidence that any worker ran. Never claim that a worker was ",
+            "launched, failed, lacked model access, or returned an error unless this turn contains ",
+            "the matching Agent/Task tool execution and its real tool result or task notification. ",
+            "Do not invent provider diagnostics or quote errors that were not returned by a tool. ",
+            "Consult custom-advisor only for conflicting worker results or high-risk changes, not ",
+            "for ordinary external research."
         ),
         _ => concat!(
             "Claudex tool policy for the main orchestrator: delegation is not required for this ",
@@ -235,6 +241,22 @@ mod tests {
         assert!(sub_ctx.contains("main-session only"));
         assert!(sub_ctx.contains("disabled_subagent_models"));
         assert!(!ctx.contains("advisor() — it is main-session only"));
+    }
+
+    #[test]
+    fn main_policy_requires_real_worker_execution_evidence() {
+        let output = hook_output_for_agent(&sample_summary(), "UserPromptSubmit", None).unwrap();
+        let context = output["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        for required in [
+            "actually launch exactly one preferred worker",
+            "routing metadata, not evidence that any worker ran",
+            "matching Agent/Task tool execution",
+            "Do not invent provider diagnostics",
+        ] {
+            assert!(context.contains(required), "missing contract: {required}");
+        }
     }
 
     #[test]
