@@ -14,6 +14,8 @@ it("creates a quoted detached tmux launch command", () => {
   expect(launch.completionChannel).toMatch(/^pi-tmux-\d+-7-complete$/u);
   expect(launch.logPath).toMatch(/pi-tmux-\d+-7\/output\.log$/u);
   expect(launch.statusPath).toMatch(/pi-tmux-\d+-7\/exit-status$/u);
+  expect(launch.submittedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+  expect(launch.taskCommand).toBe("sleep 1; echo 'tmux ok'");
   expect(launch.command).toMatch(/tmux new-session -d -s 'pi-tmux-\d+-7'/u);
   expect(launch.command).toMatch(/echo '"'"'tmux ok'"'"'/u);
   expect(launch.command).toMatch(/tmux wait-for -S/u);

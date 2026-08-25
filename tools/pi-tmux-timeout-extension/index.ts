@@ -153,15 +153,14 @@ class AutomaticTmuxRewriter {
   }
 }
 
+function submittedTimestamp(timestamp: string): string {
+  return timestamp.slice(5, 16).replace("T", " ");
+}
+
 function completionPrompt(completion: Completion): string {
-  return [
-    "A detached tmux command has completed. Inspect its log now and continue the relevant work.",
-    `exit code: ${String(completion.exitCode)}`,
-    `tmux session: ${completion.launch.sessionName}`,
-    `log: ${completion.launch.logPath}`,
-    `exit status: ${completion.launch.statusPath}`,
-    "Do not wait for a previously scheduled timeout or loop wakeup.",
-  ].join("\n");
+  const submittedAt: string = submittedTimestamp(completion.launch.submittedAt);
+  const completedAt: string = new Date().toISOString().slice(11, 16);
+  return `${submittedAt} → ${completedAt} | exit=${String(completion.exitCode)} | ${completion.launch.taskCommand}\n${completion.launch.logPath}`;
 }
 
 export function wakePiOnCompletion(host: TmuxExtensionHost, completion: Completion): void {

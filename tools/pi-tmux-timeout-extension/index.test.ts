@@ -102,10 +102,14 @@ it("wakes pi immediately when completion monitoring reports an exit status", () 
       logPath: "/tmp/pi-tmux-test/output.log",
       sessionName: "pi-tmux-test",
       statusPath: "/tmp/pi-tmux-test/exit-status",
+      submittedAt: "2026-06-01T01:02:03.000Z",
+      taskCommand: "sleep 60",
     },
   });
   expect(sendUserMessage).toHaveBeenCalledWith(
-    expect.stringMatching(/exit code: 0[\s\S]*Do not wait for a previously scheduled timeout/u),
+    expect.stringMatching(
+      /^06-01 01:02 → \d{2}:\d{2} \| exit=0 \| sleep 60\n\/tmp\/pi-tmux-test\/output\.log$/u,
+    ),
     { deliverAs: "followUp" },
   );
 });

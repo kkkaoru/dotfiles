@@ -17,6 +17,8 @@ const launch: TmuxLaunch = {
   logPath: "/tmp/pi-tmux-test/output.log",
   sessionName: "pi-tmux-test",
   statusPath: "/tmp/pi-tmux-test/exit-status",
+  submittedAt: "2026-06-01T01:02:03.000Z",
+  taskCommand: "sleep 60",
 };
 
 afterEach(() => {

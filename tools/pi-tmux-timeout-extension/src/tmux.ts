@@ -26,6 +26,8 @@ export interface TmuxLaunch {
   readonly logPath: string;
   readonly sessionName: string;
   readonly statusPath: string;
+  readonly submittedAt: string;
+  readonly taskCommand: string;
 }
 
 export interface TmuxRuntimeOptions {
@@ -54,10 +56,19 @@ export function createTmuxLaunch(command: string, id: number): TmuxLaunch {
   const outputDirectory = path.join(tmpdir(), sessionName);
   const logPath = path.join(outputDirectory, "output.log");
   const statusPath = path.join(outputDirectory, "exit-status");
+  const submittedAt: string = new Date().toISOString();
   const detachedScript = `(${command}) > ${shellQuote(logPath)} 2>&1\nexit_code=$?\nprintf '%s\\n' "$exit_code" > ${shellQuote(statusPath)}\ntmux wait-for -S ${shellQuote(completionChannel)}`;
   const message = launchMessage({ logPath, sessionName, statusPath });
   const launchCommand = `mkdir -p ${shellQuote(outputDirectory)} && tmux new-session -d -s ${shellQuote(sessionName)} -- sh -lc ${shellQuote(detachedScript)} && printf '%s\\n' ${shellQuote(message)}`;
-  return { command: launchCommand, completionChannel, logPath, sessionName, statusPath };
+  return {
+    command: launchCommand,
+    completionChannel,
+    logPath,
+    sessionName,
+    statusPath,
+    submittedAt,
+    taskCommand: command,
+  };
 }
 
 export function shouldDetachBash(input: MutableBashInput): boolean {

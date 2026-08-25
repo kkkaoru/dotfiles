@@ -15,6 +15,8 @@ long-running commands continue in detached tmux sessions.
 - Subscribes to a per-command `tmux wait-for` completion channel and queues an immediate follow-up
   turn when tmux signals completion, so pi does not poll and does not wait for a previously chosen
   timeout or `loop_wakeup` delay.
+- Formats completion follow-ups as submission time, completion time, exit code, original command,
+  and log path only; it does not enqueue repeated generic instruction text.
 
 Detached jobs are not killed when a pi session exits. Completion monitoring is session-scoped, so a
 job that finishes after pi exits cannot wake the closed session. Temporary output is intentionally
