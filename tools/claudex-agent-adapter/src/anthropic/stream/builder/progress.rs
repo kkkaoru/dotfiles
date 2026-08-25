@@ -3,7 +3,7 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use super::{MAX_PI_REASONING_DELTA_CHARS, PI_REASONING_PROGRESS_INTERVAL, SegmentBuilder};
+use super::SegmentBuilder;
 use crate::anthropic::stream::{
     protocol::StreamSender,
     sanitize::{is_canned_worker_filler, is_provider_status_line},
@@ -21,32 +21,20 @@ impl SegmentBuilder {
         event: &Value,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        let delta_chars = event
+        let _delta_chars = event
             .pointer("/params/deltaChars")
             .and_then(Value::as_u64)
-            .unwrap_or(0)
-            .min(MAX_PI_REASONING_DELTA_CHARS);
-        self.pi_reasoning_updates = self.pi_reasoning_updates.saturating_add(1);
-        self.pi_reasoning_chars = self.pi_reasoning_chars.saturating_add(delta_chars);
+            .unwrap_or(0);
         self.note_provider_turn_activity();
-        if !self.is_subagent
-            || self
-                .last_pi_reasoning_status_at
-                .is_some_and(|last| last.elapsed() < PI_REASONING_PROGRESS_INTERVAL)
-        {
+        if !self.is_subagent || self.thinking.is_open() {
             return Ok(());
         }
-        let elapsed = self.turn_started_at.elapsed().as_secs();
-        let status = if self.last_pi_reasoning_status_at.is_none() {
-            "Pi reasoning started\n".to_owned()
-        } else {
-            format!(
-                "Pi reasoning active · {elapsed}s · {} updates · {} chars streamed\n",
-                self.pi_reasoning_updates, self.pi_reasoning_chars
-            )
-        };
-        self.last_pi_reasoning_status_at = Some(std::time::Instant::now());
-        self.stream_progress_text(&status, stream).await
+        // Claude subscription workers represent private thinking with a
+        // collapsed zero-width block. Match that native contract: keeping one
+        // block open gives the TUI elapsed `Thought for …` chrome without
+        // leaking provider reasoning or stacking synthetic status paragraphs.
+        self.stream_progress_text("\u{200b}\u{200b}\u{200b}\u{200b}", stream)
+            .await
     }
 
     /// Stream ACP tool progress as thinking chrome (not executable `tool_use`).
@@ -96,6 +84,17 @@ impl SegmentBuilder {
             return Ok(());
         };
         if delta.is_empty() {
+            return Ok(());
+        }
+        let pi_item = event
+            .pointer("/params/itemId")
+            .and_then(Value::as_str)
+            .is_some_and(|item_id| item_id.starts_with("pi-"));
+        if self.is_subagent && pi_item {
+            // Claude workers stream final prose as assistant text rather than
+            // duplicating it inside a Thought block. Buffer Pi answer deltas
+            // for the normal end-turn text block to match that transcript.
+            self.buffer_pi_subagent_delta(delta);
             return Ok(());
         }
         if let Some(remainder) = self.take_subagent_status_remainder(delta, stream).await? {
@@ -197,6 +196,13 @@ impl SegmentBuilder {
         };
         if !self.is_subagent {
             return self.thinking.delta(event, &mut self.blocks, stream).await;
+        }
+        if item_id.starts_with("pi-") {
+            // Pi summaries can contain provider-private reasoning. Claude
+            // subscription workers expose only collapsed thinking in the
+            // SubAgent transcript, so keep the same privacy/display contract.
+            self.note_provider_turn_activity();
+            return Ok(());
         }
         if let Some(remainder) = self.take_subagent_status_remainder(raw, stream).await? {
             return self

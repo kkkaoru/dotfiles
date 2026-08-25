@@ -10,6 +10,16 @@ use crate::anthropic::stream::{
 };
 
 impl SegmentBuilder {
+    pub(super) fn buffer_pi_subagent_delta(&mut self, delta: &str) {
+        let Some((display, committed)) = self.filter_subagent_live_delta(delta) else {
+            return;
+        };
+        self.note_provider_turn_activity();
+        if !display.contains("large tool output omitted") {
+            self.pending_answer.push_str(&committed);
+        }
+    }
+
     pub(super) async fn take_subagent_status_remainder(
         &mut self,
         raw: &str,

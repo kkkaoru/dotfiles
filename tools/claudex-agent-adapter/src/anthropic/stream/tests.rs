@@ -3817,10 +3817,29 @@ async fn pi_reasoning_progress_event_reaches_subagent_thinking() {
     drop(sender);
     let output = collect_sse_frames(&mut receiver).await;
     assert!(
-        output.contains("Pi reasoning started"),
-        "Pi progress must reach native SubAgent thinking: {output}"
+        output.contains("\\u200b\\u200b\\u200b\\u200b")
+            || output.contains("\u{200b}\u{200b}\u{200b}\u{200b}"),
+        "Pi progress must open collapsed native SubAgent thinking: {output}"
     );
+    assert!(!output.contains("Pi reasoning"));
     assert!(builder.thinking.is_open());
+}
+
+#[tokio::test]
+async fn pi_subagent_answer_is_not_duplicated_inside_thinking() {
+    let mut builder = SegmentBuilder::for_turn(1, true, "cline-pass/deepseek-v4-flash");
+    builder
+        .text_delta(
+            &json!({
+                "params":{"itemId":"pi-0","delta":"final provider answer"}
+            }),
+            None,
+        )
+        .await
+        .expect("Pi answer delta");
+
+    assert_eq!(builder.pending_answer, "final provider answer");
+    assert!(builder.blocks.is_empty());
 }
 
 #[tokio::test]

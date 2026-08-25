@@ -23,30 +23,52 @@ fn thinking_has_nested_elapsed_chrome(text: &str) -> bool {
 }
 
 #[tokio::test]
-async fn pi_subagent_reasoning_progress_is_visible_and_rate_limited() {
+async fn pi_subagent_reasoning_matches_collapsed_claude_thinking() {
     let mut builder = SegmentBuilder::new(1).with_subagent(true);
-    builder
-        .pi_reasoning_progress(&json!({"params":{"itemId":"pi-1","deltaChars":0}}), None)
-        .await
-        .expect("initial Pi reasoning progress");
-    assert_eq!(builder.blocks[0]["thinking"], "Pi reasoning started\n");
-
     builder
         .pi_reasoning_progress(&json!({"params":{"itemId":"pi-1","deltaChars":8}}), None)
         .await
-        .expect("rate-limited Pi reasoning progress");
-    assert_eq!(builder.blocks[0]["thinking"], "Pi reasoning started\n");
+        .expect("initial Pi reasoning progress");
+    assert_eq!(
+        builder.blocks[0]["thinking"],
+        "\u{200b}\u{200b}\u{200b}\u{200b}"
+    );
 
-    builder.age_turn_for_test(Duration::from_secs(16));
-    builder.age_pi_reasoning_status_for_test(Duration::from_secs(16));
     builder
         .pi_reasoning_progress(&json!({"params":{"itemId":"pi-1","deltaChars":12}}), None)
         .await
-        .expect("periodic Pi reasoning progress");
+        .expect("continued Pi reasoning progress");
+    assert_eq!(builder.blocks.len(), 1);
     assert_eq!(
         builder.blocks[0]["thinking"],
-        "Pi reasoning started\nPi reasoning active · 16s · 3 updates · 20 chars streamed\n"
+        "\u{200b}\u{200b}\u{200b}\u{200b}"
     );
+}
+
+#[tokio::test]
+async fn pi_subagent_summary_does_not_expose_provider_private_reasoning() {
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    builder
+        .pi_reasoning_progress(&json!({"params":{"itemId":"pi-1","deltaChars":8}}), None)
+        .await
+        .expect("Pi reasoning progress");
+    builder
+        .reasoning_delta(
+            &json!({
+                "params":{
+                    "itemId":"pi-1",
+                    "summaryIndex":0,
+                    "delta":"private provider chain of thought"
+                }
+            }),
+            None,
+        )
+        .await
+        .expect("Pi reasoning summary");
+
+    let dumped = builder.blocks[0].to_string();
+    assert!(!dumped.contains("private provider chain of thought"));
+    assert!(dumped.contains('\u{200b}'));
 }
 
 #[tokio::test]

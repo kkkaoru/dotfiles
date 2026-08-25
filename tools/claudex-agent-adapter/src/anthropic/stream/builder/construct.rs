@@ -18,9 +18,6 @@ impl SegmentBuilder {
             paint_command_code_progress: false,
             turn_started_at: Instant::now(),
             last_visible_provider_at: Instant::now(),
-            last_pi_reasoning_status_at: None,
-            pi_reasoning_updates: 0,
-            pi_reasoning_chars: 0,
             external_tool_calls: 0,
             provider_tool_calls: Vec::new(),
             provider_tool_terminal_ids: HashSet::new(),
@@ -64,14 +61,6 @@ impl SegmentBuilder {
     #[cfg(test)]
     pub(in crate::anthropic::stream) fn age_turn_for_test(&mut self, age: std::time::Duration) {
         self.turn_started_at = Instant::now() - age;
-    }
-
-    #[cfg(test)]
-    pub(in crate::anthropic::stream) fn age_pi_reasoning_status_for_test(
-        &mut self,
-        age: std::time::Duration,
-    ) {
-        self.last_pi_reasoning_status_at = Some(Instant::now() - age);
     }
 
     pub(in crate::anthropic::stream) fn for_turn(
