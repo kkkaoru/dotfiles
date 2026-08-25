@@ -11,6 +11,8 @@ mod events_circuit;
 mod events_dispatch;
 #[path = "events_finish.rs"]
 mod events_finish;
+#[path = "events_skill.rs"]
+mod events_skill;
 #[path = "events_tools.rs"]
 mod events_tools;
 use events_finish::{anthropic_stop_reason, append_tool_call, mark_streamed, start_tool_call};
@@ -29,6 +31,7 @@ pub(super) struct EventTranslateState {
     streamed_content: HashSet<u64>,
     completed_thinking: HashSet<u64>,
     listed_tools: HashSet<String>,
+    skill_recovery_arguments: Option<Value>,
     consecutive_unusable_tools: u8,
     forwarded_tool_calls: usize,
 }

@@ -3731,6 +3731,74 @@ async fn pi_tool_start_emits_native_tool_use_before_tool_call() {
 }
 
 #[tokio::test]
+async fn pi_skill_call_emits_recovered_arguments_on_the_wire() {
+    let (_root, _app, bridge, mut session) = disconnect_fixture().await;
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .external_tool_names
+        .insert("cc_Skill_0".to_owned(), "Skill".to_owned());
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::for_turn(1, true, "cline-pass/deepseek-v4-flash");
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":"skill-1",
+                "method":"item/tool/start",
+                "params":{"callId":"skill-1","tool":"Skill"}
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("Pi Skill start");
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":"skill-1",
+                "method":"item/tool/delta",
+                "params":{"callId":"skill-1","delta":"{}"}
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("empty Pi Skill delta");
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":"skill-1",
+                "method":"item/tool/call",
+                "params":{
+                    "callId":"skill-1",
+                    "tool":"Skill",
+                    "arguments":{"skill":"rust-coding-rules","args":"--help"}
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("Pi Skill call");
+    drop(sender);
+    let output = collect_sse_frames(&mut receiver).await;
+    assert_eq!(
+        builder.blocks.last().unwrap()["input"],
+        json!({"skill":"rust-coding-rules","args":"--help"})
+    );
+    assert!(output.contains("rust-coding-rules"), "{output}");
+    assert!(output.contains("--help"), "{output}");
+}
+
+#[tokio::test]
 async fn agent_message_after_tool_does_not_grow_one_thought() {
     let (_root, _app, bridge, mut session) = disconnect_fixture().await;
     Arc::get_mut(&mut session)

@@ -977,6 +977,71 @@ fn from_request_tools_lists_send_message_from_pi_request() {
 }
 
 #[test]
+fn skill_recovery_understands_the_user_requested_push_flag() {
+    let state = super::event_translate_state(&json!({
+        "system":"<available_skills><skill><name>git-commit-by-feature</name></skill></available_skills>",
+        "messages":[{"role":"user","content":"スキル `git-commit-by-feature` を `--push` 付きで実行"}],
+        "tools":[{"name":"Skill"}]
+    }));
+    assert_eq!(
+        state.skill_recovery_arguments,
+        Some(json!({"skill":"git-commit-by-feature","args":"--push"}))
+    );
+}
+
+#[tokio::test]
+async fn empty_skill_call_recovers_explicit_user_arguments() {
+    let gateway = gateway();
+    let receiver = gateway.events.subscribe("request");
+    let mut state = super::event_translate_state(&json!({
+        "messages":[{"role":"user","content":[
+            {"type":"text","text":"Call Skill with skill=rust-coding-rules, args=--help."}
+        ]}],
+        "tools":[{"name":"Skill"}]
+    }));
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_start","index":0,"toolCallId":"skill-1","name":"Skill"
+            })),
+            &mut state,
+        )
+        .expect("Skill start");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_delta","index":0,"toolCallId":"skill-1","name":"Skill",
+                "delta":"{}"
+            })),
+            &mut state,
+        )
+        .expect("empty Skill delta");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_end","index":0,"toolCallId":"skill-1","name":"Skill",
+                "arguments":{}
+            })),
+            &mut state,
+        )
+        .expect("Skill end");
+
+    let start = receiver.recv().await.expect("Skill start event");
+    let call = receiver.recv().await.expect("Skill call event");
+    assert_eq!(start["params"]["tool"], "Skill");
+    assert_eq!(
+        call["params"]["arguments"],
+        json!({"skill":"rust-coding-rules","args":"--help"})
+    );
+}
+
+#[test]
 fn bash_cmd_alias_from_event_is_usable() {
     let tool = super::ToolCallBuffer {
         id: "id".to_owned(),

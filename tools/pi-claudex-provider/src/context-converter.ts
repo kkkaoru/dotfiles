@@ -52,6 +52,8 @@ function optionalText(value: JsonRecord, key: string, requestId: string): string
 }
 
 const ADAPTER_THINKING_SIGNATURE_PREFIX = "claudex_";
+const SKILL_CALL_SHAPE =
+  'Required call shape: {"skill":"<exact available skill name>","args":"<optional arguments>"}. Never call Skill with an empty object; the skill field is mandatory.';
 
 function isAdapterThinkingSignature(signature: string): boolean {
   return signature.startsWith(ADAPTER_THINKING_SIGNATURE_PREFIX) && !signature.startsWith("{");
@@ -275,12 +277,21 @@ function normalizeToolSchema(value: unknown): JsonRecord {
   return isRecord(value) ? value : { type: "object" };
 }
 
+function toolDescription(name: string, value: unknown): string {
+  const description = typeof value === "string" ? value : "";
+  if (name !== "Skill") {
+    return description;
+  }
+  return description === "" ? SKILL_CALL_SHAPE : `${description}\n\n${SKILL_CALL_SHAPE}`;
+}
+
 function parseTool(value: unknown, index: number, requestId: string): Tool {
   const tool = requiredRecord(value, `tool ${index}`, requestId);
+  const name = requiredText(tool, "name", requestId);
   const schema = normalizeToolSchema(tool["input_schema"]);
   return {
-    name: requiredText(tool, "name", requestId),
-    description: typeof tool["description"] === "string" ? tool["description"] : "",
+    name,
+    description: toolDescription(name, tool["description"]),
     parameters: Unsafe(schema),
   };
 }

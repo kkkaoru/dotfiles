@@ -371,7 +371,6 @@ describe("Anthropic to Pi context conversion", () => {
     expect(context.messages[4]).toStrictEqual({ role: "user", content: "next", timestamp: 2004 });
     expect(context.tools?.[0]?.description).toBe("");
   });
-
   it("normalizes non-object tool schemas while preserving valid schemas", () => {
     const context = toPiContext(
       gatewayRequest({
@@ -383,7 +382,8 @@ describe("Anthropic to Pi context conversion", () => {
               properties: { query: { type: "string" } },
             },
           },
-          { name: "goal", input_schema: null },
+          { name: "Skill", description: "Load a skill", input_schema: null },
+          { name: "Skill", input_schema: null },
         ],
       }),
       MODEL,
@@ -393,8 +393,8 @@ describe("Anthropic to Pi context conversion", () => {
       properties: { query: { type: "string" } },
     });
     expect(context.tools?.[1]?.parameters).toStrictEqual({ type: "object" });
+    expect(context.tools?.[1]?.description).toMatch(/^Load a skill\n\nRequired call shape:/);
   });
-
   it("rejects unsupported system, message, content, image, and result shapes", () => {
     expect(() => toPiContext(gatewayRequest({ system: {} }), MODEL)).toThrow("system must be");
     expect(() => toPiContext(gatewayRequest({ system: [{ type: "image" }] }), MODEL)).toThrow(

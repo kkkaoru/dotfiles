@@ -29,7 +29,8 @@ fn skip_start_until_ready(name: &str, mapped: &Value, raw_arguments: &str) -> bo
     if name.eq_ignore_ascii_case("Bash") {
         return raw_arguments.is_empty() || serde_json::from_str::<Value>(raw_arguments).is_ok();
     }
-    name.eq_ignore_ascii_case("SendMessage")
+    name.eq_ignore_ascii_case("Skill")
+        || name.eq_ignore_ascii_case("SendMessage")
         || name.eq_ignore_ascii_case("Agent")
         || name.eq_ignore_ascii_case("Task")
         || name.to_ascii_lowercase().contains("spawn_subagent")
@@ -139,9 +140,18 @@ impl PiGateway {
         if let Some(name) = tool_name(event) {
             tool.name = name.to_owned();
         }
-        let arguments = finished_tool_arguments(event, &tool)?;
+        let mut arguments = finished_tool_arguments(event, &tool)?;
         if tool.id.is_empty() || tool.name.is_empty() {
             bail!("Pi tool call omitted id or name");
+        }
+        if tool.name.eq_ignore_ascii_case("Skill")
+            && !arguments
+                .get("skill")
+                .and_then(Value::as_str)
+                .is_some_and(|skill| !skill.trim().is_empty())
+            && let Some(recovered) = &state.skill_recovery_arguments
+        {
+            arguments = recovered.clone();
         }
         let Some((name, arguments)) =
             mapped_claude_code_tool(&tool.name, arguments, &state.listed_tools)

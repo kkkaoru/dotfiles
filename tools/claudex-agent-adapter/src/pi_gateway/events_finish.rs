@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
 
-use super::{EventTranslateState, ToolCallBuffer};
+use super::{EventTranslateState, ToolCallBuffer, events_skill::explicit_skill_arguments};
 
 const AGENT: &str = "Agent";
 const SEND_MESSAGE: &str = "SendMessage";
@@ -38,8 +38,10 @@ pub(super) fn mapped_start_tool_name(name: &str) -> &str {
 }
 
 pub(in crate::pi_gateway) fn event_translate_state(request: &Value) -> super::EventTranslateState {
+    let skill_recovery_arguments = explicit_skill_arguments(request);
     super::EventTranslateState {
         listed_tools: listed_claude_tool_names(request),
+        skill_recovery_arguments,
         ..super::EventTranslateState::default()
     }
 }
