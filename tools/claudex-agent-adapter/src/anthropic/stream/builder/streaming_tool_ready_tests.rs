@@ -205,6 +205,47 @@ fn array_grep_arguments_are_not_ready() {
 }
 
 #[test]
+fn web_tools_require_their_complete_required_arguments() {
+    assert!(!tool_arguments_ready("WebSearch", &json!({})));
+    assert!(!tool_arguments_ready("WebSearch", &json!({"query": "  "})));
+    assert!(tool_arguments_ready(
+        "WebSearch",
+        &json!({"query": "AVITA"})
+    ));
+    assert!(!tool_arguments_ready(
+        "WebFetch",
+        &json!({"url": "https://avita.co.jp"})
+    ));
+    assert!(!tool_arguments_ready(
+        "WebFetch",
+        &json!({"prompt": "extract facts"})
+    ));
+    assert!(tool_arguments_ready(
+        "WebFetch",
+        &json!({"url": "https://avita.co.jp", "prompt": "extract facts"})
+    ));
+}
+
+#[test]
+fn web_tools_require_complete_json_and_report_specific_errors() {
+    for tool in ["WebSearch", "WebFetch"] {
+        assert!(requires_complete_tool_json(tool));
+        assert!(matches!(
+            tool_json_readiness(tool, "{}"),
+            ToolJsonReadiness::Incomplete
+        ));
+    }
+    assert_eq!(
+        incomplete_tool_json_error("WebSearch"),
+        "Incomplete WebSearch tool JSON was not flushed; a non-empty query is required."
+    );
+    assert_eq!(
+        incomplete_tool_json_error("WebFetch"),
+        "Incomplete WebFetch tool JSON was not flushed; non-empty url and prompt are required."
+    );
+}
+
+#[test]
 fn write_empty_object_stays_ready() {
     assert!(tool_arguments_ready("Write", &json!({})));
 }

@@ -6,7 +6,20 @@ const SEND_MESSAGE_BODY_KEYS: [&str; 6] =
     ["prompt", "message", "task", "instruction", "query", "input"];
 const READ_PATH_KEYS: [&str; 2] = ["file_path", "path"];
 const PATTERN_KEYS: [&str; 1] = ["pattern"];
-const COMPLETE_JSON_TOOLS: [&str; 5] = ["Bash", "SendMessage", "Read", "Grep", "Glob"];
+const SKILL_NAME_KEYS: [&str; 1] = ["skill"];
+const WEB_SEARCH_QUERY_KEYS: [&str; 1] = ["query"];
+const WEB_FETCH_URL_KEYS: [&str; 1] = ["url"];
+const WEB_FETCH_PROMPT_KEYS: [&str; 1] = ["prompt"];
+const COMPLETE_JSON_TOOLS: [&str; 8] = [
+    "Bash",
+    "SendMessage",
+    "Read",
+    "Grep",
+    "Glob",
+    "Skill",
+    "WebSearch",
+    "WebFetch",
+];
 const INCOMPLETE_BASH_JSON: &str =
     "Incomplete Bash tool JSON was not flushed; a non-empty command is required.";
 const INCOMPLETE_SEND_MESSAGE_JSON: &str =
@@ -17,14 +30,23 @@ const INCOMPLETE_GREP_JSON: &str =
     "Incomplete Grep tool JSON was not flushed; a non-empty pattern is required.";
 const INCOMPLETE_GLOB_JSON: &str =
     "Incomplete Glob tool JSON was not flushed; a non-empty pattern is required.";
+const INCOMPLETE_SKILL_JSON: &str =
+    "Incomplete Skill tool JSON was not flushed; a non-empty skill is required.";
+const INCOMPLETE_WEB_SEARCH_JSON: &str =
+    "Incomplete WebSearch tool JSON was not flushed; a non-empty query is required.";
+const INCOMPLETE_WEB_FETCH_JSON: &str =
+    "Incomplete WebFetch tool JSON was not flushed; non-empty url and prompt are required.";
 const INCOMPLETE_TOOL_JSON: &str =
     "Incomplete tool JSON was not flushed; required keys are missing.";
-const INCOMPLETE_JSON_ERRORS: [(&str, &str); 5] = [
+const INCOMPLETE_JSON_ERRORS: [(&str, &str); 8] = [
     ("Bash", INCOMPLETE_BASH_JSON),
     ("SendMessage", INCOMPLETE_SEND_MESSAGE_JSON),
     ("Read", INCOMPLETE_READ_JSON),
     ("Grep", INCOMPLETE_GREP_JSON),
     ("Glob", INCOMPLETE_GLOB_JSON),
+    ("Skill", INCOMPLETE_SKILL_JSON),
+    ("WebSearch", INCOMPLETE_WEB_SEARCH_JSON),
+    ("WebFetch", INCOMPLETE_WEB_FETCH_JSON),
 ];
 
 pub(super) enum ToolJsonReadiness {
@@ -69,6 +91,16 @@ pub(super) fn tool_arguments_ready(name: &str, arguments: &Value) -> bool {
     }
     if name.eq_ignore_ascii_case("Grep") || name.eq_ignore_ascii_case("Glob") {
         return first_nonempty(object, &PATTERN_KEYS).is_some();
+    }
+    if name.eq_ignore_ascii_case("Skill") {
+        return first_nonempty(object, &SKILL_NAME_KEYS).is_some();
+    }
+    if name.eq_ignore_ascii_case("WebSearch") {
+        return first_nonempty(object, &WEB_SEARCH_QUERY_KEYS).is_some();
+    }
+    if name.eq_ignore_ascii_case("WebFetch") {
+        return first_nonempty(object, &WEB_FETCH_URL_KEYS).is_some()
+            && first_nonempty(object, &WEB_FETCH_PROMPT_KEYS).is_some();
     }
     true
 }
