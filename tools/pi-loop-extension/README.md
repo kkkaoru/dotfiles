@@ -9,14 +9,22 @@ repeated manual prompts.
   fixed, session-scoped schedule. Supported units are seconds, minutes, hours, and days; intervals
   below one minute are rounded up.
 - Bare `/loop` continues only work already established in the conversation.
+- During an active loop tick, bash calls with a timeout of at least 120 seconds and known watch
+  commands such as `gh run watch`, `watch`, and `tail -f` are automatically rewritten to detached
+  tmux sessions. Logs and exit status are written under the system temporary directory so a later
+  wakeup can inspect them without blocking the active pi session.
 - `/loop list` shows pending jobs; `/loop pause` freezes their remaining delays; `/loop resume`
   continues them; `/loop clear` cancels them.
 
 The self-paced behavior follows Codex's agent-loop principle: a turn continues through tool calls,
 then the model explicitly decides whether a follow-up is useful. A session-scoped five-second
-background poller checks wall-clock deadlines, including overdue jobs after system sleep. Polling
-starts only after a command or tool schedules a job and stops when jobs are paused, cleared, or
-exhausted. Jobs are intentionally not persisted and are cancelled during `session_shutdown`.
+background poller checks wall-clock deadlines, including overdue jobs after system sleep. If pi
+compacts during an in-flight self-paced tick without retrying it, the extension queues that tick as a
+follow-up so the loop continues from the compacted context. Pi's own retry and recurring jobs are
+left untouched to avoid duplicate runs. `loop_wakeup` uses parallel tool execution because it only
+updates the in-memory schedule and does not need to serialize sibling tools. Polling starts only
+after a command or tool schedules a job and stops when jobs are paused, cleared, or exhausted. Jobs
+are intentionally not persisted and are cancelled during `session_shutdown`.
 
 ## Install
 

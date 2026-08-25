@@ -1,5 +1,7 @@
+// This TypeScript file is executed with Bun.
 import { type Static, Type, type TSchema } from "typebox";
 import { LoopRuntime, type LoopContext, type LoopHost } from "./src/runtime.ts";
+import type { MutableBashInput } from "./src/tmux.ts";
 
 const wakeupSchema = Type.Object({
   delaySeconds: Type.Integer({
@@ -11,16 +13,26 @@ const wakeupSchema = Type.Object({
   reason: Type.String({ description: "Short reason for choosing this delay", minLength: 1 }),
 }) satisfies TSchema;
 
-type LifecycleEvent = "session_shutdown" | "session_start";
+type LifecycleEvent =
+  | "agent_settled"
+  | "session_compact"
+  | "session_shutdown"
+  | "session_start"
+  | "tool_call";
 
 interface ToolResult {
   readonly content: readonly [{ readonly text: string; readonly type: "text" }];
   readonly details: { readonly id: number; readonly scheduledInSeconds: number };
 }
 
+interface ExtractedBashInput {
+  readonly input: MutableBashInput;
+  readonly target: object;
+}
+
 export interface LoopToolDefinition {
   readonly description: string;
-  readonly executionMode: "sequential";
+  readonly executionMode: "parallel";
   readonly execute: (
     toolCallId: string,
     params: Static<typeof wakeupSchema>,
@@ -54,13 +66,55 @@ export interface LoopExtensionHost extends LoopHost {
 
 const COMPLETIONS = ["list", "clear", "pause", "resume", "5m ", "30m ", "1h "] satisfies string[];
 
+function toolCallInput(event: unknown): unknown {
+  if (typeof event !== "object" || event === null || !("toolName" in event)) {
+    return undefined;
+  }
+  if (event.toolName !== "bash" || !("input" in event)) {
+    return undefined;
+  }
+  return event.input;
+}
+
+function normalizedBashInput(value: unknown): ExtractedBashInput | undefined {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("command" in value) ||
+    typeof value.command !== "string"
+  ) {
+    return undefined;
+  }
+  const timeout: unknown = "timeout" in value ? value.timeout : undefined;
+  if (timeout !== undefined && typeof timeout !== "number") {
+    return undefined;
+  }
+  const input: MutableBashInput =
+    timeout === undefined ? { command: value.command } : { command: value.command, timeout };
+  return { input, target: value };
+}
+
+function detachLongRunningBashFromEvent(event: unknown, runtime: LoopRuntime): void {
+  const extracted: ExtractedBashInput | undefined = normalizedBashInput(toolCallInput(event));
+  if (extracted === undefined || !runtime.detachLongRunningBash(extracted.input)) {
+    return;
+  }
+  Object.assign(extracted.target, extracted.input);
+}
+
+function willRetryAfterCompaction(event: unknown): boolean {
+  return (
+    typeof event === "object" && event !== null && "willRetry" in event && event.willRetry === true
+  );
+}
+
 export default function loopExtension(host: LoopExtensionHost): void {
   const runtime: LoopRuntime = new LoopRuntime(host);
 
   host.registerTool({
     description:
       "Schedule one self-paced loop wakeup. Use only when another useful check remains; do not use when work is complete or blocked. Delays are limited to 60-3,600 seconds.",
-    executionMode: "sequential",
+    executionMode: "parallel",
     label: "Loop Wakeup",
     name: "loop_wakeup",
     parameters: wakeupSchema,
@@ -99,6 +153,11 @@ export default function loopExtension(host: LoopExtensionHost): void {
   host.on("session_start", (_event: unknown, context: LoopContext): void =>
     runtime.setContext(context),
   );
+  host.on("session_compact", (event: unknown, context: LoopContext): void =>
+    runtime.continueAfterCompaction(willRetryAfterCompaction(event), context),
+  );
+  host.on("agent_settled", (): void => runtime.agentSettled());
+  host.on("tool_call", (event: unknown): void => detachLongRunningBashFromEvent(event, runtime));
   host.on("session_shutdown", (): void => {
     runtime.clear();
   });

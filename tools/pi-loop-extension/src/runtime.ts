@@ -1,12 +1,14 @@
+// This TypeScript file is executed with Bun.
 import { clearInterval, setInterval } from "node:timers";
 import { formatInterval, parseLoopCommand, type LoopCommand } from "./parser.ts";
+import { detachBashInTmux, type MutableBashInput } from "./tmux.ts";
 
 const MIN_WAKEUP_SECONDS = 60;
 const MAX_WAKEUP_SECONDS = 3600;
 const MILLISECONDS_PER_SECOND = 1000;
 const POLL_INTERVAL_MS = 5000;
 const AUTONOMOUS_PROMPT = `Continue work already established in this conversation. Act as a steward, not an initiator: finish in-progress work, verification, or clearly authorized maintenance. Do not invent new work or perform irreversible actions without authorization. If nothing actionable remains, say so briefly and stop.`;
-const SELF_PACED_GUIDANCE = `This is a self-paced loop. Perform the task now. Before ending, call loop_wakeup only when another useful check remains. Do not schedule another wakeup when the task is complete, blocked on user input, or waiting on external state that cannot be checked later.`;
+const SELF_PACED_GUIDANCE = `This is a self-paced loop. Perform the task now. Keep the session responsive: when a command is expected to run for a long time and tmux is available, start it in a detached tmux session with output and exit status redirected to files instead of waiting in the foreground. Preserve the tmux session and file paths in the next wakeup prompt, then inspect them on a later tick. Run short commands normally. Before ending, call loop_wakeup only when another useful check remains. Do not schedule another wakeup when the task is complete, blocked on user input, or waiting on external state that cannot be checked later.`;
 
 type Poller = ReturnType<typeof setInterval>;
 
@@ -99,7 +101,9 @@ export class LoopRuntime {
   readonly #scheduler: Scheduler;
   #context: LoopContext | undefined;
   #nextId = 1;
+  #nextTmuxId = 1;
   #paused = false;
+  #runningPrompt: string | undefined;
   #poller: Poller | undefined;
 
   constructor(host: LoopHost, scheduler: Scheduler = SYSTEM_SCHEDULER) {
@@ -151,9 +155,32 @@ export class LoopRuntime {
     const count: number = this.#jobs.size;
     this.#jobs.clear();
     this.#paused = false;
+    this.#runningPrompt = undefined;
     this.#stopPoller();
     this.#updateStatus();
     return count;
+  }
+
+  continueAfterCompaction(willRetry: boolean, context: LoopContext): void {
+    this.setContext(context);
+    if (willRetry || this.#runningPrompt === undefined || this.#jobs.size > 0) {
+      return;
+    }
+    this.#send(this.#runningPrompt);
+    context.ui.notify("Continuing loop after compaction.", "info");
+  }
+
+  agentSettled(): void {
+    this.#runningPrompt = undefined;
+  }
+
+  detachLongRunningBash(input: MutableBashInput): boolean {
+    if (this.#runningPrompt === undefined) {
+      return false;
+    }
+    const detached: boolean = detachBashInTmux(input, this.#nextTmuxId);
+    this.#nextTmuxId += Number(detached);
+    return detached;
   }
 
   #start(command: Extract<LoopCommand, { readonly kind: "start" }>, context: LoopContext): void {
@@ -273,6 +300,7 @@ export class LoopRuntime {
   }
 
   #send(prompt: string): void {
+    this.#runningPrompt = prompt;
     const context: LoopContext | undefined = this.#context;
     const options: { readonly deliverAs?: "followUp" } =
       context?.isIdle() === false ? { deliverAs: "followUp" } : {};
