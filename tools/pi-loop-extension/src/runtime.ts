@@ -1,55 +1,33 @@
 // This TypeScript file is executed with Bun.
-import { clearInterval, setInterval } from "node:timers";
+import type { LoopContext, LoopHost } from "./contracts.ts";
+import { clearLoopDisplay, loopListText, updateLoopDisplay } from "./display.ts";
+import { namedLoopFollowUp } from "./follow-up.ts";
+import {
+  AUTONOMOUS_PROMPT,
+  commandPrompt,
+  resumedJob,
+  validateWakeup,
+  type WakeupInput,
+} from "./helpers.ts";
 import { formatInterval, parseLoopCommand, type LoopCommand } from "./parser.ts";
+import { type Poller, type Scheduler, SYSTEM_SCHEDULER } from "./scheduler.ts";
+import {
+  type LoopJobState as LoopJob,
+  persistLoopState,
+  restoredPendingContinuations,
+  type LoopRuntimeState,
+} from "./state.ts";
 
-const MIN_WAKEUP_SECONDS = 60;
-const MAX_WAKEUP_SECONDS = 3600;
+export type { LoopContext, LoopHost } from "./contracts.ts";
+export type { WakeupInput } from "./helpers.ts";
+export type { Scheduler } from "./scheduler.ts";
+
 const MILLISECONDS_PER_SECOND = 1000;
 const POLL_INTERVAL_MS = 5000;
-const AUTONOMOUS_PROMPT = `Continue work already established in this conversation. Act as a steward, not an initiator: finish in-progress work, verification, or clearly authorized maintenance. Do not invent new work or perform irreversible actions without authorization. If nothing actionable remains, say so briefly and stop.`;
-const SELF_PACED_GUIDANCE = `This is a self-paced loop. Perform the task now. Before ending, call loop_wakeup only when another useful check remains. Do not schedule another wakeup when the task is complete, blocked on user input, or waiting on external state that cannot be checked later.`;
-
-type Poller = ReturnType<typeof setInterval>;
-
-export interface LoopContext {
-  readonly isIdle: () => boolean;
-  readonly ui: {
-    readonly notify: (message: string, level?: "error" | "info" | "warning") => void;
-    readonly setStatus: (key: string, value: string | undefined) => void;
-  };
-}
-
-export interface LoopHost {
-  readonly sendUserMessage: (
-    content: string,
-    options?: { readonly deliverAs?: "followUp"; readonly expandPromptTemplates?: boolean },
-  ) => void;
-}
-
-export interface Scheduler {
-  readonly clearInterval: (poller: Poller) => void;
-  readonly now: () => number;
-  readonly setInterval: (callback: () => void, intervalMs: number) => Poller;
-}
-
-interface LoopJob {
-  readonly id: number;
-  readonly intervalMs?: number;
-  readonly nextRunAt: number;
-  readonly prompt: string;
-  readonly reason: string;
-  readonly remainingMs?: number;
-}
 
 interface ScheduleInput {
   readonly delayMs: number;
   readonly intervalMs?: number;
-  readonly prompt: string;
-  readonly reason: string;
-}
-
-export interface WakeupInput {
-  readonly delaySeconds: number;
   readonly prompt: string;
   readonly reason: string;
 }
@@ -59,41 +37,6 @@ export interface WakeupResult {
   readonly scheduledInSeconds: number;
 }
 
-export const SYSTEM_SCHEDULER: Scheduler = {
-  clearInterval: (poller: Poller): void => clearInterval(poller),
-  now: (): number => Date.now(),
-  setInterval: (callback: () => void, intervalMs: number): Poller =>
-    setInterval(callback, intervalMs),
-};
-
-function commandPrompt(prompt: string): string {
-  const task: string = prompt.length === 0 ? AUTONOMOUS_PROMPT : prompt;
-  return `${SELF_PACED_GUIDANCE}\n\nTask:\n${task}`;
-}
-
-function validateWakeup({ delaySeconds, prompt, reason }: WakeupInput): void {
-  if (!Number.isInteger(delaySeconds)) {
-    throw new TypeError("delaySeconds must be an integer");
-  }
-  if (delaySeconds < MIN_WAKEUP_SECONDS || delaySeconds > MAX_WAKEUP_SECONDS) {
-    throw new Error("delaySeconds must be between 60 and 3,600");
-  }
-  if (prompt.trim().length === 0 || reason.trim().length === 0) {
-    throw new Error("prompt and reason must not be empty");
-  }
-}
-
-function resumedJob(job: LoopJob, now: number): LoopJob {
-  const nextRunAt: number = now + (job.remainingMs ?? 0);
-  const common = {
-    id: job.id,
-    nextRunAt,
-    prompt: job.prompt,
-    reason: job.reason,
-  };
-  return job.intervalMs === undefined ? common : { ...common, intervalMs: job.intervalMs };
-}
-
 export class LoopRuntime {
   readonly #host: LoopHost;
   #jobs = new Map<number, LoopJob>();
@@ -101,7 +44,8 @@ export class LoopRuntime {
   #context: LoopContext | undefined;
   #nextId = 1;
   #paused = false;
-  #runningPrompt: string | undefined;
+  #pendingContinuations: string[] = [];
+  #runningContinuation: string | undefined;
   #poller: Poller | undefined;
 
   constructor(host: LoopHost, scheduler: Scheduler = SYSTEM_SCHEDULER) {
@@ -112,6 +56,31 @@ export class LoopRuntime {
   setContext(context: LoopContext): void {
     this.#context = context;
     this.#updateStatus();
+  }
+
+  restore(state: LoopRuntimeState, context: LoopContext): void {
+    this.#stopPoller();
+    this.#context = context;
+    this.#jobs = new Map(
+      state.jobs.map((job: LoopJob): readonly [number, LoopJob] => [job.id, job]),
+    );
+    this.#nextId = state.nextId;
+    this.#paused = state.paused;
+    this.#pendingContinuations = [...restoredPendingContinuations(state)];
+    this.#runningContinuation = state.runningContinuation;
+    if (!this.#paused) {
+      this.#poll();
+      this.#ensurePoller();
+    }
+    this.#updateStatus();
+    if (context.isIdle() && this.#pendingContinuations.length > 0) {
+      this.agentSettled(context);
+    }
+  }
+
+  shutdown(): void {
+    this.#stopPoller();
+    clearLoopDisplay(this.#context?.ui);
   }
 
   command(args: string, context: LoopContext): void {
@@ -153,7 +122,9 @@ export class LoopRuntime {
     const count: number = this.#jobs.size;
     this.#jobs.clear();
     this.#paused = false;
-    this.#runningPrompt = undefined;
+    this.#pendingContinuations = [];
+    this.#runningContinuation = undefined;
+    this.#persist();
     this.#stopPoller();
     this.#updateStatus();
     return count;
@@ -161,21 +132,38 @@ export class LoopRuntime {
 
   continueAfterCompaction(willRetry: boolean, context: LoopContext): void {
     this.setContext(context);
-    if (willRetry || this.#runningPrompt === undefined || this.#jobs.size > 0) {
+    if (willRetry || this.#runningContinuation === undefined || this.#jobs.size > 0) {
       return;
     }
-    this.#send(this.#runningPrompt);
+    if (context.isIdle()) {
+      this.#host.sendUserMessage(this.#runningContinuation);
+    } else {
+      this.#queue(this.#runningContinuation);
+    }
     context.ui.notify("Continuing loop after compaction.", "info");
   }
 
-  agentSettled(): void {
-    this.#runningPrompt = undefined;
+  agentSettled(context: LoopContext): void {
+    this.setContext(context);
+    if (this.#pendingContinuations.length === 0) {
+      this.#runningContinuation = undefined;
+      this.#persist();
+      return;
+    }
+    const continuations: string = this.#pendingContinuations.join("\n\n");
+    this.#pendingContinuations = [];
+    this.#persist();
+    this.#host.sendUserMessage(continuations);
+    this.#updateStatus();
   }
 
   #start(command: Extract<LoopCommand, { readonly kind: "start" }>, context: LoopContext): void {
     const prompt: string = command.prompt.length === 0 ? AUTONOMOUS_PROMPT : command.prompt;
     if (command.intervalMs === undefined) {
-      this.#send(commandPrompt(command.prompt));
+      const message: string = commandPrompt(command.prompt);
+      const identity = `self-paced | ${command.prompt.length === 0 ? "continue established work" : command.prompt}`;
+      const now: number = this.#scheduler.now();
+      this.#send(message, identity, now, now);
       context.ui.notify("Started a self-paced loop.", "info");
       return;
     }
@@ -185,7 +173,7 @@ export class LoopRuntime {
       prompt,
       reason: `Recurring every ${formatInterval(command.intervalMs)}`,
     });
-    this.#send(prompt);
+    this.#send(prompt, `#${String(job.id)} | ${job.reason}`, job.submittedAt, job.submittedAt);
     context.ui.notify(
       `Started loop #${String(job.id)} every ${formatInterval(command.intervalMs)} (session-scoped).`,
       "info",
@@ -195,9 +183,11 @@ export class LoopRuntime {
   #schedule(input: ScheduleInput): LoopJob {
     const id: number = this.#nextId;
     this.#nextId += 1;
+    const now: number = this.#scheduler.now();
     const common = {
       id,
-      nextRunAt: this.#scheduler.now() + input.delayMs,
+      nextRunAt: now + input.delayMs,
+      submittedAt: now,
       prompt: input.prompt,
       reason: input.reason,
     };
@@ -205,6 +195,7 @@ export class LoopRuntime {
       input.intervalMs === undefined ? common : { ...common, intervalMs: input.intervalMs };
     const job: LoopJob = this.#paused ? { ...recurring, remainingMs: input.delayMs } : recurring;
     this.#jobs.set(id, job);
+    this.#persist();
     this.#ensurePoller();
     this.#updateStatus();
     return job;
@@ -221,15 +212,20 @@ export class LoopRuntime {
   }
 
   #fire(job: LoopJob, now: number): void {
-    this.#send(job.prompt);
+    this.#send(job.prompt, `#${String(job.id)} | ${job.reason}`, job.submittedAt, now);
     if (job.intervalMs === undefined) {
       this.#jobs.delete(job.id);
     } else {
-      this.#jobs.set(job.id, { ...job, nextRunAt: now + job.intervalMs });
+      this.#jobs.set(job.id, {
+        ...job,
+        nextRunAt: now + job.intervalMs,
+        submittedAt: now,
+      });
     }
     if (this.#jobs.size === 0) {
       this.#stopPoller();
     }
+    this.#persist();
     this.#updateStatus();
   }
 
@@ -248,6 +244,7 @@ export class LoopRuntime {
       ),
     );
     this.#paused = true;
+    this.#persist();
     this.#stopPoller();
     this.#updateStatus();
     context.ui.notify(`Paused ${String(this.#jobs.size)} loop job(s).`, "info");
@@ -268,6 +265,7 @@ export class LoopRuntime {
       ),
     );
     this.#paused = false;
+    this.#persist();
     this.#ensurePoller();
     this.#updateStatus();
     context.ui.notify(`Resumed ${String(this.#jobs.size)} loop job(s).`, "info");
@@ -288,12 +286,24 @@ export class LoopRuntime {
     this.#poller = undefined;
   }
 
-  #send(prompt: string): void {
-    this.#runningPrompt = prompt;
-    const context: LoopContext | undefined = this.#context;
-    const options: { readonly deliverAs?: "followUp" } =
-      context?.isIdle() === false ? { deliverAs: "followUp" } : {};
-    this.#host.sendUserMessage(prompt, options);
+  #send(prompt: string, identity: string, submittedAt: number, completedAt: number): void {
+    this.#runningContinuation = namedLoopFollowUp({ completedAt, identity, prompt, submittedAt });
+    this.#persist();
+    if (this.#context?.isIdle() === false) {
+      this.#queue(this.#runningContinuation);
+      return;
+    }
+    this.#host.sendUserMessage(completedAt === submittedAt ? prompt : this.#runningContinuation);
+  }
+
+  #queue(continuation: string): void {
+    if (this.#pendingContinuations.includes(continuation)) {
+      return;
+    }
+    this.#pendingContinuations.push(continuation);
+    this.#persist();
+    this.#context?.ui.notify(continuation.split("\n", 1)[0] ?? continuation, "info");
+    this.#updateStatus();
   }
 
   #list(context: LoopContext): void {
@@ -301,22 +311,29 @@ export class LoopRuntime {
       context.ui.notify("No loop jobs are scheduled.", "info");
       return;
     }
-    const now: number = this.#scheduler.now();
-    const jobs: string = [...this.#jobs.values()]
-      .map((job: LoopJob): string => {
-        const remainingMs: number = job.remainingMs ?? Math.max(0, job.nextRunAt - now);
-        const state: string = this.#paused ? "paused, " : "";
-        return `#${String(job.id)} ${state}in ${formatInterval(remainingMs)}: ${job.reason}`;
-      })
-      .join("\n");
-    context.ui.notify(jobs, "info");
+    context.ui.notify(
+      loopListText([...this.#jobs.values()], this.#paused, this.#scheduler.now()),
+      "info",
+    );
+  }
+
+  #persist(): void {
+    persistLoopState(this.#host.appendEntry, {
+      jobs: [...this.#jobs.values()],
+      nextId: this.#nextId,
+      paused: this.#paused,
+      pendingContinuations: this.#pendingContinuations,
+      runningContinuation: this.#runningContinuation,
+    });
   }
 
   #updateStatus(): void {
-    const paused: string = this.#paused ? " (paused)" : "";
-    this.#context?.ui.setStatus(
-      "loop",
-      this.#jobs.size === 0 ? undefined : `loop: ${String(this.#jobs.size)}${paused}`,
-    );
+    updateLoopDisplay({
+      jobs: [...this.#jobs.values()],
+      now: this.#scheduler.now(),
+      paused: this.#paused,
+      pendingContinuations: this.#pendingContinuations,
+      ui: this.#context?.ui,
+    });
   }
 }

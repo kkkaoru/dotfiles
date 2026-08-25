@@ -101,8 +101,9 @@ it("continues a loop through compaction and handles settled events", () => {
   command?.handler("continue work", context);
   onCompaction?.({ willRetry: false }, context);
   expect(sendUserMessage).toHaveBeenLastCalledWith(
-    "This is a self-paced loop. Perform the task now. Before ending, call loop_wakeup only when another useful check remains. Do not schedule another wakeup when the task is complete, blocked on user input, or waiting on external state that cannot be checked later.\n\nTask:\ncontinue work",
-    {},
+    expect.stringMatching(
+      /^\d{2}-\d{2} \d{2}:\d{2} → \d{2}:\d{2} \| loop=self-paced \| continue work\nThis is a self-paced loop\./u,
+    ),
   );
   onSettled?.({}, context);
   onCompaction?.({ willRetry: false }, context);

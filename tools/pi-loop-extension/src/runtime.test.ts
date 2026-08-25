@@ -21,13 +21,16 @@ let currentTime = 1000;
 const sendUserMessage = vi.fn<LoopHost["sendUserMessage"]>();
 const notify = vi.fn<LoopContext["ui"]["notify"]>();
 const setStatus = vi.fn<LoopContext["ui"]["setStatus"]>();
+const setWidget = vi.fn<NonNullable<LoopContext["ui"]["setWidget"]>>();
 const cleared = vi.fn();
 let idle = true;
+const RECURRING_NAME_PATTERN =
+  /^\d{2}-\d{2} \d{2}:\d{2} → \d{2}:\d{2} \| loop=#1 \| Recurring every 5m\ncheck CI$/u;
 
 const host: LoopHost = { sendUserMessage };
 const context: LoopContext = {
   isIdle: (): boolean => idle,
-  ui: { notify, setStatus },
+  ui: { notify, setStatus, setWidget },
 };
 const scheduler: Scheduler = {
   clearInterval: (poller): void => {
@@ -80,9 +83,15 @@ describe("LoopRuntime commands", () => {
     runtime.command("5m check CI", context);
 
     expect(callbacks[0]?.intervalMs).toBe(5000);
-    expect(sendUserMessage).toHaveBeenCalledWith("check CI", {});
+    expect(sendUserMessage).toHaveBeenCalledWith("check CI");
     expect(notify).toHaveBeenCalledWith("Started loop #1 every 5m (session-scoped).", "info");
     expect(setStatus).toHaveBeenLastCalledWith("loop", "loop: 1");
+    expect(setWidget).toHaveBeenLastCalledWith(
+      "loop-wakeups",
+      expect.arrayContaining([
+        expect.stringMatching(/^\d{2}-\d{2} \d{2}:\d{2} → \d{2}:\d{2} \| loop=#1/u),
+      ]),
+    );
 
     currentTime = 61_000;
     runtime.command("list", context);
@@ -90,7 +99,7 @@ describe("LoopRuntime commands", () => {
 
     currentTime = 301_000;
     callbacks[0]?.callback();
-    expect(sendUserMessage).toHaveBeenLastCalledWith("check CI", {});
+    expect(sendUserMessage).toHaveBeenLastCalledWith(expect.stringMatching(RECURRING_NAME_PATTERN));
     runtime.command("list", context);
     expect(notify).toHaveBeenLastCalledWith("#1 in 5m: Recurring every 5m", "info");
 
@@ -148,13 +157,17 @@ describe("LoopRuntime compaction", () => {
     idle = false;
 
     runtime.continueAfterCompaction(false, context);
+    runtime.continueAfterCompaction(false, context);
+    idle = true;
+    runtime.agentSettled(context);
 
     expect(sendUserMessage).toHaveBeenCalledTimes(2);
     expect(sendUserMessage).toHaveBeenLastCalledWith(
-      "This is a self-paced loop. Perform the task now. Before ending, call loop_wakeup only when another useful check remains. Do not schedule another wakeup when the task is complete, blocked on user input, or waiting on external state that cannot be checked later.\n\nTask:\ncheck deployment",
-      { deliverAs: "followUp" },
+      expect.stringMatching(
+        /^\d{2}-\d{2} \d{2}:\d{2} → \d{2}:\d{2} \| loop=self-paced \| check deployment\nThis is a self-paced loop\./u,
+      ),
     );
-    expect(notify).toHaveBeenLastCalledWith("Continuing loop after compaction.", "info");
+    expect(notify).toHaveBeenCalledWith("Continuing loop after compaction.", "info");
   });
 
   it("does not duplicate continuation when pi retries or a recurring job remains", () => {
@@ -173,7 +186,7 @@ describe("LoopRuntime compaction", () => {
   it("does not continue a loop that already settled or was cleared", () => {
     const settledRuntime = new LoopRuntime(host, scheduler);
     settledRuntime.command("check deployment", context);
-    settledRuntime.agentSettled();
+    settledRuntime.agentSettled(context);
     settledRuntime.continueAfterCompaction(false, context);
     expect(sendUserMessage).toHaveBeenCalledOnce();
 
@@ -198,7 +211,18 @@ describe("LoopRuntime wakeups", () => {
     currentTime = 500_000;
     idle = false;
     callbacks[0]?.callback();
-    expect(sendUserMessage).toHaveBeenCalledWith("check again", { deliverAs: "followUp" });
+    expect(sendUserMessage).not.toHaveBeenCalled();
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringMatching(/^\d{2}-\d{2} \d{2}:\d{2} → \d{2}:\d{2} \| loop=#1 \| CI may finish$/u),
+      "info",
+    );
+    idle = true;
+    runtime.agentSettled(context);
+    expect(sendUserMessage).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^\d{2}-\d{2} \d{2}:\d{2} → \d{2}:\d{2} \| loop=#1 \| CI may finish\ncheck again$/u,
+      ),
+    );
     expect(cleared).toHaveBeenCalledOnce();
     runtime.command("list", context);
     expect(notify).toHaveBeenLastCalledWith("No loop jobs are scheduled.", "info");

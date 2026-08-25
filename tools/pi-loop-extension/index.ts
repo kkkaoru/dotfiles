@@ -1,6 +1,7 @@
 // This TypeScript file is executed with Bun.
 import { type Static, Type, type TSchema } from "typebox";
 import { LoopRuntime, type LoopContext, type LoopHost } from "./src/runtime.ts";
+import { createLoopState, latestLoopState, type LoopRuntimeState } from "./src/state.ts";
 
 const wakeupSchema = Type.Object({
   delaySeconds: Type.Integer({
@@ -103,14 +104,23 @@ export default function loopExtension(host: LoopExtensionHost): void {
     handler: (args: string, context: LoopContext): void => runtime.command(args, context),
   });
 
-  host.on("session_start", (_event: unknown, context: LoopContext): void =>
-    runtime.setContext(context),
-  );
+  host.on("session_start", (_event: unknown, context: LoopContext): void => {
+    const restored: LoopRuntimeState =
+      latestLoopState(context.sessionManager?.getEntries() ?? []) ??
+      createLoopState({
+        jobs: [],
+        nextId: 1,
+        paused: false,
+        pendingContinuations: [],
+        runningContinuation: undefined,
+      });
+    runtime.restore(restored, context);
+  });
   host.on("session_compact", (event: unknown, context: LoopContext): void =>
     runtime.continueAfterCompaction(willRetryAfterCompaction(event), context),
   );
-  host.on("agent_settled", (): void => runtime.agentSettled());
-  host.on("session_shutdown", (): void => {
-    runtime.clear();
-  });
+  host.on("agent_settled", (_event: unknown, context: LoopContext): void =>
+    runtime.agentSettled(context),
+  );
+  host.on("session_shutdown", (): void => runtime.shutdown());
 }
