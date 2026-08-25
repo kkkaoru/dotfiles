@@ -28,9 +28,11 @@ long-running commands continue in detached tmux sessions.
   reload cannot reuse a session name.
 - Defers completion that arrives during session compaction, then delivers it after compaction or
   `agent_settled`. Compaction events reconcile tracked exit-status files without interval polling.
-- Runs cleanup at extension startup and hourly thereafter. Completed `pi-tmux-*` artifact directories
-  are removed seven days after their `exit-status` file was written. Active and incomplete jobs are
-  never removed by age alone, and the cleanup timer does not keep Pi running.
+- Uses one shared temporary-directory timestamp to allow at most one cleanup scan per 24 hours across
+  reloads and Pi sessions. Cleanup examines artifacts sequentially, stats `exit-status` first, reads
+  content only after the seven-day age threshold, and removes one directory at a time. It never uses
+  unbounded `Promise.all`, never scans hourly, preserves active/incomplete jobs, and its unreferenced
+  timer does not keep Pi running.
 
 Detached jobs are not killed when a Pi process exits. Hot `/reload` restores immediately. If the
 process is closed, the job cannot wake that closed process, but resuming the same Pi conversation

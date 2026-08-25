@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { clearInterval, setInterval } from "node:timers";
 
-export const ARTIFACT_CLEANUP_INTERVAL_MILLISECONDS = 3_600_000;
+export const ARTIFACT_CLEANUP_INTERVAL_MILLISECONDS = 86_400_000;
+export const ARTIFACT_CLEANUP_STAMP_FILENAME = ".pi-tmux-cleanup-stamp";
 export const ARTIFACT_RETENTION_MILLISECONDS = 604_800_000;
 
 export interface ArtifactCleanupOperations {
@@ -12,6 +13,7 @@ export interface ArtifactCleanupOperations {
   readonly readFile: (filePath: string) => Promise<string>;
   readonly removeDirectory: (directory: string) => Promise<void>;
   readonly statMtime: (filePath: string) => Promise<number>;
+  readonly writeFile: (filePath: string, content: string) => Promise<void>;
 }
 
 export interface ArtifactCleanupOptions {
@@ -46,6 +48,9 @@ export const systemArtifactCleanupOperations: ArtifactCleanupOperations = {
     const statistics = await fs.stat(filePath);
     return statistics.mtimeMs;
   },
+  writeFile: async (filePath: string, content: string): Promise<void> => {
+    await fs.writeFile(filePath, content);
+  },
 };
 const SYSTEM_SCHEDULER: CleanupScheduler = {
   clear: (timer: CleanupTimer): void => timer.cancel(),
@@ -67,19 +72,32 @@ async function removeExpiredDirectory(
 ): Promise<void> {
   const statusPath: string = path.join(directory, "exit-status");
   try {
-    const [status, completedAtMs] = await Promise.all([
-      operations.readFile(statusPath),
-      operations.statMtime(statusPath),
-    ]);
-    if (
-      EXIT_STATUS_PATTERN.test(status) &&
-      nowMs - completedAtMs >= ARTIFACT_RETENTION_MILLISECONDS
-    ) {
+    const completedAtMs: number = await operations.statMtime(statusPath);
+    if (nowMs - completedAtMs < ARTIFACT_RETENTION_MILLISECONDS) {
+      return;
+    }
+    const status: string = await operations.readFile(statusPath);
+    if (EXIT_STATUS_PATTERN.test(status)) {
       await operations.removeDirectory(directory);
     }
   } catch {
     // Active, incomplete, or concurrently removed jobs are intentionally preserved.
   }
+}
+
+async function removeDirectoriesSequentially(
+  entries: readonly string[],
+  rootDirectory: string,
+  nowMs: number,
+  operations: ArtifactCleanupOperations,
+  index = 0,
+): Promise<void> {
+  const entry: string | undefined = entries[index];
+  if (entry === undefined) {
+    return;
+  }
+  await removeExpiredDirectory(path.join(rootDirectory, entry), nowMs, operations);
+  await removeDirectoriesSequentially(entries, rootDirectory, nowMs, operations, index + 1);
 }
 
 export async function removeExpiredArtifacts(options?: ArtifactCleanupOptions): Promise<void> {
@@ -93,11 +111,27 @@ export async function removeExpiredArtifacts(options?: ArtifactCleanupOptions): 
   const artifactDirectories: readonly string[] = entries.filter((entry: string): boolean =>
     ARTIFACT_DIRECTORY_PATTERN.test(entry),
   );
-  await Promise.all(
-    artifactDirectories.map(async (entry: string): Promise<void> =>
-      removeExpiredDirectory(path.join(rootDirectory, entry), nowMs, operations),
-    ),
-  );
+  await removeDirectoriesSequentially(artifactDirectories, rootDirectory, nowMs, operations);
+}
+
+export async function removeExpiredArtifactsIfDue(options?: ArtifactCleanupOptions): Promise<void> {
+  const operations: ArtifactCleanupOperations =
+    options?.operations ?? systemArtifactCleanupOperations;
+  const rootDirectory: string = options?.rootDirectory ?? tmpdir();
+  const nowMs: number = (options?.nowMs ?? Date.now)();
+  const stampPath: string = path.join(rootDirectory, ARTIFACT_CLEANUP_STAMP_FILENAME);
+  try {
+    const previousCleanupMs: number = await operations.statMtime(stampPath);
+    if (nowMs - previousCleanupMs < ARTIFACT_CLEANUP_INTERVAL_MILLISECONDS) {
+      return;
+    }
+  } catch {
+    // A missing stamp means cleanup has never run in this temporary directory.
+  }
+  await removeExpiredArtifacts({ ...options, nowMs: (): number => nowMs });
+  await operations
+    .writeFile(stampPath, `${new Date(nowMs).toISOString()}\n`)
+    .catch((): void => undefined);
 }
 
 export class ArtifactCleaner {
@@ -109,10 +143,10 @@ export class ArtifactCleaner {
   constructor(options?: ArtifactCleanerOptions) {
     this.#options = options ?? {};
     this.#scheduler = options?.scheduler ?? SYSTEM_SCHEDULER;
-    this.#cleanup = removeExpiredArtifacts(this.#options);
+    this.#cleanup = removeExpiredArtifactsIfDue(this.#options);
     this.#timer = this.#scheduler.schedule((): void => {
       this.#cleanup = this.#cleanup.then(async (): Promise<void> =>
-        removeExpiredArtifacts(this.#options),
+        removeExpiredArtifactsIfDue(this.#options),
       );
     }, ARTIFACT_CLEANUP_INTERVAL_MILLISECONDS);
     this.#timer.unref();
