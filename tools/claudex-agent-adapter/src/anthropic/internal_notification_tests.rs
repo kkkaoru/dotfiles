@@ -36,6 +36,43 @@ fn recognizes_only_pure_internal_agent_notifications() {
 }
 
 #[test]
+fn routes_background_bash_completion_but_keeps_agent_completion_internal() {
+    let bash = request(
+        "<task-notification><task-id>b13mjnjlj</task-id><status>completed</status><summary>08-25 23:14 | cargo test</summary><result>exit 0</result></task-notification>".into(),
+    );
+    assert!(!is_internal_notification_request(&bash));
+    let agent = request(
+        "<task-notification><task-id>a0123456789abcdef</task-id><status>completed</status><summary>worker done</summary></task-notification>".into(),
+    );
+    assert!(is_internal_notification_request(&agent));
+    assert!(is_internal_notification_request(&request(
+        "<task-notification><task-id> </task-id><status>completed</status></task-notification>"
+            .into()
+    )));
+    assert!(!is_internal_notification_request(&request(
+        "<task-notification><task-id>a0123456789abcdeg</task-id><status>completed</status></task-notification>"
+            .into()
+    )));
+}
+
+#[test]
+fn preserves_background_bash_completion_during_transcript_cleanup() {
+    let mut request = request(json!([{
+        "type":"text",
+        "text":"<task-notification><task-id>bash123</task-id><status>completed</status><summary>08-25 23:14 | cargo test</summary><result>exit 0</result></task-notification>"
+    }]));
+
+    remove_from_transcript(&mut request);
+
+    assert_eq!(request.messages.len(), 1);
+    assert!(
+        request.messages[0]["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("08-25 23:14 | cargo test"))
+    );
+}
+
+#[test]
 fn recognizes_notification_with_trailing_transcript_elements() {
     let mut request =
         request("<task-notification><status>completed</status></task-notification>".into());

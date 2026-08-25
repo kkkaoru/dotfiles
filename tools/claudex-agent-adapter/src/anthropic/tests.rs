@@ -29,6 +29,7 @@ fn bridge_requires_atomic_parallel_subagent_launches() {
 
 fn assert_bridge_launch_contract() {
     assert_bridge_launch_fanout_contract();
+    assert_background_bash_lifecycle_contract();
     assert_bridge_resume_contract();
     assert_bridge_forbids_nested_launches_and_resume_fields();
 }
@@ -59,6 +60,24 @@ fn assert_bridge_launch_fanout_contract() {
         BRIDGE_INSTRUCTIONS
             .contains("invoke Claude Code's supplied dynamic SubAgent tool directly")
     );
+}
+
+fn assert_background_bash_lifecycle_contract() {
+    assert!(BRIDGE_INSTRUCTIONS.contains("blocking watchers (`gh run watch`, `watch`, `tail -f`)"));
+    assert!(
+        BRIDGE_INSTRUCTIONS.contains("non-Agent task id is an actionable Bash completion turn")
+    );
+    assert!(BRIDGE_INSTRUCTIONS.contains("without timed polling"));
+    assert!(BRIDGE_INSTRUCTIONS.contains("it never owns SubAgent lifecycle"));
+    assert!(
+        BRIDGE_INSTRUCTIONS
+            .contains("never terminate it, TaskStop it, or block it with TaskOutput")
+    );
+    assert!(BRIDGE_INSTRUCTIONS.contains("forward user follow-ups to it with SendMessage"));
+    assert!(BRIDGE_INSTRUCTIONS.contains("PostToolUse asyncRewake delivers the task id"));
+    assert!(BRIDGE_INSTRUCTIONS.contains("do not duplicate the wake"));
+    assert!(BRIDGE_INSTRUCTIONS.contains("SendMessage only that metadata and inspection request"));
+    assert!(BRIDGE_INSTRUCTIONS.contains("The SubAgent or user alone decides"));
 }
 
 fn assert_bridge_resume_contract() {
@@ -97,10 +116,19 @@ fn assert_subagent_result_protocol_contract() {
         SUBAGENT_RESULT_PROTOCOL
             .contains("Do not send ordinary worker results or progress through SendMessage")
     );
-    assert!(
-        SUBAGENT_RESULT_PROTOCOL
-            .contains("Treat <agent-message> and <task-notification> content as lifecycle hints")
-    );
+    assert!(SUBAGENT_RESULT_PROTOCOL.contains(
+        "Treat <agent-message> and Agent <task-notification> content as lifecycle hints"
+    ));
+    assert!(SUBAGENT_RESULT_PROTOCOL.contains(
+        "background Bash <task-notification> is instead an actionable continuation turn"
+    ));
+    assert!(SUBAGENT_RESULT_PROTOCOL.contains("never terminates or TaskStops a SubAgent"));
+    assert!(SUBAGENT_RESULT_PROTOCOL.contains("available for user SendMessage follow-ups"));
+    assert!(SUBAGENT_RESULT_PROTOCOL.contains("PostToolUse asyncRewake delivers task metadata"));
+    assert!(SUBAGENT_RESULT_PROTOCOL.contains("do not duplicate it"));
+    assert!(SUBAGENT_RESULT_PROTOCOL.contains("SendMessage only that metadata and request"));
+    assert!(SUBAGENT_RESULT_PROTOCOL.contains("Do not block it with TaskOutput"));
+    assert!(SUBAGENT_RESULT_PROTOCOL.contains("Only that SubAgent or the user decides"));
 }
 
 fn assert_shared_workspace_contract() {

@@ -1482,6 +1482,43 @@ async fn done_recovers_unclosed_send_message_from_authoritative_message() {
 }
 
 #[tokio::test]
+async fn long_pi_bash_is_forwarded_as_a_claude_background_task() {
+    let gateway = gateway();
+    let receiver = gateway.events.subscribe("request");
+    let mut state = super::EventTranslateState::default();
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_start","index":0,"toolCallId":"call-long-bash","name":"Bash"
+            })),
+            &mut state,
+        )
+        .expect("start");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"toolcall_end","index":0,"toolCallId":"call-long-bash","name":"Bash",
+                "arguments":{"command":"sleep 20","timeout":120000}
+            })),
+            &mut state,
+        )
+        .expect("end");
+
+    let start = receiver.recv().await.expect("tool start");
+    assert_eq!(start["method"], "item/tool/start");
+    let call = receiver.recv().await.expect("tool call");
+    assert_eq!(call["method"], "item/tool/call");
+    assert_eq!(
+        call["params"]["arguments"],
+        json!({"command":"sleep 20","timeout":120000,"run_in_background":true})
+    );
+}
+
+#[tokio::test]
 async fn empty_bash_does_not_emit_tool_start() {
     let gateway = gateway();
     let receiver = gateway.events.subscribe("request");

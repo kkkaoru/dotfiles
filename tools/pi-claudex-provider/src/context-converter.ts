@@ -1,3 +1,4 @@
+import { CLAUDEX_BACKGROUND_BASH_GUIDANCE } from "@kkkaoru/pi-tmux-timeout-extension/policy";
 import type {
   Api,
   AssistantMessage,
@@ -277,12 +278,18 @@ function normalizeToolSchema(value: unknown): JsonRecord {
   return isRecord(value) ? value : { type: "object" };
 }
 
+function appendedDescription(description: string, guidance: string): string {
+  return description === "" ? guidance : `${description}\n\n${guidance}`;
+}
+
 function toolDescription(name: string, value: unknown): string {
   const description = typeof value === "string" ? value : "";
-  if (name !== "Skill") {
-    return description;
+  if (name === "Skill") {
+    return appendedDescription(description, SKILL_CALL_SHAPE);
   }
-  return description === "" ? SKILL_CALL_SHAPE : `${description}\n\n${SKILL_CALL_SHAPE}`;
+  return name === "Bash"
+    ? appendedDescription(description, CLAUDEX_BACKGROUND_BASH_GUIDANCE)
+    : description;
 }
 
 function parseTool(value: unknown, index: number, requestId: string): Tool {

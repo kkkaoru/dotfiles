@@ -5,9 +5,14 @@ const SYSTEM_REMINDER_OPEN: &str = "<system-reminder";
 const SYSTEM_REMINDER_CLOSE: &str = "</system-reminder>";
 const ANOTHER_SESSION_PREFIX: &str = "Another Claude session sent a message";
 const MONITOR_HINT_PREFIX: &str = "If this event is something the user would act on now";
+const TASK_NOTIFICATION_OPEN: &str = "<task-notification";
+const TASK_NOTIFICATION_CLOSE: &str = "</task-notification>";
+const TASK_ID_OPEN: &str = "<task-id>";
+const TASK_ID_CLOSE: &str = "</task-id>";
+const AGENT_TASK_ID_HEX_LENGTH: usize = 16;
 const LIFECYCLE_TAGS: [(&str, &str); 2] = [
     ("<agent-message", "</agent-message>"),
-    ("<task-notification", "</task-notification>"),
+    (TASK_NOTIFICATION_OPEN, TASK_NOTIFICATION_CLOSE),
 ];
 
 pub(super) fn is_empty_user_content(content: &Value) -> bool {
@@ -32,6 +37,9 @@ pub(super) fn is_empty_user_content(content: &Value) -> bool {
 }
 
 pub(super) fn is_internal_notification_content(content: &Value) -> bool {
+    if is_background_bash_completion_content(content) {
+        return false;
+    }
     match content {
         Value::String(text) => is_internal_notification_text(text),
         Value::Array(blocks) if !blocks.is_empty() => {
@@ -72,12 +80,50 @@ pub(super) fn is_internal_text_block(block: &Value) -> bool {
         && block
             .get("text")
             .and_then(Value::as_str)
-            .is_some_and(is_internal_notification_text)
+            .is_some_and(|text| {
+                !is_background_bash_completion_text(text) && is_internal_notification_text(text)
+            })
 }
 
 pub(super) fn is_internal_notification_text(text: &str) -> bool {
     let text = strip_leading_wrappers(text.trim());
     has_lifecycle_notification(text) || text.starts_with(ANOTHER_SESSION_PREFIX)
+}
+
+fn is_background_bash_completion_content(content: &Value) -> bool {
+    match content {
+        Value::String(text) => is_background_bash_completion_text(text),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(text_block)
+            .any(is_background_bash_completion_text),
+        _ => false,
+    }
+}
+
+fn is_background_bash_completion_text(text: &str) -> bool {
+    let Some(body) = lifecycle_body(text, TASK_NOTIFICATION_OPEN, TASK_NOTIFICATION_CLOSE) else {
+        return false;
+    };
+    let Some(task_id) = lifecycle_body(body, TASK_ID_OPEN, TASK_ID_CLOSE) else {
+        return false;
+    };
+    let task_id = task_id.trim();
+    !task_id.is_empty() && !is_agent_task_id(task_id)
+}
+
+fn lifecycle_body<'a>(text: &'a str, opening: &str, closing: &str) -> Option<&'a str> {
+    let start = text.find(opening)?;
+    let opening_end = text[start..].find('>')? + start + 1;
+    let end = text[opening_end..].find(closing)? + opening_end;
+    Some(&text[opening_end..end])
+}
+
+fn is_agent_task_id(task_id: &str) -> bool {
+    task_id.strip_prefix('a').is_some_and(|suffix| {
+        suffix.len() == AGENT_TASK_ID_HEX_LENGTH
+            && suffix.bytes().all(|byte| byte.is_ascii_hexdigit())
+    })
 }
 
 pub(super) fn is_monitor_hint_text(text: &str) -> bool {

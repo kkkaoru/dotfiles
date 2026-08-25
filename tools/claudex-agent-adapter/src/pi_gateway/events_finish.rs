@@ -3,7 +3,9 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
 
-use super::{EventTranslateState, ToolCallBuffer, events_skill::explicit_skill_arguments};
+use super::{
+    EventTranslateState, ToolCallBuffer, events_bash, events_skill::explicit_skill_arguments,
+};
 
 const AGENT: &str = "Agent";
 const SEND_MESSAGE: &str = "SendMessage";
@@ -89,7 +91,7 @@ pub(super) fn mapped_claude_code_tool(
     if is_subagent_lifecycle_tool(name) {
         return Some((name.to_owned(), strip_removed_resume_fields(arguments)));
     }
-    Some((name.to_owned(), arguments))
+    Some((name.to_owned(), events_bash::normalize(name, arguments)))
 }
 
 fn tool_arguments_usable(name: &str, arguments: &Value) -> bool {

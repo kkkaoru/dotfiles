@@ -1,7 +1,7 @@
 // Runs with Bun.
 
-import type { AssistantMessage, AssistantMessageEvent } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import type { AssistantMessage, AssistantMessageEvent, ToolCall } from "@earendil-works/pi-ai";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mapAssistantEvent } from "../src/event-mapper.ts";
 
 const MESSAGE: AssistantMessage = {
@@ -25,6 +25,10 @@ const MESSAGE: AssistantMessage = {
 function map(event: AssistantMessageEvent) {
   return mapAssistantEvent("request", event);
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("Pi assistant event mapping", () => {
   it("maps start and text lifecycle events", () => {
@@ -176,6 +180,39 @@ describe("Pi assistant event mapping", () => {
       toolCallId: "call-1",
       name: "clock",
       arguments: { zone: "UTC" },
+    });
+  });
+
+  it("backgrounds long Bash calls in incremental and terminal events", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 7, 25, 23, 14, 59));
+    const toolCall: ToolCall = {
+      type: "toolCall",
+      id: "bash-1",
+      name: "Bash",
+      arguments: { command: "gh run watch 123" },
+    };
+    const partial: AssistantMessage = { ...MESSAGE, content: [toolCall] };
+
+    expect(map({ type: "toolcall_end", contentIndex: 0, toolCall, partial })).toMatchObject({
+      arguments: {
+        command: "gh run watch 123",
+        description: "08-25 23:14 | gh run watch 123",
+        run_in_background: true,
+      },
+    });
+    expect(map({ type: "done", reason: "toolUse", message: partial })).toMatchObject({
+      message: {
+        content: [
+          {
+            arguments: {
+              command: "gh run watch 123",
+              description: "08-25 23:14 | gh run watch 123",
+              run_in_background: true,
+            },
+          },
+        ],
+      },
     });
   });
 

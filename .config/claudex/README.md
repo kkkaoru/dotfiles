@@ -490,6 +490,22 @@ ClinePass / Ollamaは対応provider extensionもロードします。必要なex
 明示errorになり、daemonと他routeは生存します。この分離はclaudex childだけに適用され、通常のPiが使う
 `~/.pi/agent/settings.json`、認証、model catalogは変更しません。
 
+PiGatewayはproviderの`streamSimple`を直接呼び、Pi agent loopやambient
+`tool_call` extensionを実行しません。そのため長時間Bashについては
+`pi-claudex-provider`が`pi-tmux-timeout-extension`の共通policyを読み、Claude Codeの
+native `run_in_background=true`へ変換します。さらにClaudex専用の隔離settingsは
+`tools/pi-tmux-timeout-extension/claudex-hook.ts`をBash `PreToolUse`で実行し、Claude Codeの
+実行境界でも同じ変換を保証します。投入時刻は実行環境のローカルタイムゾーンでBash
+descriptionへ`MM-DD HH:mm`として付与し、task id・output path・入力受付・完了通知は
+Claude Codeが所有します。adapterはAgent task idではない`<task-notification>`をproviderへ
+再投入します。shell完了はSubAgent lifecycleを所有せず、親は同じrecipient/contextを保持して実行中の
+ユーザー追加入力を`SendMessage`で渡します。Bash `PostToolUse`の`asyncRewake` hookは
+`fs.watch`でoutput fileをイベント監視し、完了メタデータと結果確認依頼を起動元の同じ
+SubAgent contextへ直接届けます。親側native通知の`SendMessage`はfallbackだけです。
+`TaskStop`やblocking `TaskOutput`は使わず、終了はSubAgent自身またはユーザーだけが決定します。
+通常のPi TUIでは従来どおりtmux extension単体で
+`tmux wait-for`を使い、このClaudex経路へ依存しません。
+
 通常起動では `--agent` を追加せず、`CLAUDEX_ACTIVE` が設定されたプロセスでのみglobal
 `UserPromptSubmit` hookがrouting contextを注入します。このため新規・resumeのどちらでも
 sessionの表示名をagent名へ変更しません。加えて `prepare-claude-config.py` が

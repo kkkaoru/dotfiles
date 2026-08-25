@@ -1,6 +1,7 @@
 // Runs with Bun.
 
 import type { AssistantMessage, AssistantMessageEvent, ToolCall } from "@earendil-works/pi-ai";
+import { backgroundLongClaudexBash } from "./background-bash.ts";
 import { GatewayError } from "./errors.ts";
 import { serverMessage, type ServerMessage } from "./protocol.ts";
 import { normalizeThoughtResult } from "./thought-result.ts";
@@ -81,15 +82,24 @@ function mapContentEvent(requestId: string, event: ContentEvent): ServerMessage 
       });
     }
     case "toolcall_end": {
+      const toolCall: ToolCall = backgroundLongClaudexBash(event.toolCall, new Date());
       return serverMessage(event.type, {
         ...common,
         index: event.contentIndex,
-        toolCallId: event.toolCall.id,
-        name: event.toolCall.name,
-        arguments: event.toolCall.arguments,
+        toolCallId: toolCall.id,
+        name: toolCall.name,
+        arguments: toolCall.arguments,
       });
     }
   }
+}
+
+function backgroundTerminalBash(message: AssistantMessage): AssistantMessage {
+  const content: AssistantMessage["content"] = message.content.map((block) =>
+    isToolCall(block) ? backgroundLongClaudexBash(block, new Date()) : block,
+  );
+  const unchanged: boolean = content.every((block, index) => block === message.content[index]);
+  return unchanged ? message : { ...message, content };
 }
 
 function hasVisibleAssistantText(message: AssistantMessage): boolean {
@@ -131,11 +141,12 @@ export function mapAssistantEvent(requestId: string, event: AssistantMessageEven
     });
   }
   if (event.type === "done") {
+    const message: AssistantMessage = backgroundTerminalBash(event.message);
     return serverMessage("done", {
       id: requestId,
       reason: event.reason,
-      message: event.message,
-      terminal: terminalContract(event.reason, event.message),
+      message,
+      terminal: terminalContract(event.reason, message),
     });
   }
   if (event.type === "error") {

@@ -25,6 +25,20 @@ SubAgent result.
 | `copilot-acp` | GitHub Copilot CLI Agent Client Protocol (ACP) | Library/test ACP adapter; not a claudex launch route |
 | `grok-acp` | Grok Build Agent Client Protocol (ACP) | Library/test ACP adapter; not a claudex launch route |
 
+A Pi-gateway model's Bash call is still executed by Claude Code, not by Pi's agent loop. The gateway
+therefore normalizes timeouts of at least 120 seconds and blocking watchers to Claude Code's native
+`run_in_background=true`. `pi-claudex-provider` adds the submission-time description from the shared
+`pi-tmux-timeout-extension` policy, and Claudex's isolated Bash `PreToolUse` hook enforces the same
+policy at Claude Code's execution boundary. Claude Code remains interactive and owns the task id, output
+path, and completion notification. Non-Agent background-task notifications are routed back as
+actionable continuation turns, but shell completion owns no SubAgent lifecycle. The parent keeps the
+exact originating recipient available for user `SendMessage` follow-ups and never `TaskStop`s or
+blocks it with `TaskOutput`. Claudex's Bash `PostToolUse` `asyncRewake` hook delivers completion
+metadata plus a result-inspection request directly to the same originating context. A parent-side
+native notification uses `SendMessage` only as a fallback. The SubAgent or user alone decides when it
+finishes. Agent notifications retain the
+existing fast lifecycle acknowledgement.
+
 All routes coexist in one daemon without eagerly starting provider processes.
 Each configured backend starts lazily on its first model request and remains
 available for reuse for the daemon's lifetime. Every request, including the main

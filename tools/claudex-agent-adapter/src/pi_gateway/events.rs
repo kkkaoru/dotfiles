@@ -5,6 +5,8 @@ use serde_json::{Value, json};
 
 use super::{PiGateway, protocol};
 
+#[path = "events_bash.rs"]
+mod events_bash;
 #[path = "events_circuit.rs"]
 mod events_circuit;
 #[path = "events_dispatch.rs"]

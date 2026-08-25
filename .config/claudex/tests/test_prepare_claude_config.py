@@ -86,6 +86,12 @@ class PrepareClaudeConfigTests(unittest.TestCase):
             self.assertIn("SessionEnd", isolated_hooks)
             pre = json.dumps(isolated_hooks["PreToolUse"])
             self.assertIn("claudex-tool-policy", pre)
+            self.assertIn("claudex-hook.ts", pre)
+            self.assertIn('"matcher": "Bash"', pre)
+            post = json.dumps(isolated_hooks["PostToolUse"])
+            self.assertIn("claudex-completion-hook.ts", post)
+            self.assertIn('"asyncRewake": true', post)
+            self.assertIn('"timeout": 604800', post)
             # Plain shared settings must not gain mechanical tool limits.
             self.assertNotIn("PreToolUse", shared.get("hooks", {}))
 

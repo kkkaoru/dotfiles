@@ -27,6 +27,19 @@ TOOL_POLICY_HOOK = (
     'test "${CLAUDEX_ACTIVE:-}" != 1 || '
     'exec "$HOME/.cargo/bin/claudex-tool-policy"'
 )
+BACKGROUND_BASH_HOOK = (
+    'test "${CLAUDEX_ACTIVE:-}" != 1 || '
+    'exec "$HOME/.pi/agent/extensions/tmux-timeout/claudex-hook.ts"'
+)
+BACKGROUND_COMPLETION_HOOK = (
+    'test "${CLAUDEX_ACTIVE:-}" != 1 || '
+    'exec "$HOME/.pi/agent/extensions/tmux-timeout/claudex-completion-hook.ts"'
+)
+CLAUDEX_MANAGED_HOOK_COMMANDS = (
+    "claudex-tool-policy",
+    "claudex-hook.ts",
+    "claudex-completion-hook.ts",
+)
 # External model ids accepted by the Claudex adapter but not shipped in Claude
 # Code's built-in catalog. Identity mappings suppress the SDK warning without
 # changing the model sent to the adapter.
@@ -47,15 +60,30 @@ EMPTY_DISABLED_SUBAGENT_MODELS: dict[str, object] = {
 CLAUDEX_TOOL_POLICY_HOOKS: dict[str, list[dict[str, Any]]] = {
     "PreToolUse": [
         {
+            "matcher": "Bash",
+            "hooks": [{"type": "command", "command": BACKGROUND_BASH_HOOK, "timeout": 10}],
+        },
+        {
             "matcher": "Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob|LS|WebSearch|WebFetch",
             "hooks": [{"type": "command", "command": TOOL_POLICY_HOOK, "timeout": 10}],
         }
     ],
     "PostToolUse": [
         {
+            "matcher": "Bash",
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": BACKGROUND_COMPLETION_HOOK,
+                    "asyncRewake": True,
+                    "timeout": 604800,
+                }
+            ],
+        },
+        {
             "matcher": "Write|Edit|MultiEdit|NotebookEdit",
             "hooks": [{"type": "command", "command": TOOL_POLICY_HOOK, "timeout": 10}],
-        }
+        },
     ],
     "SubagentStop": [
         {
@@ -167,7 +195,10 @@ def merge_claudex_tool_policy_hooks(settings: dict[str, Any]) -> None:
                 and isinstance(entry.get("hooks"), list)
                 and any(
                     isinstance(hook, dict)
-                    and "claudex-tool-policy" in str(hook.get("command", ""))
+                    and any(
+                        marker in str(hook.get("command", ""))
+                        for marker in CLAUDEX_MANAGED_HOOK_COMMANDS
+                    )
                     for hook in entry["hooks"]
                 )
             )

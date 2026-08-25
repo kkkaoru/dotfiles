@@ -1728,9 +1728,9 @@ fn subscription_prompt_preserves_worker_reuse_and_advisor_exception() {
     assert!(prompt.contains("Reuse the first compatible session advisor for related decisions"));
     assert!(prompt.contains("ordinary Agent/Task workers return their result through the launch result or TaskOutput(task_id)"));
     assert!(prompt.contains("Do not send ordinary worker results or progress through SendMessage"));
-    assert!(
-        prompt.contains("Treat <agent-message> and <task-notification> content as lifecycle hints")
-    );
+    assert!(prompt.contains(
+        "Treat <agent-message> and Agent <task-notification> content as lifecycle hints"
+    ));
 }
 
 #[test]
