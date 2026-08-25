@@ -101,6 +101,28 @@ it("ignores invalid and unreadable status files", () => {
   waiter.clear();
 });
 
+it("reconciles a completed status after a missed tmux signal", () => {
+  const cancel = vi.fn();
+  const events: CompletionEvents = {
+    subscribe: (): (() => void) => cancel,
+  };
+  const onComplete = vi.fn<(completion: Completion) => void>();
+  const read = vi
+    .fn<StatusOperations["read"]>()
+    .mockReturnValueOnce("pending")
+    .mockReturnValueOnce("0\n");
+  const waiter = new CompletionWaiter({ events, onComplete, operations: { read } });
+
+  waiter.track(launch);
+  waiter.reconcile();
+  expect(onComplete).not.toHaveBeenCalled();
+  waiter.reconcile();
+  expect(onComplete).toHaveBeenCalledWith({ exitCode: 0, launch });
+  expect(cancel).toHaveBeenCalledOnce();
+  waiter.reconcile();
+  expect(onComplete).toHaveBeenCalledOnce();
+});
+
 it("uses mocked default status-file operations", () => {
   let onSignal: (() => void) | undefined;
   vi.spyOn(fs, "readFileSync").mockReturnValue("0\n");

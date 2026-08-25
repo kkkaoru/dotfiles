@@ -2,6 +2,8 @@
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { LAUNCH_METADATA_FILENAME, serializeLaunchMetadata } from "./persistence.ts";
+import { type MutableBashInput, shouldDetachBash } from "./policy.ts";
 import {
   type Completion,
   type CompletionEvents,
@@ -9,16 +11,9 @@ import {
   type StatusOperations,
 } from "./waiter.ts";
 
-const LONG_RUNNING_TIMEOUT_SECONDS = 120;
-const LONG_RUNNING_COMMAND = /(?:^|[;&|]\s*)(?:gh\s+run\s+watch|tail\s+-f\b|watch\b)/imu;
-const TMUX_COMMAND = /(?:^|\s)tmux(?:\s|$)/iu;
+export type { MutableBashInput } from "./policy.ts";
 export const TMUX_LAUNCH_TIMEOUT_MILLISECONDS = 30_000;
 export const TMUX_LAUNCH_TIMEOUT_SECONDS = 30;
-
-export interface MutableBashInput {
-  command: string;
-  timeout?: number;
-}
 
 export interface TmuxLaunch {
   readonly command: string;
@@ -33,6 +28,7 @@ export interface TmuxLaunch {
 export interface TmuxRuntimeOptions {
   readonly events?: CompletionEvents;
   readonly onComplete: (completion: Completion) => void;
+  readonly onTrack?: (launch: TmuxLaunch) => void;
   readonly operations?: StatusOperations;
 }
 
@@ -59,9 +55,8 @@ export function createTmuxLaunch(command: string, id: number): TmuxLaunch {
   const submittedAt: string = new Date().toISOString();
   const detachedScript = `(${command}) > ${shellQuote(logPath)} 2>&1\nexit_code=$?\nprintf '%s\\n' "$exit_code" > ${shellQuote(statusPath)}\ntmux wait-for -S ${shellQuote(completionChannel)}`;
   const message = launchMessage({ logPath, sessionName, statusPath });
-  const launchCommand = `mkdir -p ${shellQuote(outputDirectory)} && tmux new-session -d -s ${shellQuote(sessionName)} -- sh -lc ${shellQuote(detachedScript)} && printf '%s\\n' ${shellQuote(message)}`;
-  return {
-    command: launchCommand,
+  const launch: TmuxLaunch = {
+    command: "",
     completionChannel,
     logPath,
     sessionName,
@@ -69,22 +64,20 @@ export function createTmuxLaunch(command: string, id: number): TmuxLaunch {
     submittedAt,
     taskCommand: command,
   };
+  const metadataPath: string = path.join(outputDirectory, LAUNCH_METADATA_FILENAME);
+  const launchCommand = `mkdir -p ${shellQuote(outputDirectory)} && tmux new-session -d -s ${shellQuote(sessionName)} -- sh -lc ${shellQuote(detachedScript)} && printf '%s' ${shellQuote(serializeLaunchMetadata(launch))} > ${shellQuote(metadataPath)} && printf '%s\\n' ${shellQuote(message)}`;
+  return { ...launch, command: launchCommand };
 }
 
-export function shouldDetachBash(input: MutableBashInput): boolean {
-  const hasLongTimeout =
-    input.timeout !== undefined && input.timeout >= LONG_RUNNING_TIMEOUT_SECONDS;
-  return (
-    !TMUX_COMMAND.test(input.command) &&
-    (hasLongTimeout || LONG_RUNNING_COMMAND.test(input.command))
-  );
-}
+export { shouldDetachBash } from "./policy.ts";
 
 export class TmuxRuntime {
+  readonly #onTrack: (launch: TmuxLaunch) => void;
   readonly #waiter: CompletionWaiter;
   #nextId = 1;
 
   constructor(options: TmuxRuntimeOptions) {
+    this.#onTrack = options.onTrack ?? ((): void => undefined);
     this.#waiter = new CompletionWaiter(options);
   }
 
@@ -105,7 +98,24 @@ export class TmuxRuntime {
   }
 
   trackLaunch(launch: TmuxLaunch): void {
+    this.#onTrack(launch);
     this.#waiter.track(launch);
+  }
+
+  restore(launches: readonly TmuxLaunch[], nextId = 1): void {
+    this.#nextId = Math.max(this.#nextId, nextId);
+    for (const launch of launches) {
+      const id = Number(launch.sessionName.split("-").at(-1));
+      if (Number.isInteger(id)) {
+        this.#nextId = Math.max(this.#nextId, id + 1);
+      }
+      this.#waiter.track(launch);
+    }
+    this.reconcile();
+  }
+
+  reconcile(): void {
+    this.#waiter.reconcile();
   }
 
   clear(): void {

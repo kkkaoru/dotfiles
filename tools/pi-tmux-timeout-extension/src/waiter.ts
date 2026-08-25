@@ -65,6 +65,7 @@ const SYSTEM_EVENTS: CompletionEvents = createCompletionEvents();
 export class CompletionWaiter {
   readonly #cancellations = new Map<string, () => void>();
   readonly #events: CompletionEvents;
+  readonly #launches = new Map<string, TmuxLaunch>();
   readonly #onComplete: (completion: Completion) => void;
   readonly #operations: StatusOperations;
 
@@ -81,11 +82,17 @@ export class CompletionWaiter {
       onSignal: (): void => this.#complete(launch),
     });
     this.#cancellations.set(launch.completionChannel, cancel);
+    this.#launches.set(launch.completionChannel, launch);
   }
 
   cancel(launch: TmuxLaunch): void {
     this.#cancellations.get(launch.completionChannel)?.();
     this.#cancellations.delete(launch.completionChannel);
+    this.#launches.delete(launch.completionChannel);
+  }
+
+  reconcile(): void {
+    [...this.#launches.values()].map((launch: TmuxLaunch): void => this.#complete(launch));
   }
 
   clear(): void {
@@ -93,17 +100,19 @@ export class CompletionWaiter {
       cancel();
     }
     this.#cancellations.clear();
+    this.#launches.clear();
   }
 
   #complete(launch: TmuxLaunch): void {
     if (!this.#cancellations.has(launch.completionChannel)) {
       return;
     }
-    this.#cancellations.delete(launch.completionChannel);
     const exitCode: number | undefined = this.#readExitCode(launch.statusPath);
-    if (exitCode !== undefined) {
-      this.#onComplete({ exitCode, launch });
+    if (exitCode === undefined) {
+      return;
     }
+    this.cancel(launch);
+    this.#onComplete({ exitCode, launch });
   }
 
   #readExitCode(statusPath: string): number | undefined {

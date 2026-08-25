@@ -1,5 +1,15 @@
 // This TypeScript file is executed with Bun.
 import { type Static, Type, type TSchema } from "typebox";
+import { ArtifactCleaner, type ArtifactCleanerOptions } from "./src/cleanup.ts";
+import { CompletionDelivery, type CompletionDeliveryContext } from "./src/delivery.ts";
+import {
+  markCompletionDelivered,
+  nextTmuxLaunchId,
+  persistTmuxLaunch,
+  recoverSessionTmuxLaunches,
+  recoverTmuxLaunches,
+  type RecoveryOptions,
+} from "./src/persistence.ts";
 import type { Completion } from "./src/waiter.ts";
 import {
   type MutableBashInput,
@@ -8,6 +18,8 @@ import {
   TmuxRuntime,
   type TmuxRuntimeOptions,
 } from "./src/tmux.ts";
+
+export { CompletionDelivery, wakePiOnCompletion } from "./src/delivery.ts";
 
 const tmuxExecSchema = Type.Object({
   command: Type.String({
@@ -37,6 +49,14 @@ interface ExtractedBashInput {
   readonly target: object;
 }
 
+export interface TmuxExtensionRuntimeOptions extends Pick<
+  TmuxRuntimeOptions,
+  "events" | "operations"
+> {
+  readonly cleanup?: ArtifactCleanerOptions;
+  readonly recovery?: false | RecoveryOptions;
+}
+
 export interface TmuxToolDefinition {
   readonly description: string;
   readonly executionMode: "parallel";
@@ -52,18 +72,30 @@ export interface TmuxToolDefinition {
   readonly promptSnippet: string;
 }
 
+type TmuxLifecycleEvent =
+  | "agent_settled"
+  | "agent_start"
+  | "session_before_compact"
+  | "session_compact"
+  | "session_compact_failed"
+  | "session_shutdown"
+  | "session_start"
+  | "tool_call"
+  | "tool_result";
+
 export interface TmuxExtensionHost {
+  readonly appendEntry?: (customType: string, data: unknown) => void;
   readonly exec: (
     command: string,
     args: readonly string[],
     options?: ExecOptions,
   ) => Promise<ExecResult>;
   readonly on: (
-    event: "session_shutdown" | "tool_call" | "tool_result",
-    handler: (event: unknown) => void,
+    event: TmuxLifecycleEvent,
+    handler: (event: unknown, context?: CompletionDeliveryContext) => void,
   ) => void;
   readonly registerTool: (definition: TmuxToolDefinition) => void;
-  readonly sendUserMessage: (content: string, options: { readonly deliverAs: "followUp" }) => void;
+  readonly sendUserMessage: (content: string) => void;
 }
 
 function toolCallInput(event: unknown): unknown {
@@ -153,20 +185,6 @@ class AutomaticTmuxRewriter {
   }
 }
 
-function submittedTimestamp(timestamp: string): string {
-  return timestamp.slice(5, 16).replace("T", " ");
-}
-
-function completionPrompt(completion: Completion): string {
-  const submittedAt: string = submittedTimestamp(completion.launch.submittedAt);
-  const completedAt: string = new Date().toISOString().slice(11, 16);
-  return `${submittedAt} → ${completedAt} | exit=${String(completion.exitCode)} | ${completion.launch.taskCommand}\n${completion.launch.logPath}`;
-}
-
-export function wakePiOnCompletion(host: TmuxExtensionHost, completion: Completion): void {
-  host.sendUserMessage(completionPrompt(completion), { deliverAs: "followUp" });
-}
-
 function resultText(launch: TmuxLaunch): string {
   return [
     "Started detached tmux command.",
@@ -176,13 +194,82 @@ function resultText(launch: TmuxLaunch): string {
   ].join("\n");
 }
 
+function registerLifecycleHandlers(input: {
+  readonly cleaner: ArtifactCleaner;
+  readonly delivery: CompletionDelivery;
+  readonly host: TmuxExtensionHost;
+  readonly recovery: false | RecoveryOptions | undefined;
+  readonly rewriter: AutomaticTmuxRewriter;
+  readonly runtime: TmuxRuntime;
+}): void {
+  input.host.on("tool_call", (event: unknown): void => input.rewriter.toolCall(event));
+  input.host.on("tool_result", (event: unknown): void => input.rewriter.toolResult(event));
+  input.host.on("session_start", (_event: unknown, context?: CompletionDeliveryContext): void => {
+    if (context === undefined) {
+      return;
+    }
+    input.delivery.setContext(context);
+    input.delivery.beforeCompaction();
+    input.runtime.restore(
+      recoverSessionTmuxLaunches(
+        context.sessionManager?.getEntries() ?? [],
+        input.recovery === false ? undefined : input.recovery?.operations,
+      ),
+    );
+    input.delivery.afterCompaction(context);
+  });
+  input.host.on("agent_start", (_event: unknown, context?: CompletionDeliveryContext): void => {
+    if (context !== undefined) {
+      input.delivery.setContext(context);
+    }
+  });
+  input.host.on("agent_settled", (_event: unknown, context?: CompletionDeliveryContext): void => {
+    if (context !== undefined) {
+      input.delivery.agentSettled(context);
+    }
+  });
+  input.host.on(
+    "session_before_compact",
+    (_event: unknown, context?: CompletionDeliveryContext): void =>
+      input.delivery.beforeCompaction(context),
+  );
+  input.host.on("session_compact", (_event: unknown, context?: CompletionDeliveryContext): void => {
+    input.runtime.reconcile();
+    input.delivery.afterCompaction(context);
+  });
+  input.host.on(
+    "session_compact_failed",
+    (_event: unknown, context?: CompletionDeliveryContext): void => {
+      input.runtime.reconcile();
+      input.delivery.afterCompaction(context);
+    },
+  );
+  input.host.on("session_shutdown", (): void => {
+    input.cleaner.stop();
+    input.delivery.clear();
+    input.rewriter.clear();
+  });
+}
+
 export default function tmuxTimeoutExtension(
   host: TmuxExtensionHost,
-  runtimeOptions?: Pick<TmuxRuntimeOptions, "events" | "operations">,
+  runtimeOptions?: TmuxExtensionRuntimeOptions,
 ): void {
+  const cleaner = new ArtifactCleaner(runtimeOptions?.cleanup);
+  const recovery: false | RecoveryOptions | undefined = runtimeOptions?.recovery;
+  const delivery = new CompletionDelivery(
+    host,
+    recovery === false
+      ? undefined
+      : {
+          onDelivered: (completion: Completion): void =>
+            markCompletionDelivered(completion.launch, recovery?.operations),
+        },
+  );
   const runtime: TmuxRuntime = new TmuxRuntime({
     ...runtimeOptions,
-    onComplete: wakePiOnCompletion.bind(undefined, host),
+    onComplete: (completion: Completion): void => delivery.complete(completion),
+    onTrack: (launch: TmuxLaunch): void => persistTmuxLaunch(host.appendEntry, launch),
   });
   const rewriter: AutomaticTmuxRewriter = new AutomaticTmuxRewriter(runtime);
 
@@ -195,7 +282,7 @@ export default function tmuxTimeoutExtension(
     parameters: tmuxExecSchema,
     promptGuidelines: [
       "Use tmux_exec instead of foreground bash for commands expected to run for at least 120 seconds or continuously watch external state.",
-      "After tmux_exec starts a command, return control promptly; pi-tmux-timeout-extension will queue a follow-up immediately when its exit-status file appears.",
+      "After tmux_exec starts a command, return control promptly; pi-tmux-timeout-extension will start a named continuation when its exit-status file appears.",
       "Do not call loop_wakeup or start timed polling for a command handled by tmux_exec; rely on its completion wakeup instead.",
     ],
     promptSnippet: "Run a long command in detached tmux without blocking pi",
@@ -219,7 +306,11 @@ export default function tmuxTimeoutExtension(
     },
   });
 
-  host.on("tool_call", (event: unknown): void => rewriter.toolCall(event));
-  host.on("tool_result", (event: unknown): void => rewriter.toolResult(event));
-  host.on("session_shutdown", (): void => rewriter.clear());
+  registerLifecycleHandlers({ cleaner, delivery, host, recovery, rewriter, runtime });
+
+  if (recovery !== false) {
+    delivery.beforeCompaction();
+    runtime.restore(recoverTmuxLaunches(recovery), nextTmuxLaunchId(recovery));
+    delivery.afterCompaction();
+  }
 }

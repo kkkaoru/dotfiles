@@ -1,10 +1,16 @@
 // This TypeScript file is executed with Bun.
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import tmuxTimeoutExtension, {
+  CompletionDelivery,
   type TmuxExtensionHost,
   type TmuxToolDefinition,
   wakePiOnCompletion,
 } from "./index.ts";
+import type { CompletionDeliveryContext } from "./src/delivery.ts";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 it("registers and executes the parallel tmux tool", async () => {
   let tool: TmuxToolDefinition | undefined;
@@ -85,7 +91,9 @@ it("falls back through stdout and a generic tmux launch error", async () => {
   );
 });
 
-it("wakes pi immediately when completion monitoring reports an exit status", () => {
+it("wakes pi immediately with local timestamps when completion monitoring reports a status", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(2026, 7, 25, 23, 45));
   const sendUserMessage = vi.fn<TmuxExtensionHost["sendUserMessage"]>();
   const host: TmuxExtensionHost = {
     exec: vi.fn(),
@@ -102,16 +110,132 @@ it("wakes pi immediately when completion monitoring reports an exit status", () 
       logPath: "/tmp/pi-tmux-test/output.log",
       sessionName: "pi-tmux-test",
       statusPath: "/tmp/pi-tmux-test/exit-status",
-      submittedAt: "2026-06-01T01:02:03.000Z",
+      submittedAt: new Date(2026, 7, 25, 23, 14).toISOString(),
       taskCommand: "sleep 60",
     },
   });
   expect(sendUserMessage).toHaveBeenCalledWith(
     expect.stringMatching(
-      /^06-01 01:02 → \d{2}:\d{2} \| exit=0 \| sleep 60\n\/tmp\/pi-tmux-test\/output\.log$/u,
+      /^08-25 23:14 → 23:45 \| tmux=pi-tmux-test \| sleep 60\nlog: \/tmp\/pi-tmux-test\/output\.log\nstatus: \/tmp\/pi-tmux-test\/exit-status$/u,
     ),
-    { deliverAs: "followUp" },
   );
+});
+
+it("defers completion follow-ups until compaction finishes", () => {
+  const sendUserMessage = vi.fn<TmuxExtensionHost["sendUserMessage"]>();
+  const host: TmuxExtensionHost = {
+    exec: vi.fn(),
+    on: (): void => undefined,
+    registerTool: (): void => undefined,
+    sendUserMessage,
+  };
+  const delivery = new CompletionDelivery(host);
+  const completion = {
+    exitCode: 0,
+    launch: {
+      command: "tmux command",
+      completionChannel: "pi-tmux-test-complete",
+      logPath: "/tmp/pi-tmux-test/output.log",
+      sessionName: "pi-tmux-test",
+      statusPath: "/tmp/pi-tmux-test/exit-status",
+      submittedAt: new Date(2026, 7, 25, 23, 14).toISOString(),
+      taskCommand: "sleep 60",
+    },
+  };
+
+  delivery.beforeCompaction();
+  delivery.complete(completion);
+  expect(sendUserMessage).not.toHaveBeenCalled();
+  delivery.afterCompaction();
+  expect(sendUserMessage).toHaveBeenCalledOnce();
+  delivery.complete(completion);
+  expect(sendUserMessage).toHaveBeenCalledTimes(2);
+  delivery.beforeCompaction();
+  delivery.complete(completion);
+  delivery.clear();
+  delivery.afterCompaction();
+  expect(sendUserMessage).toHaveBeenCalledTimes(2);
+});
+
+it("delivers a real completion callback after compaction lifecycle events", async () => {
+  const state: {
+    completionSignal?: () => void;
+    tool?: TmuxToolDefinition;
+  } = {};
+  const handlers = new Map<string, (event: unknown, context?: CompletionDeliveryContext) => void>();
+  const sendUserMessage = vi.fn<TmuxExtensionHost["sendUserMessage"]>();
+  const host: TmuxExtensionHost = {
+    exec: vi.fn<TmuxExtensionHost["exec"]>().mockResolvedValue({
+      code: 0,
+      stderr: "",
+      stdout: "started",
+    }),
+    on: (event, handler): void => {
+      handlers.set(event, handler);
+    },
+    registerTool: (definition): void => {
+      state.tool = definition;
+    },
+    sendUserMessage,
+  };
+  const subscribe = vi.fn(({ onSignal }): (() => void) => {
+    state.completionSignal = onSignal;
+    return (): void => undefined;
+  });
+
+  const writeMarker = vi.fn();
+  tmuxTimeoutExtension(host, {
+    events: { subscribe },
+    operations: { read: (): string => "0\n" },
+    recovery: {
+      operations: {
+        exists: (): boolean => false,
+        readDirectory: (): readonly string[] => [],
+        readFile: (): string => "",
+        statBirthtime: (): number => 0,
+        writeFile: writeMarker,
+      },
+    },
+  });
+  const context: CompletionDeliveryContext = {
+    isIdle: (): boolean => true,
+    ui: { notify: vi.fn(), setStatus: vi.fn() },
+  };
+  handlers.get("session_start")?.({}, context);
+  handlers.get("agent_settled")?.({}, context);
+  await state.tool?.execute("call-1", { command: "sleep 60" }, undefined);
+  handlers.get("session_before_compact")?.({}, context);
+  state.completionSignal?.();
+  expect(sendUserMessage).not.toHaveBeenCalled();
+  handlers.get("session_compact")?.({}, context);
+  expect(sendUserMessage).toHaveBeenCalledOnce();
+  expect(writeMarker).toHaveBeenCalledOnce();
+  handlers.get("session_before_compact")?.({});
+  handlers.get("session_compact_failed")?.({});
+  handlers.get("session_shutdown")?.({});
+});
+
+it("ignores lifecycle context updates when Pi supplies no context", () => {
+  const handlers = new Map<string, (event: unknown, context?: CompletionDeliveryContext) => void>();
+  const host: TmuxExtensionHost = {
+    exec: vi.fn(),
+    on: (event, handler): void => {
+      handlers.set(event, handler);
+    },
+    registerTool: (): void => undefined,
+    sendUserMessage: vi.fn(),
+  };
+  tmuxTimeoutExtension(host, { recovery: false });
+  const context: CompletionDeliveryContext = {
+    isIdle: (): boolean => true,
+    ui: { notify: vi.fn(), setStatus: vi.fn() },
+  };
+
+  handlers.get("session_start")?.({});
+  handlers.get("agent_start")?.({});
+  handlers.get("agent_start")?.({}, context);
+  handlers.get("agent_settled")?.({});
+  handlers.get("session_shutdown")?.({});
 });
 
 it("automatically rewrites and event-subscribes successful long-running bash calls", () => {
