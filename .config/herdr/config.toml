@@ -8,3 +8,6 @@ name = "dracula"
 # the corresponding arrow key to avoid a duplicate binding.
 focus_pane_left = "prefix+left"
 split_horizontal = "prefix+h"
+
+[experimental]
+switch_ascii_input_source_in_prefix = true
