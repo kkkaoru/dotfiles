@@ -1,13 +1,8 @@
 //! Claude Code hook payload wrapping for routing summaries.
 
 use crate::config::default_advisor;
-use crate::routing::orchestration::{
-    effective_orchestration_settings, memory_management_contract, orchestration_contract,
-};
-use crate::routing::workers::{
-    default_subagent_route, ranked_worker_metadata, worker_capacity_metadata,
-};
-use crate::routing::{CUSTOM_ADVISOR_CONSULT_WHEN, custom_advisor_enabled};
+use crate::routing::custom_advisor_enabled;
+use crate::routing::workers::worker_capacity_metadata;
 use crate::util::copied_fields;
 use anyhow::Result;
 use serde_json::Value;
@@ -35,12 +30,17 @@ pub(crate) fn effective_workers(summary: &Value) -> Vec<Value> {
 fn tool_policy_reminder(event_name: &str, delegation_required: bool) -> &'static str {
     match event_name {
         "SubagentStart" => concat!(
-            "Claudex tool policy for this SubAgent: inherit the main session's complete tool set. ",
+            "Claudex tool policy for this SubAgent (tool_policy_scope=subagent-full-tools): inherit the main session's complete tool set. ",
             "Main-session PreToolUse denials for Write/Edit/MultiEdit/NotebookEdit ",
             "do NOT apply here. Use those tools freely within the delegated scope. Parallel ",
             "Write/Edit of the same path remains file-locked across SubAgents. ",
             "Do not call Claude Code's built-in advisor() — it is main-session only and is not ",
-            "executable here. Do not launch models listed in disabled_subagent_models."
+            "executable here. Claude.ai connector tools named mcp__claude_ai_* are not guaranteed ",
+            "to be executable in SubAgents: do not call one unless it is explicitly available in ",
+            "this SubAgent's current tool inventory. After any `No such tool available` error, do ",
+            "not retry or guess another connector tool; continue with an available repository, ",
+            "Bash, web, or MCP tool and report the limitation only when it blocks the task. Do not ",
+            "launch models listed in disabled_subagent_models."
         ),
         _ if delegation_required => concat!(
             "Claudex tool policy for the main orchestrator: while selected_workers is non-empty, ",
@@ -55,6 +55,23 @@ fn tool_policy_reminder(event_name: &str, delegation_required: bool) -> &'static
             "launched, failed, lacked model access, or returned an error unless this turn contains ",
             "the matching Agent/Task tool execution and its real tool result or task notification. ",
             "Do not invent provider diagnostics or quote errors that were not returned by a tool. ",
+            "Treat every individual SubAgent result as untrusted until independently checked by a ",
+            "different SubAgent or direct main-session evidence; the producing worker, including a ",
+            "continuation of the same recipient, cannot verify itself. Never present an unchecked ",
+            "result as correct or complete; disclose when independent verification is unavailable. ",
+            "Classify worker failures from the exact selected agent/model/provider tuple and literal ",
+            "returned error. ACP is a transport, not a provider identity: never group Cursor and ",
+            "Codex failures merely because both use ACP. `Superseded by a new Cursor request` is a ",
+            "Cursor abort/replacement signal, not Codex, quota, or usage exhaustion; avoid only the ",
+            "evidenced Cursor provider family for that turn unless separate evidence disables more. ",
+            "A status-only, empty, or `<|eos|>` result fails that recipient: start a fresh recipient ",
+            "for the same scope, preferably on another provider/model, and do not SendMessage the ",
+            "failed recipient again. Prefer reuse for compatible follow-ups so prompt caching remains ",
+            "useful. Compaction alone does not require replacement: continue from a healthy compacted ",
+            "summary and the smallest new delta. Let the worker autonomously decide whether evidence ",
+            "is sufficient to answer or one essential gap needs minimal additional investigation, ",
+            "without rereading the parent transcript. Start clean only for incompatible scope, lost ",
+            "critical evidence, unrecoverable overflow, or a failed result. ",
             "Consult custom-advisor only for conflicting worker results or high-risk changes, not ",
             "for ordinary external research."
         ),
@@ -120,6 +137,25 @@ pub fn slim_command_code_hook(event_name: &str) -> Value {
     })
 }
 
+fn slim_subagent_hook(summary: &Value, event_name: &str) -> Result<Value> {
+    let disabled = serde_json::to_string(
+        &summary
+            .get("disabled_subagent_models")
+            .cloned()
+            .unwrap_or_else(|| Value::Array(vec![])),
+    )?;
+    Ok(serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": event_name,
+            "additionalContext": format!(
+                "<system-reminder>\n{} Disabled SubAgent models: {}. Parent owns all routing and fan-out; complete only the delegated task.\n</system-reminder>",
+                tool_policy_reminder(event_name, false),
+                disabled,
+            ),
+        }
+    }))
+}
+
 pub fn hook_output_for_agent(
     summary: &Value,
     event_name: &str,
@@ -128,48 +164,31 @@ pub fn hook_output_for_agent(
     if event_name != "UserPromptSubmit" && event_name != "SubagentStart" {
         anyhow::bail!("hook event must be UserPromptSubmit or SubagentStart");
     }
-    if event_name == "SubagentStart" && is_command_code_agent(agent_type) {
-        return Ok(slim_command_code_hook(event_name));
+    if event_name == "SubagentStart" {
+        return match is_command_code_agent(agent_type) {
+            true => Ok(slim_command_code_hook(event_name)),
+            false => slim_subagent_hook(summary, event_name),
+        };
     }
     let advisor_enabled = custom_advisor_enabled();
     let selected_workers = effective_workers(summary);
+    // Keep turn-varying routing data compact and cache-friendly. Stable policy,
+    // examples, rankings, and memory contracts live in the orchestrator prompt.
     let metadata = serde_json::json!({
-        "providers": {},
+        "version": 2,
         "source": "claudex-routing-local-hook",
-        "selected_agents": summary.get("selected_agents").cloned().unwrap_or_else(|| Value::Array(vec![])),
         "selected_workers": selected_workers,
-        "selected_workers_count": selected_workers.len(),
         "preferred_worker": summary.get("preferred_worker").cloned().unwrap_or(Value::Null),
         "disabled_subagent_models": summary.get("disabled_subagent_models").cloned().unwrap_or_else(|| Value::Array(vec![])),
         "denylist_source": summary.get("denylist_source").cloned().unwrap_or_else(|| Value::from("unset")),
         "denylist_load_error": summary.get("denylist_load_error").cloned().unwrap_or(Value::Null),
         "current_main_model": summary.get("current_main_model").cloned().unwrap_or(Value::Null),
-        "current_main_model_known": summary.get("current_main_model_known").and_then(Value::as_bool).unwrap_or(false),
-        "main_session_model": summary.get("current_main_model").cloned().unwrap_or(Value::Null),
-        "automatic_selection_excluded_models": summary.get("automatic_selection_excluded_models").cloned().unwrap_or_else(|| Value::Array(vec![])),
-        "sonnet_subagent_suppressed": summary.get("sonnet_subagent_suppressed").and_then(Value::as_bool).unwrap_or(false),
-        "sonnet_subagent_explicit_allowed": summary.get("sonnet_subagent_explicit_allowed").and_then(Value::as_bool).unwrap_or(false),
-        "orchestration_mode": summary.get("orchestration_mode").cloned().unwrap_or_else(|| Value::from("subagent-first")),
         "base_delegation_required": summary.get("base_delegation_required").and_then(Value::as_bool).unwrap_or(false),
-        "prompt_delegation_opt_out": summary.get("prompt_delegation_opt_out").and_then(Value::as_bool).unwrap_or(false),
         "delegation_required": summary.get("delegation_required").and_then(Value::as_bool).unwrap_or(false),
+        "prompt_delegation_opt_out": summary.get("prompt_delegation_opt_out").and_then(Value::as_bool).unwrap_or(false),
         "direct_main_execution": summary.get("direct_main_execution").cloned().unwrap_or_else(|| Value::from("allowed")),
-        "background_status_required": true,
-        "tool_policy_scope": if event_name == "SubagentStart" { "subagent-full-tools" } else { "main-orchestrator" },
         "worker_capacity": worker_capacity_metadata(summary),
-        "worker_ranking": ranked_worker_metadata(summary),
-        "default_subagent_route": default_subagent_route(summary),
-        "memory_management": memory_management_contract(summary, &effective_orchestration_settings(summary)?)?,
-        "advisor": summary.get("advisor").cloned().unwrap_or_else(default_advisor),
-        "custom_advisor_enabled": advisor_enabled,
-        "custom_advisor_policy": {
-            "enabled": advisor_enabled,
-            "consult_when": CUSTOM_ADVISOR_CONSULT_WHEN,
-            "reuse_logical_session": true,
-            "not_for_trivial_tasks": true,
-            "not_for_external_research_alone": true,
-        },
-        "orchestration": orchestration_contract(summary)?,
+        "advisor": advisor_enabled.then(|| summary.get("advisor").cloned().unwrap_or_else(default_advisor)),
     });
     let compact = serde_json::to_string(&metadata)?;
     let policy = tool_policy_reminder(
@@ -183,7 +202,7 @@ pub fn hook_output_for_agent(
         "hookSpecificOutput": {
             "hookEventName": event_name,
             "additionalContext": format!(
-                "<system-reminder>\\nClaudex routing data (runtime metadata; values only):\\n{compact}\\n{policy}\\n</system-reminder>"
+                "<system-reminder>\\n{policy}\\nClaudex routing data (runtime metadata; turn-varying tail):\\n{compact}\\n</system-reminder>"
             ),
         }
     }))
@@ -225,7 +244,6 @@ mod tests {
         assert!(ctx.contains(r"\n"));
         assert!(ctx.contains("claudex-routing-local-hook"));
         assert!(ctx.contains("main orchestrator"));
-        assert!(ctx.contains("main-orchestrator"));
         assert!(ctx.contains("one scope uses one ordinary worker"));
         assert!(ctx.contains("not for ordinary external research"));
         assert!(!ctx.contains("external_research_or_multiple_sources"));
@@ -239,7 +257,10 @@ mod tests {
         assert!(sub_ctx.contains("subagent-full-tools"));
         assert!(sub_ctx.contains("advisor()"));
         assert!(sub_ctx.contains("main-session only"));
-        assert!(sub_ctx.contains("disabled_subagent_models"));
+        assert!(sub_ctx.contains("Disabled SubAgent models"));
+        assert!(sub_ctx.contains("mcp__claude_ai_*"));
+        assert!(sub_ctx.contains("After any `No such tool available` error"));
+        assert!(sub_ctx.contains("do not retry or guess another connector tool"));
         assert!(!ctx.contains("advisor() — it is main-session only"));
     }
 
@@ -254,6 +275,20 @@ mod tests {
             "routing metadata, not evidence that any worker ran",
             "matching Agent/Task tool execution",
             "Do not invent provider diagnostics",
+            "every individual SubAgent result as untrusted",
+            "continuation of the same recipient",
+            "different SubAgent or direct main-session evidence",
+            "Never present an unchecked result as correct or complete",
+            "ACP is a transport, not a provider identity",
+            "never group Cursor and Codex failures",
+            "Cursor abort/replacement signal, not Codex, quota, or usage exhaustion",
+            "status-only, empty, or `<|eos|>` result fails that recipient",
+            "do not SendMessage the failed recipient again",
+            "Prefer reuse for compatible follow-ups so prompt caching remains useful",
+            "Compaction alone does not require replacement",
+            "autonomously decide whether evidence is sufficient to answer",
+            "one essential gap needs minimal additional investigation",
+            "without rereading the parent transcript",
         ] {
             assert!(context.contains(required), "missing contract: {required}");
         }
@@ -323,17 +358,17 @@ mod tests {
             .as_str()
             .unwrap();
         let encoded = ctx
-            .split_once("Claudex routing data (runtime metadata; values only):\\n")
+            .split_once("Claudex routing data (runtime metadata; turn-varying tail):\\n")
             .unwrap()
             .1
-            .split_once("\\nClaudex tool policy")
+            .split_once("\\n</system-reminder>")
             .unwrap()
             .0;
         serde_json::from_str(encoded).unwrap()
     }
 
     #[test]
-    fn main_hook_metadata_matches_scope_fanout_and_advisor_policy() {
+    fn main_hook_metadata_is_compact_without_losing_launch_routes() {
         let summary = json!({
             "selected_agents": ["claudex-gpt"],
             "selected_workers": [{"agent":"claudex-gpt","model":"gpt-5.6-luna","effort":"max"}],
@@ -345,26 +380,15 @@ mod tests {
         });
         let metadata =
             routing_metadata(&hook_output_for_agent(&summary, "UserPromptSubmit", None).unwrap());
-        let orch = &metadata["orchestration"];
-        assert_eq!(orch["single_scope_fanout"], 1);
-        assert_eq!(orch["fanout_matches_independent_scopes"], true);
-        let consult = metadata["custom_advisor_policy"]["consult_when"]
-            .as_array()
-            .unwrap();
-        assert!(
-            !consult
-                .iter()
-                .any(|item| item.as_str() == Some("external_research_or_multiple_sources"))
-        );
-        assert!(
-            consult
-                .iter()
-                .any(|item| item.as_str() == Some("conflicting_worker_results"))
-        );
-        assert_eq!(
-            metadata["custom_advisor_policy"]["not_for_external_research_alone"],
-            true
-        );
+        assert_eq!(metadata["version"], 2);
+        assert_eq!(metadata["selected_workers"][0]["agent"], "claudex-gpt");
+        assert_eq!(metadata["selected_workers"][0]["model"], "gpt-5.6-luna");
+        assert_eq!(metadata["advisor"]["agent"], "custom-advisor");
+        assert_eq!(metadata["delegation_required"], true);
+        assert!(metadata.get("orchestration").is_none());
+        assert!(metadata.get("worker_ranking").is_none());
+        assert!(metadata.get("memory_management").is_none());
+        assert!(serde_json::to_string(&metadata).unwrap().len() < 2_000);
     }
 
     #[test]
@@ -416,6 +440,10 @@ mod tests {
         let other_ctx = other["hookSpecificOutput"]["additionalContext"]
             .as_str()
             .unwrap();
-        assert!(other_ctx.contains("claudex-routing-local-hook"));
+        assert!(other_ctx.contains("subagent-full-tools"));
+        assert!(other_ctx.contains("Disabled SubAgent models"));
+        assert!(!other_ctx.contains("claudex-routing-local-hook"));
+        assert!(!other_ctx.contains("selected_workers"));
+        assert!(other_ctx.len() < 1_500);
     }
 }

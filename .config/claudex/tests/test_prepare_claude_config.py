@@ -73,6 +73,8 @@ class PrepareClaudeConfigTests(unittest.TestCase):
             )
             self.assertEqual(isolated_settings["model"], "grok-4.6")
             self.assertEqual(isolated_settings["effortLevel"], "high")
+            self.assertEqual(isolated_settings["subagentPromptCacheTtl"], "5m")
+            self.assertNotIn("subagentPromptCacheTtl", shared)
             self.assertEqual(isolated_settings["modelOverrides"]["grok-4.6"], "grok-4.6")
             self.assertNotIn("grok-4.5", isolated_settings["modelOverrides"])
             self.assertEqual(
@@ -105,6 +107,37 @@ class PrepareClaudeConfigTests(unittest.TestCase):
                 json.loads(denylist.read_text(encoding="utf-8")),
                 {"version": 1, "disabledModels": []},
             )
+
+    def test_preserves_explicit_subagent_prompt_cache_ttl(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="claudex-prepare-cache-ttl-") as temporary:
+            home = Path(temporary)
+            user_claude = home / ".claude"
+            isolated = home / ".config/claudex/claude-config"
+            user_claude.mkdir(parents=True)
+            (user_claude / "settings.json").write_text(
+                '{"model":"opus","subagentPromptCacheTtl":"1h"}',
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(PREPARE),
+                    str(user_claude),
+                    str(isolated),
+                    "grok-4.6",
+                    "high",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            isolated_settings = json.loads(
+                (isolated / "settings.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(isolated_settings["subagentPromptCacheTtl"], "1h")
 
     def test_does_not_overwrite_existing_denylist(self) -> None:
         with tempfile.TemporaryDirectory(prefix="claudex-prepare-denylist-") as temporary:

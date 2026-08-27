@@ -334,12 +334,12 @@ fn context(output: &Output) -> String {
 
 fn metadata(output: &Output) -> Value {
     let context = context(output);
-    let prefix = "Claudex routing data (runtime metadata; values only):\\n";
+    let prefix = "Claudex routing data (runtime metadata; turn-varying tail):\\n";
     let encoded = context
         .split_once(prefix)
         .expect("routing metadata prefix")
         .1
-        .split_once("\\nClaudex tool policy")
+        .split_once("\\n</system-reminder>")
         .expect("routing metadata suffix")
         .0;
     serde_json::from_str(encoded).expect("routing metadata JSON")
@@ -383,7 +383,6 @@ fn assert_exact_v2_lifetime(state: &Value) {
 fn assert_worker_choices_retained(metadata: &Value) {
     let workers = metadata["selected_workers"].as_array().unwrap();
     assert!(!workers.is_empty());
-    assert!(!metadata["selected_agents"].as_array().unwrap().is_empty());
     assert_eq!(metadata["preferred_worker"]["agent"], workers[0]["agent"]);
 }
 
@@ -615,25 +614,10 @@ fn cold_hook_does_not_floor_single_scope_to_three_workers() {
     let _guard = fixture.hold_refresh_lock();
     let output = fixture.run_routed(r#"{"prompt":"Please continue the real task"}"#, &[]);
     let metadata = metadata(&output);
-    let orch = &metadata["orchestration"];
-    assert_eq!(orch["single_scope_fanout"], 1);
-    assert_eq!(orch["task_fanout_default"], 1);
-    assert_eq!(orch["fanout_matches_independent_scopes"], true);
-    assert_eq!(orch["minimum_subagents_per_phase"], 1);
-    assert_eq!(orch["minimum_active_subagents"], 1);
-    assert_eq!(orch["minimum_model_kinds"], 1);
-    let consult = metadata["custom_advisor_policy"]["consult_when"]
-        .as_array()
-        .unwrap();
-    assert!(
-        !consult
-            .iter()
-            .any(|item| item.as_str() == Some("external_research_or_multiple_sources"))
-    );
-    assert_eq!(
-        metadata["custom_advisor_policy"]["not_for_external_research_alone"],
-        true
-    );
+    assert_eq!(metadata["version"], 2);
+    assert!(metadata.get("orchestration").is_none());
+    assert!(metadata.get("custom_advisor_policy").is_none());
+    assert!(metadata.get("worker_ranking").is_none());
     let ctx = context(&output);
     assert!(ctx.contains("one scope uses one ordinary worker"));
     assert!(ctx.contains("not for ordinary external research"));
@@ -686,7 +670,7 @@ fn cold_and_stale_hooks_refresh_then_fresh_hook_starts_no_provider_process() {
         ],
     );
     let stale = metadata(&stale);
-    assert_eq!(stale["sonnet_subagent_suppressed"], true);
+    assert!(stale.get("sonnet_subagent_suppressed").is_none());
     assert_eq!(stale["selected_workers"][0]["agent"], "claudex-gpt");
     assert!(
         stale["selected_workers"]

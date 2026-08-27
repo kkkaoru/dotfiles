@@ -21,6 +21,7 @@ SHARED_SETTINGS_NAMES = frozenset({"settings.json", "settings.local.json"})
 DISCOVERY_PREFIX = "claude-claudex-"
 PLAIN_CLAUDE_FALLBACK_MODEL = "sonnet[1m]"
 DEFAULT_STOP_HOOK_BLOCK_CAP = "64"
+DEFAULT_SUBAGENT_PROMPT_CACHE_TTL = "5m"
 # xAI publishes a 500k window for grok-4.6; the launcher still sends that via
 # CLAUDE_CODE_MAX_CONTEXT_TOKENS from providers.json.
 TOOL_POLICY_HOOK = (
@@ -228,6 +229,10 @@ def apply_claudex_hook_env(settings: dict[str, Any]) -> None:
     env.setdefault("CLAUDE_CODE_STOP_HOOK_BLOCK_CAP", DEFAULT_STOP_HOOK_BLOCK_CAP)
 
 
+def apply_subagent_prompt_cache_ttl(settings: dict[str, Any]) -> None:
+    settings.setdefault("subagentPromptCacheTtl", DEFAULT_SUBAGENT_PROMPT_CACHE_TTL)
+
+
 def apply_external_model_overrides(settings: dict[str, Any]) -> None:
     overrides = settings.get("modelOverrides")
     if not isinstance(overrides, dict):
@@ -251,6 +256,7 @@ def write_isolated_settings(
     settings["effortLevel"] = effort
     apply_context_token_env(settings, context_tokens)
     apply_claudex_hook_env(settings)
+    apply_subagent_prompt_cache_ttl(settings)
     apply_external_model_overrides(settings)
     merge_claudex_tool_policy_hooks(settings)
     isolated_settings_path.write_text(

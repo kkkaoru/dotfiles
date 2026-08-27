@@ -286,22 +286,7 @@ fn rounded_percent(value: Option<f64>, ndigits: i32) -> Value {
     })
 }
 
-pub fn ranked_worker_metadata(summary: &Value) -> Vec<Value> {
-    worker_capacity_metadata(summary)
-        .into_iter()
-        .enumerate()
-        .map(|(index, entry)| {
-            serde_json::json!({
-                "rank": index + 1,
-                "agent": entry.get("agent").cloned().unwrap_or(Value::Null),
-                "model": entry.get("model").cloned().unwrap_or(Value::Null),
-                "weekly_remaining_percent": entry.get("weekly_remaining_percent").cloned().unwrap_or(Value::Null),
-                "five_hour_remaining_percent": entry.get("five_hour_remaining_percent").cloned().unwrap_or(Value::Null),
-            })
-        })
-        .collect()
-}
-
+#[cfg(test)]
 pub fn default_subagent_route(summary: &Value) -> Option<Value> {
     let workers = summary.get("selected_workers")?.as_array()?;
     let top = workers.first()?.as_object()?;
