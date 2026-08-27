@@ -10,7 +10,7 @@ export const CLAUDEX_CONFIG_ENV = "CLAUDEX_PROVIDER_CONFIG";
 export const CLAUDEX_AUTH_ENV = "ANTHROPIC_AUTH_TOKEN";
 const DEFAULT_BASE_URL = "http://127.0.0.1:8318";
 const DEFAULT_CONFIG_PATH = "~/.config/claudex/providers.json";
-const LOOPBACK_API_KEY = "claudex-loopback";
+const LOOPBACK_API_KEY = "claudex-local";
 
 interface ClaudexProviderSettings {
   baseUrl: string;

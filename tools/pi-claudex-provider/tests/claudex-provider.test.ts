@@ -61,6 +61,16 @@ describe("Claudex model catalog", () => {
     expect(models[0]).toMatchObject({
       name: "Claudex · gpt-5.6-luna",
       reasoning: true,
+      compat: { forceAdaptiveThinking: true },
+      thinkingLevelMap: {
+        off: null,
+        minimal: "minimal",
+        low: "low",
+        medium: "medium",
+        high: "high",
+        xhigh: "xhigh",
+        max: "max",
+      },
       input: ["text", "image"],
       maxTokens: 32_768,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -97,7 +107,7 @@ describe("Claudex Pi provider registration", () => {
     expect(config).toMatchObject({
       name: "Claudex",
       baseUrl: "http://127.0.0.1:8318",
-      apiKey: "claudex-loopback",
+      apiKey: "claudex-local",
       api: "anthropic-messages",
       headers: { [CLAUDEX_ORIGIN_HEADER]: CLAUDEX_ORIGIN_VALUE },
     });

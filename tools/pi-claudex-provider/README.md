@@ -28,6 +28,11 @@ Direction B configuration:
 - `CLAUDEX_PROVIDER_CONFIG`: model catalog source; default `~/.config/claudex/providers.json`
 - `ANTHROPIC_AUTH_TOKEN`: required when the adapter is not on loopback
 
+Loopback Direction B uses the adapter launcher's canonical `claudex-local` token. Discovered Claudex
+models force Anthropic adaptive thinking so Pi's displayed thinking level is serialized as
+`output_config.effort`; this keeps Pi's dynamic-effort TUI value identical to the adapter's logged
+`request_effort`.
+
 Direction B sends `x-claudex-origin: pi-provider`. The adapter must reject this origin if the selected route would enter the Pi gateway again. Direction A also excludes the `claudex` provider from model listing and rejects it explicitly.
 
 ## Gateway protocol

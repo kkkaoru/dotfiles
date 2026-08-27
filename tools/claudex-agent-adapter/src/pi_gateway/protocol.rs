@@ -146,8 +146,7 @@ fn validate_version(value: &Value) -> Result<()> {
 
 fn pi_reasoning(effort: &str) -> Option<&str> {
     match effort {
-        "off" | "minimal" | "low" | "medium" | "high" | "xhigh" => Some(effort),
-        "max" => Some("xhigh"),
+        "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" => Some(effort),
         _ => None,
     }
 }
@@ -174,7 +173,7 @@ mod tests {
         assert_eq!(value["tools"], raw["tools"]);
         assert_eq!(value["options"]["metadata"], raw["metadata"]);
         assert_eq!(value["options"]["sessionId"], "claude-session");
-        assert_eq!(value["options"]["reasoning"], "xhigh");
+        assert_eq!(value["options"]["reasoning"], "max");
         assert_eq!(value["origin"], ORIGIN);
         assert!(request("r", "t", "claudex", "model", &raw, None).is_err());
     }
