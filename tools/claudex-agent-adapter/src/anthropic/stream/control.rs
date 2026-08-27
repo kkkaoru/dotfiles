@@ -11,7 +11,7 @@ pub(in crate::anthropic) fn turn_flow(event: &Value) -> Result<ControlFlow<()>> 
     match event.pointer("/params/turn/status").and_then(Value::as_str) {
         Some("completed") | None => Ok(ControlFlow::Break(())),
         Some("inProgress") => Ok(ControlFlow::Continue(())),
-        Some(status) => bail!("codex app-server turn ended with status {status}"),
+        Some(status) => bail!("ACP provider turn ended with status {status}"),
     }
 }
 
@@ -23,18 +23,18 @@ pub(in crate::anthropic) fn error_flow(event: &Value) -> Result<ControlFlow<()>>
     {
         tracing::warn!(
             error = %event.get("params").unwrap_or(event),
-            "codex app-server is retrying the turn"
+            "ACP provider is retrying the turn"
         );
         return Ok(ControlFlow::Continue(()));
     }
     if super::context_window::is_context_window_event(event) {
-        tracing::warn!(error = %event.get("params").unwrap_or(event), "codex app-server hit context window limit");
+        tracing::warn!(error = %event.get("params").unwrap_or(event), "ACP provider hit context window limit");
     }
     if super::usage_limit::is_usage_limit_event(event) {
-        tracing::warn!(error = %event.get("params").unwrap_or(event), "codex app-server hit usage limit");
+        tracing::warn!(error = %event.get("params").unwrap_or(event), "ACP provider hit usage limit");
     }
     if super::super::provider_auth::is_auth_failure_event(event) {
-        tracing::warn!(error = %event.get("params").unwrap_or(event), "codex app-server hit provider auth failure");
+        tracing::warn!(error = %event.get("params").unwrap_or(event), "ACP provider hit provider auth failure");
     }
     bail!("{}", turn_error_message(event))
 }
@@ -50,7 +50,7 @@ fn turn_error_message(event: &Value) -> String {
     {
         return super::super::segment::cline_credits_failure_message(message);
     }
-    format!("codex app-server turn failed: {params}")
+    format!("ACP provider turn failed: {params}")
 }
 
 pub(super) async fn refresh_activity_keepalive(

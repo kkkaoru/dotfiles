@@ -13,8 +13,9 @@ use crate::anthropic::Segment;
 pub(in crate::anthropic::stream) const LIVE_PROSE_CHAR_LIMIT: usize = 280;
 
 pub(super) const PREMATURE_STATUS_ONLY_NOTICE: &str = "Claudex: ACP worker ended with a status-only \
-toolless reply. This is not a completed result. Reroute the same scope; do not treat the provider \
-as exhausted.";
+or terminal-sentinel reply. This is not a completed result. Start a fresh recipient for the same \
+scope, preferably on a different provider/model; do not SendMessage the failed recipient again and \
+do not treat the provider as exhausted.";
 
 const ADAPTER_LOCAL_THINKING_PREFIX: &str = "claudex_local_";
 const PROVIDER_PROGRESS_SIGNATURE: &str = "claudex_provider_progress";
@@ -105,7 +106,7 @@ pub(super) fn is_premature_worker_status_reply(text: &str) -> bool {
     if trimmed.is_empty() || trimmed.chars().count() > 160 {
         return false;
     }
-    if is_provider_status_only(trimmed) {
+    if is_provider_status_only(trimmed) || is_terminal_sentinel(trimmed) {
         return true;
     }
     let lower = trimmed.to_ascii_lowercase();
@@ -115,8 +116,27 @@ pub(super) fn is_premature_worker_status_reply(text: &str) -> bool {
         || lower.contains("each phase")
         || lower.starts_with("starting phase")
         || lower.starts_with("still working")
+        || lower.starts_with("i'll check")
+        || lower.starts_with("i will check")
+        || lower.starts_with("let me check")
+        || lower.starts_with("i'll investigate")
+        || lower.starts_with("i will investigate")
         || trimmed.contains("フェーズ")
         || trimmed.contains("ステータス")
+        || trimmed.ends_with("確認します。")
+        || trimmed.ends_with("確認します")
+        || trimmed.ends_with("調査します。")
+        || trimmed.ends_with("調査します")
+        || trimmed.ends_with("実行します。")
+        || trimmed.ends_with("実行します")
+        || trimmed.ends_with("進めます。")
+        || trimmed.ends_with("進めます")
+        || trimmed.ends_with("開始します。")
+        || trimmed.ends_with("開始します")
+}
+
+fn is_terminal_sentinel(text: &str) -> bool {
+    matches!(text.trim(), "<|eos|>" | "<|endoftext|>" | "</s>")
 }
 
 fn segment_has_tool_payload(blocks: &[Value]) -> bool {

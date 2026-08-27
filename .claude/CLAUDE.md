@@ -16,7 +16,12 @@
   Read/Write/Edit/search tools while `delegation_required` is true
   (`CLAUDEX_ALLOW_MAIN_TOOLS=1` is the emergency override only). Those denials do **not** apply to
   SubAgents: SubagentStart reminders and PreToolUse both keep the worker's full tool set (only
-  cross-SubAgent Write/Edit path locks remain).
+  cross-SubAgent Write/Edit path locks remain). Claude.ai connector tools named
+  `mcp__claude_ai_*` are a runtime exception: they may be visible historically or in the main
+  session but unavailable in a SubAgent. A SubAgent must not call one unless it is explicitly
+  available in its current tool inventory. After `No such tool available`, never retry or guess a
+  sibling connector; continue with available repository, Bash, web, or MCP tools and report the
+  limitation only if it blocks the task.
   A background task is never fire-and-forget: record the exact
   task id from its launch result, but do not automatically call `TaskList`, poll on a timer, or issue
   `TaskOutput` for every worker. Handle the user's next message first and retrieve only the exact
@@ -44,8 +49,12 @@
   factual status chrome, launch-metadata echoes, or Thought-for placeholders. Never copy
   end-the-turn-with-status or emit-short-status-after-each-phase into Agent/Task worker prompts;
   those rules apply only after you launch workers. Worker prompts must require tool-backed
-  completion and concrete evidence. Treat a status-only toolless worker result as failure and
-  reroute; do not accept it as done. Report blockers immediately without exposing private reasoning.
+  completion and concrete evidence. Treat a status-only, terminal-sentinel (`<|eos|>`), or empty
+  worker result as a failed recipient, not as a prompt to continue that recipient. Start a fresh
+  recipient for the same scope, preferably on a different provider/model, and do not SendMessage the
+  failed recipient again. If the failed worker mutated files, first confirm it is no longer live and
+  preserve/inspect its changes before assigning any new writer. Report blockers immediately without
+  exposing private reasoning.
 - When substantive work is clear and the user has not explicitly opted out of delegation, invoke
   the selected SubAgent directly in the first response. Do not merely announce future delegation.
   Do not add `TaskList`, `TaskCreate`, or `TaskUpdate` round trips solely to prepare delegation; use
@@ -94,10 +103,23 @@
   parallel capacity; for genuinely independent work, start another routed worker when useful instead
   of queueing it behind the busy worker.
 - At every completion, failure, timeout, capacity update, and phase boundary, re-evaluate the
-  active set. Integrate partial results immediately and reuse a compatible recipient for a related
+  active set. Classify a failure from the exact selected agent/model/provider tuple and the literal
+  returned error. ACP is a transport, not a provider identity: never group Cursor and Codex failures
+  merely because both use ACP. `Superseded by a new Cursor request` is a Cursor abort/replacement
+  signal, not evidence of a Codex, quota, or usage-limit failure; avoid only the evidenced Cursor
+  provider family for that turn unless separate evidence disables more routes. Integrate partial
+  results immediately and reuse a compatible recipient for a related
   delta. Give every launch a stable scope key; never relaunch an in-flight, completed, or cancelled
   key. Do not automatically refill a completed slot. Do not retain a live worker solely for possible
-  reuse: logical transcript reuse and live-process lifetime are separate. On normal completion,
+  reuse: logical transcript reuse and live-process lifetime are separate. Prefer reuse for compatible
+  follow-ups so the worker's prompt prefix and cache remain useful, including after compaction when
+  the compacted summary is healthy and the task remains coherent. Compaction alone is not a reason
+  to replace a worker. After compaction, continue from that summary and the smallest new delta; the
+  worker must autonomously decide whether the summarized evidence already supports an answer or one
+  concrete essential gap needs minimal additional investigation. Never reread or reconstruct the
+  parent transcript merely to recover old context. Start a clean recipient
+  only when the topic or authorization is incompatible, critical evidence was lost, context overflow
+  cannot be summarized safely, or the worker returned status-only, empty, or sentinel output. On normal completion,
   cancellation, error, or main-session exit, hand off to the runtime lifecycle so it stops launches,
   requests cancellation, waits for owned children to exit, and reaps them before discarding its
   session ownership record.
@@ -151,6 +173,13 @@
 - Honor `CLAUDEX_CUSTOM_ADVISOR` when present: values `0`, `false`, or `off` (case-insensitive)
   disable only the custom-advisor SubAgent for that process; built-in `advisor()` remains available.
   Unset or any other value leaves custom-advisor enabled.
+- Treat every individual SubAgent's work or research result as an untrusted claim until it receives
+  an independent check. The worker that produced the result, including a continuation of that same
+  recipient, cannot verify itself. Use either a different SubAgent with an independent review scope
+  or direct main-session evidence. For code changes, inspect the actual diff and rerun relevant
+  checks; for research, independently inspect the cited primary/source evidence and material claims.
+  Do not present the result as correct or complete before this check; if independent verification is
+  unavailable, state that limitation and keep the result explicitly unverified.
 - The main session owns decisions, resolves conflicts, and verifies delegated results. Agent/Task
   acceptance proves delegation; an actual worker reply or completion notification proves completion.
   A delivery acknowledgement alone does not. Never fabricate a worker response or

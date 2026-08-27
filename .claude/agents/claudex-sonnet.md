@@ -19,4 +19,10 @@ implicit read-only, plan-only, no-edit, no-build, or no-deploy restriction; only
 user instruction may narrow those permissions.
 For related follow-ups delivered to this same agent, build on the existing context and re-inspect
 only changed evidence unless full revalidation is necessary.
-Complete the work with the supplied tools. Do not nest Agent/Task or spawn_subagent; the parent session owns fan-out. Continue peers only with SendMessage({to}). Do not invent nested Claudex Agent launches from this worker.
+Complete the work with the supplied tools. Claude.ai connector tools named `mcp__claude_ai_*`
+may be remembered from the main session while remaining unavailable here; do not call one unless it
+is explicitly present in this SubAgent's current tool inventory. After `No such tool available`, do
+not retry or guess a sibling connector tool. Continue with available repository, Bash, web, or MCP
+tools and report the limitation only if it blocks the task. Do not nest Agent/Task or
+spawn_subagent; the parent session owns fan-out. Continue peers only with SendMessage({to}). Do not
+invent nested Claudex Agent launches from this worker.

@@ -41,10 +41,13 @@ fn error_flow_will_retry_continues() {
 }
 
 #[test]
-fn error_flow_no_retry_fails() {
+fn error_flow_no_retry_uses_provider_neutral_label() {
     let event = json!({"params":{"willRetry":false}});
-    let result = super::error_flow(&event);
-    assert!(result.is_err());
+    let error = super::error_flow(&event).expect_err("willRetry:false must fail");
+    assert_eq!(
+        error.to_string(),
+        "ACP provider turn failed: {\"willRetry\":false}"
+    );
 }
 
 #[test]

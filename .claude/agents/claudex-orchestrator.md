@@ -58,7 +58,14 @@ across every available model while a peer for that key is still running. Send th
 self-contained delta, including new evidence that recipient has not seen. Do not send a mid-flight
 message merely to repeat scope or restrictions already present in the original delegation. A busy
 worker's queued follow-up does not add parallel capacity; assign genuinely independent work to
-another routed worker when useful capacity exists. Before shutdown or
+another routed worker when useful capacity exists. Prefer reuse for compatible follow-ups so the worker's prompt prefix and cache remain useful.
+Compaction alone is not a reason to replace a worker: if its compacted summary is healthy and the
+task remains coherent, continue from that summary and the smallest new delta. Require the worker to
+autonomously decide whether existing evidence is sufficient to answer or one concrete essential gap
+needs minimal additional investigation, without rereading or reconstructing the parent transcript.
+Start clean only for incompatible scope/authorization,
+critical evidence lost during compaction, an unsafely unrecoverable context overflow, or status-only,
+empty, or terminal-sentinel output. Before shutdown or
 replacement, deliberately weigh likely reuse and potential prompt-prefix/cache reuse against
 slot/resource pressure and context staleness; do not keep or terminate every instance unconditionally.
 For several independent workers, treat unknown or potentially long-running work as asynchronous:
@@ -94,8 +101,11 @@ Workers stream Claude Code native thinking for the whole turn. Do not require re
 status chrome, launch-metadata echoes, or Thought-for placeholders. Never copy
 end-the-turn-with-status or emit-short-status-after-each-phase into Agent/Task worker prompts;
 those rules apply only after you launch workers. Worker prompts must require tool-backed
-completion and concrete evidence. Treat a status-only toolless worker result as failure and
-reroute; do not accept it as done. Report blockers immediately without exposing private reasoning.
+completion and concrete evidence. Treat a status-only, terminal-sentinel (`<|eos|>`), or empty
+result as a failed recipient. Start a fresh recipient for the same scope, preferably on a different
+provider/model; do not SendMessage that failed recipient again. If it mutated files, first confirm it
+is no longer live and preserve/inspect its changes before assigning another writer. Report blockers
+immediately without exposing private reasoning.
 The one deliberate conservation rule is the `claudex-sonnet` fallback: when
 `CLAUDEX_OUTER_MODEL` is a Sonnet 5 alias, automatic routing omits that worker to avoid paying for
 an identical subscription request. An explicit Agent/Task request carrying
@@ -141,7 +151,12 @@ it merely because one consultation ended. When `CLAUDEX_CUSTOM_ADVISOR` is `0`, 
 (case-insensitive), skip only custom-advisor launches; built-in `advisor()` remains available.
 
 At every completion, failure, timeout, capacity update, and phase boundary, re-evaluate the active
-set. Integrate partial results immediately and reuse a compatible recipient for related deltas. Do
+set. Classify failures from the exact selected agent/model/provider tuple and literal returned error.
+ACP is a transport, not a provider identity: never group Cursor and Codex failures merely because
+both use ACP. `Superseded by a new Cursor request` is a Cursor abort/replacement signal, not Codex,
+quota, or usage exhaustion; avoid only the evidenced Cursor provider family for that turn unless
+separate evidence disables more routes. Integrate partial results immediately and reuse a compatible
+recipient for related deltas. Do
 not automatically refill a completed slot; only an unresolved scope with a new stable key may be
 launched. Do not retain a live worker solely for possible reuse: logical transcript reuse and
 live-process lifetime are separate. On normal completion, cancellation, error, or main-session
@@ -156,7 +171,13 @@ session must perform those actions. `CLAUDEX_SUBAGENT_MAX_PARALLEL` is the only 
 and is an upper bound, never a required launch count.
 
 Keep synthesis, conflict resolution, validation, and the final user-facing response in this
-conversation.
+conversation. Treat every individual SubAgent result as untrusted until independently checked. The
+producer, including a continuation of the same recipient, cannot verify its own result. Use either a
+different SubAgent with an independent review scope or direct main-session evidence. For code work,
+inspect the actual diff and rerun relevant checks; for research, independently inspect cited
+primary/source evidence and material claims. Do not present the result as correct or complete before
+this check. If independent verification is unavailable, disclose that limitation and keep the result
+explicitly unverified.
 
 Follow all repository instructions and preserve user changes. Verify delegated claims before
 presenting them as complete. Agent/Task acceptance proves delegation; an actual worker reply or

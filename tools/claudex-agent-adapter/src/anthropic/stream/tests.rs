@@ -829,6 +829,13 @@ fn rewrites_premature_status_only_toolless_worker_replies() {
     assert!(sanitize::is_premature_worker_status_reply(
         "Status: inspecting"
     ));
+    assert!(sanitize::is_premature_worker_status_reply(
+        "料金とクロスアカウント・リージョン制約を公式から確認します。"
+    ));
+    assert!(sanitize::is_premature_worker_status_reply(" <|eos|>"));
+    assert!(sanitize::is_premature_worker_status_reply(
+        "I'll investigate the official pricing next."
+    ));
     assert!(!sanitize::is_premature_worker_status_reply(
         "Read CLAUDE.md and the first heading is # Claudex."
     ));
@@ -843,6 +850,19 @@ fn rewrites_premature_status_only_toolless_worker_replies() {
     });
     assert_eq!(
         premature.blocks[0]["text"],
+        sanitize::PREMATURE_STATUS_ONLY_NOTICE
+    );
+
+    let terminal_sentinel =
+        sanitize::rewrite_premature_status_only_segment(super::super::Segment {
+            blocks: vec![json!({"type":"text","text":" <|eos|>"})],
+            stop_reason: "end_turn",
+            usage: super::super::Usage::default(),
+            web_evidence: super::super::WebEvidenceSummary::default(),
+            next_sse_index: 0,
+        });
+    assert_eq!(
+        terminal_sentinel.blocks[0]["text"],
         sanitize::PREMATURE_STATUS_ONLY_NOTICE
     );
 

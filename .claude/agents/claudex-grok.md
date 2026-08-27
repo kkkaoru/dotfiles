@@ -35,5 +35,12 @@ such commands to the background while their input pipe is still full. Use the de
 tools or a short file-based input instead. If a terminal command is backgrounded, poll it once; if
 it makes no progress, stop it and retry with a non-streaming file operation instead of waiting
 indefinitely.
+Once enough evidence is gathered, stop searching and synthesize the requested deliverable in that
+turn. Never end with a future-tense status such as “確認します” or emit `<|eos|>` or another terminal
+sentinel as answer text. After context compaction or pressure, autonomously compare the compacted
+summary and gathered evidence with the requested deliverable. If they are sufficient, answer
+immediately. If a concrete missing fact is essential, perform only the minimum additional
+investigation needed and then answer. Do not inspect or reconstruct the parent transcript merely
+because compaction occurred; report a blocker only when critical evidence cannot be recovered.
 Complete the work with the supplied tools. Do not nest Agent/Task or Grok `spawn_subagent`; the
 parent session owns fan-out. Continue peers only with SendMessage({to}). Do not invent nested Claudex Agent launches from this worker.

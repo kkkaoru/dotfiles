@@ -47,7 +47,11 @@ retained.
    `delegation_required` is true (Bash stays allowed in main). SubagentStart reminders and
    PreToolUse both keep the worker's full tool set — main denials are never inherited. Parallel
    SubAgents still take exclusive file locks on Write/Edit targets; partition scopes so workers
-   never share a mutable path.
+   never share a mutable path. Claude.ai connector tools named `mcp__claude_ai_*` are a runtime
+   exception: they may be visible historically or in main yet unavailable in a SubAgent. A worker
+   must not call one unless it is explicitly available in its current tool inventory. After a
+   `No such tool available` error, do not retry or guess another connector tool; use an available
+   repository, Bash, web, or MCP tool and report the limitation only when it blocks the task.
    Pass each worker's `agent`, `model`, and `effort` as one inseparable route tuple:
    `subagent_type`, `claudex_model`, and `claudex_effort` must all come from the same
    `selected_workers` entry. Never combine a named worker with another worker's model or effort,
@@ -84,9 +88,11 @@ retained.
    emit repeated factual status chrome, launch-metadata echoes, or Thought-for placeholders.
    Never copy end-the-turn-with-status or emit-short-status-after-each-phase into Agent/Task
    worker prompts; those rules apply only after you launch workers. Worker prompts must require
-   tool-backed completion and concrete evidence. Treat a status-only toolless worker result as
-   failure and reroute; do not accept it as done. Report a blocker immediately; do not remain
-   silent until the final result.
+   tool-backed completion and concrete evidence. Treat a status-only, terminal-sentinel (`<|eos|>`),
+   or empty result as a failed recipient. Start a fresh recipient for the same scope, preferably on a
+   different provider/model; do not SendMessage that failed recipient again. If it mutated files,
+   first confirm it is no longer live and preserve/inspect its changes before assigning another
+   writer. Report a blocker immediately; do not remain silent until the final result.
    For several independent workers, treat unknown or potentially long-running work as asynchronous:
    emit each Agent/Task call as its own native background launch (`run_in_background: true`).
    Multiple launches may be emitted in the same assistant response, but never wrap them in an
@@ -144,8 +150,15 @@ retained.
    - When `CLAUDEX_CUSTOM_ADVISOR` is `0`, `false`, or `off` (case-insensitive), skip only
      custom-advisor launches; built-in `advisor()` remains available. Unset or any other value leaves
      custom-advisor enabled.
-6. Synthesize, verify, and present the subagents' results in the main conversation. Capacity
-   selection does not relax repository instructions, safety requirements, or validation gates.
+6. Synthesize, verify, and present the subagents' results in the main conversation. Treat every
+   individual SubAgent result as untrusted until independently checked. A producer cannot verify its
+   own result, including through a continuation of the same recipient: use either a different
+   SubAgent with an independent review scope or direct main-session evidence. For code work, inspect
+   the actual diff and rerun relevant checks; for research, independently inspect cited
+   primary/source evidence and material claims. Do not report the result as correct or complete
+   before this check. If independent verification is unavailable, disclose that limitation and keep
+   the result explicitly unverified. Capacity selection does not relax repository instructions,
+   safety requirements, or validation gates.
    For web research, preserve the evidence class for every material claim:
    - `fetch_verified` means the provider completed a fetch and returned the page content for the
      cited URL. It may support factual claims from that page.
@@ -171,9 +184,16 @@ retained.
      require Agent Teams. Do not set Agent/Task resume. Prefer a prior instance when the exact native
      Agent/Task recipient specified by its Agent/Task result (agent ID or teammate name as applicable)
      is available in the current main-session transcript and its agent, model, effort, role, scope,
-     and authorization remain compatible with the current routing context. Send the smallest
-     sufficient, self-contained delta, including new evidence the recipient has not seen, so the
-     existing context and prompt prefix remain reusable.
+     and authorization remain compatible with the current routing context. Prefer reuse for
+     compatible follow-ups so the prompt prefix and cache remain useful. Compaction alone is not a
+     reason to replace a worker: when its compacted summary is healthy and the task remains coherent,
+     continue from that summary and the smallest new delta. The worker must autonomously decide
+     whether existing evidence is sufficient to answer or one concrete essential gap needs minimal
+     additional investigation, without rereading or reconstructing the parent transcript. Start clean
+     only for incompatible scope/authorization, critical evidence lost
+     during compaction, an unsafely unrecoverable context overflow, or status-only, empty, or
+     terminal-sentinel output. Send the smallest sufficient, self-contained delta, including new
+     evidence the recipient has not seen, so a healthy existing context and prompt prefix remain reusable.
    - Do not guess a recipient, persist it to memory, or call task-list tools solely to rediscover
      it. A delivery acknowledgement is not completion evidence; wait for the actual
      reply or completion notification. The TUI's `N queued` is pending main-session input, which may
@@ -193,7 +213,12 @@ retained.
      logically resumable without a live process, so do not keep it artificially busy. Apply the same
      deliberate reuse rule to custom-advisor, counted separately from worker slots.
    - At every completion, failure, timeout, capacity update, and phase boundary, re-evaluate the
-     active set. Integrate partial results immediately, reuse a compatible recipient for a related
+     active set. Classify failures from the exact selected agent/model/provider tuple and literal
+     returned error. ACP is a transport, not a provider identity: never group Cursor and Codex
+     failures merely because both use ACP. `Superseded by a new Cursor request` is a Cursor
+     abort/replacement signal, not Codex, quota, or usage exhaustion; avoid only the evidenced Cursor
+     provider family for that turn unless separate evidence disables more routes. Integrate partial
+     results immediately, reuse a compatible recipient for a related
      delta. Keep a stable scope key for every launch; never relaunch an in-flight, completed, or
      cancelled key. Do not refill a completed slot unless a genuinely unresolved scope with a new
      key already exists. Logical transcript reuse and live-process lifetime are separate: do not
