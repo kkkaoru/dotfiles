@@ -641,6 +641,14 @@ minimumやmodel familyを満たせない場合は、provider quota、denylist、
 
 ### outer model/effort の既定値を切り替える
 
+Claudex main sessionのeffortをcontext使用量に応じて自動管理する場合は
+`claudex --dynamic-effort` で起動します。`--no-dynamic-effort`または
+`--dynamic-effort=off`で明示的に無効化できます。dynamic modeはSubAgentのroute固定effortを変更せず、
+main requestだけを対象にします。provider routeの`maxContextTokens`に対して60%から`medium` → `high` →
+`xhigh`と段階的に上げ、compaction requestだけ`max`を使用します。compaction summaryの次のrequestを
+成功境界として数え、3回ごとに1 requestだけ`medium`へ戻します。Pi gateway routeではrequestごとの
+effortがPi model capabilityで最終clampされます。
+
 `claudex` と素の `claude` の既定 model は分離しています。
 
 | 用途 | 設定場所 | 備考 |

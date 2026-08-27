@@ -14,7 +14,8 @@ use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use crate::{agent_backend::AgentBackend, app_server::ThreadEvents};
 
 use super::{
-    active_subagent_models, agent_effort, model_concurrency, subagent_reuse, tool_schema_cache,
+    active_subagent_models, agent_effort, dynamic_effort, model_concurrency, subagent_reuse,
+    tool_schema_cache,
 };
 
 pub(crate) struct AgentEffortRecord<'a> {
@@ -69,6 +70,7 @@ pub struct Bridge {
     /// for late Claude tool results, but must not be considered for a new main
     /// turn or hold up active-session matching.
     pub(in crate::anthropic) detached_sessions: Mutex<Vec<Arc<Session>>>,
+    pub(in crate::anthropic) dynamic_effort: dynamic_effort::DynamicEffortManager,
     pub(in crate::anthropic) session_slots: Arc<Semaphore>,
     pub(in crate::anthropic) next_session_sweep: std::sync::Mutex<Instant>,
     pub(in crate::anthropic) signature_pool: SignaturePool,

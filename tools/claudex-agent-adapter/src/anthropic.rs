@@ -14,6 +14,7 @@ mod config;
 mod content;
 mod content_batch;
 mod content_pending;
+mod dynamic_effort;
 mod error;
 mod exhausted_subagent;
 mod health;

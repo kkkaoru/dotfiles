@@ -279,7 +279,11 @@ outer request model when one of the configured prefixes supports it.
 
 Each request selects effort independently. An explicit Anthropic
 `output_config.effort` wins; otherwise the adapter rereads Claude Code's
-`effortLevel` setting for that request. For an Agent child, an explicit effort
+`effortLevel` setting for that request. With `CLAUDEX_DYNAMIC_EFFORT=1` (normally set by
+`claudex --dynamic-effort`), main-session requests with a configured `maxContextTokens` ramp from
+`medium` through `high` to `xhigh` after 60% context usage. Compaction requests use `max`; after every
+third accepted compaction boundary the next main request resets to `medium`. Dynamic control never
+rewrites SubAgent effort tuples or launch-scoped ACP effort. For an Agent child, an explicit effort
 in the Agent tool input overrides the outer request's inherited effort. The
 adapter also exposes a private `claudex_effort` field to the main model so a
 conversational SubAgent effort request can be captured even when Claude Code's

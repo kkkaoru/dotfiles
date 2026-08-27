@@ -9,8 +9,8 @@ use anyhow::Result;
 use tokio::sync::{Mutex, Semaphore};
 
 use super::{
-    Bridge, MAX_SESSIONS, active_subagent_models, agent_effort, model_concurrency, retention,
-    subagent_reuse, subagent_timeout, subscription, tool_schema_cache,
+    Bridge, MAX_SESSIONS, active_subagent_models, agent_effort, dynamic_effort, model_concurrency,
+    retention, subagent_reuse, subagent_timeout, subscription, tool_schema_cache,
 };
 use crate::{agent_backend::AgentBackend, app_server::AppServer};
 
@@ -107,6 +107,7 @@ impl Bridge {
             usage_limit_cache_home: None,
             sessions: Mutex::new(Vec::new()),
             detached_sessions: Mutex::new(Vec::new()),
+            dynamic_effort: dynamic_effort::DynamicEffortManager::from_environment(),
             session_slots: Arc::new(Semaphore::new(MAX_SESSIONS)),
             next_session_sweep: std::sync::Mutex::new(
                 Instant::now() + retention::SESSION_SWEEP_INTERVAL,

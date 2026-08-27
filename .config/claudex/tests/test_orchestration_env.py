@@ -206,6 +206,18 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
         self.assertEqual(output["CLAUDEX_MAIN_MODEL"], "")
         self.assertEqual(output["CLAUDEX_MAIN_MODEL_KNOWN"], "0")
 
+    def test_dynamic_effort_flags_are_adapter_only(self) -> None:
+        enabled = self.run_launcher({}, ["--dynamic-effort", "work"])
+        self.assertEqual(enabled["CLAUDEX_DYNAMIC_EFFORT"], "1")
+        self.assertNotIn("--dynamic-effort", enabled["CLAUDEX_ADAPTER_ARGS"])
+
+        disabled = self.run_launcher(
+            {"CLAUDEX_DYNAMIC_EFFORT": "1"},
+            ["--no-dynamic-effort", "work"],
+        )
+        self.assertEqual(disabled["CLAUDEX_DYNAMIC_EFFORT"], "0")
+        self.assertNotIn("--no-dynamic-effort", disabled["CLAUDEX_ADAPTER_ARGS"])
+
     def test_explicit_model_remains_known_when_resuming(self) -> None:
         output = self.run_launcher(
             {"CLAUDEX_MODEL": "grok-4.6"},
@@ -330,7 +342,9 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
                 "printf 'CLAUDEX_SUBSCRIPTION_MAX_PROCESSES=%s\\n' "
                 "\"${subscription_max_processes}\"\n"
                 "printf 'CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES=%s\\n' "
-                "\"${subscription_timeout_minutes}\"\n",
+                "\"${subscription_timeout_minutes}\"\n"
+                "printf 'CLAUDEX_DYNAMIC_EFFORT=%s\\n' "
+                "\"${CLAUDEX_DYNAMIC_EFFORT:-}\"\n",
                 encoding="utf-8",
             )
             adapter.chmod(adapter.stat().st_mode | stat.S_IXUSR)

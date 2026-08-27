@@ -297,9 +297,19 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     # --provider-interface configures the adapter itself. Keep every other
     # argument on the Claude Code side of `--`, preserving the default path.
     set -l claude_args
+    set -l dynamic_effort ""
+    set -q CLAUDEX_DYNAMIC_EFFORT; and set dynamic_effort "$CLAUDEX_DYNAMIC_EFFORT"
     set -l expects_provider_interface 0
     set -l has_provider_interface 0
     for argument in $argv
+        switch $argument
+            case --dynamic-effort '--dynamic-effort=on'
+                set dynamic_effort 1
+                continue
+            case --no-dynamic-effort '--dynamic-effort=off'
+                set dynamic_effort 0
+                continue
+        end
         if test $expects_provider_interface -eq 1
             if test $has_provider_interface -eq 1
                 echo "claudex: --provider-interface must not be repeated" >&2
@@ -315,6 +325,9 @@ function claudex --description 'Run Claude Code with config-driven agent backend
             continue
         end
         set -a claude_args "$argument"
+    end
+    if test -n "$dynamic_effort"
+        set -fx CLAUDEX_DYNAMIC_EFFORT "$dynamic_effort"
     end
     if test $expects_provider_interface -eq 1
         echo "claudex: --provider-interface requires a value" >&2

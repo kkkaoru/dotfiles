@@ -117,7 +117,8 @@ impl Bridge {
             },
             |model| self.model_catalog.matches(model),
         )?;
-        let mut effort = self.resolve_request_effort(&request, intent.effort);
+        let configured_effort = self.resolve_request_effort(&request, intent.effort);
+        let mut effort = self.resolve_dynamic_effort(&request, is_subagent, configured_effort);
         tracing::debug!(
             request_model = %request.model,
             request_effort = ?effort,
