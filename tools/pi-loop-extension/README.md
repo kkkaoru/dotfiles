@@ -18,10 +18,13 @@ Loop continuations use the local-time naming line
 in the message body while its task identity is displayed through this naming line. When Pi is busy,
 the extension shows every scheduled or ready name in a persistent widget above the editor, keeps the continuation
 internally, and sends it as a normal user turn after `agent_settled`; it does not use Pi's `followUp`
-queue or display its hard-coded queue prefix.
+queue or display its hard-coded queue prefix. If `isIdle()` races with a newly started prompt, the
+continuation returns to that internal queue instead of surfacing a runtime error.
 
 The self-paced behavior follows Codex's agent-loop principle: a turn continues through tool calls,
-then the model explicitly decides whether another continuation is useful. A session-scoped
+then the model explicitly decides whether another continuation is useful. Every `loop_wakeup` tick
+reapplies the self-paced decision instructions around the saved task prompt, so later turns do not
+depend on the model copying those instructions into its own wakeup prompt. A session-scoped
 five-second background poller checks wall-clock deadlines, including overdue jobs after system
 sleep. If pi compacts during an in-flight self-paced tick without retrying it, the extension retains
 that tick internally so the loop continues from the compacted context. Every schedule, pause, resume,

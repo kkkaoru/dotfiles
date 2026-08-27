@@ -1,4 +1,3 @@
-// This TypeScript file is executed with Bun.
 import type { LoopContext, LoopHost } from "./contracts.ts";
 import { clearLoopDisplay, loopListText, updateLoopDisplay } from "./display.ts";
 import { namedLoopFollowUp } from "./follow-up.ts";
@@ -6,6 +5,7 @@ import {
   AUTONOMOUS_PROMPT,
   commandPrompt,
   resumedJob,
+  trySendUserMessage,
   validateWakeup,
   type WakeupInput,
 } from "./helpers.ts";
@@ -17,26 +17,21 @@ import {
   restoredPendingContinuations,
   type LoopRuntimeState,
 } from "./state.ts";
-
 export type { LoopContext, LoopHost } from "./contracts.ts";
 export type { WakeupInput } from "./helpers.ts";
 export type { Scheduler } from "./scheduler.ts";
-
 const MILLISECONDS_PER_SECOND = 1000;
 const POLL_INTERVAL_MS = 5000;
-
 interface ScheduleInput {
   readonly delayMs: number;
   readonly intervalMs?: number;
   readonly prompt: string;
   readonly reason: string;
 }
-
 export interface WakeupResult {
   readonly id: number;
   readonly scheduledInSeconds: number;
 }
-
 export class LoopRuntime {
   readonly #host: LoopHost;
   #jobs = new Map<number, LoopJob>();
@@ -135,9 +130,7 @@ export class LoopRuntime {
     if (willRetry || this.#runningContinuation === undefined || this.#jobs.size > 0) {
       return;
     }
-    if (context.isIdle()) {
-      this.#host.sendUserMessage(this.#runningContinuation);
-    } else {
+    if (!context.isIdle() || !trySendUserMessage(this.#host, this.#runningContinuation)) {
       this.#queue(this.#runningContinuation);
     }
     context.ui.notify("Continuing loop after compaction.", "info");
@@ -151,10 +144,11 @@ export class LoopRuntime {
       return;
     }
     const continuations: string = this.#pendingContinuations.join("\n\n");
-    this.#pendingContinuations = [];
-    this.#persist();
-    this.#host.sendUserMessage(continuations);
-    this.#updateStatus();
+    if (trySendUserMessage(this.#host, continuations)) {
+      this.#pendingContinuations = [];
+      this.#persist();
+      this.#updateStatus();
+    }
   }
 
   #start(command: Extract<LoopCommand, { readonly kind: "start" }>, context: LoopContext): void {
@@ -212,7 +206,8 @@ export class LoopRuntime {
   }
 
   #fire(job: LoopJob, now: number): void {
-    this.#send(job.prompt, `#${String(job.id)} | ${job.reason}`, job.submittedAt, now);
+    const prompt: string = job.intervalMs === undefined ? commandPrompt(job.prompt) : job.prompt;
+    this.#send(prompt, `#${String(job.id)} | ${job.reason}`, job.submittedAt, now);
     if (job.intervalMs === undefined) {
       this.#jobs.delete(job.id);
     } else {
@@ -293,7 +288,10 @@ export class LoopRuntime {
       this.#queue(this.#runningContinuation);
       return;
     }
-    this.#host.sendUserMessage(completedAt === submittedAt ? prompt : this.#runningContinuation);
+    const message: string = completedAt === submittedAt ? prompt : this.#runningContinuation;
+    if (!trySendUserMessage(this.#host, message)) {
+      this.#queue(this.#runningContinuation);
+    }
   }
 
   #queue(continuation: string): void {

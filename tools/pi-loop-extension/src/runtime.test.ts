@@ -150,6 +150,36 @@ describe("LoopRuntime commands", () => {
   });
 });
 
+describe("LoopRuntime delivery races", () => {
+  it("requeues when sendUserMessage races with an active agent", () => {
+    sendUserMessage.mockImplementationOnce((): never => {
+      throw new Error("Agent is already processing a prompt. Use steer() or followUp().");
+    });
+    const runtime = new LoopRuntime(host, scheduler);
+
+    expect((): void => runtime.command("check the build", context)).not.toThrow();
+    expect(setWidget).toHaveBeenLastCalledWith("loop-wakeups", [
+      expect.stringContaining("loop=self-paced"),
+    ]);
+
+    runtime.agentSettled(context);
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(2);
+    expect(setWidget).toHaveBeenLastCalledWith("loop-wakeups", undefined);
+  });
+
+  it("does not hide unrelated delivery errors", () => {
+    sendUserMessage.mockImplementationOnce((): never => {
+      throw new Error("unexpected delivery failure");
+    });
+    const runtime = new LoopRuntime(host, scheduler);
+
+    expect((): void => runtime.command("check the build", context)).toThrow(
+      "unexpected delivery failure",
+    );
+  });
+});
+
 describe("LoopRuntime compaction", () => {
   it("continues an in-flight self-paced loop after non-retrying compaction", () => {
     const runtime = new LoopRuntime(host, scheduler);
@@ -220,7 +250,7 @@ describe("LoopRuntime wakeups", () => {
     runtime.agentSettled(context);
     expect(sendUserMessage).toHaveBeenCalledWith(
       expect.stringMatching(
-        /^\d{2}-\d{2} \d{2}:\d{2} → \d{2}:\d{2} \| loop=#1 \| CI may finish\ncheck again$/u,
+        /^\d{2}-\d{2} \d{2}:\d{2} → \d{2}:\d{2} \| loop=#1 \| CI may finish\nThis is a self-paced loop\. Perform the task now\. Before ending, call loop_wakeup only when another useful check remains\. Do not schedule another wakeup when the task is complete, blocked on user input, or waiting on external state that cannot be checked later\.\n\nTask:\ncheck again$/u,
       ),
     );
     expect(cleared).toHaveBeenCalledOnce();
