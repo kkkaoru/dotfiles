@@ -1443,7 +1443,7 @@ fn assert_developer_guidance(developer: &str) {
         "complex or ambiguous decisions",
         "worker stalls/timeouts",
         "consult one custom-advisor when triggered",
-        "For ordinary related follow-ups, continue the exact prior recipient with SendMessage({to: that agentId})",
+        "For ordinary related follow-ups, prefer continuing the exact prior recipient with SendMessage({to: that agentId})",
         "never launch a new Agent for the same path",
         "never Agent({resume})",
         "Workers must not nest Agent/Task fan-out",
