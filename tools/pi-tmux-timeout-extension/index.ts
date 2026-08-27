@@ -4,10 +4,8 @@ import { ArtifactCleaner, type ArtifactCleanerOptions } from "./src/cleanup.ts";
 import { CompletionDelivery, type CompletionDeliveryContext } from "./src/delivery.ts";
 import {
   markCompletionDelivered,
-  nextTmuxLaunchId,
   persistTmuxLaunch,
   recoverSessionTmuxLaunches,
-  recoverTmuxLaunches,
   type RecoveryOptions,
 } from "./src/persistence.ts";
 import type { Completion } from "./src/waiter.ts";
@@ -54,7 +52,7 @@ export interface TmuxExtensionRuntimeOptions extends Pick<
   "events" | "operations"
 > {
   readonly cleanup?: ArtifactCleanerOptions;
-  readonly recovery?: false | RecoveryOptions;
+  readonly recovery?: false | Omit<RecoveryOptions, "sessionNamespace">;
 }
 
 export interface TmuxToolDefinition {
@@ -198,7 +196,7 @@ function registerLifecycleHandlers(input: {
   readonly cleaner: ArtifactCleaner;
   readonly delivery: CompletionDelivery;
   readonly host: TmuxExtensionHost;
-  readonly recovery: false | RecoveryOptions | undefined;
+  readonly recovery: false | Omit<RecoveryOptions, "sessionNamespace"> | undefined;
   readonly rewriter: AutomaticTmuxRewriter;
   readonly runtime: TmuxRuntime;
 }): void {
@@ -208,11 +206,17 @@ function registerLifecycleHandlers(input: {
     if (context === undefined) {
       return;
     }
+    const { sessionManager } = context;
+    if (sessionManager === undefined) {
+      return;
+    }
     input.delivery.setContext(context);
     input.delivery.beforeCompaction();
+    const sessionNamespace = input.runtime.startSession(sessionManager.getSessionId());
     input.runtime.restore(
       recoverSessionTmuxLaunches(
-        context.sessionManager?.getEntries() ?? [],
+        sessionManager.getEntries(),
+        sessionNamespace,
         input.recovery === false ? undefined : input.recovery?.operations,
       ),
     );
@@ -256,7 +260,8 @@ export default function tmuxTimeoutExtension(
   runtimeOptions?: TmuxExtensionRuntimeOptions,
 ): void {
   const cleaner = new ArtifactCleaner(runtimeOptions?.cleanup);
-  const recovery: false | RecoveryOptions | undefined = runtimeOptions?.recovery;
+  const recovery: false | Omit<RecoveryOptions, "sessionNamespace"> | undefined =
+    runtimeOptions?.recovery;
   const delivery = new CompletionDelivery(
     host,
     recovery === false
@@ -283,7 +288,6 @@ export default function tmuxTimeoutExtension(
     promptGuidelines: [
       "Use tmux_exec instead of foreground bash for commands expected to run for at least 120 seconds or continuously watch external state.",
       "After tmux_exec starts a command, return control promptly; pi-tmux-timeout-extension will start a named continuation when its exit-status file appears.",
-      "Do not call loop_wakeup or start timed polling for a command handled by tmux_exec; rely on its completion wakeup instead.",
     ],
     promptSnippet: "Run a long command in detached tmux without blocking pi",
     async execute(_toolCallId, params, signal) {
@@ -307,10 +311,4 @@ export default function tmuxTimeoutExtension(
   });
 
   registerLifecycleHandlers({ cleaner, delivery, host, recovery, rewriter, runtime });
-
-  if (recovery !== false) {
-    delivery.beforeCompaction();
-    runtime.restore(recoverTmuxLaunches(recovery), nextTmuxLaunchId(recovery));
-    delivery.afterCompaction();
-  }
 }

@@ -4,23 +4,33 @@ import {
   createTmuxLaunch,
   shouldDetachBash,
   TMUX_LAUNCH_TIMEOUT_SECONDS,
+  tmuxSessionNamespace,
   TmuxRuntime,
 } from "./tmux.ts";
 
-it("creates a quoted detached tmux launch command", () => {
-  const launch = createTmuxLaunch("sleep 1; echo 'tmux ok'", 7);
+const SESSION_ID = "01a03e61-5a77-7345-bb03-adda2f5fd100";
+const SESSION_NAMESPACE = tmuxSessionNamespace(SESSION_ID);
 
-  expect(launch.sessionName).toMatch(/^pi-tmux-\d+-7$/u);
-  expect(launch.completionChannel).toMatch(/^pi-tmux-\d+-7-complete$/u);
-  expect(launch.logPath).toMatch(/pi-tmux-\d+-7\/output\.log$/u);
-  expect(launch.statusPath).toMatch(/pi-tmux-\d+-7\/exit-status$/u);
+it("creates a quoted detached tmux launch command", () => {
+  const launch = createTmuxLaunch("sleep 1; echo 'tmux ok'", 7, SESSION_NAMESPACE);
+
+  expect(launch.sessionName).toBe(`pi-tmux-${SESSION_NAMESPACE}-7`);
+  expect(launch.socketName).toBe(`pi-tmux-${SESSION_NAMESPACE}`);
+  expect(launch.completionChannel).toBe(`pi-tmux-${SESSION_NAMESPACE}-7-complete`);
+  expect(launch.logPath).toMatch(new RegExp(`pi-tmux-${SESSION_NAMESPACE}-7/output\\.log$`, "u"));
+  expect(launch.statusPath).toMatch(new RegExp(`pi-tmux-${SESSION_NAMESPACE}-7/exit-status$`, "u"));
   expect(launch.submittedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
   expect(launch.taskCommand).toBe("sleep 1; echo 'tmux ok'");
-  expect(launch.command).toMatch(/tmux new-session -d -s 'pi-tmux-\d+-7'/u);
+  expect(launch.command).toContain(
+    `tmux -L 'pi-tmux-${SESSION_NAMESPACE}' new-session -d -s 'pi-tmux-${SESSION_NAMESPACE}-7'`,
+  );
   expect(launch.command).toMatch(/echo '"'"'tmux ok'"'"'/u);
-  expect(launch.command).toMatch(/tmux wait-for -S/u);
+  expect(launch.command).toMatch(/tmux -L .* wait-for -S/u);
   expect(launch.command).toContain("launch.json");
   expect(launch.command).toContain("sleep 1; echo");
+  expect((): ReturnType<TmuxRuntime["createLaunch"]> =>
+    createTmuxLaunch("sleep 1", 1, "invalid"),
+  ).toThrow("invalid tmux session namespace");
 });
 
 it("detects long timeouts and known watch commands", () => {
@@ -48,14 +58,15 @@ it("rewrites matching bash calls and preserves the counter for skipped calls", (
       tracked.push(launch.sessionName);
     },
   });
+  runtime.startSession(SESSION_ID);
   const shortInput = { command: "bun test", timeout: 30 };
   const longInput = { command: "gh run watch 123", timeout: 1200 };
 
   expect(runtime.rewriteLongBash(shortInput)).toBeUndefined();
-  expect(runtime.rewriteLongBash(longInput)?.sessionName).toMatch(/^pi-tmux-\d+-1$/u);
+  expect(runtime.rewriteLongBash(longInput)?.sessionName).toBe(`pi-tmux-${SESSION_NAMESPACE}-1`);
   expect(longInput.timeout).toBe(TMUX_LAUNCH_TIMEOUT_SECONDS);
-  expect(longInput.command).toMatch(/pi-tmux-\d+-1/u);
-  expect(runtime.createLaunch("sleep 1").sessionName).toMatch(/pi-tmux-\d+-2/u);
+  expect(longInput.command).toContain(`pi-tmux-${SESSION_NAMESPACE}-1`);
+  expect(runtime.createLaunch("sleep 1").sessionName).toBe(`pi-tmux-${SESSION_NAMESPACE}-2`);
   expect(tracked).toHaveLength(0);
   const trackedLaunch = runtime.createLaunch("sleep 2");
   runtime.trackLaunch(trackedLaunch);
@@ -79,15 +90,31 @@ it("restores launch tracking and advances ids beyond recovered jobs", () => {
       },
     },
   });
-  const recovered = createTmuxLaunch("sleep 10", 11);
+  runtime.startSession(SESSION_ID);
+  const recovered = createTmuxLaunch("sleep 10", 11, SESSION_NAMESPACE);
 
   const malformed = { ...recovered, completionChannel: "invalid-complete", sessionName: "invalid" };
-  runtime.restore([recovered, malformed], 20);
+  const otherNamespace = tmuxSessionNamespace("another-main-session");
+  const otherSession = createTmuxLaunch("sleep 30", 99, otherNamespace);
+  runtime.restore([recovered, malformed, otherSession], 20);
 
-  expect(subscribed).toEqual([recovered.completionChannel, malformed.completionChannel]);
+  expect(subscribed).toEqual([recovered.completionChannel]);
   const fresh = runtime.createLaunch("sleep 20");
-  expect(fresh.sessionName).toMatch(/pi-tmux-\d+-20$/u);
+  expect(fresh.sessionName).toBe(`pi-tmux-${SESSION_NAMESPACE}-20`);
   runtime.trackLaunch(fresh);
   runtime.restore([]);
   runtime.clear();
+});
+
+it("uses distinct tmux servers and counters for different Pi sessions", () => {
+  const runtime = new TmuxRuntime({ onComplete: (): void => undefined });
+  runtime.startSession("main-session-a");
+  const first = runtime.createLaunch("sleep 1");
+  runtime.startSession("main-session-b");
+  const second = runtime.createLaunch("sleep 1");
+
+  expect(first.sessionName).not.toBe(second.sessionName);
+  expect(first.socketName).not.toBe(second.socketName);
+  expect(first.sessionName).toMatch(/-1$/u);
+  expect(second.sessionName).toMatch(/-1$/u);
 });

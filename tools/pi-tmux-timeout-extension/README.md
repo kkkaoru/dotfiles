@@ -6,6 +6,9 @@ long-running commands continue in detached tmux sessions.
 ## Behavior
 
 - Registers the parallel `tmux_exec` tool for explicitly starting a command in detached tmux.
+- Derives a 128-bit namespace from Pi's main session ID and uses a dedicated tmux server socket for
+  that namespace. Session names are `pi-tmux-<namespace>-<counter>`, so different Pi sessions neither
+  share names nor subscribe to each other's completion channels.
 - Automatically rewrites `bash` tool calls with a timeout of at least 120 seconds.
 - Automatically rewrites known blocking watchers: `gh run watch`, `watch`, and `tail -f`.
 - Leaves short commands and commands that already invoke tmux unchanged.
@@ -16,16 +19,21 @@ long-running commands continue in detached tmux sessions.
   when tmux signals completion, so pi does not poll or wait for a previously chosen timeout.
 - Never places completion in Pi's `followUp` queue. While Pi is busy, it displays the structured task
   name through a persistent widget above the editor, retains the continuation internally, and starts
-  a normal user turn on `agent_settled`. This removes the hard-coded `Follow-up:` TUI prefix.
-- Names successful completion as
-  `MM-DD HH:mm → HH:mm | tmux=<session> | <command>` without `exit=0`. A nonzero result adds
-  `failed=<code>`. Command whitespace is collapsed and the identity is capped at 160 characters.
+  a normal user turn on `agent_settled`. If `isIdle()` races with a newly started prompt and
+  `sendUserMessage()` rejects delivery, the completion returns to the same internal queue for the next
+  `agent_settled` instead of surfacing an extension error. This removes the hard-coded `Follow-up:`
+  TUI prefix.
+- Names same-day completion as `HH:mm → HH:mm | <command>` and includes dates on both timestamps
+  only when it spans local calendar dates: `MM-DD HH:mm → MM-DD HH:mm | <command>`. The tmux session
+  identity remains in internal metadata and artifact paths but is omitted from completion displays.
+  A nonzero result adds
+  `command_exit=<code>` and is shown as a command-failure warning rather than a tmux extension error.
+  Command whitespace is collapsed and the identity is capped at 160 characters.
 - Persists `launch.json` beside every job and records each launch as a versioned custom Pi session
-  entry. `/reload` restores same-process artifacts; later resume of the same Pi conversation restores
-  launches from session history even under a new PID. Both paths re-subscribe waiters and immediately
-  reconcile existing `exit-status` files. A `completion-delivered` marker prevents duplicate
-  continuation, and ID allocation scans every same-process artifact—including delivered jobs—so
-  reload cannot reuse a session name.
+  entry. `/reload` and later resume restore only entries whose namespace matches the current main Pi
+  session, then re-subscribe through that session's dedicated tmux socket and immediately reconcile
+  existing `exit-status` files. Runtime restoration rejects mismatched socket names, session names,
+  and completion channels. A `completion-delivered` marker prevents duplicate continuation.
 - Defers completion that arrives during session compaction, then delivers it after compaction or
   `agent_settled`. Compaction events reconcile tracked exit-status files without interval polling.
 - Uses one shared temporary-directory timestamp to allow at most one cleanup scan per 24 hours across

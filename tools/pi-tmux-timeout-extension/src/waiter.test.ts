@@ -16,6 +16,7 @@ const launch: TmuxLaunch = {
   completionChannel: "pi-tmux-test-complete",
   logPath: "/tmp/pi-tmux-test/output.log",
   sessionName: "pi-tmux-test",
+  socketName: "pi-tmux-socket",
   statusPath: "/tmp/pi-tmux-test/exit-status",
   submittedAt: "2026-06-01T01:02:03.000Z",
   taskCommand: "sleep 60",
@@ -39,11 +40,14 @@ it("subscribes to tmux wait-for and handles its close event", () => {
   const cancel = createCompletionEvents(spawnProcess).subscribe({
     channel: "pi-tmux-test-complete",
     onSignal,
+    socketName: "pi-tmux-socket",
   });
 
-  expect(spawnProcess).toHaveBeenCalledWith("tmux", ["wait-for", "pi-tmux-test-complete"], {
-    stdio: "ignore",
-  });
+  expect(spawnProcess).toHaveBeenCalledWith(
+    "tmux",
+    ["-L", "pi-tmux-socket", "wait-for", "pi-tmux-test-complete"],
+    { stdio: "ignore" },
+  );
   close?.(1);
   expect(onSignal).not.toHaveBeenCalled();
   close?.(0);

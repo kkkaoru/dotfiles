@@ -36,7 +36,7 @@ export interface ArtifactCleanerOptions extends ArtifactCleanupOptions {
   readonly scheduler?: CleanupScheduler;
 }
 
-const ARTIFACT_DIRECTORY_PATTERN = /^pi-tmux-\d+-\d+$/u;
+const ARTIFACT_DIRECTORY_PATTERN = /^pi-tmux-(?:\d+|[a-f0-9]{32})-\d+$/u;
 const EXIT_STATUS_PATTERN = /^\d+\s*$/u;
 export const systemArtifactCleanupOperations: ArtifactCleanupOperations = {
   readDirectory: async (directory: string): Promise<string[]> => fs.readdir(directory),

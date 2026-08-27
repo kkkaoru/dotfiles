@@ -2,11 +2,15 @@
 import { formatLocalTimestamp } from "./policy.ts";
 import type { Completion } from "./waiter.ts";
 
+const AGENT_BUSY_ERROR = "Agent is already processing a prompt";
 const MAX_COMPLETION_IDENTITY_CHARACTERS = 160;
 
 export interface CompletionDeliveryContext {
   readonly isIdle: () => boolean;
-  readonly sessionManager?: { readonly getEntries: () => readonly unknown[] };
+  readonly sessionManager?: {
+    readonly getEntries: () => readonly unknown[];
+    readonly getSessionId: () => string;
+  };
   readonly ui: {
     readonly notify: (message: string, level?: "error" | "info" | "warning") => void;
     readonly setStatus: (key: string, value: string | undefined) => void;
@@ -27,18 +31,26 @@ function completionIdentity(command: string): string {
 }
 
 function completionName(completion: Completion): string {
-  const submittedAt: string = formatLocalTimestamp(
-    new Date(completion.launch.submittedAt),
-    "submitted",
-  );
-  const completedAt: string = formatLocalTimestamp(new Date(), "completed");
+  const submittedDate = new Date(completion.launch.submittedAt);
+  const completedDate = new Date();
+  const spansDates =
+    submittedDate.getFullYear() !== completedDate.getFullYear() ||
+    submittedDate.getMonth() !== completedDate.getMonth() ||
+    submittedDate.getDate() !== completedDate.getDate();
+  const format = spansDates ? "submitted" : "completed";
+  const submittedAt: string = formatLocalTimestamp(submittedDate, format);
+  const completedAt: string = formatLocalTimestamp(completedDate, format);
   const failure: string =
-    completion.exitCode === 0 ? "" : ` | failed=${String(completion.exitCode)}`;
-  return `${submittedAt} → ${completedAt} | tmux=${completion.launch.sessionName}${failure} | ${completionIdentity(completion.launch.taskCommand)}`;
+    completion.exitCode === 0 ? "" : ` | command_exit=${String(completion.exitCode)}`;
+  return `${submittedAt} → ${completedAt}${failure} | ${completionIdentity(completion.launch.taskCommand)}`;
 }
 
 function completionPrompt(completion: Completion): string {
   return `${completionName(completion)}\nlog: ${completion.launch.logPath}\nstatus: ${completion.launch.statusPath}`;
+}
+
+function isAgentBusyError(error: unknown): boolean {
+  return error instanceof Error && error.message.includes(AGENT_BUSY_ERROR);
 }
 
 export function wakePiOnCompletion(host: CompletionDeliveryHost, completion: Completion): void {
@@ -63,7 +75,10 @@ export class CompletionDelivery {
       this.#showPending(completion);
       return;
     }
-    this.#deliver([completion]);
+    if (!this.#deliver([completion])) {
+      this.#pending.push(completion);
+      this.#showPending(completion);
+    }
   }
 
   setContext(context: CompletionDeliveryContext): void {
@@ -96,13 +111,21 @@ export class CompletionDelivery {
     this.#updateStatus();
   }
 
-  #deliver(completions: readonly Completion[]): void {
-    this.#host.sendUserMessage(
-      completions
-        .map((completion: Completion): string => completionPrompt(completion))
-        .join("\n\n"),
-    );
-    completions.map((completion: Completion): void => this.#onDelivered(completion));
+  #deliver(completions: readonly Completion[]): boolean {
+    try {
+      this.#host.sendUserMessage(
+        completions
+          .map((completion: Completion): string => completionPrompt(completion))
+          .join("\n\n"),
+      );
+      completions.map((completion: Completion): void => this.#onDelivered(completion));
+      return true;
+    } catch (error: unknown) {
+      if (isAgentBusyError(error)) {
+        return false;
+      }
+      throw error;
+    }
   }
 
   #flushIfIdle(): void {
@@ -110,15 +133,16 @@ export class CompletionDelivery {
       return;
     }
     const pending: readonly Completion[] = this.#pending;
-    this.#deliver(pending);
-    this.#pending = [];
+    if (this.#deliver(pending)) {
+      this.#pending = [];
+    }
     this.#updateStatus();
   }
 
   #showPending(completion: Completion): void {
     this.#context?.ui.notify(
       completionName(completion),
-      completion.exitCode === 0 ? "info" : "error",
+      completion.exitCode === 0 ? "info" : "warning",
     );
     this.#updateStatus();
   }

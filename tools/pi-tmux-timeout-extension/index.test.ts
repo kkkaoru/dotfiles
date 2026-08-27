@@ -37,7 +37,7 @@ it("registers and executes the parallel tmux tool", async () => {
   const result = await tool?.execute("call-1", { command: "sleep 60" }, controller.signal);
   expect(exec).toHaveBeenCalledOnce();
   expect(result?.content[0]?.text).toMatch(/Started detached tmux command/u);
-  expect(result?.details.sessionName).toMatch(/^pi-tmux-\d+-1$/u);
+  expect(result?.details.sessionName).toMatch(/^pi-tmux-[a-f0-9]{32}-1$/u);
   expect(result?.details.logPath).toMatch(/output\.log$/u);
   expect(result?.details.statusPath).toMatch(/exit-status$/u);
 });
@@ -109,6 +109,7 @@ it("wakes pi immediately with local timestamps when completion monitoring report
       completionChannel: "pi-tmux-test-complete",
       logPath: "/tmp/pi-tmux-test/output.log",
       sessionName: "pi-tmux-test",
+      socketName: "pi-tmux-socket",
       statusPath: "/tmp/pi-tmux-test/exit-status",
       submittedAt: new Date(2026, 7, 25, 23, 14).toISOString(),
       taskCommand: "sleep 60",
@@ -116,7 +117,7 @@ it("wakes pi immediately with local timestamps when completion monitoring report
   });
   expect(sendUserMessage).toHaveBeenCalledWith(
     expect.stringMatching(
-      /^08-25 23:14 → 23:45 \| tmux=pi-tmux-test \| sleep 60\nlog: \/tmp\/pi-tmux-test\/output\.log\nstatus: \/tmp\/pi-tmux-test\/exit-status$/u,
+      /^23:14 → 23:45 \| sleep 60\nlog: \/tmp\/pi-tmux-test\/output\.log\nstatus: \/tmp\/pi-tmux-test\/exit-status$/u,
     ),
   );
 });
@@ -137,6 +138,7 @@ it("defers completion follow-ups until compaction finishes", () => {
       completionChannel: "pi-tmux-test-complete",
       logPath: "/tmp/pi-tmux-test/output.log",
       sessionName: "pi-tmux-test",
+      socketName: "pi-tmux-socket",
       statusPath: "/tmp/pi-tmux-test/exit-status",
       submittedAt: new Date(2026, 7, 25, 23, 14).toISOString(),
       taskCommand: "sleep 60",
@@ -199,6 +201,10 @@ it("delivers a real completion callback after compaction lifecycle events", asyn
   });
   const context: CompletionDeliveryContext = {
     isIdle: (): boolean => true,
+    sessionManager: {
+      getEntries: (): readonly unknown[] => [],
+      getSessionId: (): string => "main-session-id",
+    },
     ui: { notify: vi.fn(), setStatus: vi.fn() },
   };
   handlers.get("session_start")?.({}, context);
@@ -232,6 +238,7 @@ it("ignores lifecycle context updates when Pi supplies no context", () => {
   };
 
   handlers.get("session_start")?.({});
+  handlers.get("session_start")?.({}, context);
   handlers.get("agent_start")?.({});
   handlers.get("agent_start")?.({}, context);
   handlers.get("agent_settled")?.({});
@@ -288,7 +295,7 @@ it("automatically rewrites and event-subscribes successful long-running bash cal
     { isError: true, toolCallId: "call-2" },
   ].map((event: unknown): void => handleToolResult(event));
   expect(input.timeout).toBe(30);
-  expect(input.command).toMatch(/tmux new-session -d/u);
+  expect(input.command).toMatch(/tmux -L '[^']+' new-session -d/u);
   expect(subscribe).toHaveBeenCalledOnce();
   onShutdown?.({});
 });

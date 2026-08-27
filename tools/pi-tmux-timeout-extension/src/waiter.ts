@@ -15,6 +15,7 @@ export interface CompletionEvents {
 export interface CompletionSubscriptionInput {
   readonly channel: string;
   readonly onSignal: () => void;
+  readonly socketName: string;
 }
 
 export interface StatusOperations {
@@ -44,8 +45,8 @@ const SYSTEM_OPERATIONS: StatusOperations = {
 
 export function createCompletionEvents(spawnProcess: SpawnProcess = spawn): CompletionEvents {
   return {
-    subscribe: ({ channel, onSignal }: CompletionSubscriptionInput): (() => void) => {
-      const process: WaitProcess = spawnProcess("tmux", ["wait-for", channel], {
+    subscribe: ({ channel, onSignal, socketName }: CompletionSubscriptionInput): (() => void) => {
+      const process: WaitProcess = spawnProcess("tmux", ["-L", socketName, "wait-for", channel], {
         stdio: "ignore",
       });
       process.once("close", (code: number | null): void => {
@@ -80,6 +81,7 @@ export class CompletionWaiter {
     const cancel: () => void = this.#events.subscribe({
       channel: launch.completionChannel,
       onSignal: (): void => this.#complete(launch),
+      socketName: launch.socketName,
     });
     this.#cancellations.set(launch.completionChannel, cancel);
     this.#launches.set(launch.completionChannel, launch);

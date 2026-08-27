@@ -2,17 +2,17 @@
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import process from "node:process";
 import type { TmuxLaunch } from "./tmux.ts";
 
 export const DELIVERY_MARKER_FILENAME = "completion-delivered";
 export const LAUNCH_METADATA_FILENAME = "launch.json";
-export const TMUX_SESSION_ENTRY_TYPE = "pi-tmux-launch-v1";
+export const TMUX_SESSION_ENTRY_TYPE = "pi-tmux-launch-v2";
 
 interface PersistedTmuxLaunch {
   readonly completionChannel: string;
   readonly logPath: string;
   readonly sessionName: string;
+  readonly socketName: string;
   readonly statusPath: string;
   readonly submittedAt: string;
   readonly taskCommand: string;
@@ -28,8 +28,8 @@ export interface PersistenceOperations {
 
 export interface RecoveryOptions {
   readonly operations?: PersistenceOperations;
-  readonly pid?: number;
   readonly rootDirectory?: string;
+  readonly sessionNamespace: string;
 }
 
 const SYSTEM_OPERATIONS: PersistenceOperations = {
@@ -45,6 +45,7 @@ function persistedLaunch(launch: TmuxLaunch): PersistedTmuxLaunch {
     completionChannel: launch.completionChannel,
     logPath: launch.logPath,
     sessionName: launch.sessionName,
+    socketName: launch.socketName,
     statusPath: launch.statusPath,
     submittedAt: launch.submittedAt,
     taskCommand: launch.taskCommand,
@@ -81,10 +82,29 @@ const METADATA_KEYS = [
   "completionChannel",
   "logPath",
   "sessionName",
+  "socketName",
   "statusPath",
   "submittedAt",
   "taskCommand",
 ] as const satisfies readonly (keyof PersistedTmuxLaunch)[];
+
+function metadataIdentityMatches(metadata: PersistedTmuxLaunch, sessionName: string): boolean {
+  const namespace: string | undefined = /^pi-tmux-([a-f0-9]{32})-(\d+)$/u.exec(sessionName)?.[1];
+  return (
+    namespace !== undefined &&
+    metadata.sessionName === sessionName &&
+    metadata.socketName === `pi-tmux-${namespace}` &&
+    metadata.completionChannel === `${sessionName}-complete`
+  );
+}
+
+function metadataPathsMatch(metadata: PersistedTmuxLaunch, directory: string): boolean {
+  return (
+    metadata.logPath === path.join(directory, "output.log") &&
+    metadata.statusPath === path.join(directory, "exit-status") &&
+    Number.isFinite(Date.parse(metadata.submittedAt))
+  );
+}
 
 function parseMetadata(
   content: string,
@@ -102,11 +122,8 @@ function parseMetadata(
     }
     const metadata = value as PersistedTmuxLaunch;
     if (
-      metadata.sessionName !== sessionName ||
-      metadata.completionChannel !== `${sessionName}-complete` ||
-      metadata.logPath !== path.join(directory, "output.log") ||
-      metadata.statusPath !== path.join(directory, "exit-status") ||
-      !Number.isFinite(Date.parse(metadata.submittedAt))
+      !metadataIdentityMatches(metadata, sessionName) ||
+      !metadataPathsMatch(metadata, directory)
     ) {
       return undefined;
     }
@@ -130,6 +147,7 @@ function legacyLaunch(
     completionChannel: `${sessionName}-complete`,
     logPath,
     sessionName,
+    socketName: sessionName.replace(/-\d+$/u, ""),
     statusPath: path.join(directory, "exit-status"),
     submittedAt: new Date(operations.statBirthtime(directory)).toISOString(),
     taskCommand: `recovered tmux job ${sessionName}`,
@@ -144,19 +162,18 @@ function readDirectory(directory: string, operations: PersistenceOperations): re
   }
 }
 
-function recoveryInput(options?: RecoveryOptions): {
+function recoveryInput(options: RecoveryOptions): {
   readonly entries: readonly string[];
   readonly operations: PersistenceOperations;
   readonly pattern: RegExp;
   readonly rootDirectory: string;
 } {
-  const operations: PersistenceOperations = options?.operations ?? SYSTEM_OPERATIONS;
-  const pid: number = options?.pid ?? process.pid;
-  const rootDirectory: string = options?.rootDirectory ?? tmpdir();
+  const operations: PersistenceOperations = options.operations ?? SYSTEM_OPERATIONS;
+  const rootDirectory: string = options.rootDirectory ?? tmpdir();
   return {
     entries: readDirectory(rootDirectory, operations),
     operations,
-    pattern: new RegExp(`^pi-tmux-${String(pid)}-(\\d+)$`, "u"),
+    pattern: new RegExp(`^pi-tmux-${options.sessionNamespace}-(\\d+)$`, "u"),
     rootDirectory,
   };
 }
@@ -184,13 +201,14 @@ function launchFromSessionEntry(entry: unknown): TmuxLaunch | undefined {
 
 export function recoverSessionTmuxLaunches(
   entries: readonly unknown[],
+  sessionNamespace: string,
   operations: PersistenceOperations = SYSTEM_OPERATIONS,
 ): readonly TmuxLaunch[] {
   const launches = new Map<string, TmuxLaunch>();
   const recovered: readonly TmuxLaunch[] = entries.flatMap(
     (entry: unknown): readonly TmuxLaunch[] => {
       const launch: TmuxLaunch | undefined = launchFromSessionEntry(entry);
-      return launch === undefined ? [] : [launch];
+      return launch?.socketName === `pi-tmux-${sessionNamespace}` ? [launch] : [];
     },
   );
   for (const launch of recovered) {
@@ -201,7 +219,7 @@ export function recoverSessionTmuxLaunches(
   return [...launches.values()];
 }
 
-export function nextTmuxLaunchId(options?: RecoveryOptions): number {
+export function nextTmuxLaunchId(options: RecoveryOptions): number {
   const { entries, pattern } = recoveryInput(options);
   let nextId = 1;
   for (const sessionName of entries) {
@@ -236,7 +254,7 @@ function recoverEntry(
   }
 }
 
-export function recoverTmuxLaunches(options?: RecoveryOptions): readonly TmuxLaunch[] {
+export function recoverTmuxLaunches(options: RecoveryOptions): readonly TmuxLaunch[] {
   const { entries, operations, pattern, rootDirectory } = recoveryInput(options);
   return entries.flatMap((sessionName: string): readonly TmuxLaunch[] => {
     const launch: TmuxLaunch | undefined = recoverEntry(

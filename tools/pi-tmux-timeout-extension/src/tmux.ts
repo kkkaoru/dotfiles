@@ -1,7 +1,7 @@
 // This TypeScript file is executed with Bun.
+import { createHash, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import process from "node:process";
 import { LAUNCH_METADATA_FILENAME, serializeLaunchMetadata } from "./persistence.ts";
 import { type MutableBashInput, shouldDetachBash } from "./policy.ts";
 import {
@@ -20,6 +20,7 @@ export interface TmuxLaunch {
   readonly completionChannel: string;
   readonly logPath: string;
   readonly sessionName: string;
+  readonly socketName: string;
   readonly statusPath: string;
   readonly submittedAt: string;
   readonly taskCommand: string;
@@ -46,43 +47,72 @@ function launchMessage(launch: Pick<TmuxLaunch, "logPath" | "sessionName" | "sta
   ].join("\n");
 }
 
-export function createTmuxLaunch(command: string, id: number): TmuxLaunch {
-  const sessionName = `pi-tmux-${String(process.pid)}-${String(id)}`;
+export function tmuxSessionNamespace(sessionId: string): string {
+  return createHash("sha256").update(sessionId).digest("hex").slice(0, 32);
+}
+
+export function createTmuxLaunch(command: string, id: number, namespace: string): TmuxLaunch {
+  if (!/^[a-f0-9]{32}$/u.test(namespace)) {
+    throw new Error("invalid tmux session namespace");
+  }
+  const socketName = `pi-tmux-${namespace}`;
+  const sessionName = `${socketName}-${String(id)}`;
   const completionChannel = `${sessionName}-complete`;
   const outputDirectory = path.join(tmpdir(), sessionName);
   const logPath = path.join(outputDirectory, "output.log");
   const statusPath = path.join(outputDirectory, "exit-status");
   const submittedAt: string = new Date().toISOString();
-  const detachedScript = `(${command}) > ${shellQuote(logPath)} 2>&1\nexit_code=$?\nprintf '%s\\n' "$exit_code" > ${shellQuote(statusPath)}\ntmux wait-for -S ${shellQuote(completionChannel)}`;
+  const detachedScript = `(${command}) > ${shellQuote(logPath)} 2>&1\nexit_code=$?\nprintf '%s\\n' "$exit_code" > ${shellQuote(statusPath)}\ntmux -L ${shellQuote(socketName)} wait-for -S ${shellQuote(completionChannel)}`;
   const message = launchMessage({ logPath, sessionName, statusPath });
   const launch: TmuxLaunch = {
     command: "",
     completionChannel,
     logPath,
     sessionName,
+    socketName,
     statusPath,
     submittedAt,
     taskCommand: command,
   };
   const metadataPath: string = path.join(outputDirectory, LAUNCH_METADATA_FILENAME);
-  const launchCommand = `mkdir -p ${shellQuote(outputDirectory)} && tmux new-session -d -s ${shellQuote(sessionName)} -- sh -lc ${shellQuote(detachedScript)} && printf '%s' ${shellQuote(serializeLaunchMetadata(launch))} > ${shellQuote(metadataPath)} && printf '%s\\n' ${shellQuote(message)}`;
+  const launchCommand = `mkdir -p ${shellQuote(outputDirectory)} && tmux -L ${shellQuote(socketName)} new-session -d -s ${shellQuote(sessionName)} -- sh -lc ${shellQuote(detachedScript)} && printf '%s' ${shellQuote(serializeLaunchMetadata(launch))} > ${shellQuote(metadataPath)} && printf '%s\\n' ${shellQuote(message)}`;
   return { ...launch, command: launchCommand };
 }
 
 export { shouldDetachBash } from "./policy.ts";
 
+function launchIdForNamespace(launch: TmuxLaunch, namespace: string): number | undefined {
+  const match = new RegExp(`^pi-tmux-${namespace}-(\\d+)$`, "u").exec(launch.sessionName);
+  if (
+    launch.socketName !== `pi-tmux-${namespace}` ||
+    launch.completionChannel !== `${launch.sessionName}-complete` ||
+    match?.[1] === undefined
+  ) {
+    return undefined;
+  }
+  return Number(match[1]);
+}
+
 export class TmuxRuntime {
   readonly #onTrack: (launch: TmuxLaunch) => void;
   readonly #waiter: CompletionWaiter;
   #nextId = 1;
+  #namespace = tmuxSessionNamespace(randomUUID());
 
   constructor(options: TmuxRuntimeOptions) {
     this.#onTrack = options.onTrack ?? ((): void => undefined);
     this.#waiter = new CompletionWaiter(options);
   }
 
+  startSession(sessionId: string): string {
+    this.clear();
+    this.#namespace = tmuxSessionNamespace(sessionId);
+    this.#nextId = 1;
+    return this.#namespace;
+  }
+
   createLaunch(command: string): TmuxLaunch {
-    const launch: TmuxLaunch = createTmuxLaunch(command, this.#nextId);
+    const launch: TmuxLaunch = createTmuxLaunch(command, this.#nextId, this.#namespace);
     this.#nextId += 1;
     return launch;
   }
@@ -105,11 +135,11 @@ export class TmuxRuntime {
   restore(launches: readonly TmuxLaunch[], nextId = 1): void {
     this.#nextId = Math.max(this.#nextId, nextId);
     for (const launch of launches) {
-      const id = Number(launch.sessionName.split("-").at(-1));
-      if (Number.isInteger(id)) {
+      const id: number | undefined = launchIdForNamespace(launch, this.#namespace);
+      if (id !== undefined) {
         this.#nextId = Math.max(this.#nextId, id + 1);
+        this.#waiter.track(launch);
       }
-      this.#waiter.track(launch);
     }
     this.reconcile();
   }

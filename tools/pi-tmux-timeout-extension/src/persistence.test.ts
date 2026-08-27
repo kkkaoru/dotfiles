@@ -15,6 +15,7 @@ import {
 } from "./persistence.ts";
 import type { TmuxLaunch } from "./tmux.ts";
 
+const SESSION_NAMESPACE = "a".repeat(32);
 const temporaryDirectories: string[] = [];
 
 function temporaryDirectory(): string {
@@ -24,7 +25,7 @@ function temporaryDirectory(): string {
 }
 
 function launch(rootDirectory: string, id: number): TmuxLaunch {
-  const sessionName = `pi-tmux-4321-${String(id)}`;
+  const sessionName = `pi-tmux-${SESSION_NAMESPACE}-${String(id)}`;
   const directory: string = path.join(rootDirectory, sessionName);
   fs.mkdirSync(directory);
   return {
@@ -32,6 +33,7 @@ function launch(rootDirectory: string, id: number): TmuxLaunch {
     completionChannel: `${sessionName}-complete`,
     logPath: path.join(directory, "output.log"),
     sessionName,
+    socketName: `pi-tmux-${SESSION_NAMESPACE}`,
     statusPath: path.join(directory, "exit-status"),
     submittedAt: new Date(2026, 7, 26, 2, 5).toISOString(),
     taskCommand: `job ${String(id)}`,
@@ -54,7 +56,7 @@ function createInvalidMetadataFixtures(rootDirectory: string): void {
   );
 }
 
-it("recovers metadata and legacy jobs for the current Pi pid only", () => {
+it("recovers metadata and legacy jobs for the current Pi session namespace only", () => {
   const rootDirectory: string = temporaryDirectory();
   const persisted: TmuxLaunch = launch(rootDirectory, 7);
   fs.writeFileSync(
@@ -77,18 +79,18 @@ it("recovers metadata and legacy jobs for the current Pi pid only", () => {
   fs.writeFileSync(legacy.logPath, "legacy output");
   launch(rootDirectory, 11);
   createInvalidMetadataFixtures(rootDirectory);
-  fs.mkdirSync(path.join(rootDirectory, "pi-tmux-9999-1"));
+  fs.mkdirSync(path.join(rootDirectory, `pi-tmux-${"b".repeat(32)}-1`));
 
-  const recovered = recoverTmuxLaunches({ pid: 4321, rootDirectory });
+  const recovered = recoverTmuxLaunches({ rootDirectory, sessionNamespace: SESSION_NAMESPACE });
   expect(recovered).toHaveLength(2);
-  expect(nextTmuxLaunchId({ pid: 4321, rootDirectory })).toBe(14);
+  expect(nextTmuxLaunchId({ rootDirectory, sessionNamespace: SESSION_NAMESPACE })).toBe(14);
   expect(recovered).toEqual(
     expect.arrayContaining([
       { ...persisted, command: "" },
       expect.objectContaining({
         command: "",
-        sessionName: "pi-tmux-4321-10",
-        taskCommand: "recovered tmux job pi-tmux-4321-10",
+        sessionName: `pi-tmux-${SESSION_NAMESPACE}-10`,
+        taskCommand: `recovered tmux job pi-tmux-${SESSION_NAMESPACE}-10`,
       }),
     ]),
   );
@@ -99,15 +101,15 @@ it("ignores an artifact concurrently removed during recovery", () => {
     recoverTmuxLaunches({
       operations: {
         exists: (filePath: string): boolean => filePath.endsWith(LAUNCH_METADATA_FILENAME),
-        readDirectory: (): readonly string[] => ["pi-tmux-4321-1"],
+        readDirectory: (): readonly string[] => [`pi-tmux-${SESSION_NAMESPACE}-1`],
         readFile: (): string => {
           throw new Error("removed");
         },
         statBirthtime: (): number => 0,
         writeFile: (): void => undefined,
       },
-      pid: 4321,
       rootDirectory: "/tmp",
+      sessionNamespace: SESSION_NAMESPACE,
     }),
   ).toEqual([]);
 });
@@ -120,13 +122,16 @@ it("persists and recovers undelivered launches from a resumed Pi session", () =>
     entries.push({ customType, data, type: "custom" });
   }, persisted);
   entries.push(null, { type: "message" }, entries[0], {
-    customType: "pi-tmux-launch-v1",
+    customType: "pi-tmux-launch-v2",
     type: "custom",
   });
 
-  expect(recoverSessionTmuxLaunches(entries)).toEqual([{ ...persisted, command: "" }]);
+  expect(recoverSessionTmuxLaunches(entries, SESSION_NAMESPACE)).toEqual([
+    { ...persisted, command: "" },
+  ]);
+  expect(recoverSessionTmuxLaunches(entries, "b".repeat(32))).toEqual([]);
   markCompletionDelivered(persisted);
-  expect(recoverSessionTmuxLaunches(entries)).toEqual([]);
+  expect(recoverSessionTmuxLaunches(entries, SESSION_NAMESPACE)).toEqual([]);
   persistTmuxLaunch(undefined, persisted);
 });
 
@@ -136,6 +141,10 @@ it("marks successful delivery and tolerates an unavailable recovery root", () =>
   markCompletionDelivered(persisted);
   expect(fs.readFileSync(deliveryMarkerPath(persisted), "utf8")).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
   const missingRoot: string = path.join(rootDirectory, "missing");
-  expect(recoverTmuxLaunches({ pid: 4321, rootDirectory: missingRoot })).toEqual([]);
-  expect(nextTmuxLaunchId({ pid: 4321, rootDirectory: missingRoot })).toBe(1);
+  expect(
+    recoverTmuxLaunches({ rootDirectory: missingRoot, sessionNamespace: SESSION_NAMESPACE }),
+  ).toEqual([]);
+  expect(
+    nextTmuxLaunchId({ rootDirectory: missingRoot, sessionNamespace: SESSION_NAMESPACE }),
+  ).toBe(1);
 });
