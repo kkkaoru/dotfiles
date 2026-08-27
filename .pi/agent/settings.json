@@ -4,8 +4,17 @@
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-5.6-sol",
   "defaultThinkingLevel": "medium",
+  "pi-effort-manager": {
+    "dynamicDefault": true,
+    "startEffort": "medium",
+    "endEffort": "xhigh",
+    "compactionEffort": "max",
+    "compactionResetInterval": 1,
+    "compactionResetEffort": "xhigh",
+    "rampStartRatio": 0.6
+  },
   "packages": [
-    "npm:pi-effort",
+    "./packages/pi-effort-manager",
     "./packages/pi-my-clinepass-provider",
     "npm:pi-ollama-cloud",
     "./packages/pi-my-cursor-provider",
