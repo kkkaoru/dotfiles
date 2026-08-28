@@ -6,6 +6,7 @@ set -euo pipefail
 SCRIPT_PATH="$(node -e 'console.log(require("node:fs").realpathSync(process.argv[1]))' "$0")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 REAL_PI=""
+ORIGINAL_ARGC=$#
 ORIGINAL_ARGS=("$@")
 for candidate in "${HOME}/.bun/bin/pi" /opt/homebrew/bin/pi; do
   if [ -x "$candidate" ] && [ "$candidate" != "$0" ]; then
@@ -110,10 +111,17 @@ case "$REAL_PI_RESOLVED" in
     PATCH_MODULE="$SCRIPT_DIR/pi-compaction-singleflight.mjs"
     UNBUNDLED_CLI="$PACKAGE_ROOT/dist/cli.js"
     if [ -f "$PATCH_MODULE" ] && [ -f "$UNBUNDLED_CLI" ]; then
+      if [ "$ORIGINAL_ARGC" -eq 0 ]; then
+        PI_CODING_AGENT_PACKAGE_ROOT="$PACKAGE_ROOT" \
+          exec node --import "$PATCH_MODULE" "$UNBUNDLED_CLI"
+      fi
       PI_CODING_AGENT_PACKAGE_ROOT="$PACKAGE_ROOT" \
         exec node --import "$PATCH_MODULE" "$UNBUNDLED_CLI" "${ORIGINAL_ARGS[@]}"
     fi
     ;;
 esac
 
+if [ "$ORIGINAL_ARGC" -eq 0 ]; then
+  exec "$REAL_PI"
+fi
 exec "$REAL_PI" "${ORIGINAL_ARGS[@]}"

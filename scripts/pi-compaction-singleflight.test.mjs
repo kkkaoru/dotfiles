@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { installCompactionSingleFlight } from "./pi-compaction-singleflight.mjs";
+
+const WRAPPER = join(dirname(fileURLToPath(import.meta.url)), "pi");
 
 function deferred() {
   const state = {};
@@ -50,6 +57,25 @@ function vulnerableSessionClass() {
     }
   };
 }
+
+test("wrapper forwards an empty argument list under Bash nounset", () => {
+  const home = mkdtempSync(join(tmpdir(), "pi-wrapper-empty-"));
+  const realPi = join(home, ".bun/bin/pi");
+  mkdirSync(dirname(realPi), { recursive: true });
+  writeFileSync(realPi, "#!/bin/bash\nprintf '%s\\n' \"$#\"\n", { mode: 0o700 });
+
+  try {
+    const result = spawnSync("/bin/bash", [WRAPPER], {
+      cwd: home,
+      encoding: "utf8",
+      env: { ...process.env, HOME: home, PI_PROVIDER: "noop" },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), "0");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
 
 test("installs once on the vulnerable AgentSession shape", () => {
   const AgentSession = vulnerableSessionClass();
