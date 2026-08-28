@@ -1,8 +1,10 @@
+// This TypeScript file is executed with Bun.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
+  isRecord,
   readManagerSettings,
   readReserveTokens,
   resolveSettingsTarget,
@@ -21,6 +23,12 @@ afterEach(() => {
   directories.splice(0).map((directory): void => fs.rmSync(directory, { recursive: true }));
 });
 
+it("recognizes plain record settings values", () => {
+  expect(isRecord({ setting: true })).toBe(true);
+  expect(isRecord([])).toBe(false);
+  expect(isRecord(null)).toBe(false);
+});
+
 it("reads defaults and merged compaction reserve settings", () => {
   const directory = temporaryDirectory();
   const globalPath = path.join(directory, "global.json");
@@ -36,6 +44,8 @@ it("reads defaults and merged compaction reserve settings", () => {
         dynamicDefault: true,
         endEffort: "xhigh",
         fastMode: true,
+        progressTextOnCompaction: true,
+        progressTextOnEffortChange: false,
         rampStartRatio: 0.7,
         startEffort: "low",
       },
@@ -48,6 +58,7 @@ it("reads defaults and merged compaction reserve settings", () => {
       "pi-effort-manager": {
         compactionResetEffort: "xhigh",
         dynamicDefault: false,
+        progressTextOnCompaction: false,
         startEffort: "medium",
       },
     }),
@@ -60,6 +71,8 @@ it("reads defaults and merged compaction reserve settings", () => {
     dynamicDefault: false,
     endEffort: "xhigh",
     fastMode: true,
+    progressTextOnCompaction: false,
+    progressTextOnEffortChange: false,
     rampStartRatio: 0.7,
     startEffort: "medium",
   });
@@ -72,6 +85,8 @@ it("reads defaults and merged compaction reserve settings", () => {
     dynamicDefault: false,
     endEffort: undefined,
     fastMode: false,
+    progressTextOnCompaction: false,
+    progressTextOnEffortChange: false,
     rampStartRatio: 0.6,
     startEffort: "medium",
   });
@@ -117,6 +132,8 @@ it("rejects malformed settings and falls back for invalid manager values", () =>
     compactionResetInterval: 1,
     dynamicDefault: false,
     fastMode: false,
+    progressTextOnCompaction: false,
+    progressTextOnEffortChange: false,
     rampStartRatio: 0.6,
     startEffort: "medium",
   });
@@ -127,6 +144,8 @@ it("rejects malformed settings and falls back for invalid manager values", () =>
     dynamicDefault: false,
     endEffort: undefined,
     fastMode: false,
+    progressTextOnCompaction: false,
+    progressTextOnEffortChange: false,
     rampStartRatio: 0.6,
     startEffort: "medium",
   });
@@ -137,6 +156,8 @@ it("rejects malformed settings and falls back for invalid manager values", () =>
     dynamicDefault: false,
     endEffort: undefined,
     fastMode: false,
+    progressTextOnCompaction: false,
+    progressTextOnEffortChange: false,
     rampStartRatio: 0.6,
     startEffort: "medium",
   });

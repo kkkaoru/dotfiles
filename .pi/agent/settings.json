@@ -11,6 +11,8 @@
     "compactionEffort": "max",
     "compactionResetInterval": 1,
     "compactionResetEffort": "xhigh",
+    "progressTextOnCompaction": true,
+    "progressTextOnEffortChange": true,
     "rampStartRatio": 0.6
   },
   "packages": [

@@ -1,3 +1,4 @@
+// This TypeScript file is executed with Bun.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

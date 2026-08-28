@@ -1,3 +1,4 @@
+// This TypeScript file is executed with Bun.
 import path from "node:path";
 import type { ModelThinkingLevel, ThinkingLevel } from "@earendil-works/pi-ai";
 import {
@@ -14,6 +15,7 @@ import {
   reasoningSummary,
   type ObservedReasoning,
 } from "./display.ts";
+import { fastEligible } from "./fast.ts";
 import {
   effortAtLeast,
   effortProfile,
@@ -22,6 +24,7 @@ import {
   type EffortBoundaries,
   type EffortProfile,
 } from "./policy.ts";
+import type { ProgressTextSettings } from "./progress.ts";
 import {
   effectiveResetPolicy,
   latestPersistedState,
@@ -31,12 +34,12 @@ import {
   type SessionOverrides,
 } from "./session.ts";
 import {
+  isRecord,
   readManagerSettings,
   readReserveTokens,
   writeManagerBoolean,
   type ManagerSettings,
 } from "./settings.ts";
-const FAST_PROVIDERS = new Set(["openai", "openai-codex", "azure-openai-responses"]);
 
 interface ManagerState {
   compactionCount: number;
@@ -45,16 +48,9 @@ interface ManagerState {
   overrides: SessionOverrides;
   preCompactionLevel: ModelThinkingLevel | undefined;
 }
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function modelKey(ctx: ExtensionContext): string {
   return ctx.model === undefined ? "none" : `${ctx.model.provider}/${ctx.model.id}`;
-}
-
-function fastEligible(model: ExtensionContext["model"]): boolean {
-  return model !== undefined && FAST_PROVIDERS.has(model.provider) && model.id.startsWith("gpt-5");
 }
 
 export class EffortController {
@@ -185,6 +181,10 @@ export class EffortController {
       : undefined;
   }
 
+  progressTextSettings(): ProgressTextSettings {
+    return this.#settings;
+  }
+
   sessionStart(ctx: ExtensionContext, dynamicFlag: unknown): void {
     this.#projectSettingsPath = ctx.isProjectTrusted()
       ? path.join(ctx.cwd, CONFIG_DIR_NAME, "settings.json")
@@ -209,20 +209,22 @@ export class EffortController {
     this.#activeRequestLevel = this.#pi.getThinkingLevel();
   }
 
-  modelSelected(ctx: ExtensionContext): void {
-    this.#applyDynamic(ctx);
+  modelSelected(ctx: ExtensionContext): boolean {
+    return this.#applyDynamic(ctx);
   }
 
-  beforeAgentStart(ctx: ExtensionContext): void {
+  beforeAgentStart(ctx: ExtensionContext): boolean {
     const forceBaseline = this.#state.forceBaselineTurns > 0;
-    this.#applyDynamic(ctx, forceBaseline);
+    const changed = this.#applyDynamic(ctx, forceBaseline);
     this.#state.forceBaselineTurns = Math.max(0, this.#state.forceBaselineTurns - 1);
     this.#activeRequestLevel = this.#pi.getThinkingLevel();
+    return changed;
   }
 
-  turnEnded(ctx: ExtensionContext): void {
-    this.#applyDynamic(ctx);
+  turnEnded(ctx: ExtensionContext): boolean {
+    const changed = this.#applyDynamic(ctx);
     this.#activeRequestLevel = this.#pi.getThinkingLevel();
+    return changed;
   }
 
   observeReasoning(ctx: ExtensionContext, reasoning: number): void {
@@ -272,17 +274,17 @@ export class EffortController {
     this.#state.preCompactionLevel = undefined;
   }
 
-  #applyDynamic(ctx: ExtensionContext, forceBaseline = false): void {
+  #applyDynamic(ctx: ExtensionContext, forceBaseline = false): boolean {
     if (!this.#state.enabled) {
       this.updateUi(ctx);
-      return;
+      return false;
     }
     const selected = this.#selectForContext(ctx, forceBaseline);
     if (selected === undefined) {
       this.updateUi(ctx);
-    } else {
-      this.#setManagedLevel(ctx, selected);
+      return false;
     }
+    return this.#setManagedLevel(ctx, selected);
   }
 
   #persistState(): void {
@@ -324,10 +326,12 @@ export class EffortController {
     });
   }
 
-  #setManagedLevel(ctx: ExtensionContext, level: ThinkingLevel): void {
-    if (this.#pi.getThinkingLevel() !== level) {
+  #setManagedLevel(ctx: ExtensionContext, level: ThinkingLevel): boolean {
+    const changed = this.#pi.getThinkingLevel() !== level;
+    if (changed) {
       this.#pi.setThinkingLevel(level);
     }
     this.updateUi(ctx);
+    return changed;
   }
 }

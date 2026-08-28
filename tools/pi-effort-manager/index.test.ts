@@ -1,3 +1,4 @@
+// This TypeScript file is executed with Bun.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -28,7 +29,15 @@ type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown;
 
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-effort-index-test-"));
 process.env.PI_EFFORT_INDEX_TEST_DIR = directory;
-fs.writeFileSync(path.join(directory, "settings.json"), "{}\n");
+fs.writeFileSync(
+  path.join(directory, "settings.json"),
+  `${JSON.stringify({
+    "pi-effort-manager": {
+      progressTextOnCompaction: true,
+      progressTextOnEffortChange: true,
+    },
+  })}\n`,
+);
 
 const commands = new Map<string, CommandDefinition>();
 const events = new Map<string, EventHandler>();
@@ -124,7 +133,11 @@ async function exerciseCommands(): Promise<void> {
 function exerciseEvents(): void {
   required(events.get("session_start"), "session_start")({}, context);
   required(events.get("model_select"), "model_select")({}, context);
-  required(events.get("before_agent_start"), "before_agent_start")({}, context);
+  required(events.get("before_agent_start"), "before_agent_start")(
+    { systemPrompt: "base prompt" },
+    context,
+  );
+  required(events.get("context"), "context")({ messages: [] }, context);
   required(events.get("turn_end"), "turn_end")({}, context);
   required(events.get("message_end"), "message_end")(
     { message: { role: "assistant", usage: { reasoning: 10 } } },
@@ -134,6 +147,18 @@ function exerciseEvents(): void {
   required(events.get("session_before_compact"), "session_before_compact")({}, context);
   required(events.get("session_compact"), "session_compact")({}, context);
   required(events.get("session_compact_failed"), "session_compact_failed")({}, context);
+}
+
+function exerciseEffortChangeEvents(): void {
+  thinking = "off";
+  required(events.get("model_select"), "model_select")({}, context);
+  thinking = "off";
+  required(events.get("before_agent_start"), "before_agent_start")(
+    { systemPrompt: "base prompt" },
+    context,
+  );
+  thinking = "off";
+  required(events.get("turn_end"), "turn_end")({}, context);
 }
 
 afterAll(() => {
@@ -158,4 +183,24 @@ it("registers and executes the complete effort management surface", async () => 
     ),
   ).toBeUndefined();
   expect(notify).toHaveBeenCalled();
+  expect(
+    required(events.get("before_agent_start"), "before_agent_start")(
+      { systemPrompt: "base prompt" },
+      context,
+    ),
+  ).toMatchObject({ systemPrompt: expect.stringMatching(/Progress communication/u) });
+  expect(required(events.get("context"), "context")({ messages: [] }, context)).toMatchObject({
+    messages: [
+      {
+        details: { trigger: "compaction" },
+        display: false,
+        role: "custom",
+      },
+    ],
+  });
+  exerciseEffortChangeEvents();
+  expect(required(events.get("context"), "context")({ messages: [] }, context)).toMatchObject({
+    messages: [{ details: { trigger: "effort-change" } }],
+  });
+  expect(required(events.get("context"), "context")({ messages: [] }, context)).toBeUndefined();
 });

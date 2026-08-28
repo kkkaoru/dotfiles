@@ -43,6 +43,14 @@ usage, supported levels, successful compaction count, and observed reasoning-tok
 per effort when the provider supplies `usage.reasoning`. The status and working-message effort labels
 include `dynamic` while automatic control is active.
 
+Natural progress text is model-authored rather than emitted as fixed extension notifications. When
+enabled, an effort change or successful compaction gives the next model call one private, one-shot
+opportunity to write a brief update. The system prompt tells the model to remain silent when there is
+no meaningful development, avoid narrating routine tools, and never expose internal effort or
+compaction mechanics. The two triggers are independently configurable.
+Both are opt-in: only an explicit `true` enables a trigger; an omitted, malformed, or `false` value
+keeps it disabled.
+
 Optional defaults live under `pi-effort-manager` in Pi's global settings:
 
 ```json
@@ -55,6 +63,8 @@ Optional defaults live under `pi-effort-manager` in Pi's global settings:
     "compactionResetEffort": "xhigh",
     "compactionResetInterval": 1,
     "fastMode": false,
+    "progressTextOnCompaction": true,
+    "progressTextOnEffortChange": true,
     "rampStartRatio": 0.6
   }
 }

@@ -1,3 +1,4 @@
+// This TypeScript file is executed with Bun.
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -20,13 +21,13 @@ import {
   DEFAULT_START_EFFORT,
 } from "./policy.ts";
 
-const THINKING_LEVELS = new Set<ThinkingLevel>([
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
+const THINKING_LEVELS = new Map<string, ThinkingLevel>([
+  ["minimal", "minimal"],
+  ["low", "low"],
+  ["medium", "medium"],
+  ["high", "high"],
+  ["xhigh", "xhigh"],
+  ["max", "max"],
 ]);
 
 export interface ManagerSettings {
@@ -36,18 +37,26 @@ export interface ManagerSettings {
   readonly dynamicDefault: boolean;
   readonly endEffort?: ThinkingLevel | undefined;
   readonly fastMode: boolean;
+  readonly progressTextOnCompaction: boolean;
+  readonly progressTextOnEffortChange: boolean;
   readonly rampStartRatio: number;
   readonly startEffort: ThinkingLevel;
+}
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function errnoCode(error: unknown): unknown {
+  return isRecord(error) ? error["code"] : undefined;
 }
 
 function readObject(filePath: string): Record<string, unknown> {
   try {
     const value: unknown = JSON.parse(readFileSync(filePath, "utf8"));
-    return typeof value === "object" && value !== null && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : {};
+    return isRecord(value) ? value : {};
   } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (errnoCode(error) === "ENOENT") {
       return {};
     }
     throw error;
@@ -56,15 +65,11 @@ function readObject(filePath: string): Record<string, unknown> {
 
 function managerObject(settings: Record<string, unknown>): Record<string, unknown> {
   const value = settings["pi-effort-manager"];
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? { ...(value as Record<string, unknown>) }
-    : {};
+  return isRecord(value) ? { ...value } : {};
 }
 
 function thinkingLevel(value: unknown): ThinkingLevel | undefined {
-  return typeof value === "string" && THINKING_LEVELS.has(value as ThinkingLevel)
-    ? (value as ThinkingLevel)
-    : undefined;
+  return typeof value === "string" ? THINKING_LEVELS.get(value) : undefined;
 }
 
 function positiveInteger(value: unknown): number | undefined {
@@ -97,6 +102,8 @@ export function readManagerSettings(
       dynamicDefault: manager["dynamicDefault"] === true,
       endEffort: thinkingLevel(manager["endEffort"]),
       fastMode: manager["fastMode"] === true,
+      progressTextOnCompaction: manager["progressTextOnCompaction"] === true,
+      progressTextOnEffortChange: manager["progressTextOnEffortChange"] === true,
       rampStartRatio:
         typeof ramp === "number" && Number.isFinite(ramp) ? ramp : DEFAULT_RAMP_START_RATIO,
       startEffort: thinkingLevel(manager["startEffort"]) ?? DEFAULT_START_EFFORT,
@@ -107,6 +114,8 @@ export function readManagerSettings(
       compactionResetInterval: DEFAULT_RESET_COMPACTION_INTERVAL,
       dynamicDefault: false,
       fastMode: false,
+      progressTextOnCompaction: false,
+      progressTextOnEffortChange: false,
       rampStartRatio: DEFAULT_RAMP_START_RATIO,
       startEffort: DEFAULT_START_EFFORT,
     };
@@ -117,14 +126,10 @@ export function readReserveTokens(settingsPath: string, projectSettingsPath?: st
   const globalCompaction = readObject(settingsPath)["compaction"];
   const projectCompaction =
     projectSettingsPath === undefined ? undefined : readObject(projectSettingsPath)["compaction"];
-  const globalReserve =
-    typeof globalCompaction === "object" && globalCompaction !== null
-      ? (globalCompaction as Record<string, unknown>)["reserveTokens"]
-      : undefined;
-  const projectReserve =
-    typeof projectCompaction === "object" && projectCompaction !== null
-      ? (projectCompaction as Record<string, unknown>)["reserveTokens"]
-      : undefined;
+  const globalReserve = isRecord(globalCompaction) ? globalCompaction["reserveTokens"] : undefined;
+  const projectReserve = isRecord(projectCompaction)
+    ? projectCompaction["reserveTokens"]
+    : undefined;
   const reserve = projectReserve ?? globalReserve;
   return typeof reserve === "number" && Number.isSafeInteger(reserve) && reserve >= 0
     ? reserve
@@ -140,7 +145,7 @@ export function resolveSettingsTarget(
     const { mode } = statistics;
     return { mode, path: statistics.isSymbolicLink() ? realpathSync(settingsPath) : settingsPath };
   } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (errnoCode(error) === "ENOENT") {
       return { path: settingsPath };
     }
     throw error;

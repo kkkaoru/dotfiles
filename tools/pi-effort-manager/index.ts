@@ -1,5 +1,12 @@
+// This TypeScript file is executed with Bun.
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { EffortController } from "./src/controller.ts";
+import { ProgressTextController } from "./src/progress.ts";
+
+interface LifecycleControllers {
+  readonly controller: EffortController;
+  readonly progress: ProgressTextController;
+}
 
 const SESSION_POLICY_KEYS = new Map([
   ["start", "startEffort"],
@@ -82,28 +89,49 @@ function registerCommands(pi: ExtensionAPI, controller: EffortController): void 
   });
 }
 
-function registerLifecycle(pi: ExtensionAPI, controller: EffortController): void {
+function registerLifecycle(pi: ExtensionAPI, controllers: LifecycleControllers): void {
+  const { controller, progress } = controllers;
   pi.on("before_provider_request", (event, ctx) => controller.providerPayload(event.payload, ctx));
   pi.on("session_start", (_event, ctx): void => {
     controller.sessionStart(ctx, pi.getFlag("dynamic-effort"));
+    progress.reset(controller.progressTextSettings());
   });
-  pi.on("model_select", (_event, ctx): void => controller.modelSelected(ctx));
-  pi.on("before_agent_start", (_event, ctx): void => controller.beforeAgentStart(ctx));
-  pi.on("turn_end", (_event, ctx): void => controller.turnEnded(ctx));
+  pi.on("model_select", (_event, ctx): void => {
+    if (controller.modelSelected(ctx)) {
+      progress.schedule("effort-change");
+    }
+  });
+  pi.on("before_agent_start", (event, ctx) => {
+    if (controller.beforeAgentStart(ctx)) {
+      progress.schedule("effort-change");
+    }
+    const systemPrompt = progress.systemPrompt(event.systemPrompt);
+    return systemPrompt === undefined ? undefined : { systemPrompt };
+  });
+  pi.on("context", (event) => progress.context(event.messages));
+  pi.on("turn_end", (_event, ctx): void => {
+    if (controller.turnEnded(ctx)) {
+      progress.schedule("effort-change");
+    }
+  });
   pi.on("message_end", (event, ctx): void => {
     if (event.message.role === "assistant" && event.message.usage.reasoning !== undefined) {
       controller.observeReasoning(ctx, event.message.usage.reasoning);
     }
   });
   pi.on("session_before_compact", (_event, ctx): void => controller.beforeCompaction(ctx));
-  pi.on("session_compact", (_event, ctx): void => controller.compacted(ctx));
+  pi.on("session_compact", (_event, ctx): void => {
+    controller.compacted(ctx);
+    progress.schedule("compaction");
+  });
   pi.on("session_compact_failed", (_event, ctx): void => controller.compactionFailed(ctx));
 }
 
 export default function effortManager(pi: ExtensionAPI): void {
   const controller = new EffortController(pi);
+  const progress = new ProgressTextController(controller.progressTextSettings());
   registerFlags(pi);
   registerShortcuts(pi, controller);
   registerCommands(pi, controller);
-  registerLifecycle(pi, controller);
+  registerLifecycle(pi, { controller, progress });
 }
