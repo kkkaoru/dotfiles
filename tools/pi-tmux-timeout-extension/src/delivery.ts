@@ -4,13 +4,6 @@ import type { Completion } from "./waiter.ts";
 
 const AGENT_BUSY_ERROR = "Agent is already processing a prompt";
 const MAX_COMPLETION_IDENTITY_CHARACTERS = 160;
-const FOLLOW_UP_OPTIONS: CompletionDeliveryMessageOptions = { deliverAs: "followUp" };
-
-type CompletionDeliveryResult = "delivered" | "queued" | "retry";
-
-export interface CompletionDeliveryMessageOptions {
-  readonly deliverAs: "followUp";
-}
 
 export interface CompletionDeliveryContext {
   readonly isIdle: () => boolean;
@@ -26,7 +19,7 @@ export interface CompletionDeliveryContext {
 }
 
 export interface CompletionDeliveryHost {
-  readonly sendUserMessage: (content: string, options?: CompletionDeliveryMessageOptions) => void;
+  readonly sendUserMessage: (content: string) => void;
 }
 
 export interface CompletionDeliveryOptions {
@@ -77,24 +70,13 @@ export class CompletionDelivery {
   }
 
   complete(completion: Completion): void {
-    if (this.#compacting) {
-      this.#pending.push(completion);
-      this.#showPending(completion);
+    if (this.#compacting || this.#context?.isIdle() === false) {
+      this.#defer(completion);
       return;
     }
-    const result: CompletionDeliveryResult = this.#deliver(
-      [completion],
-      this.#context?.isIdle() === false,
-    );
-    if (result === "retry") {
-      this.#pending.push(completion);
-      this.#showPending(completion);
-      return;
+    if (!this.#deliver([completion])) {
+      this.#defer(completion);
     }
-    if (result === "queued") {
-      this.#notifyCompletion(completion);
-    }
-    this.#updateStatus();
   }
 
   setContext(context: CompletionDeliveryContext): void {
@@ -127,23 +109,21 @@ export class CompletionDelivery {
     this.#updateStatus();
   }
 
-  #deliver(completions: readonly Completion[], queueAsFollowUp: boolean): CompletionDeliveryResult {
-    const prompt: string = completions
-      .map((completion: Completion): string => completionPrompt(completion))
-      .join("\n\n");
+  #deliver(completions: readonly Completion[]): boolean {
     try {
-      this.#host.sendUserMessage(prompt, queueAsFollowUp ? FOLLOW_UP_OPTIONS : undefined);
+      this.#host.sendUserMessage(
+        completions
+          .map((completion: Completion): string => completionPrompt(completion))
+          .join("\n\n"),
+      );
+      completions.map((completion: Completion): void => this.#onDelivered(completion));
+      return true;
     } catch (error: unknown) {
-      if (!isAgentBusyError(error)) {
-        throw error;
+      if (isAgentBusyError(error)) {
+        return false;
       }
-      if (queueAsFollowUp) {
-        return "retry";
-      }
-      return this.#deliver(completions, true);
+      throw error;
     }
-    completions.map((completion: Completion): void => this.#onDelivered(completion));
-    return queueAsFollowUp ? "queued" : "delivered";
   }
 
   #flushIfIdle(): void {
@@ -151,12 +131,8 @@ export class CompletionDelivery {
       return;
     }
     const pending: readonly Completion[] = this.#pending;
-    const result: CompletionDeliveryResult = this.#deliver(pending, false);
-    if (result !== "retry") {
+    if (this.#deliver(pending)) {
       this.#pending = [];
-    }
-    if (result === "queued") {
-      pending.map((completion: Completion): void => this.#notifyCompletion(completion));
     }
     this.#updateStatus();
   }
@@ -168,19 +144,14 @@ export class CompletionDelivery {
     );
   }
 
-  #showPending(completion: Completion): void {
+  #defer(completion: Completion): void {
+    this.#pending.push(completion);
     this.#notifyCompletion(completion);
     this.#updateStatus();
   }
 
   #updateStatus(): void {
-    this.#context?.ui.setStatus(
-      "tmux-completion",
-      this.#pending.length === 0 ? undefined : `tmux: ${String(this.#pending.length)} completed`,
-    );
-    this.#context?.ui.setWidget?.(
-      "tmux-completions",
-      this.#pending.length === 0 ? undefined : this.#pending.map(completionName),
-    );
+    this.#context?.ui.setStatus("tmux-completion", undefined);
+    this.#context?.ui.setWidget?.("tmux-completions", undefined);
   }
 }

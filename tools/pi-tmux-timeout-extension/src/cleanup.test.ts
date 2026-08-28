@@ -75,6 +75,7 @@ it("uses the system filesystem adapter for removal and completion time", async (
   await expect(systemArtifactCleanupOperations.readDirectory(tmpdir())).rejects.toThrow(
     "directory unavailable",
   );
+  await removeExpiredArtifacts();
   expect(await systemArtifactCleanupOperations.readFile(`${tmpdir()}/exit-status`)).toBe("0\n");
   await systemArtifactCleanupOperations.removeDirectory(`${tmpdir()}/pi-tmux-1-1`);
   const completedAtMs = await systemArtifactCleanupOperations.statMtime(
