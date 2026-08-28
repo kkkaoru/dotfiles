@@ -6,8 +6,6 @@ set -euo pipefail
 SCRIPT_PATH="$(node -e 'console.log(require("node:fs").realpathSync(process.argv[1]))' "$0")"
 SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
 REAL_PI=""
-ORIGINAL_ARGC=$#
-ORIGINAL_ARGS=("$@")
 for candidate in "${HOME}/.bun/bin/pi" /opt/homebrew/bin/pi; do
   if [ -x "$candidate" ] && [ "$candidate" != "$0" ]; then
     REAL_PI="$candidate"
@@ -21,69 +19,75 @@ fi
 
 OMLX_CLI="${OMLX_CLI:-/Applications/oMLX.app/Contents/MacOS/omlx-cli}"
 needs_omlx=0
-case "${1-}" in
-  install|remove|uninstall|update|list|config|auth|--list-models|--help|-h|--version|-v)
-    ;;
-  *)
-    provider="${PI_PROVIDER:-}"
-    model="${PI_MODEL:-}"
-    provider_from_cli=0
-    while [ "$#" -gt 0 ]; do
-      case "$1" in
-        --provider)
-          provider="${2-}"
-          provider_from_cli=1
-          if [ "$#" -ge 2 ]; then
-            shift 2
-          else
-            shift
-          fi
-          continue
-          ;;
-        --provider=*)
-          provider="${1#*=}"
-          provider_from_cli=1
-          ;;
-        --model)
-          model="${2-}"
-          if [ "$#" -ge 2 ]; then
-            shift 2
-          else
-            shift
-          fi
-          continue
-          ;;
-        --model=*)
-          model="${1#*=}"
-          ;;
-      esac
-      shift
+detect_omlx_requirement() {
+  case "${1-}" in
+    install|remove|uninstall|update|list|config|auth|--list-models|--help|-h|--version|-v)
+      return
+      ;;
+  esac
+
+  provider="${PI_PROVIDER:-}"
+  model="${PI_MODEL:-}"
+  provider_from_cli=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --provider)
+        provider="${2-}"
+        provider_from_cli=1
+        if [ "$#" -ge 2 ]; then
+          shift 2
+        else
+          shift
+        fi
+        continue
+        ;;
+      --provider=*)
+        provider="${1#*=}"
+        provider_from_cli=1
+        ;;
+      --model)
+        model="${2-}"
+        if [ "$#" -ge 2 ]; then
+          shift 2
+        else
+          shift
+        fi
+        continue
+        ;;
+      --model=*)
+        model="${1#*=}"
+        ;;
+    esac
+    shift
+  done
+
+  # A provider-qualified model is an explicit selection and wins over the
+  # ambient provider. Otherwise use pi's configured default provider.
+  if [ "$provider_from_cli" -eq 0 ] && [[ "$model" == omlx/* ]]; then
+    provider="omlx"
+  elif [ -z "$provider" ]; then
+    for settings_file in \
+      "${PWD}/.pi/settings.json" \
+      "${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}/settings.json"; do
+      if [ ! -r "$settings_file" ]; then
+        continue
+      fi
+      configured_provider="$(sed -nE 's/.*"defaultProvider"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$settings_file" | head -n 1)"
+      if [ -n "$configured_provider" ]; then
+        provider="$configured_provider"
+        break
+      fi
     done
+  fi
 
-    # A provider-qualified model is an explicit selection and wins over the
-    # ambient provider. Otherwise use pi's configured default provider.
-    if [ "$provider_from_cli" -eq 0 ] && [[ "$model" == omlx/* ]]; then
-      provider="omlx"
-    elif [ -z "$provider" ]; then
-      for settings_file in \
-        "${PWD}/.pi/settings.json" \
-        "${PI_CODING_AGENT_DIR:-${HOME}/.pi/agent}/settings.json"; do
-        if [ ! -r "$settings_file" ]; then
-          continue
-        fi
-        configured_provider="$(sed -nE 's/.*"defaultProvider"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$settings_file" | head -n 1)"
-        if [ -n "$configured_provider" ]; then
-          provider="$configured_provider"
-          break
-        fi
-      done
-    fi
+  if [ "$provider" = "omlx" ]; then
+    needs_omlx=1
+  fi
+}
 
-    if [ "$provider" = "omlx" ]; then
-      needs_omlx=1
-    fi
-    ;;
-esac
+# Shifts inside the function only affect its local positional parameters, so
+# the wrapper's original "$@" remains intact even on Bash 3.2 with `set -u`.
+detect_omlx_requirement "$@"
 
 if [ "$needs_omlx" -eq 1 ] && [ ! -x "$OMLX_CLI" ]; then
   # Pi remains usable with another provider when the optional local oMLX
@@ -111,17 +115,10 @@ case "$REAL_PI_RESOLVED" in
     PATCH_MODULE="$SCRIPT_DIR/pi-compaction-singleflight.mjs"
     UNBUNDLED_CLI="$PACKAGE_ROOT/dist/cli.js"
     if [ -f "$PATCH_MODULE" ] && [ -f "$UNBUNDLED_CLI" ]; then
-      if [ "$ORIGINAL_ARGC" -eq 0 ]; then
-        PI_CODING_AGENT_PACKAGE_ROOT="$PACKAGE_ROOT" \
-          exec node --import "$PATCH_MODULE" "$UNBUNDLED_CLI"
-      fi
       PI_CODING_AGENT_PACKAGE_ROOT="$PACKAGE_ROOT" \
-        exec node --import "$PATCH_MODULE" "$UNBUNDLED_CLI" "${ORIGINAL_ARGS[@]}"
+        exec node --import "$PATCH_MODULE" "$UNBUNDLED_CLI" "$@"
     fi
     ;;
 esac
 
-if [ "$ORIGINAL_ARGC" -eq 0 ]; then
-  exec "$REAL_PI"
-fi
-exec "$REAL_PI" "${ORIGINAL_ARGS[@]}"
+exec "$REAL_PI" "$@"
