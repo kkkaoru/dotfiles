@@ -9,7 +9,7 @@ internal enum SleepControlSnapshots {
   private static let expectedArgumentCount = 3
   private static let resourcesArgumentIndex = 1
   private static let outputArgumentIndex = 2
-  private static let expectedSnapshotCount = 6
+  private static let expectedSnapshotCount = 10
   private static let languages = ["en", "ja"]
   private static let states = [
     (name: "sleep-enabled", value: false),
@@ -50,15 +50,38 @@ internal enum SleepControlSnapshots {
     for state in states {
       let model = SleepSettingsModel(client: SnapshotClient(sleepDisabled: state.value))
       model.refresh()
-      let view = SleepControlView(model: model, strings: strings)
-        .background(Color(nsColor: .windowBackgroundColor))
-      let file = output.appending(
-        path: "\(language)-\(state.name).png",
-        directoryHint: .notDirectory
+      try renderSleepState(
+        language: language,
+        stateName: state.name,
+        model: model,
+        strings: strings,
+        output: output
       )
-      try write(view: view, to: file)
+      try renderMenu(
+        language: language,
+        stateName: state.name,
+        model: model,
+        strings: MenuBarStrings(bundle: bundle),
+        output: output
+      )
     }
     try renderSettings(language: language, bundle: bundle, output: output)
+  }
+
+  private static func renderSleepState(
+    language: String,
+    stateName: String,
+    model: SleepSettingsModel,
+    strings: SleepControlStrings,
+    output: URL
+  ) throws {
+    let view = SleepControlView(model: model, strings: strings)
+      .background(Color(nsColor: .windowBackgroundColor))
+    let file = output.appending(
+      path: "\(language)-\(stateName).png",
+      directoryHint: .notDirectory
+    )
+    try write(view: view, to: file)
   }
 
   private static func renderSettings(language: String, bundle: Bundle, output: URL) throws {
@@ -79,7 +102,7 @@ internal enum SleepControlSnapshots {
     try write(view: view, to: file)
   }
 
-  private static func write<Content: View>(view: Content, to file: URL) throws {
+  internal static func write<Content: View>(view: Content, to file: URL) throws {
     let hostingView = NSHostingView(rootView: view)
     hostingView.frame.size = hostingView.fittingSize
     hostingView.layoutSubtreeIfNeeded()

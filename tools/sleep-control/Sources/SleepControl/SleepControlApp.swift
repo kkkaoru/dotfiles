@@ -30,7 +30,9 @@ internal struct SleepControlApp: App {
     } label: {
       menuBarLabel
     }
-    .menuBarExtraStyle(.menu)
+    // The AppKit-backed menu style can retain stale NSMenuItem views across sleep/wake on macOS 26.
+    // A window-style extra avoids NSMenu tracking while preserving the same controls.
+    .menuBarExtraStyle(.window)
 
     Settings {
       SleepControlSettingsView(

@@ -29,10 +29,12 @@ If the permission prompt was previously denied, add **Sleep Control** in
 System Settings → Privacy & Security → Input Monitoring, then restart the app.
 
 While running, the app remains available in the macOS menu bar. Its menu-bar
-symbol changes between the moon and sun with the current setting. The global
-sleep toggle defaults to `⌃⌥S`; open **Settings…** from the menu to choose
-another modifier combination and letter key. The Carbon hot-key API is built
-into macOS and does not require Accessibility permission or polling.
+symbol changes between the moon and sun with the current setting. Clicking it
+opens a compact popover rather than an AppKit-tracked menu, avoiding the stale
+menu-item crash that macOS 26 can trigger after sleep or a display cycle. The
+global sleep toggle defaults to `⌃⌥S`; open **Settings…** from the popover to
+choose another modifier combination and letter key. The Carbon hot-key API is
+built into macOS and does not require Accessibility permission or polling.
 
 ## Build and install
 
@@ -56,7 +58,7 @@ Verification includes strict formatting, all applicable SwiftLint opt-in rules,
 40 dependency-free unit tests, a 95% core line-coverage gate, English and
 Japanese UI snapshot rendering, strict concurrency, and ad-hoc code-signature
 validation during bundle creation. Verification compares fresh renders with the
-six checked-in UI state and settings images under `Snapshots/`. Run `make snapshots` to
+ten checked-in window, popover, and settings images under `Snapshots/`. Run `make snapshots` to
 intentionally update those baselines.
 
 To remove it:
