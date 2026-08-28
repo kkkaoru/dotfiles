@@ -20,6 +20,7 @@ it("normalizes completion identity into one bounded naming line", () => {
   wakePiOnCompletion(
     { sendUserMessage },
     {
+      completedAt: new Date(2026, 7, 26, 2, 15).toISOString(),
       exitCode: 0,
       launch: {
         command: "tmux command",
@@ -41,7 +42,7 @@ it("normalizes completion identity into one bounded naming line", () => {
   );
 });
 
-it("shows a named completion while busy and wakes without a Follow-up queue after settling", () => {
+it("queues a named follow-up immediately while busy without retaining a widget", () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date(2026, 7, 26, 2, 15));
   const sendUserMessage = vi.fn<CompletionDeliveryHost["sendUserMessage"]>();
@@ -56,6 +57,7 @@ it("shows a named completion while busy and wakes without a Follow-up queue afte
   const onDelivered = vi.fn();
   const delivery = new CompletionDelivery({ sendUserMessage }, { onDelivered });
   const completion = {
+    completedAt: new Date(2026, 7, 26, 2, 12).toISOString(),
     exitCode: 2,
     launch: {
       command: "tmux command",
@@ -73,22 +75,23 @@ it("shows a named completion while busy and wakes without a Follow-up queue afte
   delivery.complete(completion);
 
   expect(notify).toHaveBeenCalledWith(
-    "02:05 → 02:15 | command_exit=2 | run verification",
+    "02:05 → 02:12 | command_exit=2 | run verification",
     "warning",
   );
-  expect(setWidget).toHaveBeenLastCalledWith("tmux-completions", [
-    "02:05 → 02:15 | command_exit=2 | run verification",
-  ]);
+  expect(sendUserMessage).toHaveBeenCalledWith(
+    "02:05 → 02:12 | command_exit=2 | run verification\nlog: /tmp/pi-tmux-test/output.log\nstatus: /tmp/pi-tmux-test/exit-status",
+    { deliverAs: "followUp" },
+  );
+  expect(onDelivered).toHaveBeenCalledWith(completion);
+  expect(setWidget).toHaveBeenLastCalledWith("tmux-completions", undefined);
 
   idle = true;
   delivery.agentSettled(context);
 
   expect(sendUserMessage).toHaveBeenCalledOnce();
-  expect(onDelivered).toHaveBeenCalledWith(completion);
-  expect(setWidget).toHaveBeenLastCalledWith("tmux-completions", undefined);
 });
 
-it("requeues a completion when sendUserMessage races with an active agent", () => {
+it("queues a follow-up when sendUserMessage races with an active agent", () => {
   const sendUserMessage = vi
     .fn<CompletionDeliveryHost["sendUserMessage"]>()
     .mockImplementationOnce((): never => {
@@ -104,6 +107,7 @@ it("requeues a completion when sendUserMessage races with an active agent", () =
   const onDelivered = vi.fn();
   const delivery = new CompletionDelivery({ sendUserMessage }, { onDelivered });
   const completion: Completion = {
+    completedAt: "2026-08-26T02:15:00.000Z",
     exitCode: 0,
     launch: {
       command: "tmux command",
@@ -119,15 +123,69 @@ it("requeues a completion when sendUserMessage races with an active agent", () =
   delivery.setContext(context);
 
   expect((): void => delivery.complete(completion)).not.toThrow();
+  expect(sendUserMessage).toHaveBeenCalledTimes(2);
+  expect(sendUserMessage).toHaveBeenLastCalledWith(expect.any(String), {
+    deliverAs: "followUp",
+  });
+  expect(onDelivered).toHaveBeenCalledWith(completion);
+  expect(setWidget).toHaveBeenLastCalledWith("tmux-completions", undefined);
+
+  delivery.agentSettled(context);
+
+  expect(sendUserMessage).toHaveBeenCalledTimes(2);
+});
+
+it("retains a completion only when both immediate follow-up delivery attempts race", () => {
+  const sendUserMessage = vi
+    .fn<CompletionDeliveryHost["sendUserMessage"]>()
+    .mockImplementationOnce((): never => {
+      throw new Error("Agent is already processing a prompt");
+    })
+    .mockImplementationOnce((): never => {
+      throw new Error("Agent is already processing a prompt");
+    });
+  const notify = vi.fn<CompletionDeliveryContext["ui"]["notify"]>();
+  const setStatus = vi.fn<CompletionDeliveryContext["ui"]["setStatus"]>();
+  const setWidget = vi.fn<NonNullable<CompletionDeliveryContext["ui"]["setWidget"]>>();
+  const state: { idle: boolean } = { idle: false };
+  const context: CompletionDeliveryContext = {
+    isIdle: (): boolean => state.idle,
+    ui: { notify, setStatus, setWidget },
+  };
+  const onDelivered = vi.fn();
+  const completion: Completion = {
+    completedAt: "2026-08-26T02:15:00.000Z",
+    exitCode: 0,
+    launch: {
+      command: "tmux command",
+      completionChannel: "pi-tmux-test-complete",
+      logPath: "/tmp/pi-tmux-test/output.log",
+      sessionName: "pi-tmux-test",
+      socketName: "pi-tmux-socket",
+      statusPath: "/tmp/pi-tmux-test/exit-status",
+      submittedAt: "2026-08-26T02:14:00.000Z",
+      taskCommand: "run verification",
+    },
+  };
+  const delivery = new CompletionDelivery({ sendUserMessage }, { onDelivered });
+  delivery.setContext(context);
+
+  delivery.complete(completion);
+
   expect(onDelivered).not.toHaveBeenCalled();
   expect(setWidget).toHaveBeenLastCalledWith("tmux-completions", [
     expect.stringContaining("run verification"),
   ]);
 
+  state.idle = true;
   delivery.agentSettled(context);
 
-  expect(sendUserMessage).toHaveBeenCalledTimes(2);
+  expect(sendUserMessage).toHaveBeenCalledTimes(3);
+  expect(sendUserMessage).toHaveBeenLastCalledWith(expect.any(String), {
+    deliverAs: "followUp",
+  });
   expect(onDelivered).toHaveBeenCalledWith(completion);
+  expect(notify).toHaveBeenCalledTimes(2);
   expect(setWidget).toHaveBeenLastCalledWith("tmux-completions", undefined);
 });
 
@@ -137,6 +195,7 @@ it("does not hide unrelated completion delivery errors", () => {
   });
   const delivery = new CompletionDelivery({ sendUserMessage });
   const completion: Completion = {
+    completedAt: "2026-08-26T02:15:00.000Z",
     exitCode: 0,
     launch: {
       command: "tmux command",

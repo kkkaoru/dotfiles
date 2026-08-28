@@ -4,6 +4,13 @@ import type { Completion } from "./waiter.ts";
 
 const AGENT_BUSY_ERROR = "Agent is already processing a prompt";
 const MAX_COMPLETION_IDENTITY_CHARACTERS = 160;
+const FOLLOW_UP_OPTIONS: CompletionDeliveryMessageOptions = { deliverAs: "followUp" };
+
+type CompletionDeliveryResult = "delivered" | "queued" | "retry";
+
+export interface CompletionDeliveryMessageOptions {
+  readonly deliverAs: "followUp";
+}
 
 export interface CompletionDeliveryContext {
   readonly isIdle: () => boolean;
@@ -19,7 +26,7 @@ export interface CompletionDeliveryContext {
 }
 
 export interface CompletionDeliveryHost {
-  readonly sendUserMessage: (content: string) => void;
+  readonly sendUserMessage: (content: string, options?: CompletionDeliveryMessageOptions) => void;
 }
 
 export interface CompletionDeliveryOptions {
@@ -32,7 +39,7 @@ function completionIdentity(command: string): string {
 
 function completionName(completion: Completion): string {
   const submittedDate = new Date(completion.launch.submittedAt);
-  const completedDate = new Date();
+  const completedDate = new Date(completion.completedAt);
   const spansDates =
     submittedDate.getFullYear() !== completedDate.getFullYear() ||
     submittedDate.getMonth() !== completedDate.getMonth() ||
@@ -70,15 +77,24 @@ export class CompletionDelivery {
   }
 
   complete(completion: Completion): void {
-    if (this.#compacting || this.#context?.isIdle() === false) {
+    if (this.#compacting) {
       this.#pending.push(completion);
       this.#showPending(completion);
       return;
     }
-    if (!this.#deliver([completion])) {
+    const result: CompletionDeliveryResult = this.#deliver(
+      [completion],
+      this.#context?.isIdle() === false,
+    );
+    if (result === "retry") {
       this.#pending.push(completion);
       this.#showPending(completion);
+      return;
     }
+    if (result === "queued") {
+      this.#notifyCompletion(completion);
+    }
+    this.#updateStatus();
   }
 
   setContext(context: CompletionDeliveryContext): void {
@@ -111,21 +127,23 @@ export class CompletionDelivery {
     this.#updateStatus();
   }
 
-  #deliver(completions: readonly Completion[]): boolean {
+  #deliver(completions: readonly Completion[], queueAsFollowUp: boolean): CompletionDeliveryResult {
+    const prompt: string = completions
+      .map((completion: Completion): string => completionPrompt(completion))
+      .join("\n\n");
     try {
-      this.#host.sendUserMessage(
-        completions
-          .map((completion: Completion): string => completionPrompt(completion))
-          .join("\n\n"),
-      );
-      completions.map((completion: Completion): void => this.#onDelivered(completion));
-      return true;
+      this.#host.sendUserMessage(prompt, queueAsFollowUp ? FOLLOW_UP_OPTIONS : undefined);
     } catch (error: unknown) {
-      if (isAgentBusyError(error)) {
-        return false;
+      if (!isAgentBusyError(error)) {
+        throw error;
       }
-      throw error;
+      if (queueAsFollowUp) {
+        return "retry";
+      }
+      return this.#deliver(completions, true);
     }
+    completions.map((completion: Completion): void => this.#onDelivered(completion));
+    return queueAsFollowUp ? "queued" : "delivered";
   }
 
   #flushIfIdle(): void {
@@ -133,17 +151,25 @@ export class CompletionDelivery {
       return;
     }
     const pending: readonly Completion[] = this.#pending;
-    if (this.#deliver(pending)) {
+    const result: CompletionDeliveryResult = this.#deliver(pending, false);
+    if (result !== "retry") {
       this.#pending = [];
+    }
+    if (result === "queued") {
+      pending.map((completion: Completion): void => this.#notifyCompletion(completion));
     }
     this.#updateStatus();
   }
 
-  #showPending(completion: Completion): void {
+  #notifyCompletion(completion: Completion): void {
     this.#context?.ui.notify(
       completionName(completion),
       completion.exitCode === 0 ? "info" : "warning",
     );
+  }
+
+  #showPending(completion: Completion): void {
+    this.#notifyCompletion(completion);
     this.#updateStatus();
   }
 

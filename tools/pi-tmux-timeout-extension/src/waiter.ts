@@ -4,6 +4,7 @@ import fs from "node:fs";
 import type { TmuxLaunch } from "./tmux.ts";
 
 export interface Completion {
+  readonly completedAt: string;
   readonly exitCode: number;
   readonly launch: TmuxLaunch;
 }
@@ -114,7 +115,7 @@ export class CompletionWaiter {
       return;
     }
     this.cancel(launch);
-    this.#onComplete({ exitCode, launch });
+    this.#onComplete({ completedAt: new Date().toISOString(), exitCode, launch });
   }
 
   #readExitCode(statusPath: string): number | undefined {

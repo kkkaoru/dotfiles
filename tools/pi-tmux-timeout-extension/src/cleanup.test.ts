@@ -64,17 +64,24 @@ it("removes only completed tmux artifacts older than the retention period", asyn
 it("uses the system filesystem adapter for removal and completion time", async () => {
   const statistics: Stats = Object.create(Stats.prototype);
   Object.defineProperty(statistics, "mtimeMs", { value: 1234 });
+  const readDirectory = vi
+    .spyOn(fs, "readdir")
+    .mockRejectedValue(new Error("directory unavailable"));
   const readFile = vi.spyOn(fs, "readFile").mockResolvedValue("0\n");
   const remove = vi.spyOn(fs, "rm").mockResolvedValue();
   const writeFile = vi.spyOn(fs, "writeFile").mockResolvedValue();
   vi.spyOn(fs, "stat").mockResolvedValue(statistics);
 
+  await expect(systemArtifactCleanupOperations.readDirectory(tmpdir())).rejects.toThrow(
+    "directory unavailable",
+  );
   expect(await systemArtifactCleanupOperations.readFile(`${tmpdir()}/exit-status`)).toBe("0\n");
   await systemArtifactCleanupOperations.removeDirectory(`${tmpdir()}/pi-tmux-1-1`);
   const completedAtMs = await systemArtifactCleanupOperations.statMtime(
     `${tmpdir()}/pi-tmux-1-1/exit-status`,
   );
 
+  expect(readDirectory).toHaveBeenCalledWith(tmpdir());
   expect(readFile).toHaveBeenCalledWith(`${tmpdir()}/exit-status`, "utf8");
   expect(remove).toHaveBeenCalledWith(`${tmpdir()}/pi-tmux-1-1`, {
     force: true,

@@ -24,6 +24,7 @@ const launch: TmuxLaunch = {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 it("subscribes to tmux wait-for and handles its close event", () => {
@@ -57,6 +58,8 @@ it("subscribes to tmux wait-for and handles its close event", () => {
 });
 
 it("wakes exactly once from a valid tmux completion signal", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-06-01T01:03:04.000Z"));
   let onSignal: (() => void) | undefined;
   const cancel = vi.fn();
   const events: CompletionEvents = {
@@ -75,7 +78,11 @@ it("wakes exactly once from a valid tmux completion signal", () => {
   onSignal?.();
   onSignal?.();
   expect(onComplete).toHaveBeenCalledOnce();
-  expect(onComplete).toHaveBeenCalledWith({ exitCode: 7, launch });
+  expect(onComplete).toHaveBeenCalledWith({
+    completedAt: "2026-06-01T01:03:04.000Z",
+    exitCode: 7,
+    launch,
+  });
   waiter.clear();
 });
 
@@ -106,6 +113,8 @@ it("ignores invalid and unreadable status files", () => {
 });
 
 it("reconciles a completed status after a missed tmux signal", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-06-01T01:03:05.000Z"));
   const cancel = vi.fn();
   const events: CompletionEvents = {
     subscribe: (): (() => void) => cancel,
@@ -121,13 +130,19 @@ it("reconciles a completed status after a missed tmux signal", () => {
   waiter.reconcile();
   expect(onComplete).not.toHaveBeenCalled();
   waiter.reconcile();
-  expect(onComplete).toHaveBeenCalledWith({ exitCode: 0, launch });
+  expect(onComplete).toHaveBeenCalledWith({
+    completedAt: "2026-06-01T01:03:05.000Z",
+    exitCode: 0,
+    launch,
+  });
   expect(cancel).toHaveBeenCalledOnce();
   waiter.reconcile();
   expect(onComplete).toHaveBeenCalledOnce();
 });
 
 it("uses mocked default status-file operations", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-06-01T01:03:06.000Z"));
   let onSignal: (() => void) | undefined;
   vi.spyOn(fs, "readFileSync").mockReturnValue("0\n");
   const events: CompletionEvents = {
@@ -141,5 +156,9 @@ it("uses mocked default status-file operations", () => {
 
   waiter.track(launch);
   onSignal?.();
-  expect(onComplete).toHaveBeenCalledWith({ exitCode: 0, launch });
+  expect(onComplete).toHaveBeenCalledWith({
+    completedAt: "2026-06-01T01:03:06.000Z",
+    exitCode: 0,
+    launch,
+  });
 });

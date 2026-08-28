@@ -103,6 +103,7 @@ it("wakes pi immediately with local timestamps when completion monitoring report
   };
 
   wakePiOnCompletion(host, {
+    completedAt: new Date(2026, 7, 25, 23, 45).toISOString(),
     exitCode: 0,
     launch: {
       command: "tmux command",
@@ -132,6 +133,7 @@ it("defers completion follow-ups until compaction finishes", () => {
   };
   const delivery = new CompletionDelivery(host);
   const completion = {
+    completedAt: "2026-08-25T23:45:00.000Z",
     exitCode: 0,
     launch: {
       command: "tmux command",
