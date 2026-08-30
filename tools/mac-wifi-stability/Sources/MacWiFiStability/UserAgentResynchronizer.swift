@@ -12,12 +12,11 @@ internal struct UserAgentResynchronizer: Sendable {
   }
 
   internal func full() -> [String] {
-    [
-      restart(label: "com.apple.sharingd", processToken: "sharingd"),
-      restart(label: "com.apple.wifi.WiFiAgent", processToken: "WiFiAgent"),
-      restart(label: "com.apple.networkserviceproxy", processToken: "networkserviceproxy"),
-      flushDNSCache(),
-    ]
+    // sharingd owns Bonjour sharing-name registration. Restarting it during a
+    // network transition can make macOS treat its previous registration as a
+    // name collision and persist a suffixed ComputerName (for example, "Mac (2)").
+    // It is unrelated to IP path recovery, so deliberately leave it running.
+    light() + [flushDNSCache()]
   }
 
   private func restart(label: String, processToken: String) -> String {

@@ -7,6 +7,7 @@ internal struct ApplicationContext: Sendable {
   internal let probe: NetworkProbe
   internal let connector: NetworkConnector
   internal let resynchronizer: UserAgentResynchronizer
+  internal let tailscaleResynchronizer: TailscaleResynchronizer
 
   internal init() throws {
     configuration = try Configuration()
@@ -18,6 +19,7 @@ internal struct ApplicationContext: Sendable {
       runner: CommandRunner(),
       uid: String(getuid())
     )
+    tailscaleResynchronizer = TailscaleResynchronizer(runner: CommandRunner())
     try store.prepare()
   }
 }

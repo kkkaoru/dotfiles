@@ -12,12 +12,22 @@ import {
 } from "./waiter.ts";
 
 export type { MutableBashInput } from "./policy.ts";
+export const DEFAULT_ESTIMATED_DURATION_SECONDS = 120;
+export const RECONCILIATION_INTERVAL_MILLISECONDS = 60_000;
 export const TMUX_LAUNCH_TIMEOUT_MILLISECONDS = 30_000;
 export const TMUX_LAUNCH_TIMEOUT_SECONDS = 30;
+
+export interface CreateTmuxLaunchInput {
+  readonly command: string;
+  readonly estimatedDurationSeconds?: number;
+  readonly id: number;
+  readonly namespace: string;
+}
 
 export interface TmuxLaunch {
   readonly command: string;
   readonly completionChannel: string;
+  readonly estimatedCompletionAt?: string;
   readonly logPath: string;
   readonly sessionName: string;
   readonly socketName: string;
@@ -28,6 +38,7 @@ export interface TmuxLaunch {
 
 export interface TmuxRuntimeOptions {
   readonly events?: CompletionEvents;
+  readonly onActiveChange?: (launches: readonly TmuxLaunch[]) => void;
   readonly onComplete: (completion: Completion) => void;
   readonly onTrack?: (launch: TmuxLaunch) => void;
   readonly operations?: StatusOperations;
@@ -51,7 +62,8 @@ export function tmuxSessionNamespace(sessionId: string): string {
   return createHash("sha256").update(sessionId).digest("hex").slice(0, 32);
 }
 
-export function createTmuxLaunch(command: string, id: number, namespace: string): TmuxLaunch {
+export function createTmuxLaunch(input: CreateTmuxLaunchInput): TmuxLaunch {
+  const { command, id, namespace } = input;
   if (!/^[a-f0-9]{32}$/u.test(namespace)) {
     throw new Error("invalid tmux session namespace");
   }
@@ -62,11 +74,17 @@ export function createTmuxLaunch(command: string, id: number, namespace: string)
   const logPath = path.join(outputDirectory, "output.log");
   const statusPath = path.join(outputDirectory, "exit-status");
   const submittedAt: string = new Date().toISOString();
+  const estimatedDurationSeconds: number =
+    input.estimatedDurationSeconds ?? DEFAULT_ESTIMATED_DURATION_SECONDS;
+  const estimatedCompletionAt: string = new Date(
+    Date.parse(submittedAt) + estimatedDurationSeconds * 1000,
+  ).toISOString();
   const detachedScript = `(${command}) > ${shellQuote(logPath)} 2>&1\nexit_code=$?\nprintf '%s\\n' "$exit_code" > ${shellQuote(statusPath)}\ntmux -L ${shellQuote(socketName)} wait-for -S ${shellQuote(completionChannel)}`;
   const message = launchMessage({ logPath, sessionName, statusPath });
   const launch: TmuxLaunch = {
     command: "",
     completionChannel,
+    estimatedCompletionAt,
     logPath,
     sessionName,
     socketName,
@@ -94,14 +112,23 @@ function launchIdForNamespace(launch: TmuxLaunch, namespace: string): number | u
 }
 
 export class TmuxRuntime {
+  readonly #active = new Map<string, TmuxLaunch>();
+  readonly #onActiveChange: (launches: readonly TmuxLaunch[]) => void;
+  readonly #onComplete: (completion: Completion) => void;
   readonly #onTrack: (launch: TmuxLaunch) => void;
   readonly #waiter: CompletionWaiter;
   #nextId = 1;
+  #reconciliationTimer: NodeJS.Timeout | undefined;
   #namespace = tmuxSessionNamespace(randomUUID());
 
   constructor(options: TmuxRuntimeOptions) {
+    this.#onActiveChange = options.onActiveChange ?? ((): void => undefined);
+    this.#onComplete = options.onComplete;
     this.#onTrack = options.onTrack ?? ((): void => undefined);
-    this.#waiter = new CompletionWaiter(options);
+    this.#waiter = new CompletionWaiter({
+      ...options,
+      onComplete: (completion: Completion): void => this.#complete(completion),
+    });
   }
 
   startSession(sessionId: string): string {
@@ -111,8 +138,13 @@ export class TmuxRuntime {
     return this.#namespace;
   }
 
-  createLaunch(command: string): TmuxLaunch {
-    const launch: TmuxLaunch = createTmuxLaunch(command, this.#nextId, this.#namespace);
+  createLaunch(command: string, estimatedDurationSeconds?: number): TmuxLaunch {
+    const launch: TmuxLaunch = createTmuxLaunch({
+      command,
+      ...(estimatedDurationSeconds === undefined ? {} : { estimatedDurationSeconds }),
+      id: this.#nextId,
+      namespace: this.#namespace,
+    });
     this.#nextId += 1;
     return launch;
   }
@@ -121,7 +153,7 @@ export class TmuxRuntime {
     if (!shouldDetachBash(input)) {
       return undefined;
     }
-    const launch: TmuxLaunch = this.createLaunch(input.command);
+    const launch: TmuxLaunch = this.createLaunch(input.command, input.timeout);
     input.command = launch.command;
     input.timeout = TMUX_LAUNCH_TIMEOUT_SECONDS;
     return launch;
@@ -129,18 +161,24 @@ export class TmuxRuntime {
 
   trackLaunch(launch: TmuxLaunch): void {
     this.#onTrack(launch);
+    this.#active.set(launch.completionChannel, launch);
+    this.#notifyActiveChange();
     this.#waiter.track(launch);
   }
 
   restore(launches: readonly TmuxLaunch[], nextId = 1): void {
     this.#nextId = Math.max(this.#nextId, nextId);
-    for (const launch of launches) {
+    launches.map((launch: TmuxLaunch): boolean => {
       const id: number | undefined = launchIdForNamespace(launch, this.#namespace);
-      if (id !== undefined) {
-        this.#nextId = Math.max(this.#nextId, id + 1);
-        this.#waiter.track(launch);
+      if (id === undefined) {
+        return false;
       }
-    }
+      this.#nextId = Math.max(this.#nextId, id + 1);
+      this.#active.set(launch.completionChannel, launch);
+      this.#waiter.track(launch);
+      return true;
+    });
+    this.#notifyActiveChange();
     this.reconcile();
   }
 
@@ -150,5 +188,36 @@ export class TmuxRuntime {
 
   clear(): void {
     this.#waiter.clear();
+    this.#active.clear();
+    this.#notifyActiveChange();
+  }
+
+  #complete(completion: Completion): void {
+    this.#active.delete(completion.launch.completionChannel);
+    this.#notifyActiveChange();
+    this.#onComplete(completion);
+  }
+
+  #notifyActiveChange(): void {
+    this.#onActiveChange([...this.#active.values()]);
+    this.#updateReconciliationTimer();
+  }
+
+  #updateReconciliationTimer(): void {
+    if (this.#active.size === 0) {
+      if (this.#reconciliationTimer !== undefined) {
+        globalThis.clearInterval(this.#reconciliationTimer);
+        this.#reconciliationTimer = undefined;
+      }
+      return;
+    }
+    if (this.#reconciliationTimer !== undefined) {
+      return;
+    }
+    this.#reconciliationTimer = globalThis.setInterval(
+      (): void => this.reconcile(),
+      RECONCILIATION_INTERVAL_MILLISECONDS,
+    );
+    this.#reconciliationTimer.unref();
   }
 }

@@ -31,6 +31,7 @@ function launch(rootDirectory: string, id: number): TmuxLaunch {
   return {
     command: "tmux wrapper",
     completionChannel: `${sessionName}-complete`,
+    estimatedCompletionAt: new Date(2026, 7, 26, 2, 10).toISOString(),
     logPath: path.join(directory, "output.log"),
     sessionName,
     socketName: `pi-tmux-${SESSION_NAMESPACE}`,
@@ -53,6 +54,11 @@ function createInvalidMetadataFixtures(rootDirectory: string): void {
   fs.writeFileSync(
     path.join(path.dirname(mismatched.logPath), LAUNCH_METADATA_FILENAME),
     serializeLaunchMetadata({ ...mismatched, completionChannel: "wrong" }),
+  );
+  const invalidEstimate: TmuxLaunch = launch(rootDirectory, 14);
+  fs.writeFileSync(
+    path.join(path.dirname(invalidEstimate.logPath), LAUNCH_METADATA_FILENAME),
+    JSON.stringify({ ...invalidEstimate, estimatedCompletionAt: 42 }),
   );
 }
 
@@ -83,7 +89,7 @@ it("recovers metadata and legacy jobs for the current Pi session namespace only"
 
   const recovered = recoverTmuxLaunches({ rootDirectory, sessionNamespace: SESSION_NAMESPACE });
   expect(recovered).toHaveLength(2);
-  expect(nextTmuxLaunchId({ rootDirectory, sessionNamespace: SESSION_NAMESPACE })).toBe(14);
+  expect(nextTmuxLaunchId({ rootDirectory, sessionNamespace: SESSION_NAMESPACE })).toBe(15);
   expect(recovered).toEqual(
     expect.arrayContaining([
       { ...persisted, command: "" },

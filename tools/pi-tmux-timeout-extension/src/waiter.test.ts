@@ -140,6 +140,56 @@ it("reconciles a completed status after a missed tmux signal", () => {
   expect(onComplete).toHaveBeenCalledOnce();
 });
 
+it("finishes an orphaned launch whose tmux session disappeared", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-06-01T01:03:06.000Z"));
+  const cancel = vi.fn();
+  const events: CompletionEvents = {
+    subscribe: (): (() => void) => cancel,
+  };
+  const onComplete = vi.fn<(completion: Completion) => void>();
+  const waiter = new CompletionWaiter({
+    events,
+    onComplete,
+    operations: {
+      isRunning: (): boolean => false,
+      read: (): string => {
+        throw new Error("missing status");
+      },
+    },
+  });
+
+  waiter.track(launch);
+  waiter.reconcile();
+
+  expect(onComplete).toHaveBeenCalledWith({
+    completedAt: "2026-06-01T01:03:06.000Z",
+    exitCode: 255,
+    launch,
+    orphaned: true,
+  });
+  expect(cancel).toHaveBeenCalledOnce();
+});
+
+it("detects an orphan through the default tmux status operation", () => {
+  const events: CompletionEvents = {
+    subscribe: (): (() => void) => (): void => undefined,
+  };
+  const onComplete = vi.fn<(completion: Completion) => void>();
+  const waiter = new CompletionWaiter({ events, onComplete });
+
+  waiter.track({
+    ...launch,
+    sessionName: "pi-tmux-session-that-does-not-exist",
+    statusPath: "/tmp/pi-tmux-status-that-does-not-exist",
+  });
+  waiter.reconcile();
+
+  expect(onComplete).toHaveBeenCalledWith(
+    expect.objectContaining({ exitCode: 255, orphaned: true }),
+  );
+});
+
 it("uses mocked default status-file operations", () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-06-01T01:03:06.000Z"));

@@ -6,6 +6,8 @@ internal struct ConnectionCoordinator: Sendable {
   internal static let healthDecisionDelaySeconds: TimeInterval = 5
   internal static let targetSettleSeconds: TimeInterval = 8
   internal static let fallbackSettleSeconds: TimeInterval = 3
+  internal static let userspaceRecoverySettleSeconds: TimeInterval = 6
+  internal static let reassociationSettleSeconds: TimeInterval = 10
   internal static let singleAttempt = "1/1"
 
   internal let context: ApplicationContext
@@ -26,8 +28,9 @@ internal struct ConnectionCoordinator: Sendable {
       return
     }
 
-    let health = context.probe.oneShotHealth(for: candidate)
-    context.logger.log("action=target-health-once \(health.logFields)")
+    let initialHealth = context.probe.oneShotHealth(for: candidate)
+    context.logger.log("action=target-health-once \(initialHealth.logFields)")
+    let health = recoverTargetConnectivity(initialHealth: initialHealth, startedAt: startedAt)
     guard !health.isHealthy else {
       return
     }
@@ -52,17 +55,15 @@ internal struct ConnectionCoordinator: Sendable {
 
     Thread.sleep(forTimeInterval: Self.targetSettleSeconds)
     let state = context.probe.currentState()
-    let health = targetHealth(for: state)
+    let initialHealth = targetHealth(for: state)
     if state.router == context.configuration.targetRouter {
       try context.store.recordHealthDecision(for: state.signature)
     }
-    context.logger.log("action=target-health-once \(health.logFields)")
+    context.logger.log("action=target-health-once \(initialHealth.logFields)")
+    let health = recoverTargetConnectivity(initialHealth: initialHealth, startedAt: startedAt)
 
     if health.isHealthy {
-      try context.store.saveSignature(state.signature)
-      print("connected=\(context.configuration.targetSSID)")
-      print("attempt=\(Self.singleAttempt)")
-      print("health=good")
+      try finishSuccessfulTargetConnection()
       return
     }
 
@@ -74,6 +75,14 @@ internal struct ConnectionCoordinator: Sendable {
       return
     }
     try fallbackToTethering(reason: health.reason)
+  }
+
+  private func finishSuccessfulTargetConnection() throws {
+    let recoveredState = context.probe.currentState()
+    try context.store.saveSignature(recoveredState.signature)
+    print("connected=\(context.configuration.targetSSID)")
+    print("attempt=\(Self.singleAttempt)")
+    print("health=good")
   }
 
   private func fallbackToTethering(reason: String) throws {

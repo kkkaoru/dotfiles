@@ -15,11 +15,22 @@ long-running commands continue in detached tmux sessions.
 - Stores combined stdout/stderr in `output.log` and the numeric exit code in `exit-status` under the
   system temporary directory.
 - Returns the tmux session name and both file paths immediately so pi remains available for input.
+- Shows every active task with its local start and estimated completion date/time in a persistent
+  widget above the editor, and reports the active task count in the footer. Automatic Bash rewrites
+  use the original timeout as the estimate; explicit `tmux_exec` calls accept
+  `estimatedDurationSeconds`. Tasks restored after `/reload` or session resume are shown too.
+- Reconciliation checks active tasks once per minute, removes orphaned tasks when both the tmux
+  session and exit-status file are gone, marks them as `orphaned`, and prevents them from remaining in
+  the widget indefinitely.
+- Registers `/tmux-tasks [status|clear|hide|show|reset]` for session-scoped display control. `clear`
+  persistently dismisses currently visible rows without stopping their jobs or completion monitoring;
+  `hide` and `show` control the whole widget, and `reset` restores all tracked rows. The state survives
+  `/reload` and session resume through a custom session entry.
 - Subscribes to a per-command `tmux wait-for` completion channel and starts an immediate continuation
-  when tmux signals completion, so pi does not poll or wait for a previously chosen timeout.
-- Never places completion in Pi's `followUp` queue. While Pi is busy, it displays the structured task
-  name through a persistent widget above the editor, retains the continuation internally, and starts
-  a normal user turn on `agent_settled`. If `isIdle()` races with a newly started prompt and
+  when tmux signals normal completion; the minute reconciliation is only the orphan fallback.
+- Never places completion in Pi's `followUp` queue. While Pi is busy, it shows a transient completion
+  notification, retains the continuation internally, and starts a normal user turn on `agent_settled`.
+  If `isIdle()` races with a newly started prompt and
   `sendUserMessage()` rejects delivery, the completion returns to the same internal queue for the next
   `agent_settled` instead of surfacing an extension error. This removes the hard-coded `Follow-up:`
   TUI prefix.
@@ -35,7 +46,7 @@ long-running commands continue in detached tmux sessions.
   existing `exit-status` files. Runtime restoration rejects mismatched socket names, session names,
   and completion channels. A `completion-delivered` marker prevents duplicate continuation.
 - Defers completion that arrives during session compaction, then delivers it after compaction or
-  `agent_settled`. Compaction events reconcile tracked exit-status files without interval polling.
+  `agent_settled`. Compaction events also reconcile tracked exit-status files immediately.
 - Uses one shared temporary-directory timestamp to allow at most one cleanup scan per 24 hours across
   reloads and Pi sessions. Cleanup examines artifacts sequentially, stats `exit-status` first, reads
   content only after the seven-day age threshold, and removes one directory at a time. It never uses

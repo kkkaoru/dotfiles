@@ -6,7 +6,9 @@ import tmuxTimeoutExtension, {
   type TmuxToolDefinition,
   wakePiOnCompletion,
 } from "./index.ts";
+import { ACTIVE_DISPLAY_ENTRY_TYPE } from "./src/active-display.ts";
 import type { CompletionDeliveryContext } from "./src/delivery.ts";
+import type { TmuxCommandDefinition } from "./src/display-command.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -31,15 +33,106 @@ it("registers and executes the parallel tmux tool", async () => {
   tmuxTimeoutExtension(host, {
     events: { subscribe: (): (() => void) => (): void => undefined },
   });
-  expect(tool?.name).toBe("tmux_exec");
-  expect(tool?.executionMode).toBe("parallel");
+  if (tool === undefined) {
+    throw new Error("Tmux tool was not registered");
+  }
+  expect(tool.name).toBe("tmux_exec");
+  expect(tool.executionMode).toBe("parallel");
   const controller = new globalThis.AbortController();
-  const result = await tool?.execute("call-1", { command: "sleep 60" }, controller.signal);
+  const result = await tool.execute(
+    "call-1",
+    { command: "sleep 60", estimatedDurationSeconds: 600 },
+    controller.signal,
+  );
   expect(exec).toHaveBeenCalledOnce();
-  expect(result?.content[0]?.text).toMatch(/Started detached tmux command/u);
-  expect(result?.details.sessionName).toMatch(/^pi-tmux-[a-f0-9]{32}-1$/u);
-  expect(result?.details.logPath).toMatch(/output\.log$/u);
-  expect(result?.details.statusPath).toMatch(/exit-status$/u);
+  expect(result.content[0].text).toMatch(/Started detached tmux command/u);
+  expect(result.details.sessionName).toMatch(/^pi-tmux-[a-f0-9]{32}-1$/u);
+  expect(result.details.logPath).toMatch(/output\.log$/u);
+  expect(result.details.statusPath).toMatch(/exit-status$/u);
+  expect(
+    Date.parse(result.details.estimatedCompletionAt ?? "") - Date.parse(result.details.submittedAt),
+  ).toBe(600_000);
+});
+
+it("controls session-scoped task display commands", async () => {
+  let command: TmuxCommandDefinition | undefined;
+  const appendEntry = vi.fn<NonNullable<TmuxExtensionHost["appendEntry"]>>();
+  const notify = vi.fn<CompletionDeliveryContext["ui"]["notify"]>();
+  const host: TmuxExtensionHost = {
+    appendEntry,
+    exec: vi.fn(),
+    on: (): void => undefined,
+    registerCommand: (_name, definition): void => {
+      command = definition;
+    },
+    registerTool: (): void => undefined,
+    sendUserMessage: vi.fn(),
+  };
+  const context: CompletionDeliveryContext = {
+    isIdle: (): boolean => true,
+    ui: { notify, setStatus: vi.fn(), setWidget: vi.fn() },
+  };
+
+  tmuxTimeoutExtension(host, { recovery: false });
+  if (command === undefined) {
+    throw new Error("Tmux tasks command was not registered");
+  }
+  await command.handler("", context);
+  await command.handler("status", context);
+  await command.handler("hide", context);
+  await command.handler("show", context);
+  await command.handler("reset", context);
+  await command.handler("invalid", context);
+
+  expect(notify).toHaveBeenCalledWith("tmux tasks: active=0 visible=0", "info");
+  expect(notify).toHaveBeenCalledWith("Tmux task display hidden.", "info");
+  expect(notify).toHaveBeenCalledWith("Tmux task display shown.", "info");
+  expect(notify).toHaveBeenCalledWith("Tmux task display reset.", "info");
+  expect(notify).toHaveBeenCalledWith("Usage: /tmux-tasks [status|clear|hide|show|reset]", "error");
+  expect(appendEntry).toHaveBeenCalledTimes(3);
+});
+
+it("clears old task displays while retaining background tracking", async () => {
+  let command: TmuxCommandDefinition | undefined;
+  let tool: TmuxToolDefinition | undefined;
+  const appendEntry = vi.fn<NonNullable<TmuxExtensionHost["appendEntry"]>>();
+  const notify = vi.fn<CompletionDeliveryContext["ui"]["notify"]>();
+  const host: TmuxExtensionHost = {
+    appendEntry,
+    exec: vi.fn<TmuxExtensionHost["exec"]>().mockResolvedValue({
+      code: 0,
+      stderr: "",
+      stdout: "started",
+    }),
+    on: (): void => undefined,
+    registerCommand: (_name, definition): void => {
+      command = definition;
+    },
+    registerTool: (definition): void => {
+      tool = definition;
+    },
+    sendUserMessage: vi.fn(),
+  };
+  const context: CompletionDeliveryContext = {
+    isIdle: (): boolean => true,
+    ui: { notify, setStatus: vi.fn(), setWidget: vi.fn() },
+  };
+
+  tmuxTimeoutExtension(host, {
+    events: { subscribe: (): (() => void) => (): void => undefined },
+    recovery: false,
+  });
+  if (command === undefined || tool === undefined) {
+    throw new Error("Tmux task controls were not registered");
+  }
+  await tool.execute("call-1", { command: "sleep 60" }, undefined);
+  await command.handler("clear", context);
+
+  expect(notify).toHaveBeenCalledWith("Cleared 1 tmux task display(s).", "info");
+  expect(appendEntry).toHaveBeenLastCalledWith(ACTIVE_DISPLAY_ENTRY_TYPE, {
+    dismissedSessionNames: [expect.stringMatching(/^pi-tmux-[a-f0-9]{32}-1$/u)],
+    hidden: false,
+  });
 });
 
 it("reports tmux launch failures", async () => {
@@ -207,7 +300,7 @@ it("delivers a real completion callback after compaction lifecycle events", asyn
       getEntries: (): readonly unknown[] => [],
       getSessionId: (): string => "main-session-id",
     },
-    ui: { notify: vi.fn(), setStatus: vi.fn() },
+    ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() },
   };
   handlers.get("session_start")?.({}, context);
   handlers.get("agent_settled")?.({}, context);

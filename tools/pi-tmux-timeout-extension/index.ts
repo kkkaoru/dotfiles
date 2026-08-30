@@ -1,7 +1,9 @@
 // This TypeScript file is executed with Bun.
 import { type Static, Type, type TSchema } from "typebox";
 import { ArtifactCleaner, type ArtifactCleanerOptions } from "./src/cleanup.ts";
+import { ActiveTaskDisplay, recoverActiveTaskDisplayState } from "./src/active-display.ts";
 import { CompletionDelivery, type CompletionDeliveryContext } from "./src/delivery.ts";
+import { type ActiveDisplayCommandHost, registerDisplayCommand } from "./src/display-command.ts";
 import {
   markCompletionDelivered,
   persistTmuxLaunch,
@@ -24,6 +26,13 @@ const tmuxExecSchema = Type.Object({
     description: "Long-running shell command to start in detached tmux",
     minLength: 1,
   }),
+  estimatedDurationSeconds: Type.Optional(
+    Type.Integer({
+      description: "Estimated duration in seconds for expected completion time",
+      maximum: 604_800,
+      minimum: 1,
+    }),
+  ),
 }) satisfies TSchema;
 
 interface ExecOptions {
@@ -47,11 +56,10 @@ interface ExtractedBashInput {
   readonly target: object;
 }
 
-export interface TmuxExtensionRuntimeOptions extends Pick<
-  TmuxRuntimeOptions,
-  "events" | "operations"
-> {
+export interface TmuxExtensionRuntimeOptions {
   readonly cleanup?: ArtifactCleanerOptions;
+  readonly events?: NonNullable<TmuxRuntimeOptions["events"]>;
+  readonly operations?: NonNullable<TmuxRuntimeOptions["operations"]>;
   readonly recovery?: false | Omit<RecoveryOptions, "sessionNamespace">;
 }
 
@@ -81,8 +89,7 @@ type TmuxLifecycleEvent =
   | "tool_call"
   | "tool_result";
 
-export interface TmuxExtensionHost {
-  readonly appendEntry?: (customType: string, data: unknown) => void;
+export interface TmuxExtensionHost extends ActiveDisplayCommandHost {
   readonly exec: (
     command: string,
     args: readonly string[],
@@ -193,6 +200,7 @@ function resultText(launch: TmuxLaunch): string {
 }
 
 function registerLifecycleHandlers(input: {
+  readonly activeDisplay: ActiveTaskDisplay;
   readonly cleaner: ArtifactCleaner;
   readonly delivery: CompletionDelivery;
   readonly host: TmuxExtensionHost;
@@ -210,6 +218,8 @@ function registerLifecycleHandlers(input: {
     if (sessionManager === undefined) {
       return;
     }
+    input.activeDisplay.restore(recoverActiveTaskDisplayState(sessionManager.getEntries()));
+    input.activeDisplay.setContext(context);
     input.delivery.setContext(context);
     input.delivery.beforeCompaction();
     const sessionNamespace = input.runtime.startSession(sessionManager.getSessionId());
@@ -252,6 +262,7 @@ function registerLifecycleHandlers(input: {
     input.cleaner.stop();
     input.delivery.clear();
     input.rewriter.clear();
+    input.activeDisplay.clear();
   });
 }
 
@@ -259,6 +270,7 @@ export default function tmuxTimeoutExtension(
   host: TmuxExtensionHost,
   runtimeOptions?: TmuxExtensionRuntimeOptions,
 ): void {
+  const activeDisplay = new ActiveTaskDisplay();
   const cleaner = new ArtifactCleaner(runtimeOptions?.cleanup);
   const recovery: false | Omit<RecoveryOptions, "sessionNamespace"> | undefined =
     runtimeOptions?.recovery;
@@ -273,11 +285,13 @@ export default function tmuxTimeoutExtension(
   );
   const runtime: TmuxRuntime = new TmuxRuntime({
     ...runtimeOptions,
+    onActiveChange: (launches: readonly TmuxLaunch[]): void => activeDisplay.update(launches),
     onComplete: (completion: Completion): void => delivery.complete(completion),
     onTrack: (launch: TmuxLaunch): void => persistTmuxLaunch(host.appendEntry, launch),
   });
   const rewriter: AutomaticTmuxRewriter = new AutomaticTmuxRewriter(runtime);
 
+  registerDisplayCommand(host, activeDisplay);
   host.registerTool({
     description:
       "Start a long-running shell command in a detached tmux session and return immediately. Output and exit status are written to files under the system temporary directory.",
@@ -287,11 +301,15 @@ export default function tmuxTimeoutExtension(
     parameters: tmuxExecSchema,
     promptGuidelines: [
       "Use tmux_exec instead of foreground bash for commands expected to run for at least 120 seconds or continuously watch external state.",
+      "Set tmux_exec estimatedDurationSeconds to a realistic duration estimate for the command.",
       "After tmux_exec starts a command, return control promptly; pi-tmux-timeout-extension will start a named continuation when its exit-status file appears.",
     ],
     promptSnippet: "Run a long command in detached tmux without blocking pi",
     async execute(_toolCallId, params, signal) {
-      const launch: TmuxLaunch = runtime.createLaunch(params.command);
+      const launch: TmuxLaunch = runtime.createLaunch(
+        params.command,
+        params.estimatedDurationSeconds,
+      );
       const options: ExecOptions =
         signal === undefined
           ? { timeout: TMUX_LAUNCH_TIMEOUT_MILLISECONDS }
@@ -310,5 +328,13 @@ export default function tmuxTimeoutExtension(
     },
   });
 
-  registerLifecycleHandlers({ cleaner, delivery, host, recovery, rewriter, runtime });
+  registerLifecycleHandlers({
+    activeDisplay,
+    cleaner,
+    delivery,
+    host,
+    recovery,
+    rewriter,
+    runtime,
+  });
 }

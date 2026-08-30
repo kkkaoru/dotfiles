@@ -30,6 +30,13 @@ function completionIdentity(command: string): string {
   return command.replaceAll(/\s+/gu, " ").trim().slice(0, MAX_COMPLETION_IDENTITY_CHARACTERS);
 }
 
+function completionFailure(completion: Completion): string {
+  if (completion.orphaned === true) {
+    return " | orphaned";
+  }
+  return completion.exitCode === 0 ? "" : ` | command_exit=${String(completion.exitCode)}`;
+}
+
 function completionName(completion: Completion): string {
   const submittedDate = new Date(completion.launch.submittedAt);
   const completedDate = new Date(completion.completedAt);
@@ -40,8 +47,7 @@ function completionName(completion: Completion): string {
   const format = spansDates ? "submitted" : "completed";
   const submittedAt: string = formatLocalTimestamp(submittedDate, format);
   const completedAt: string = formatLocalTimestamp(completedDate, format);
-  const failure: string =
-    completion.exitCode === 0 ? "" : ` | command_exit=${String(completion.exitCode)}`;
+  const failure: string = completionFailure(completion);
   return `${submittedAt} → ${completedAt}${failure} | ${completionIdentity(completion.launch.taskCommand)}`;
 }
 

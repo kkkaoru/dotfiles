@@ -70,6 +70,14 @@ internal struct MonitorStore: Sendable {
     try saveText(signature, to: lastHealthDecisionURL)
   }
 
+  internal func clearHealthDecision() throws {
+    guard FileManager.default.fileExists(atPath: lastHealthDecisionURL.path(percentEncoded: false))
+    else {
+      return
+    }
+    try FileManager.default.removeItem(at: lastHealthDecisionURL)
+  }
+
   internal func acquireTransactionLock() -> ProcessLock? {
     let lock = ProcessLock(url: transactionLockURL)
     if lock != nil {

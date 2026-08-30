@@ -83,6 +83,7 @@ internal enum MacWiFiStabilityMain {
         return
       }
       try context.store.saveSignature(settled.signature)
+      try resetTargetHealthDecisionIfNeeded(context: context, state: settled)
       context.logger.log("network-change previous=\(previous) current=\(settled.signature)")
       if settled.isReadyForResync {
         try runLightResync(context: context)
@@ -94,8 +95,19 @@ internal enum MacWiFiStabilityMain {
     }
 
     try context.store.saveSignature(current.signature)
+    try resetTargetHealthDecisionIfNeeded(context: context, state: current)
     context.logger.log("network-initial signature=\(current.signature)")
     try ConnectionCoordinator(context: context).evaluateTargetHealth(state: current)
+  }
+
+  private static func resetTargetHealthDecisionIfNeeded(
+    context: ApplicationContext,
+    state: NetworkState
+  ) throws {
+    guard state.router != context.configuration.targetRouter else {
+      return
+    }
+    try context.store.clearHealthDecision()
   }
 
   private static func runLightResync(context: ApplicationContext) throws {
@@ -106,11 +118,13 @@ internal enum MacWiFiStabilityMain {
 
     try context.store.recordLightAction()
     context.resynchronizer.light().forEach { context.logger.log($0) }
+    context.logger.log(context.tailscaleResynchronizer.reconcile())
   }
 
   private static func runFullResync() throws {
     let context = try ApplicationContext()
     context.resynchronizer.full().forEach { context.logger.log($0) }
+    context.logger.log(context.tailscaleResynchronizer.reconcile())
   }
 }
 

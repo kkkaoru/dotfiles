@@ -1,5 +1,5 @@
 // This TypeScript file is executed with Bun.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import type { TmuxLaunch } from "./tmux.ts";
 
@@ -7,6 +7,7 @@ export interface Completion {
   readonly completedAt: string;
   readonly exitCode: number;
   readonly launch: TmuxLaunch;
+  readonly orphaned?: boolean;
 }
 
 export interface CompletionEvents {
@@ -20,6 +21,7 @@ export interface CompletionSubscriptionInput {
 }
 
 export interface StatusOperations {
+  readonly isRunning?: (launch: TmuxLaunch) => boolean;
   readonly read: (path: string) => string;
 }
 
@@ -41,6 +43,10 @@ type SpawnProcess = (
 ) => WaitProcess;
 
 const SYSTEM_OPERATIONS: StatusOperations = {
+  isRunning: (launch: TmuxLaunch): boolean =>
+    spawnSync("tmux", ["-L", launch.socketName, "has-session", "-t", launch.sessionName], {
+      stdio: "ignore",
+    }).status === 0,
   read: (path: string): string => fs.readFileSync(path, "utf8"),
 };
 
@@ -111,11 +117,24 @@ export class CompletionWaiter {
       return;
     }
     const exitCode: number | undefined = this.#readExitCode(launch.statusPath);
-    if (exitCode === undefined) {
+    if (exitCode !== undefined) {
+      this.#finish({ completedAt: new Date().toISOString(), exitCode, launch });
       return;
     }
-    this.cancel(launch);
-    this.#onComplete({ completedAt: new Date().toISOString(), exitCode, launch });
+    if (this.#operations.isRunning?.(launch) !== false) {
+      return;
+    }
+    this.#finish({
+      completedAt: new Date().toISOString(),
+      exitCode: 255,
+      launch,
+      orphaned: true,
+    });
+  }
+
+  #finish(completion: Completion): void {
+    this.cancel(completion.launch);
+    this.#onComplete(completion);
   }
 
   #readExitCode(statusPath: string): number | undefined {

@@ -42,6 +42,33 @@ it("normalizes completion identity into one bounded naming line", () => {
   );
 });
 
+it("labels orphaned task completion without an invented exit result", () => {
+  const sendUserMessage = vi.fn<CompletionDeliveryHost["sendUserMessage"]>();
+
+  wakePiOnCompletion(
+    { sendUserMessage },
+    {
+      completedAt: "2026-08-26T02:15:00.000Z",
+      exitCode: 255,
+      launch: {
+        command: "tmux command",
+        completionChannel: "pi-tmux-test-complete",
+        logPath: "/tmp/pi-tmux-test/output.log",
+        sessionName: "pi-tmux-test",
+        socketName: "pi-tmux-socket",
+        statusPath: "/tmp/pi-tmux-test/exit-status",
+        submittedAt: "2026-08-26T02:14:00.000Z",
+        taskCommand: "run verification",
+      },
+      orphaned: true,
+    },
+  );
+
+  expect(sendUserMessage).toHaveBeenCalledWith(
+    "11:14 → 11:15 | orphaned | run verification\nlog: /tmp/pi-tmux-test/output.log\nstatus: /tmp/pi-tmux-test/exit-status",
+  );
+});
+
 it("shows a transient completion while busy and delivers normally after settling", () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date(2026, 7, 26, 2, 15));

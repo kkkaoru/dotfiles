@@ -10,6 +10,7 @@ export const TMUX_SESSION_ENTRY_TYPE = "pi-tmux-launch-v2";
 
 interface PersistedTmuxLaunch {
   readonly completionChannel: string;
+  readonly estimatedCompletionAt?: string;
   readonly logPath: string;
   readonly sessionName: string;
   readonly socketName: string;
@@ -43,6 +44,9 @@ const SYSTEM_OPERATIONS: PersistenceOperations = {
 function persistedLaunch(launch: TmuxLaunch): PersistedTmuxLaunch {
   return {
     completionChannel: launch.completionChannel,
+    ...(launch.estimatedCompletionAt === undefined
+      ? {}
+      : { estimatedCompletionAt: launch.estimatedCompletionAt }),
     logPath: launch.logPath,
     sessionName: launch.sessionName,
     socketName: launch.socketName,
@@ -102,7 +106,9 @@ function metadataPathsMatch(metadata: PersistedTmuxLaunch, directory: string): b
   return (
     metadata.logPath === path.join(directory, "output.log") &&
     metadata.statusPath === path.join(directory, "exit-status") &&
-    Number.isFinite(Date.parse(metadata.submittedAt))
+    Number.isFinite(Date.parse(metadata.submittedAt)) &&
+    (metadata.estimatedCompletionAt === undefined ||
+      Number.isFinite(Date.parse(metadata.estimatedCompletionAt)))
   );
 }
 
@@ -116,7 +122,8 @@ function parseMetadata(
     if (
       typeof value !== "object" ||
       value === null ||
-      !METADATA_KEYS.every((key): boolean => isStringProperty(value, key))
+      !METADATA_KEYS.every((key): boolean => isStringProperty(value, key)) ||
+      ("estimatedCompletionAt" in value && typeof value.estimatedCompletionAt !== "string")
     ) {
       return undefined;
     }

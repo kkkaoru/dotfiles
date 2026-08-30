@@ -8,7 +8,10 @@ internal enum NetworkStateTests {
     ignoresDHCPConnectionIDChanges()
     ignoresRedactedNetworkIdentifiers()
     rejectsUnavailableState()
-    print("Swift tests: 5 passed")
+    parsesRunningTailscaleState()
+    parsesStoppedTailscaleState()
+    rejectsMalformedTailscaleState()
+    print("Swift tests: 8 passed")
   }
 
   private static func parsesHealthyDHCPState() {
@@ -82,6 +85,21 @@ internal enum NetworkStateTests {
     expect(!state.isAvailable)
     expect(state.signature == "unavailable")
     expect(!state.isReadyForResync)
+  }
+
+  private static func parsesRunningTailscaleState() {
+    let state = TailscaleRunStateParser.parse(#"{"WantRunning":true}"#)
+    expect(state == .running)
+  }
+
+  private static func parsesStoppedTailscaleState() {
+    let state = TailscaleRunStateParser.parse(#"{"WantRunning":false}"#)
+    expect(state == .stopped)
+  }
+
+  private static func rejectsMalformedTailscaleState() {
+    expect(TailscaleRunStateParser.parse("not-json") == .unavailable)
+    expect(TailscaleRunStateParser.parse(#"{"RouteAll":true}"#) == .unavailable)
   }
 
   private static func expect(_ condition: @autoclosure () -> Bool) {
