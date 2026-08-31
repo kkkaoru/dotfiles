@@ -45,8 +45,10 @@ long-running commands continue in detached tmux sessions.
   Command whitespace is collapsed and the identity is capped at 160 characters.
 - Persists `launch.json` beside every job and records each launch as a versioned custom Pi session
   entry. `/reload` and later resume restore only entries whose namespace matches the current main Pi
-  session, then re-subscribe through that session's dedicated tmux socket and immediately reconcile
-  existing `exit-status` files. Runtime restoration rejects mismatched socket names, session names,
+  session and whose artifact directory still exists, then re-subscribe through that session's
+  dedicated tmux socket and immediately reconcile existing `exit-status` files. Entries whose
+  temporary artifact directory was already removed are discarded instead of being reported as
+  orphaned historical tasks. Runtime restoration rejects mismatched socket names, session names,
   and completion channels. A `completion-delivered` marker prevents duplicate continuation.
 - Defers completion that arrives during session compaction, then delivers it after compaction or
   `agent_settled`. Compaction events also reconcile tracked exit-status files immediately.

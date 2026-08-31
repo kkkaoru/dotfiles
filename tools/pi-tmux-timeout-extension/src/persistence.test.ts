@@ -127,6 +127,11 @@ it("persists and recovers undelivered launches from a resumed Pi session", () =>
   persistTmuxLaunch((customType, data): void => {
     entries.push({ customType, data, type: "custom" });
   }, persisted);
+  const removedArtifact: TmuxLaunch = launch(rootDirectory, 22);
+  persistTmuxLaunch((customType, data): void => {
+    entries.push({ customType, data, type: "custom" });
+  }, removedArtifact);
+  fs.rmSync(path.dirname(removedArtifact.statusPath), { recursive: true });
   entries.push(null, { type: "message" }, entries[0], {
     customType: "pi-tmux-launch-v2",
     type: "custom",

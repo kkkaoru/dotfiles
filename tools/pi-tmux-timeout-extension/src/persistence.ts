@@ -219,7 +219,8 @@ export function recoverSessionTmuxLaunches(
     },
   );
   for (const launch of recovered) {
-    if (!operations.exists(deliveryMarkerPath(launch))) {
+    const artifactDirectory: string = path.dirname(launch.statusPath);
+    if (operations.exists(artifactDirectory) && !operations.exists(deliveryMarkerPath(launch))) {
       launches.set(launch.sessionName, launch);
     }
   }
