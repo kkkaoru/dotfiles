@@ -171,7 +171,14 @@ export class CompletionDelivery {
   #deliver(completions: readonly Completion[]): boolean {
     try {
       this.#host.sendUserMessage(deliveryPrompt(completions), COMPLETION_DELIVERY_OPTIONS);
-      completions.map((completion: Completion): void => this.#onDelivered(completion));
+      completions.map((completion: Completion): undefined => {
+        try {
+          this.#onDelivered(completion);
+        } catch {
+          // The message is accepted already; bookkeeping failure must not deliver it twice.
+        }
+        return undefined;
+      });
       return true;
     } catch (error: unknown) {
       if (isAgentBusyError(error)) {

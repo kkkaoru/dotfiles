@@ -75,7 +75,11 @@ export function markCompletionDelivered(
   launch: TmuxLaunch,
   operations: PersistenceOperations = SYSTEM_OPERATIONS,
 ): void {
-  operations.writeFile(deliveryMarkerPath(launch), `${new Date().toISOString()}\n`);
+  try {
+    operations.writeFile(deliveryMarkerPath(launch), `${new Date().toISOString()}\n`);
+  } catch {
+    // Delivery already succeeded; a concurrently removed artifact must not enqueue it again.
+  }
 }
 
 function isStringProperty(value: object, key: keyof PersistedTmuxLaunch): boolean {

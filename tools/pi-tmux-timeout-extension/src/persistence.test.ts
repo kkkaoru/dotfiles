@@ -151,6 +151,9 @@ it("marks successful delivery and tolerates an unavailable recovery root", () =>
   const persisted: TmuxLaunch = launch(rootDirectory, 1);
   markCompletionDelivered(persisted);
   expect(fs.readFileSync(deliveryMarkerPath(persisted), "utf8")).toMatch(/^\d{4}-\d{2}-\d{2}T/u);
+  const removedArtifact: TmuxLaunch = launch(rootDirectory, 2);
+  fs.rmSync(path.dirname(removedArtifact.statusPath), { recursive: true });
+  expect((): void => markCompletionDelivered(removedArtifact)).not.toThrow();
   const missingRoot: string = path.join(rootDirectory, "missing");
   expect(
     recoverTmuxLaunches({ rootDirectory: missingRoot, sessionNamespace: SESSION_NAMESPACE }),
