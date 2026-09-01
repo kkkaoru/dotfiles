@@ -55,16 +55,16 @@ beforeEach(() => {
 afterEach(() => {
   pollers.map((poller): void => clearInterval(poller));
   pollers.length = 0;
+  vi.useRealTimers();
 });
 
 describe("LoopRuntime commands", () => {
   it("starts a self-paced prompted loop immediately", () => {
     const runtime = new LoopRuntime(host, scheduler);
     runtime.command("check the build", context);
-
     expect(sendUserMessage).toHaveBeenCalledOnce();
     expect(sendUserMessage.mock.calls[0]?.[0]).toBe(
-      "This is a self-paced loop. Perform the task now. Before ending, call loop_wakeup only when another useful check remains. Do not schedule another wakeup when the task is complete, blocked on user input, or waiting on external state that cannot be checked later.\n\nTask:\ncheck the build",
+      "This is a self-paced loop. Perform the task now and continue through every immediately actionable step. Do not end by merely reporting remaining work. Before ending, make exactly one terminal loop decision: call loop_wakeup when another useful later check remains, or call loop_complete only when the task is complete or blocked on user input. If neither tool is called, the loop automatically continues.\n\nTask:\ncheck the build",
     );
     expect(notify).toHaveBeenCalledWith("Started a self-paced loop.", "info");
   });
@@ -74,7 +74,7 @@ describe("LoopRuntime commands", () => {
     runtime.command("", context);
 
     expect(sendUserMessage.mock.calls[0]?.[0]).toBe(
-      "This is a self-paced loop. Perform the task now. Before ending, call loop_wakeup only when another useful check remains. Do not schedule another wakeup when the task is complete, blocked on user input, or waiting on external state that cannot be checked later.\n\nTask:\nContinue work already established in this conversation. Act as a steward, not an initiator: finish in-progress work, verification, or clearly authorized maintenance. Do not invent new work or perform irreversible actions without authorization. If nothing actionable remains, say so briefly and stop.",
+      "This is a self-paced loop. Perform the task now and continue through every immediately actionable step. Do not end by merely reporting remaining work. Before ending, make exactly one terminal loop decision: call loop_wakeup when another useful later check remains, or call loop_complete only when the task is complete or blocked on user input. If neither tool is called, the loop automatically continues.\n\nTask:\nContinue work already established in this conversation. Act as a steward, not an initiator: finish in-progress work, verification, or clearly authorized maintenance. Do not invent new work or perform irreversible actions without authorization. If nothing actionable remains, say so briefly and stop.",
     );
   });
 
@@ -83,7 +83,7 @@ describe("LoopRuntime commands", () => {
     runtime.command("5m check CI", context);
 
     expect(callbacks[0]?.intervalMs).toBe(5000);
-    expect(sendUserMessage).toHaveBeenCalledWith("check CI");
+    expect(sendUserMessage).toHaveBeenCalledWith("check CI", { deliverAs: "followUp" });
     expect(notify).toHaveBeenCalledWith("Started loop #1 every 5m (session-scoped).", "info");
     expect(setStatus).toHaveBeenLastCalledWith("loop", "loop: 1");
     expect(setWidget).toHaveBeenLastCalledWith(
@@ -92,14 +92,14 @@ describe("LoopRuntime commands", () => {
         expect.stringMatching(/^\d{2}-\d{2} \d{2}:\d{2} → \d{2}:\d{2} \| loop=#1/u),
       ]),
     );
-
     currentTime = 61_000;
     runtime.command("list", context);
     expect(notify).toHaveBeenLastCalledWith("#1 in 4m: Recurring every 5m", "info");
 
     currentTime = 301_000;
     callbacks[0]?.callback();
-    expect(sendUserMessage).toHaveBeenLastCalledWith(expect.stringMatching(RECURRING_NAME_PATTERN));
+    expect(sendUserMessage.mock.lastCall?.[0]).toMatch(RECURRING_NAME_PATTERN);
+    expect(sendUserMessage.mock.lastCall?.[1]).toStrictEqual({ deliverAs: "followUp" });
     runtime.command("list", context);
     expect(notify).toHaveBeenLastCalledWith("#1 in 5m: Recurring every 5m", "info");
 
@@ -162,10 +162,31 @@ describe("LoopRuntime delivery races", () => {
       expect.stringContaining("loop=self-paced"),
     ]);
 
+    sendUserMessage.mockImplementationOnce((): never => {
+      throw new Error("Agent is already processing a prompt. Use steer() or followUp().");
+    });
+    runtime.agentSettled(context);
+    expect(setWidget).toHaveBeenLastCalledWith("loop-wakeups", [
+      expect.stringContaining("loop=self-paced"),
+    ]);
     runtime.agentSettled(context);
 
-    expect(sendUserMessage).toHaveBeenCalledTimes(2);
+    expect(sendUserMessage).toHaveBeenCalledTimes(3);
     expect(setWidget).toHaveBeenLastCalledWith("loop-wakeups", undefined);
+  });
+
+  it("requeues an unfinished continuation when settled delivery races", () => {
+    const runtime = new LoopRuntime(host, scheduler);
+    runtime.command("check the build", context);
+    sendUserMessage.mockImplementationOnce((): never => {
+      throw new Error("Agent is already processing a prompt. Use steer() or followUp().");
+    });
+
+    runtime.agentSettled(context);
+    runtime.agentSettled(context);
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(3);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("loop=self-paced"), "info");
   });
 
   it("does not hide unrelated delivery errors", () => {
@@ -177,6 +198,33 @@ describe("LoopRuntime delivery races", () => {
     expect((): void => runtime.command("check the build", context)).toThrow(
       "unexpected delivery failure",
     );
+  });
+});
+
+describe("LoopRuntime settled delivery", () => {
+  it("defers and coalesces continuation until the lifecycle callback returns", () => {
+    vi.useFakeTimers();
+    const runtime = new LoopRuntime(host, scheduler);
+    runtime.command("check deployment", context);
+
+    runtime.deferLifecycleContinuation((): void => runtime.agentSettled(context));
+    runtime.deferLifecycleContinuation((): void => runtime.agentSettled(context));
+    expect(sendUserMessage).toHaveBeenCalledOnce();
+    vi.runOnlyPendingTimers();
+
+    expect(sendUserMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("cancels deferred continuation during shutdown", () => {
+    vi.useFakeTimers();
+    const runtime = new LoopRuntime(host, scheduler);
+    runtime.command("check deployment", context);
+    runtime.deferLifecycleContinuation((): void => runtime.agentSettled(context));
+
+    runtime.shutdown();
+    vi.runOnlyPendingTimers();
+
+    expect(sendUserMessage).toHaveBeenCalledOnce();
   });
 });
 
@@ -196,6 +244,7 @@ describe("LoopRuntime compaction", () => {
       expect.stringMatching(
         /^\d{2}-\d{2} \d{2}:\d{2} → \d{2}:\d{2} \| loop=self-paced \| check deployment\nThis is a self-paced loop\./u,
       ),
+      { deliverAs: "followUp" },
     );
     expect(notify).toHaveBeenCalledWith("Continuing loop after compaction.", "info");
   });
@@ -213,18 +262,30 @@ describe("LoopRuntime compaction", () => {
     recurringRuntime.clear();
   });
 
-  it("does not continue a loop that already settled or was cleared", () => {
-    const settledRuntime = new LoopRuntime(host, scheduler);
-    settledRuntime.command("check deployment", context);
-    settledRuntime.agentSettled(context);
-    settledRuntime.continueAfterCompaction(false, context);
-    expect(sendUserMessage).toHaveBeenCalledOnce();
+  it("continues an unfinished tick until explicitly completed", () => {
+    const runtime = new LoopRuntime(host, scheduler);
+    runtime.command("check deployment", context);
 
-    const clearedRuntime = new LoopRuntime(host, scheduler);
-    clearedRuntime.command("check deployment", context);
-    clearedRuntime.clear();
-    clearedRuntime.continueAfterCompaction(false, context);
+    runtime.agentSettled(context);
+
     expect(sendUserMessage).toHaveBeenCalledTimes(2);
+    expect(notify).toHaveBeenLastCalledWith("Continuing unfinished loop work.", "info");
+    expect(runtime.complete("deployment verified", context)).toStrictEqual({
+      reason: "deployment verified",
+    });
+    runtime.agentSettled(context);
+    runtime.continueAfterCompaction(false, context);
+    expect(sendUserMessage).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not continue a cleared loop", () => {
+    const runtime = new LoopRuntime(host, scheduler);
+    runtime.command("check deployment", context);
+    runtime.clear();
+    runtime.agentSettled(context);
+    runtime.continueAfterCompaction(false, context);
+
+    expect(sendUserMessage).toHaveBeenCalledOnce();
   });
 });
 
@@ -236,12 +297,15 @@ describe("LoopRuntime wakeups", () => {
       prompt: " check again ",
       reason: " CI may finish ",
     };
+    runtime.command("watch CI", context);
     expect(runtime.wakeup(input, context)).toStrictEqual({ id: 1, scheduledInSeconds: 90 });
+    runtime.agentSettled(context);
+    expect(sendUserMessage).toHaveBeenCalledOnce();
 
     currentTime = 500_000;
     idle = false;
     callbacks[0]?.callback();
-    expect(sendUserMessage).not.toHaveBeenCalled();
+    expect(sendUserMessage).toHaveBeenCalledOnce();
     expect(notify).toHaveBeenCalledWith(
       expect.stringMatching(/^\d{2}-\d{2} \d{2}:\d{2} → \d{2}:\d{2} \| loop=#1 \| CI may finish$/u),
       "info",
@@ -250,15 +314,16 @@ describe("LoopRuntime wakeups", () => {
     runtime.agentSettled(context);
     expect(sendUserMessage).toHaveBeenCalledWith(
       expect.stringMatching(
-        /^\d{2}-\d{2} \d{2}:\d{2} → \d{2}:\d{2} \| loop=#1 \| CI may finish\nThis is a self-paced loop\. Perform the task now\. Before ending, call loop_wakeup only when another useful check remains\. Do not schedule another wakeup when the task is complete, blocked on user input, or waiting on external state that cannot be checked later\.\n\nTask:\ncheck again$/u,
+        /^\d{2}-\d{2} \d{2}:\d{2} → \d{2}:\d{2} \| loop=#1 \| CI may finish\nThis is a self-paced loop\. Perform the task now and continue through every immediately actionable step\. Do not end by merely reporting remaining work\. Before ending, make exactly one terminal loop decision: call loop_wakeup when another useful later check remains, or call loop_complete only when the task is complete or blocked on user input\. If neither tool is called, the loop automatically continues\.\n\nTask:\ncheck again$/u,
       ),
+      { deliverAs: "followUp" },
     );
     expect(cleared).toHaveBeenCalledOnce();
     runtime.command("list", context);
     expect(notify).toHaveBeenLastCalledWith("No loop jobs are scheduled.", "info");
   });
 
-  it("validates wakeup inputs", () => {
+  it("validates wakeup inputs and requires an active tick", () => {
     const runtime = new LoopRuntime(host, scheduler);
     expect(() =>
       runtime.wakeup({ delaySeconds: 60.5, prompt: "next", reason: "why" }, context),
@@ -275,5 +340,21 @@ describe("LoopRuntime wakeups", () => {
     expect(() =>
       runtime.wakeup({ delaySeconds: 60, prompt: "next", reason: " " }, context),
     ).toThrow("prompt and reason must not be empty");
+    expect(() =>
+      runtime.wakeup({ delaySeconds: 60, prompt: "next", reason: "why" }, context),
+    ).toThrow("loop_wakeup requires an active /loop tick");
+  });
+
+  it("validates completion and accepts only one terminal decision", () => {
+    const runtime = new LoopRuntime(host, scheduler);
+    expect(() => runtime.complete("done", context)).toThrow(
+      "loop_complete requires an active /loop tick",
+    );
+    runtime.command("finish work", context);
+    expect(() => runtime.complete(" ", context)).toThrow("reason must not be empty");
+    expect(runtime.complete(" done ", context)).toStrictEqual({ reason: "done" });
+    expect(() => runtime.complete("done again", context)).toThrow(
+      "loop_complete requires an active /loop tick",
+    );
   });
 });

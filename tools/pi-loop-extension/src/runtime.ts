@@ -1,16 +1,17 @@
-import type { LoopContext, LoopHost } from "./contracts.ts";
-import { clearLoopDisplay, loopListText, updateLoopDisplay } from "./display.ts";
+import type { CompleteResult, LoopContext, LoopHost } from "./contracts.ts";
+import { clearLoopDisplay, updateLoopDisplay } from "./display.ts";
 import { namedLoopFollowUp } from "./follow-up.ts";
 import {
   AUTONOMOUS_PROMPT,
   commandPrompt,
-  resumedJob,
   trySendUserMessage,
   validateWakeup,
   type WakeupInput,
 } from "./helpers.ts";
+import { loopListMessage, pauseJobs, resumeJobs } from "./job-control.ts";
 import { formatInterval, parseLoopCommand, type LoopCommand } from "./parser.ts";
 import { type Poller, type Scheduler, SYSTEM_SCHEDULER } from "./scheduler.ts";
+import { SettledDelivery } from "./settled-delivery.ts";
 import {
   type LoopJobState as LoopJob,
   persistLoopState,
@@ -42,6 +43,7 @@ export class LoopRuntime {
   #pendingContinuations: string[] = [];
   #runningContinuation: string | undefined;
   #poller: Poller | undefined;
+  readonly #settledDelivery = new SettledDelivery();
 
   constructor(host: LoopHost, scheduler: Scheduler = SYSTEM_SCHEDULER) {
     this.#host = host;
@@ -69,12 +71,13 @@ export class LoopRuntime {
     }
     this.#updateStatus();
     if (context.isIdle() && this.#pendingContinuations.length > 0) {
-      this.agentSettled(context);
+      this.deferLifecycleContinuation((): void => this.agentSettled(context));
     }
   }
 
   shutdown(): void {
     this.#stopPoller();
+    this.#settledDelivery.cancel();
     clearLoopDisplay(this.#context?.ui);
   }
 
@@ -104,6 +107,8 @@ export class LoopRuntime {
   wakeup(input: WakeupInput, context: LoopContext): WakeupResult {
     validateWakeup(input);
     this.setContext(context);
+    this.#requireActiveTick("loop_wakeup");
+    this.#runningContinuation = undefined;
     const delayMs: number = input.delaySeconds * MILLISECONDS_PER_SECOND;
     const job: LoopJob = this.#schedule({
       delayMs,
@@ -111,6 +116,19 @@ export class LoopRuntime {
       reason: input.reason.trim(),
     });
     return { id: job.id, scheduledInSeconds: input.delaySeconds };
+  }
+
+  complete(reason: string, context: LoopContext): CompleteResult {
+    this.setContext(context);
+    this.#requireActiveTick("loop_complete");
+    const normalizedReason: string = reason.trim();
+    if (normalizedReason.length === 0) {
+      throw new Error("reason must not be empty");
+    }
+    this.#runningContinuation = undefined;
+    this.#persist();
+    this.#updateStatus();
+    return { reason: normalizedReason };
   }
 
   clear(): number {
@@ -136,19 +154,36 @@ export class LoopRuntime {
     context.ui.notify("Continuing loop after compaction.", "info");
   }
 
+  deferLifecycleContinuation(callback: () => void): void {
+    this.#settledDelivery.schedule(callback);
+  }
+
   agentSettled(context: LoopContext): void {
     this.setContext(context);
-    if (this.#pendingContinuations.length === 0) {
+    if (this.#pendingContinuations.length > 0) {
+      const continuations: string = this.#pendingContinuations.join("\n\n");
+      if (trySendUserMessage(this.#host, continuations)) {
+        this.#pendingContinuations = [];
+        this.#persist();
+        this.#updateStatus();
+      }
+      return;
+    }
+    if (this.#runningContinuation === undefined) {
+      this.#persist();
+      return;
+    }
+    if (this.#jobs.size > 0) {
       this.#runningContinuation = undefined;
       this.#persist();
       return;
     }
-    const continuations: string = this.#pendingContinuations.join("\n\n");
-    if (trySendUserMessage(this.#host, continuations)) {
-      this.#pendingContinuations = [];
-      this.#persist();
-      this.#updateStatus();
+    if (!trySendUserMessage(this.#host, this.#runningContinuation)) {
+      this.#queue(this.#runningContinuation);
+      return;
     }
+    context.ui.notify("Continuing unfinished loop work.", "info");
+    this.#persist();
   }
 
   #start(command: Extract<LoopCommand, { readonly kind: "start" }>, context: LoopContext): void {
@@ -229,15 +264,7 @@ export class LoopRuntime {
       context.ui.notify("Loop jobs are already paused.", "info");
       return;
     }
-    const now: number = this.#scheduler.now();
-    this.#jobs = new Map(
-      [...this.#jobs.entries()].map(
-        ([id, job]: readonly [number, LoopJob]): readonly [number, LoopJob] => [
-          id,
-          { ...job, remainingMs: Math.max(0, job.nextRunAt - now) },
-        ],
-      ),
-    );
+    this.#jobs = pauseJobs({ jobs: this.#jobs, now: this.#scheduler.now() });
     this.#paused = true;
     this.#persist();
     this.#stopPoller();
@@ -250,15 +277,7 @@ export class LoopRuntime {
       context.ui.notify("Loop jobs are not paused.", "info");
       return;
     }
-    const now: number = this.#scheduler.now();
-    this.#jobs = new Map(
-      [...this.#jobs.entries()].map(
-        ([id, job]: readonly [number, LoopJob]): readonly [number, LoopJob] => [
-          id,
-          resumedJob(job, now),
-        ],
-      ),
-    );
+    this.#jobs = resumeJobs({ jobs: this.#jobs, now: this.#scheduler.now() });
     this.#paused = false;
     this.#persist();
     this.#ensurePoller();
@@ -304,13 +323,19 @@ export class LoopRuntime {
     this.#updateStatus();
   }
 
-  #list(context: LoopContext): void {
-    if (this.#jobs.size === 0) {
-      context.ui.notify("No loop jobs are scheduled.", "info");
-      return;
+  #requireActiveTick(toolName: string): void {
+    if (this.#runningContinuation === undefined) {
+      throw new Error(`${toolName} requires an active /loop tick`);
     }
+  }
+
+  #list(context: LoopContext): void {
     context.ui.notify(
-      loopListText([...this.#jobs.values()], this.#paused, this.#scheduler.now()),
+      loopListMessage({
+        jobs: this.#jobs,
+        now: this.#scheduler.now(),
+        paused: this.#paused,
+      }),
       "info",
     );
   }

@@ -1,18 +1,17 @@
 // This TypeScript file is executed with Bun.
+import type { LoopHost, UserMessageDeliveryOptions } from "./contracts.ts";
 import type { LoopJobState } from "./state.ts";
 
 const AGENT_BUSY_ERROR = "Agent is already processing a prompt";
+const USER_MESSAGE_DELIVERY_OPTIONS: UserMessageDeliveryOptions = { deliverAs: "followUp" };
 const MIN_WAKEUP_SECONDS = 60;
 const MAX_WAKEUP_SECONDS = 3600;
 export const AUTONOMOUS_PROMPT = `Continue work already established in this conversation. Act as a steward, not an initiator: finish in-progress work, verification, or clearly authorized maintenance. Do not invent new work or perform irreversible actions without authorization. If nothing actionable remains, say so briefly and stop.`;
-const SELF_PACED_GUIDANCE = `This is a self-paced loop. Perform the task now. Before ending, call loop_wakeup only when another useful check remains. Do not schedule another wakeup when the task is complete, blocked on user input, or waiting on external state that cannot be checked later.`;
+const SELF_PACED_GUIDANCE = `This is a self-paced loop. Perform the task now and continue through every immediately actionable step. Do not end by merely reporting remaining work. Before ending, make exactly one terminal loop decision: call loop_wakeup when another useful later check remains, or call loop_complete only when the task is complete or blocked on user input. If neither tool is called, the loop automatically continues.`;
 
-export function trySendUserMessage(
-  host: { readonly sendUserMessage: (message: string) => void },
-  message: string,
-): boolean {
+export function trySendUserMessage(host: LoopHost, message: string): boolean {
   try {
-    host.sendUserMessage(message);
+    host.sendUserMessage(message, USER_MESSAGE_DELIVERY_OPTIONS);
     return true;
   } catch (error: unknown) {
     if (error instanceof Error && error.message.includes(AGENT_BUSY_ERROR)) {

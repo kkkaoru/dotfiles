@@ -13,6 +13,7 @@ function persistedPausedState(
   entries: readonly unknown[],
 ): LoopRuntimeState {
   const runtime = new LoopRuntime(host);
+  runtime.command("inspect model", context);
   runtime.wakeup({ delaySeconds: 90, prompt: "inspect model", reason: "training" }, context);
   vi.advanceTimersByTime(30_000);
   runtime.command("pause", context);
@@ -24,7 +25,8 @@ function persistedPausedState(
   return restored;
 }
 
-it("delivers a ready continuation when reload restores into an idle session", () => {
+it("delivers a ready continuation after the reload lifecycle returns", () => {
+  vi.useFakeTimers();
   const sendUserMessage = vi.fn<LoopHost["sendUserMessage"]>();
   const runtime = new LoopRuntime({ sendUserMessage });
   const context: LoopContext = {
@@ -41,8 +43,13 @@ it("delivers a ready continuation when reload restores into an idle session", ()
     }),
     context,
   );
+  expect(sendUserMessage).not.toHaveBeenCalled();
+  vi.runOnlyPendingTimers();
 
-  expect(sendUserMessage).toHaveBeenCalledWith("08-26 04:00 → 04:01 | loop=#1 | inspect\ncontinue");
+  expect(sendUserMessage).toHaveBeenCalledWith(
+    "08-26 04:00 → 04:01 | loop=#1 | inspect\ncontinue",
+    { deliverAs: "followUp" },
+  );
   runtime.clear();
 });
 
@@ -62,6 +69,7 @@ it("restores a paused wakeup across reload and resumes its remaining delay", () 
     ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() },
   };
   const restored: LoopRuntimeState = persistedPausedState(host, context, entries);
+  sendUserMessage.mockClear();
 
   vi.setSystemTime(new Date(2026, 7, 26, 5, 0));
   const afterReload = new LoopRuntime(host);
@@ -72,6 +80,7 @@ it("restores a paused wakeup across reload and resumes its remaining delay", () 
   expect(resumed?.paused).toBe(false);
   expect(resumed?.jobs[0]?.nextRunAt).toBe(new Date(2026, 7, 26, 5, 1).getTime());
   expect(sendUserMessage).not.toHaveBeenCalled();
+  afterReload.command("schedule next", context);
   expect(
     afterReload.wakeup({ delaySeconds: 60, prompt: "next", reason: "again" }, context).id,
   ).toBe(2);

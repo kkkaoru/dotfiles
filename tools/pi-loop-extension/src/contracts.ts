@@ -1,5 +1,9 @@
 // This TypeScript file is executed with Bun.
 
+export interface CompleteResult {
+  readonly reason: string;
+}
+
 export interface LoopContext {
   readonly isIdle: () => boolean;
   readonly sessionManager?: { readonly getEntries: () => readonly unknown[] };
@@ -10,7 +14,11 @@ export interface LoopContext {
   };
 }
 
+export interface UserMessageDeliveryOptions {
+  readonly deliverAs: "followUp";
+}
+
 export interface LoopHost {
   readonly appendEntry?: (customType: string, data: unknown) => void;
-  readonly sendUserMessage: (content: string) => void;
+  readonly sendUserMessage: (content: string, options?: UserMessageDeliveryOptions) => void;
 }
