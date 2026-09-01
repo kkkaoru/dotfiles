@@ -4,6 +4,13 @@ import type { Completion } from "./waiter.ts";
 
 const AGENT_BUSY_ERROR = "Agent is already processing a prompt";
 const MAX_COMPLETION_IDENTITY_CHARACTERS = 160;
+const SETTLED_DELIVERY_DELAY_MS = 0;
+type SettledDelivery = ReturnType<typeof globalThis.setTimeout>;
+const COMPLETION_DELIVERY_OPTIONS: UserMessageDeliveryOptions = { deliverAs: "followUp" };
+
+export interface UserMessageDeliveryOptions {
+  readonly deliverAs: "followUp";
+}
 
 export interface CompletionDeliveryContext {
   readonly isIdle: () => boolean;
@@ -19,7 +26,7 @@ export interface CompletionDeliveryContext {
 }
 
 export interface CompletionDeliveryHost {
-  readonly sendUserMessage: (content: string) => void;
+  readonly sendUserMessage: (content: string, options?: UserMessageDeliveryOptions) => void;
 }
 
 export interface CompletionDeliveryOptions {
@@ -60,7 +67,7 @@ function isAgentBusyError(error: unknown): boolean {
 }
 
 export function wakePiOnCompletion(host: CompletionDeliveryHost, completion: Completion): void {
-  host.sendUserMessage(completionPrompt(completion));
+  host.sendUserMessage(completionPrompt(completion), COMPLETION_DELIVERY_OPTIONS);
 }
 
 export class CompletionDelivery {
@@ -69,6 +76,7 @@ export class CompletionDelivery {
   readonly #host: CompletionDeliveryHost;
   readonly #onDelivered: (completion: Completion) => void;
   #pending: Completion[] = [];
+  #settledDelivery: SettledDelivery | undefined;
 
   constructor(host: CompletionDeliveryHost, options?: CompletionDeliveryOptions) {
     this.#host = host;
@@ -104,12 +112,25 @@ export class CompletionDelivery {
     this.#flushIfIdle();
   }
 
+  deferAfterCompaction(context?: CompletionDeliveryContext): void {
+    if (context !== undefined) {
+      this.setContext(context);
+    }
+    this.#scheduleSettledDelivery((): void => this.afterCompaction(context));
+  }
+
+  deferAgentSettled(context: CompletionDeliveryContext): void {
+    this.setContext(context);
+    this.#scheduleSettledDelivery((): void => this.agentSettled(context));
+  }
+
   agentSettled(context: CompletionDeliveryContext): void {
     this.setContext(context);
     this.#flushIfIdle();
   }
 
   clear(): void {
+    this.#cancelSettledDelivery();
     this.#compacting = false;
     this.#pending = [];
     this.#updateStatus();
@@ -121,6 +142,7 @@ export class CompletionDelivery {
         completions
           .map((completion: Completion): string => completionPrompt(completion))
           .join("\n\n"),
+        COMPLETION_DELIVERY_OPTIONS,
       );
       completions.map((completion: Completion): void => this.#onDelivered(completion));
       return true;
@@ -130,6 +152,24 @@ export class CompletionDelivery {
       }
       throw error;
     }
+  }
+
+  #cancelSettledDelivery(): void {
+    if (this.#settledDelivery === undefined) {
+      return;
+    }
+    globalThis.clearTimeout(this.#settledDelivery);
+    this.#settledDelivery = undefined;
+  }
+
+  #scheduleSettledDelivery(callback: () => void): void {
+    if (this.#settledDelivery !== undefined) {
+      return;
+    }
+    this.#settledDelivery = globalThis.setTimeout((): void => {
+      this.#settledDelivery = undefined;
+      callback();
+    }, SETTLED_DELIVERY_DELAY_MS);
   }
 
   #flushIfIdle(): void {

@@ -213,6 +213,7 @@ it("wakes pi immediately with local timestamps when completion monitoring report
     expect.stringMatching(
       /^23:14 → 23:45 \| sleep 60\nlog: \/tmp\/pi-tmux-test\/output\.log\nstatus: \/tmp\/pi-tmux-test\/exit-status$/u,
     ),
+    { deliverAs: "followUp" },
   );
 });
 
@@ -254,7 +255,8 @@ it("defers completion follow-ups until compaction finishes", () => {
   expect(sendUserMessage).toHaveBeenCalledTimes(2);
 });
 
-it("delivers a real completion callback after compaction lifecycle events", async () => {
+it("delivers a real completion callback after lifecycle handlers return", async () => {
+  vi.useFakeTimers();
   const state: {
     completionSignal?: () => void;
     tool?: TmuxToolDefinition;
@@ -303,17 +305,40 @@ it("delivers a real completion callback after compaction lifecycle events", asyn
     ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() },
   };
   handlers.get("session_start")?.({}, context);
-  handlers.get("agent_settled")?.({}, context);
   await state.tool?.execute("call-1", { command: "sleep 60" }, undefined);
   handlers.get("session_before_compact")?.({}, context);
   state.completionSignal?.();
   expect(sendUserMessage).not.toHaveBeenCalled();
   handlers.get("session_compact")?.({}, context);
+  vi.runOnlyPendingTimers();
   expect(sendUserMessage).toHaveBeenCalledOnce();
-  expect(writeMarker).toHaveBeenCalledOnce();
   handlers.get("session_before_compact")?.({});
   handlers.get("session_compact_failed")?.({});
   handlers.get("session_shutdown")?.({});
+});
+
+it("defers agent-settled delivery until its lifecycle handler returns", () => {
+  vi.useFakeTimers();
+  const handlers = new Map<string, (event: unknown, context?: CompletionDeliveryContext) => void>();
+  const host: TmuxExtensionHost = {
+    exec: vi.fn(),
+    on: (event, handler): void => {
+      handlers.set(event, handler);
+    },
+    registerTool: (): void => undefined,
+    sendUserMessage: vi.fn(),
+  };
+  const context: CompletionDeliveryContext = {
+    isIdle: (): boolean => true,
+    ui: { notify: vi.fn(), setStatus: vi.fn() },
+  };
+  tmuxTimeoutExtension(host, { recovery: false });
+
+  handlers.get("agent_settled")?.({}, context);
+
+  expect(vi.getTimerCount()).toBe(1);
+  handlers.get("session_shutdown")?.({});
+  expect(vi.getTimerCount()).toBe(0);
 });
 
 it("ignores lifecycle context updates when Pi supplies no context", () => {

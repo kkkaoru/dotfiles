@@ -28,12 +28,12 @@ long-running commands continue in detached tmux sessions.
   `/reload` and session resume through a custom session entry.
 - Subscribes to a per-command `tmux wait-for` completion channel and starts an immediate continuation
   when tmux signals normal completion; the minute reconciliation is only the orphan fallback.
-- Never places completion in Pi's `followUp` queue. While Pi is busy, it shows a transient completion
-  notification, retains the continuation internally, and starts a normal user turn on `agent_settled`.
-  If `isIdle()` races with a newly started prompt and
-  `sendUserMessage()` rejects delivery, the completion returns to the same internal queue for the next
-  `agent_settled` instead of surfacing an extension error. This removes the hard-coded `Follow-up:`
-  TUI prefix.
+- Sends completion continuations with Pi's supported `{ deliverAs: "followUp" }` delivery mode. While
+  Pi is busy, it also shows a transient completion notification and retains the continuation internally
+  until `agent_settled`. Delivery from that event is deferred by one event-loop turn so multiple
+  settled handlers cannot all observe idle before an earlier asynchronous `sendUserMessage` call has
+  activated or queued its run. Together with the explicit delivery mode, this prevents re-entrant
+  prompt dispatch and a new prompt racing the final handoff.
 - Names same-day completion as `HH:mm → HH:mm | <command>` and includes dates on both timestamps
   only when it spans local calendar dates: `MM-DD HH:mm → MM-DD HH:mm | <command>`. The tmux session
   identity remains in internal metadata and artifact paths but is omitted from completion displays.

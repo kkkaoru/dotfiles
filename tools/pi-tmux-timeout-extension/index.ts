@@ -2,7 +2,11 @@
 import { type Static, Type, type TSchema } from "typebox";
 import { ArtifactCleaner, type ArtifactCleanerOptions } from "./src/cleanup.ts";
 import { ActiveTaskDisplay, recoverActiveTaskDisplayState } from "./src/active-display.ts";
-import { CompletionDelivery, type CompletionDeliveryContext } from "./src/delivery.ts";
+import {
+  CompletionDelivery,
+  type CompletionDeliveryContext,
+  type CompletionDeliveryHost,
+} from "./src/delivery.ts";
 import { type ActiveDisplayCommandHost, registerDisplayCommand } from "./src/display-command.ts";
 import {
   markCompletionDelivered,
@@ -39,18 +43,15 @@ interface ExecOptions {
   readonly signal?: AbortSignal;
   readonly timeout?: number;
 }
-
 interface ExecResult {
   readonly code: number;
   readonly stderr: string;
   readonly stdout: string;
 }
-
 interface ToolResult {
   readonly content: readonly [{ readonly text: string; readonly type: "text" }];
   readonly details: TmuxLaunch;
 }
-
 interface ExtractedBashInput {
   readonly input: MutableBashInput;
   readonly target: object;
@@ -89,7 +90,7 @@ type TmuxLifecycleEvent =
   | "tool_call"
   | "tool_result";
 
-export interface TmuxExtensionHost extends ActiveDisplayCommandHost {
+export interface TmuxExtensionHost extends ActiveDisplayCommandHost, CompletionDeliveryHost {
   readonly exec: (
     command: string,
     args: readonly string[],
@@ -100,7 +101,6 @@ export interface TmuxExtensionHost extends ActiveDisplayCommandHost {
     handler: (event: unknown, context?: CompletionDeliveryContext) => void,
   ) => void;
   readonly registerTool: (definition: TmuxToolDefinition) => void;
-  readonly sendUserMessage: (content: string) => void;
 }
 
 function toolCallInput(event: unknown): unknown {
@@ -230,7 +230,7 @@ function registerLifecycleHandlers(input: {
         input.recovery === false ? undefined : input.recovery?.operations,
       ),
     );
-    input.delivery.afterCompaction(context);
+    input.delivery.deferAfterCompaction(context);
   });
   input.host.on("agent_start", (_event: unknown, context?: CompletionDeliveryContext): void => {
     if (context !== undefined) {
@@ -239,7 +239,7 @@ function registerLifecycleHandlers(input: {
   });
   input.host.on("agent_settled", (_event: unknown, context?: CompletionDeliveryContext): void => {
     if (context !== undefined) {
-      input.delivery.agentSettled(context);
+      input.delivery.deferAgentSettled(context);
     }
   });
   input.host.on(
@@ -249,13 +249,13 @@ function registerLifecycleHandlers(input: {
   );
   input.host.on("session_compact", (_event: unknown, context?: CompletionDeliveryContext): void => {
     input.runtime.reconcile();
-    input.delivery.afterCompaction(context);
+    input.delivery.deferAfterCompaction(context);
   });
   input.host.on(
     "session_compact_failed",
     (_event: unknown, context?: CompletionDeliveryContext): void => {
       input.runtime.reconcile();
-      input.delivery.afterCompaction(context);
+      input.delivery.deferAfterCompaction(context);
     },
   );
   input.host.on("session_shutdown", (): void => {

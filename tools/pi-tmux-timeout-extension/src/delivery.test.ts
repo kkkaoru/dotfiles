@@ -39,6 +39,7 @@ it("normalizes completion identity into one bounded naming line", () => {
     expect.stringMatching(
       /^08-25 23:55 → 08-26 02:15 \| cat > \/tmp\/test\.py <<'PY' print\('ok'\)[^\n]{0,160}\nlog: \/tmp\/pi-tmux-test\/output\.log\nstatus: \/tmp\/pi-tmux-test\/exit-status$/u,
     ),
+    { deliverAs: "followUp" },
   );
 });
 
@@ -66,6 +67,7 @@ it("labels orphaned task completion without an invented exit result", () => {
 
   expect(sendUserMessage).toHaveBeenCalledWith(
     "11:14 → 11:15 | orphaned | run verification\nlog: /tmp/pi-tmux-test/output.log\nstatus: /tmp/pi-tmux-test/exit-status",
+    { deliverAs: "followUp" },
   );
 });
 
@@ -113,8 +115,58 @@ it("shows a transient completion while busy and delivers normally after settling
 
   expect(sendUserMessage).toHaveBeenCalledWith(
     "02:05 → 02:12 | command_exit=2 | run verification\nlog: /tmp/pi-tmux-test/output.log\nstatus: /tmp/pi-tmux-test/exit-status",
+    { deliverAs: "followUp" },
   );
   expect(onDelivered).toHaveBeenCalledWith(completion);
+});
+
+it("defers and coalesces settled delivery until the lifecycle callback returns", () => {
+  vi.useFakeTimers();
+  const sendUserMessage = vi.fn<CompletionDeliveryHost["sendUserMessage"]>();
+  const context: CompletionDeliveryContext = {
+    isIdle: (): boolean => true,
+    ui: { notify: vi.fn(), setStatus: vi.fn() },
+  };
+  const delivery = new CompletionDelivery({ sendUserMessage });
+  const completion: Completion = {
+    completedAt: "2026-08-26T02:15:00.000Z",
+    exitCode: 0,
+    launch: {
+      command: "tmux command",
+      completionChannel: "pi-tmux-test-complete",
+      logPath: "/tmp/pi-tmux-test/output.log",
+      sessionName: "pi-tmux-test",
+      socketName: "pi-tmux-socket",
+      statusPath: "/tmp/pi-tmux-test/exit-status",
+      submittedAt: "2026-08-26T02:14:00.000Z",
+      taskCommand: "run verification",
+    },
+  };
+  delivery.setContext({ ...context, isIdle: (): boolean => false });
+  delivery.complete(completion);
+
+  delivery.deferAgentSettled(context);
+  delivery.deferAgentSettled(context);
+  expect(sendUserMessage).not.toHaveBeenCalled();
+  vi.runOnlyPendingTimers();
+
+  expect(sendUserMessage).toHaveBeenCalledOnce();
+});
+
+it("cancels deferred settled delivery when cleared", () => {
+  vi.useFakeTimers();
+  const sendUserMessage = vi.fn<CompletionDeliveryHost["sendUserMessage"]>();
+  const context: CompletionDeliveryContext = {
+    isIdle: (): boolean => true,
+    ui: { notify: vi.fn(), setStatus: vi.fn() },
+  };
+  const delivery = new CompletionDelivery({ sendUserMessage });
+  delivery.deferAgentSettled(context);
+
+  delivery.clear();
+  vi.runOnlyPendingTimers();
+
+  expect(sendUserMessage).not.toHaveBeenCalled();
 });
 
 it("defers an immediate delivery race without showing a persistent widget", () => {
