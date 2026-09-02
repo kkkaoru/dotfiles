@@ -77,6 +77,36 @@ test("wrapper forwards an empty argument list under Bash nounset", () => {
   }
 });
 
+test("wrapper starts with a configured Node binary outside PATH", () => {
+  const home = mkdtempSync(join(tmpdir(), "pi-wrapper-node-"));
+  const realPi = join(home, ".bun/bin/pi");
+  const node = join(home, "node");
+  mkdirSync(dirname(realPi), { recursive: true });
+  writeFileSync(realPi, "#!/bin/bash\nprintf 'started\\n'\n", { mode: 0o700 });
+  writeFileSync(
+    node,
+    "#!/bin/bash\n/usr/bin/python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' \"$3\"\n",
+    { mode: 0o700 },
+  );
+
+  try {
+    const result = spawnSync("/bin/bash", [WRAPPER], {
+      cwd: home,
+      encoding: "utf8",
+      env: {
+        HOME: home,
+        PATH: home,
+        PI_NODE_BINARY: node,
+        PI_PROVIDER: "noop",
+      },
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), "started");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("installs once on the vulnerable AgentSession shape", () => {
   const AgentSession = vulnerableSessionClass();
 
