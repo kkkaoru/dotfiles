@@ -9,9 +9,17 @@ long-running commands continue in detached tmux sessions.
 - Derives a 128-bit namespace from Pi's main session ID and uses a dedicated tmux server socket for
   that namespace. Session names are `pi-tmux-<namespace>-<counter>`, so different Pi sessions neither
   share names nor subscribe to each other's completion channels.
-- Automatically rewrites `bash` tool calls with a timeout of at least 120 seconds.
-- Automatically rewrites known blocking watchers: `gh run watch`, `watch`, and `tail -f`.
-- Leaves short commands and commands that already invoke tmux unchanged.
+- Automatically rewrites `bash` tool calls with a timeout of at least 30 seconds.
+- Also rewrites duration-uncertain commands without an explicit foreground budget: known watchers;
+  package, language, and workflow validation; builds and installs; deploy, container, infrastructure,
+  database, data, and training work; network commands; broad repository inspections; and unknown
+  custom commands. This catches commands such as `actionlint; git diff --stat` even when the agent
+  omits `timeout`.
+- Treats an explicit timeout below 30 seconds as a foreground budget, even for a normally risky
+  command. Without a timeout, only an allowlist of confidently short local commands such as `pwd`,
+  `echo`, and `git status` remains in foreground. Commands that already invoke tmux stay unchanged.
+  The tool guidance tells agents to prefer `tmux_exec` whenever duration is uncertain and to reserve
+  foreground Bash for bounded local work.
 - Stores combined stdout/stderr in `output.log` and the numeric exit code in `exit-status` under the
   system temporary directory.
 - Returns the tmux session name and both file paths immediately so pi remains available for input.
@@ -65,7 +73,7 @@ cleanup time.
 
 ## Claudex integration
 
-This package exports its long-command policy as
+This package exports its potentially blocking-command policy as
 `@kkkaoru/pi-tmux-timeout-extension/policy`. `pi-claudex-provider` consumes that policy because its
 Claudex gateway calls Pi providers directly without running Pi's agent loop. In that environment the
 matching operation is delegated to Claude Code's native `run_in_background` Bash lifecycle instead
@@ -85,10 +93,16 @@ Pi can call the tool directly:
 tmux_exec({ command: "gh run watch 32847265628 --exit-status --compact" })
 ```
 
-A normal long-timeout bash call is rewritten automatically:
+A potentially blocking Bash call is rewritten automatically, even if the agent omits `timeout`:
 
 ```text
-bash({ command: "bun run check", timeout: 120 })
+bash({ command: "bun run check" })
+```
+
+An intentionally bounded external check stays in foreground:
+
+```text
+bash({ command: "curl --max-time 10 https://example.com/status", timeout: 10 })
 ```
 
 ## Install

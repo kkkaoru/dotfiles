@@ -38,6 +38,9 @@ it("registers and executes the parallel tmux tool", async () => {
   }
   expect(tool.name).toBe("tmux_exec");
   expect(tool.executionMode).toBe("parallel");
+  expect(tool.description).toContain("duration-uncertain");
+  expect(tool.promptGuidelines.join(" ")).toContain("when in doubt, detach it");
+  expect(tool.promptGuidelines.join(" ")).toContain("foreground bash only");
   const controller = new globalThis.AbortController();
   const result = await tool.execute(
     "call-1",
@@ -365,7 +368,7 @@ it("ignores lifecycle context updates when Pi supplies no context", () => {
   handlers.get("session_shutdown")?.({});
 });
 
-it("automatically rewrites and event-subscribes successful long-running bash calls", () => {
+it("automatically rewrites and event-subscribes potentially blocking bash calls", () => {
   let onShutdown: ((event: unknown) => void) | undefined;
   let onToolCall: ((event: unknown) => void) | undefined;
   let onToolResult: ((event: unknown) => void) | undefined;
@@ -384,7 +387,9 @@ it("automatically rewrites and event-subscribes successful long-running bash cal
     registerTool: (): void => undefined,
     sendUserMessage: vi.fn(),
   };
-  const input = { command: "gh run watch 32847265628 --exit-status --compact", timeout: 1200 };
+  const input: { command: string; timeout?: number } = {
+    command: "command -v actionlint >/dev/null && actionlint workflow.yml; git diff --stat -- app",
+  };
   const failedInput = { command: "tail -f server.log", timeout: 1200 };
 
   tmuxTimeoutExtension(host, { events: { subscribe } });

@@ -294,17 +294,17 @@ export default function tmuxTimeoutExtension(
   registerDisplayCommand(host, activeDisplay);
   host.registerTool({
     description:
-      "Start a long-running shell command in a detached tmux session and return immediately. Output and exit status are written to files under the system temporary directory.",
+      "Start a potentially slow, blocking, externally waiting, or duration-uncertain shell command in a detached tmux session and return immediately. Output and exit status are written to files under the system temporary directory.",
     executionMode: "parallel",
     label: "Tmux Exec",
     name: "tmux_exec",
     parameters: tmuxExecSchema,
     promptGuidelines: [
-      "Use tmux_exec instead of foreground bash for commands expected to run for at least 120 seconds or continuously watch external state.",
-      "Set tmux_exec estimatedDurationSeconds to a realistic duration estimate for the command.",
+      "Prefer tmux_exec whenever a shell command may block, has uncertain duration, or could take at least 30 seconds; when in doubt, detach it. Use it by default for tests, builds, deploys, containers, database or data processing, model training or evaluation, external-state waits, network transfers, and broad repository inspections.",
+      "Use foreground bash only for bounded local commands confidently expected to finish within 30 seconds. Give intentionally foregrounded network or otherwise risky commands an explicit timeout below 30 seconds, and give tmux_exec a realistic estimatedDurationSeconds.",
       "After tmux_exec starts a command, return control promptly; pi-tmux-timeout-extension will start a named continuation when its exit-status file appears.",
     ],
-    promptSnippet: "Run a long command in detached tmux without blocking pi",
+    promptSnippet: "Run potentially blocking or duration-uncertain shell work without blocking pi",
     async execute(_toolCallId, params, signal) {
       const launch: TmuxLaunch = runtime.createLaunch(
         params.command,

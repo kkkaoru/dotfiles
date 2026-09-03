@@ -5,9 +5,11 @@ Bidirectional integration package for Pi and Claudex.
 Direction A exposes Pi providers as a raw model gateway over an authenticated Unix socket. It calls provider `streamSimple` directly, so Pi's agent loop does not run. Direction B registers configured Claudex models as the Pi provider `claudex` and uses Pi's Anthropic Messages streaming implementation to call the adapter.
 
 Because Direction A does not run Pi's agent loop, Pi `tool_call` extensions cannot intercept the
-Claude Code tools returned by a routed model. This package therefore imports the long-command policy
-from `pi-tmux-timeout-extension`, adds the Claude-native background lifecycle guidance to the Bash
-tool description, and normalizes matching Bash calls to `run_in_background=true`. It prefixes the
+Claude Code tools returned by a routed model. This package therefore imports the potentially
+blocking-command policy from `pi-tmux-timeout-extension`, adds the Claude-native background lifecycle
+guidance to the Bash tool description, and normalizes matching Bash calls to
+`run_in_background=true`. The shared policy uses a 30-second foreground budget and backgrounds all
+non-allowlisted or recognized duration-uncertain work when the model omits a timeout. It prefixes the
 background description with execution-local `MM-DD HH:mm`, while Claude Code owns the task id, output path, user-input
 availability, and completion notification. Claudex's isolated `PreToolUse` hook applies the same
 policy again at the Claude Code execution boundary as a fallback. The adapter treats non-Agent task

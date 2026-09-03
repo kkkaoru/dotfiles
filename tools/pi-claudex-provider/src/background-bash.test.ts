@@ -64,7 +64,7 @@ it("leaves unrelated and malformed calls unchanged", () => {
     type: "toolCall",
     id: "bash-4",
     name: "Bash",
-    arguments: { command: "bun test", timeout: 30_000 },
+    arguments: { command: "bun test", timeout: 29_000 },
   };
   const explicit: ToolCall = {
     type: "toolCall",

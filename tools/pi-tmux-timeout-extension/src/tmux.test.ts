@@ -46,15 +46,17 @@ it("creates a quoted detached tmux launch command", () => {
   ).toThrow("invalid tmux session namespace");
 });
 
-it("detects long timeouts and known watch commands", () => {
-  expect(shouldDetachBash({ command: "bun run check", timeout: 120 })).toBe(true);
+it("detects uncertain work, thirty-second timeouts, and known watch commands", () => {
+  expect(shouldDetachBash({ command: "bun run check" })).toBe(true);
+  expect(shouldDetachBash({ command: "echo uncertain", timeout: 30 })).toBe(true);
   expect(shouldDetachBash({ command: "gh run watch 123" })).toBe(true);
   expect(shouldDetachBash({ command: "tail -f server.log" })).toBe(true);
   expect(shouldDetachBash({ command: "watch date" })).toBe(true);
 });
 
-it("leaves short and already detached commands unchanged", () => {
-  expect(shouldDetachBash({ command: "bun test", timeout: 30 })).toBe(false);
+it("leaves bounded, short local, and already detached commands unchanged", () => {
+  expect(shouldDetachBash({ command: "bun test", timeout: 29 })).toBe(false);
+  expect(shouldDetachBash({ command: "git status --short" })).toBe(false);
   expect(
     shouldDetachBash({
       command: "tmux new-session -d -s existing 'gh run watch 1'",
@@ -72,7 +74,7 @@ it("rewrites matching bash calls and preserves the counter for skipped calls", (
     },
   });
   runtime.startSession(SESSION_ID);
-  const shortInput = { command: "bun test", timeout: 30 };
+  const shortInput = { command: "bun test", timeout: 29 };
   const longInput = { command: "gh run watch 123", timeout: 1200 };
 
   expect(runtime.rewriteLongBash(shortInput)).toBeUndefined();
