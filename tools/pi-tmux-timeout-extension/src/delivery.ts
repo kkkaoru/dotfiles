@@ -62,6 +62,38 @@ function completionPrompt(completion: Completion): string {
   return `${completionName(completion)}\nlog: ${completion.launch.logPath}\nstatus: ${completion.launch.statusPath}`;
 }
 
+function completionTimestamp(completion: Completion): number {
+  return Date.parse(completion.completedAt);
+}
+
+function latestCompletion(completions: readonly Completion[]): Completion {
+  const latestTimestamp: number = Math.max(
+    ...completions.map((completion: Completion): number => completionTimestamp(completion)),
+  );
+  const latest: Completion | undefined = completions.findLast(
+    (completion: Completion): boolean => completionTimestamp(completion) === latestTimestamp,
+  );
+  if (latest === undefined) {
+    throw new Error("Cannot deliver an empty completion batch");
+  }
+  return latest;
+}
+
+function deliveryPrompt(completions: readonly Completion[]): string {
+  if (completions.length === 1) {
+    return completionPrompt(latestCompletion(completions));
+  }
+  const failedCount: number = completions.filter(
+    (completion: Completion): boolean => completion.exitCode !== 0,
+  ).length;
+  const succeededCount: number = completions.length - failedCount;
+  return [
+    `tmux completion batch: ${String(completions.length)} tasks finished while Pi was busy (${String(succeededCount)} succeeded, ${String(failedCount)} failed or orphaned).`,
+    `Earlier completion details coalesced: ${String(completions.length - 1)}. Their artifacts remain under the same Pi tmux session namespace; inspect them only if still relevant.`,
+    `latest completion:\n${completionPrompt(latestCompletion(completions))}`,
+  ].join("\n");
+}
+
 function isAgentBusyError(error: unknown): boolean {
   return error instanceof Error && error.message.includes(AGENT_BUSY_ERROR);
 }
@@ -138,12 +170,7 @@ export class CompletionDelivery {
 
   #deliver(completions: readonly Completion[]): boolean {
     try {
-      this.#host.sendUserMessage(
-        completions
-          .map((completion: Completion): string => completionPrompt(completion))
-          .join("\n\n"),
-        COMPLETION_DELIVERY_OPTIONS,
-      );
+      this.#host.sendUserMessage(deliveryPrompt(completions), COMPLETION_DELIVERY_OPTIONS);
       completions.map((completion: Completion): void => this.#onDelivered(completion));
       return true;
     } catch (error: unknown) {

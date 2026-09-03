@@ -120,6 +120,60 @@ it("shows a transient completion while busy and delivers normally after settling
   expect(onDelivered).toHaveBeenCalledWith(completion);
 });
 
+it("coalesces a busy completion burst into one latest-task summary", () => {
+  vi.useFakeTimers();
+  let idle = false;
+  const sendUserMessage = vi.fn<CompletionDeliveryHost["sendUserMessage"]>();
+  const onDelivered = vi.fn();
+  const context: CompletionDeliveryContext = {
+    isIdle: (): boolean => idle,
+    ui: { notify: vi.fn(), setStatus: vi.fn() },
+  };
+  const delivery = new CompletionDelivery({ sendUserMessage }, { onDelivered });
+  const olderCompletion: Completion = {
+    completedAt: "2026-08-26T02:12:00.000Z",
+    exitCode: 1,
+    launch: {
+      command: "tmux command",
+      completionChannel: "pi-tmux-test-older-complete",
+      logPath: "/tmp/pi-tmux-test-older/output.log",
+      sessionName: "pi-tmux-test-older",
+      socketName: "pi-tmux-socket",
+      statusPath: "/tmp/pi-tmux-test-older/exit-status",
+      submittedAt: "2026-08-26T02:10:00.000Z",
+      taskCommand: "older verification",
+    },
+  };
+  const latestCompletion: Completion = {
+    completedAt: "2026-08-26T02:14:00.000Z",
+    exitCode: 0,
+    launch: {
+      command: "tmux command",
+      completionChannel: "pi-tmux-test-latest-complete",
+      logPath: "/tmp/pi-tmux-test-latest/output.log",
+      sessionName: "pi-tmux-test-latest",
+      socketName: "pi-tmux-socket",
+      statusPath: "/tmp/pi-tmux-test-latest/exit-status",
+      submittedAt: "2026-08-26T02:13:00.000Z",
+      taskCommand: "latest verification",
+    },
+  };
+  delivery.setContext(context);
+  delivery.complete(latestCompletion);
+  delivery.complete(olderCompletion);
+
+  idle = true;
+  delivery.agentSettled(context);
+
+  expect(sendUserMessage).toHaveBeenCalledWith(
+    "tmux completion batch: 2 tasks finished while Pi was busy (1 succeeded, 1 failed or orphaned).\nEarlier completion details coalesced: 1. Their artifacts remain under the same Pi tmux session namespace; inspect them only if still relevant.\nlatest completion:\n11:13 → 11:14 | latest verification\nlog: /tmp/pi-tmux-test-latest/output.log\nstatus: /tmp/pi-tmux-test-latest/exit-status",
+    { deliverAs: "followUp" },
+  );
+  expect(onDelivered).toHaveBeenCalledTimes(2);
+  expect(onDelivered).toHaveBeenNthCalledWith(1, latestCompletion);
+  expect(onDelivered).toHaveBeenNthCalledWith(2, olderCompletion);
+});
+
 it("defers and coalesces settled delivery until the lifecycle callback returns", () => {
   vi.useFakeTimers();
   const sendUserMessage = vi.fn<CompletionDeliveryHost["sendUserMessage"]>();

@@ -33,7 +33,10 @@ long-running commands continue in detached tmux sessions.
   until `agent_settled`. Delivery from that event is deferred by one event-loop turn so multiple
   settled handlers cannot all observe idle before an earlier asynchronous `sendUserMessage` call has
   activated or queued its run. Together with the explicit delivery mode, this prevents re-entrant
-  prompt dispatch and a new prompt racing the final handoff.
+  prompt dispatch and a new prompt racing the final handoff. If several tasks finish while Pi remains
+  busy, their eventual follow-up reports aggregate success/failure counts and only the newest task's
+  command and artifact paths. All tasks are still marked delivered, so stale intermediate details do
+  not flood a later agent turn or return after `/reload`.
 - Names same-day completion as `HH:mm → HH:mm | <command>` and includes dates on both timestamps
   only when it spans local calendar dates: `MM-DD HH:mm → MM-DD HH:mm | <command>`. The tmux session
   identity remains in internal metadata and artifact paths but is omitted from completion displays.
