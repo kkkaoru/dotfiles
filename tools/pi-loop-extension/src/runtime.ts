@@ -170,7 +170,6 @@ export class LoopRuntime {
       return;
     }
     if (this.#runningContinuation === undefined) {
-      this.#persist();
       return;
     }
     if (this.#jobs.size > 0) {

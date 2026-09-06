@@ -8,6 +8,7 @@ import {
   type Scheduler,
   type WakeupInput,
 } from "./runtime.ts";
+import { createLoopState } from "./state.ts";
 
 interface PollerCallback {
   readonly callback: () => void;
@@ -202,6 +203,30 @@ describe("LoopRuntime delivery races", () => {
 });
 
 describe("LoopRuntime settled delivery", () => {
+  it("does not persist unchanged state after the agent settles", () => {
+    const appendEntry = vi.fn<NonNullable<LoopHost["appendEntry"]>>();
+    const runtime = new LoopRuntime({ appendEntry, sendUserMessage }, scheduler);
+    runtime.restore(
+      createLoopState({
+        jobs: [],
+        nextId: 1,
+        paused: false,
+        pendingContinuations: [],
+        runningContinuation: undefined,
+      }),
+      context,
+    );
+
+    runtime.agentSettled(context);
+    runtime.agentSettled(context);
+    expect(appendEntry).not.toHaveBeenCalled();
+
+    runtime.command("pause", context);
+    expect(appendEntry).toHaveBeenCalledOnce();
+    runtime.agentSettled(context);
+    expect(appendEntry).toHaveBeenCalledOnce();
+  });
+
   it("defers and coalesces continuation until the lifecycle callback returns", () => {
     vi.useFakeTimers();
     const runtime = new LoopRuntime(host, scheduler);
