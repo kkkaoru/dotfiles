@@ -3,8 +3,29 @@
 
 set -euo pipefail
 
-SCRIPT_PATH="$(node -e 'console.log(require("node:fs").realpathSync(process.argv[1]))' "$0")"
-SCRIPT_DIR="$(dirname "$SCRIPT_PATH")"
+find_node_binary() {
+  for candidate in \
+    "${PI_NODE_BINARY:-}" \
+    "$(command -v node 2>/dev/null || true)" \
+    /opt/homebrew/bin/node \
+    /usr/local/bin/node \
+    "${HOME}/.local/share/mise/installs/node/latest/bin/node" \
+    "${HOME}"/.local/share/mise/installs/node/*/bin/node; do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return
+    fi
+  done
+  return 1
+}
+
+NODE_BINARY="$(find_node_binary || true)"
+if [ -z "$NODE_BINARY" ]; then
+  echo "pi wrapper: could not find node; install Node with mise or set PI_NODE_BINARY" >&2
+  exit 127
+fi
+SCRIPT_PATH="$("$NODE_BINARY" -e 'console.log(require("node:fs").realpathSync(process.argv[1]))' "$0")"
+SCRIPT_DIR="${SCRIPT_PATH%/*}"
 REAL_PI=""
 for candidate in "${HOME}/.bun/bin/pi" /opt/homebrew/bin/pi; do
   if [ -x "$candidate" ] && [ "$candidate" != "$0" ]; then
@@ -108,7 +129,7 @@ if [ "$needs_omlx" -eq 1 ]; then
   fi
 fi
 
-REAL_PI_RESOLVED="$(node -e 'console.log(require("node:fs").realpathSync(process.argv[1]))' "$REAL_PI")"
+REAL_PI_RESOLVED="$("$NODE_BINARY" -e 'console.log(require("node:fs").realpathSync(process.argv[1]))' "$REAL_PI")"
 case "$REAL_PI_RESOLVED" in
   */@earendil-works/pi-coding-agent/dist/bundle/cli.js|*/@earendil-works/pi-coding-agent/dist/cli.js)
     PACKAGE_ROOT="${REAL_PI_RESOLVED%%/dist/*}"
@@ -116,7 +137,7 @@ case "$REAL_PI_RESOLVED" in
     UNBUNDLED_CLI="$PACKAGE_ROOT/dist/cli.js"
     if [ -f "$PATCH_MODULE" ] && [ -f "$UNBUNDLED_CLI" ]; then
       PI_CODING_AGENT_PACKAGE_ROOT="$PACKAGE_ROOT" \
-        exec node --import "$PATCH_MODULE" "$UNBUNDLED_CLI" "$@"
+        exec "$NODE_BINARY" --import "$PATCH_MODULE" "$UNBUNDLED_CLI" "$@"
     fi
     ;;
 esac

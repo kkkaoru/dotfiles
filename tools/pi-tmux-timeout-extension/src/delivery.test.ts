@@ -317,6 +317,35 @@ it("retains a completion across repeated immediate delivery races", () => {
   expect(sendUserMessage).toHaveBeenCalledTimes(3);
 });
 
+it("does not redeliver when post-delivery bookkeeping fails", () => {
+  const sendUserMessage = vi.fn<CompletionDeliveryHost["sendUserMessage"]>();
+  const delivery = new CompletionDelivery(
+    { sendUserMessage },
+    {
+      onDelivered: (): never => {
+        throw new Error("artifact disappeared");
+      },
+    },
+  );
+  const completion: Completion = {
+    completedAt: "2026-08-26T02:15:00.000Z",
+    exitCode: 0,
+    launch: {
+      command: "tmux command",
+      completionChannel: "pi-tmux-test-complete",
+      logPath: "/tmp/pi-tmux-test/output.log",
+      sessionName: "pi-tmux-test",
+      socketName: "pi-tmux-socket",
+      statusPath: "/tmp/pi-tmux-test/exit-status",
+      submittedAt: "2026-08-26T02:14:00.000Z",
+      taskCommand: "run verification",
+    },
+  };
+
+  expect((): void => delivery.complete(completion)).not.toThrow();
+  expect(sendUserMessage).toHaveBeenCalledOnce();
+});
+
 it("does not hide unrelated completion delivery errors", () => {
   const sendUserMessage = vi.fn<CompletionDeliveryHost["sendUserMessage"]>(() => {
     throw new Error("unexpected delivery failure");
