@@ -1,0 +1,4 @@
+set timeout -1
+spawn -noecho {*}$argv
+stty rows 40 columns 120 < $spawn_out(slave,name)
+interact
