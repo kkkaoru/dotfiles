@@ -120,6 +120,10 @@ export class AutomaticDelivery {
   }
 
   #flush(request: AutomaticCheckRequest, pending: readonly string[]): void {
+    if (pending.length === 0) {
+      this.#queuedDelivery = undefined;
+      return;
+    }
     const remaining: readonly string[] = undeliveredInbox(
       pending,
       request.context.sessionManager.buildContextEntries?.() ??

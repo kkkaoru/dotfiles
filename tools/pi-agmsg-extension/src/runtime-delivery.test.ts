@@ -201,7 +201,7 @@ describe("automatic message checks", () => {
   it("polls after joining and triggers a turn only for a real message", async () => {
     const harness = createDeliveryHarness({ availableTeams: [], kind: "not-joined" });
     await harness.runtime.start(harness.context);
-    expect(harness.schedulerState.intervalMs).toBe(5000);
+    expect(harness.schedulerState.intervalMs).toBe(60_000);
     harness.ui.editor.mockResolvedValueOnce("new-team").mockResolvedValueOnce("new-agent");
     await harness.runtime.command("setup", harness.context);
     harness.messages.sendMessage.mockClear();
@@ -242,10 +242,12 @@ describe("automatic message checks", () => {
 
   it("ignores empty output, unknown identity, and stopped sessions", async () => {
     const empty = createDeliveryHarness(SINGLE_IDENTITY);
+    const getEntries = vi.spyOn(empty.context.sessionManager, "getEntries");
     empty.clientMock.inbox.mockResolvedValue("");
     await empty.runtime.start(empty.context);
     await empty.runtime.checkAutomatically(empty.context);
     expect(empty.messages.sendMessage).not.toHaveBeenCalled();
+    expect(getEntries).not.toHaveBeenCalled();
 
     const unknown = createDeliveryHarness({ availableTeams: [], kind: "not-joined" });
     await unknown.runtime.checkAutomatically(unknown.context);
