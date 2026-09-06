@@ -2,9 +2,10 @@
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   LAUNCH_METADATA_FILENAME,
+  type PersistenceOperations,
   deliveryMarkerPath,
   markCompletionDelivered,
   nextTmuxLaunchId,
@@ -141,6 +142,36 @@ it("persists and recovers undelivered launches from a resumed Pi session", () =>
   persistTmuxLaunch(undefined, persisted);
 });
 
+it("does not recover a resumed launch after its artifact directory was removed", () => {
+  const entries: unknown[] = [
+    {
+      customType: "pi-tmux-launch-v2",
+      data: {
+        completionChannel: "pi-tmux-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1-complete",
+        logPath: "/tmp/pi-tmux-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1/output.log",
+        sessionName: "pi-tmux-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1",
+        socketName: "pi-tmux-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        statusPath: "/tmp/pi-tmux-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1/exit-status",
+        submittedAt: "2026-09-05T00:00:00.000Z",
+        taskCommand: "completed task",
+      },
+      type: "custom",
+    },
+  ];
+  const exists = vi.fn<PersistenceOperations["exists"]>().mockReturnValue(false);
+  const operations: PersistenceOperations = {
+    exists,
+    readDirectory: vi.fn(),
+    readFile: vi.fn(),
+    statBirthtime: vi.fn(),
+    writeFile: vi.fn(),
+  };
+
+  expect(recoverSessionTmuxLaunches(entries, SESSION_NAMESPACE, operations)).toStrictEqual([]);
+  expect(exists).toHaveBeenCalledOnce();
+  expect(exists).toHaveBeenCalledWith("/tmp/pi-tmux-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1");
+});
+
 it("marks successful delivery and tolerates an unavailable recovery root", () => {
   const rootDirectory: string = temporaryDirectory();
   const persisted: TmuxLaunch = launch(rootDirectory, 1);
@@ -153,4 +184,62 @@ it("marks successful delivery and tolerates an unavailable recovery root", () =>
   expect(
     nextTmuxLaunchId({ rootDirectory: missingRoot, sessionNamespace: SESSION_NAMESPACE }),
   ).toBe(1);
+});
+
+it("tolerates an artifact directory removed before delivery is marked", () => {
+  const writeFile = vi.fn<PersistenceOperations["writeFile"]>(() => {
+    throw Object.assign(new Error("artifact directory was removed"), { code: "ENOENT" });
+  });
+  const operations: PersistenceOperations = {
+    exists: vi.fn(),
+    readDirectory: vi.fn(),
+    readFile: vi.fn(),
+    statBirthtime: vi.fn(),
+    writeFile,
+  };
+
+  expect(() =>
+    markCompletionDelivered(
+      {
+        command: "tmux wrapper",
+        completionChannel: "pi-tmux-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1-complete",
+        logPath: "/tmp/pi-tmux-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1/output.log",
+        sessionName: "pi-tmux-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1",
+        socketName: "pi-tmux-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        statusPath: "/tmp/pi-tmux-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1/exit-status",
+        submittedAt: "2026-09-05T00:00:00.000Z",
+        taskCommand: "completed task",
+      },
+      operations,
+    ),
+  ).not.toThrow();
+  expect(writeFile).toHaveBeenCalledOnce();
+});
+
+it("propagates delivery marker write failures other than a missing path", () => {
+  const operations: PersistenceOperations = {
+    exists: vi.fn(),
+    readDirectory: vi.fn(),
+    readFile: vi.fn(),
+    statBirthtime: vi.fn(),
+    writeFile: vi.fn(() => {
+      throw Object.assign(new Error("delivery marker is not writable"), { code: "EACCES" });
+    }),
+  };
+
+  expect(() =>
+    markCompletionDelivered(
+      {
+        command: "tmux wrapper",
+        completionChannel: "pi-tmux-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1-complete",
+        logPath: "/tmp/pi-tmux-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1/output.log",
+        sessionName: "pi-tmux-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1",
+        socketName: "pi-tmux-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        statusPath: "/tmp/pi-tmux-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-1/exit-status",
+        submittedAt: "2026-09-05T00:00:00.000Z",
+        taskCommand: "completed task",
+      },
+      operations,
+    ),
+  ).toThrow("delivery marker is not writable");
 });

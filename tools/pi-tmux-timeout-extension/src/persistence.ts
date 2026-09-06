@@ -75,7 +75,13 @@ export function markCompletionDelivered(
   launch: TmuxLaunch,
   operations: PersistenceOperations = SYSTEM_OPERATIONS,
 ): void {
-  operations.writeFile(deliveryMarkerPath(launch), `${new Date().toISOString()}\n`);
+  try {
+    operations.writeFile(deliveryMarkerPath(launch), `${new Date().toISOString()}\n`);
+  } catch (error: unknown) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+      throw error;
+    }
+  }
 }
 
 function isStringProperty(value: object, key: keyof PersistedTmuxLaunch): boolean {
@@ -219,7 +225,10 @@ export function recoverSessionTmuxLaunches(
     },
   );
   for (const launch of recovered) {
-    if (!operations.exists(deliveryMarkerPath(launch))) {
+    if (
+      operations.exists(path.dirname(launch.statusPath)) &&
+      !operations.exists(deliveryMarkerPath(launch))
+    ) {
       launches.set(launch.sessionName, launch);
     }
   }
