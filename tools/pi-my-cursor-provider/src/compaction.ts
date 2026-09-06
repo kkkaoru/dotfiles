@@ -167,6 +167,24 @@ export function buildSummaryPrompt(
   return `<conversation>\n${messagesText}\n</conversation>\n\n${previousSummaryBlock}${focusedPrompt}`;
 }
 
+async function completeWithAbort<T>(
+  promise: Promise<T>,
+  signal: AbortSignal | undefined,
+): Promise<T> {
+  if (signal === undefined) return promise;
+  const cancelled = Promise.withResolvers<never>();
+  const abort = (): void => {
+    cancelled.reject(new DOMException("Compaction cancelled", "AbortError"));
+  };
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) abort();
+  try {
+    return await Promise.race([promise, cancelled.promise]);
+  } finally {
+    signal.removeEventListener("abort", abort);
+  }
+}
+
 export function summarizeWithFallbackChain(
   conversationText: string,
   previousSummary: string | undefined,
@@ -192,24 +210,27 @@ export function summarizeWithFallbackChain(
     }
     try {
       const prompt = buildSummaryPrompt(conversationText, previousSummary, customInstructions);
-      const response = await registry.complete(
-        model,
-        {
-          systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
-          messages: [
-            {
-              role: "user",
-              content: [{ type: "text", text: prompt }],
-              timestamp: Date.now(),
-            },
-          ],
-        },
-        {
-          maxTokens: SUMMARY_MAX_TOKENS,
-          signal,
-          cacheRetention: "none",
-          sessionId: uuidv7(),
-        },
+      const response = await completeWithAbort(
+        registry.complete(
+          model,
+          {
+            systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
+            messages: [
+              {
+                role: "user",
+                content: [{ type: "text", text: prompt }],
+                timestamp: Date.now(),
+              },
+            ],
+          },
+          {
+            maxTokens: SUMMARY_MAX_TOKENS,
+            signal,
+            cacheRetention: "none",
+            sessionId: uuidv7(),
+          },
+        ),
+        signal,
       );
       if (signal?.aborted) return undefined;
       const summary = textOfContent(response.content).trim();

@@ -117,6 +117,20 @@ test("returns undefined when the whole chain fails or nothing is available", asy
   ).resolves.toBeUndefined();
 });
 
+test("aborts a never-resolving summarization instead of keeping the session locked", async () => {
+  const controller = new AbortController();
+  const complete = vi.fn((): Promise<{ content: unknown[] }> => new Promise(() => {}));
+  const pending = summarizeWithFallbackChain(
+    "conversation",
+    undefined,
+    undefined,
+    registry([KIMI], { complete }),
+    controller.signal,
+  );
+  controller.abort();
+  await expect(pending).resolves.toBeUndefined();
+});
+
 test("aborts cleanly when the signal fires before the call", async () => {
   const controller = new AbortController();
   controller.abort();
