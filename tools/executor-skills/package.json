@@ -1,0 +1,30 @@
+{
+  "name": "@kkkaoru/executor-skills",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "pi": {
+    "skills": [
+      "./skills"
+    ]
+  },
+  "scripts": {
+    "start": "bun run cli.mjs",
+    "tsc": "tsc --noEmit",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "test": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "zod": "4.3.6",
+    "yaml": "2.8.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.2.4",
+    "@types/bun": "1.3.0",
+    "@vitest/coverage-v8": "3.2.4",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}
