@@ -1,0 +1,9 @@
+#!/bin/sh
+# Use the CLI shipped with the Homebrew cask; do not install a second runtime.
+set -eu
+binary="/Applications/Executor.app/Contents/Resources/executor/executor"
+if [ ! -x "$binary" ]; then
+  printf '%s\n' 'Executor Desktop is missing. Install it with: brew install --cask executor' >&2
+  exit 127
+fi
+exec "$binary" "$@"

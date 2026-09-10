@@ -1,0 +1,62 @@
+{
+  "sources": [
+    "https://developers.cloudflare.com/agents/model-context-protocol/cloudflare/servers-for-cloudflare/",
+    "https://motherduck.com/docs/key-tasks/ai-and-motherduck/mcp-setup/"
+  ],
+  "remote": [
+    {
+      "slug": "cloudflare-docs",
+      "name": "Cloudflare Documentation",
+      "endpoint": "https://docs.mcp.cloudflare.com/mcp",
+      "auth": "none"
+    },
+    {
+      "slug": "cloudflare-agents",
+      "name": "Cloudflare Agents SDK Documentation",
+      "endpoint": "https://agents.cloudflare.com/mcp",
+      "auth": "none"
+    },
+    {
+      "slug": "cloudflare-api",
+      "name": "Cloudflare API (Code Mode)",
+      "endpoint": "https://mcp.cloudflare.com/mcp",
+      "auth": "oauth2"
+    },
+    {
+      "slug": "cloudflare-bindings",
+      "name": "Cloudflare Workers Bindings",
+      "endpoint": "https://bindings.mcp.cloudflare.com/mcp",
+      "auth": "oauth2"
+    },
+    {
+      "slug": "cloudflare-builds",
+      "name": "Cloudflare Workers Builds",
+      "endpoint": "https://builds.mcp.cloudflare.com/mcp",
+      "auth": "oauth2"
+    },
+    {
+      "slug": "cloudflare-observability",
+      "name": "Cloudflare Workers Observability",
+      "endpoint": "https://observability.mcp.cloudflare.com/mcp",
+      "auth": "oauth2"
+    },
+    {
+      "slug": "cloudflare-browser",
+      "name": "Cloudflare Browser Run",
+      "endpoint": "https://browser.mcp.cloudflare.com/mcp",
+      "auth": "oauth2"
+    },
+    {
+      "slug": "cloudflare-graphql",
+      "name": "Cloudflare GraphQL Analytics",
+      "endpoint": "https://graphql.mcp.cloudflare.com/mcp",
+      "auth": "oauth2"
+    },
+    {
+      "slug": "motherduck",
+      "name": "MotherDuck",
+      "endpoint": "https://api.motherduck.com/mcp",
+      "auth": "oauth2"
+    }
+  ]
+}
