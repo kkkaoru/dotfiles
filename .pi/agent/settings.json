@@ -16,6 +16,18 @@
     "progressTextOnEffortChange": true,
     "rampStartRatio": 0.6
   },
+  "skills": [
+    "!agents-sdk",
+    "!cloudflare*",
+    "!durable-objects",
+    "!gpui*",
+    "!motherduck-*",
+    "!sandbox-*",
+    "!turnstile-spin",
+    "!web-perf",
+    "!workers-best-practices",
+    "!wrangler"
+  ],
   "packages": [
     "./packages/pi-effort-manager",
     "./packages/pi-my-clinepass-provider",
@@ -23,6 +35,7 @@
     "./packages/pi-my-cursor-provider",
     "./packages/pi-my-devin-cli-provider",
     "./packages/pi-claudex-provider",
-    "./packages/pi-lazy-external-extensions"
+    "./packages/pi-lazy-external-extensions",
+    "./packages/executor-skills"
   ]
 }
