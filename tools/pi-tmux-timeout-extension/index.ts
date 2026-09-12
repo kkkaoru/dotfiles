@@ -1,5 +1,7 @@
 // This TypeScript file is executed with Bun.
-import { type Static, Type, type TSchema } from "typebox";
+import type { Static } from "typebox";
+import { registerTmuxTool } from "./src/register-tool.ts";
+import type { tmuxExecSchema } from "./src/tool-schema.ts";
 import { ArtifactCleaner, type ArtifactCleanerOptions } from "./src/cleanup.ts";
 import { ActiveTaskDisplay, recoverActiveTaskDisplayState } from "./src/active-display.ts";
 import {
@@ -17,27 +19,12 @@ import {
 import type { Completion } from "./src/waiter.ts";
 import {
   type MutableBashInput,
-  TMUX_LAUNCH_TIMEOUT_MILLISECONDS,
   type TmuxLaunch,
   TmuxRuntime,
   type TmuxRuntimeOptions,
 } from "./src/tmux.ts";
 
 export { CompletionDelivery, wakePiOnCompletion } from "./src/delivery.ts";
-
-const tmuxExecSchema = Type.Object({
-  command: Type.String({
-    description: "Long-running shell command to start in detached tmux",
-    minLength: 1,
-  }),
-  estimatedDurationSeconds: Type.Optional(
-    Type.Integer({
-      description: "Estimated duration in seconds for expected completion time",
-      maximum: 604_800,
-      minimum: 1,
-    }),
-  ),
-}) satisfies TSchema;
 
 interface ExecOptions {
   readonly signal?: AbortSignal;
@@ -190,15 +177,6 @@ class AutomaticTmuxRewriter {
   }
 }
 
-function resultText(launch: TmuxLaunch): string {
-  return [
-    "Started detached tmux command.",
-    `tmux session: ${launch.sessionName}`,
-    `log: ${launch.logPath}`,
-    `exit status: ${launch.statusPath}`,
-  ].join("\n");
-}
-
 function registerLifecycleHandlers(input: {
   readonly activeDisplay: ActiveTaskDisplay;
   readonly cleaner: ArtifactCleaner;
@@ -292,41 +270,7 @@ export default function tmuxTimeoutExtension(
   const rewriter: AutomaticTmuxRewriter = new AutomaticTmuxRewriter(runtime);
 
   registerDisplayCommand(host, activeDisplay);
-  host.registerTool({
-    description:
-      "Start a potentially slow, blocking, externally waiting, or duration-uncertain shell command in a detached tmux session and return immediately. Output and exit status are written to files under the system temporary directory.",
-    executionMode: "parallel",
-    label: "Tmux Exec",
-    name: "tmux_exec",
-    parameters: tmuxExecSchema,
-    promptGuidelines: [
-      "Prefer tmux_exec whenever a shell command may block, has uncertain duration, or could take at least 30 seconds; when in doubt, detach it. Use it by default for tests, builds, deploys, containers, database or data processing, model training or evaluation, external-state waits, network transfers, and broad repository inspections.",
-      "Use foreground bash only for bounded local commands confidently expected to finish within 30 seconds. Give intentionally foregrounded network or otherwise risky commands an explicit timeout below 30 seconds, and give tmux_exec a realistic estimatedDurationSeconds.",
-      "After tmux_exec starts a command, return control promptly; pi-tmux-timeout-extension will start a named continuation when its exit-status file appears.",
-    ],
-    promptSnippet: "Run potentially blocking or duration-uncertain shell work without blocking pi",
-    async execute(_toolCallId, params, signal) {
-      const launch: TmuxLaunch = runtime.createLaunch(
-        params.command,
-        params.estimatedDurationSeconds,
-      );
-      const options: ExecOptions =
-        signal === undefined
-          ? { timeout: TMUX_LAUNCH_TIMEOUT_MILLISECONDS }
-          : { signal, timeout: TMUX_LAUNCH_TIMEOUT_MILLISECONDS };
-      const result: ExecResult = await host.exec("sh", ["-lc", launch.command], options);
-      if (result.code !== 0) {
-        throw new Error(
-          result.stderr.trim() || result.stdout.trim() || "Failed to start tmux command",
-        );
-      }
-      runtime.trackLaunch(launch);
-      return {
-        content: [{ text: resultText(launch), type: "text" }],
-        details: launch,
-      };
-    },
-  });
+  registerTmuxTool(host, runtime);
 
   registerLifecycleHandlers({
     activeDisplay,
