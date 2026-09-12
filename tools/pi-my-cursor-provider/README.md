@@ -61,6 +61,15 @@ pi --approve -e . --model cursor/auto
 
 Run unit tests with `bun --cwd tools/pi-my-cursor-provider test` (vitest). A bare `bun test` in this directory uses bun's runner and fails on `importOriginal`.
 
+The `undici` override removes the vulnerable 5.x copy pulled in by Cursor's
+Connect 1.x dependency and uses the same 8.9.0 version as the pinned Pi SDK.
+Connect 1.7.0 imports only its `Headers` polyfill; its HTTP transports use Node's
+built-in clients. Keep the override until Cursor updates that dependency, and
+verify native Connect imports/header handling as well as `bun audit` when updating it.
+For an existing installation, use `bun install --force --frozen-lockfile` so an old
+nested copy does not shadow the override. `bun audit` checks the lockfile, not
+extraneous packages left in `node_modules`.
+
 ### Manual TUI tool roundtrip
 
 `tests/tui-probe-extension.ts` is a manual fixture for verifying that a Cursor custom-tool callback crosses the provider bridge, is executed by pi, and returns its result to the same Cursor run. Start both extensions:
