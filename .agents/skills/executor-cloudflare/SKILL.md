@@ -121,6 +121,103 @@ and call `cloudflare.request` from an async arrow function.
   successful results from others.
 - Do not interpret HTTP 200 alone as success; inspect the service result too.
 
+## R2 operations through existing OAuth
+
+Distinguish **bucket management**, **object access**, and **API-token management**.
+A failure on `/user/tokens` or `/accounts/{account_id}/tokens` does not establish
+that R2 operations are unavailable. Conversely, successful bucket creation alone
+is not proof of object access. Probe the actual operation needed.
+
+### Prefer the existing MCP connection before requiring S3 keys
+
+Load the official `cloudflare` skill and its `references/r2/README.md` and relevant
+references through `local-skills`. Then discover R2 endpoints with the registered
+`cloudflare-api` Code Mode `search` tool. Inspect only the needed methods,
+parameters, request bodies, and response fields; returning every R2 schema can
+truncate the MCP response.
+
+The following REST routes were found in the MCP's OpenAPI specification:
+
+| Operation | Method and path |
+| --- | --- |
+| List/create buckets | `GET` / `POST /accounts/{account_id}/r2/buckets` |
+| Inspect bucket | `GET /accounts/{account_id}/r2/buckets/{bucket_name}` |
+| List objects | `GET /accounts/{account_id}/r2/buckets/{bucket_name}/objects` |
+| Read/write/delete one object | `GET` / `PUT` / `DELETE /accounts/{account_id}/r2/buckets/{bucket_name}/objects/{object_key}` |
+
+Use `cloudflare.request` through Executor with the existing authorized OAuth
+connection. Supply the explicit account and bucket, and encode the object key as
+one path parameter. For listings, inspect `per_page`, `prefix`, and `cursor` in the
+current schema, bound each response, and follow pagination when completeness is
+required. Do not use the collection DELETE route for a single-object cleanup.
+
+**Verified in this environment:** the existing OAuth connection successfully
+listed objects, uploaded a small non-secret JSON object, read it back with an exact
+content match, deleted it, and confirmed its absence. API-token-management access
+still returned error `9109` after reauthorization. These are separate capabilities.
+This demonstrates an R2 object-access route without issuing new S3 credentials,
+deploying a Worker, making the bucket public, or adding a daemon. It does not prove
+that every connection, jurisdiction, payload size, or future deployment supports
+this route; rediscover and verify before relying on it.
+
+### JSON/binary handling and verification
+
+- The discovered GET schema returns the object body, not necessarily a Cloudflare
+  JSON API envelope. PUT accepts a raw object body. Inspect the current MCP
+  `execute` schema for `body`, `contentType`, and `rawBody` handling; do not assume
+  arbitrary binary data survives the MCP's response parser.
+- The successful small-object probe used `contentType: "application/json"` and an
+  application document shaped as
+  `{"success":true,"result":{"marker":"<random non-secret value>"},"errors":[],"messages":[]}`.
+  On GET, the marker was available as `response.result.marker`. The stored
+  `success` field is application data, **not independent evidence of API success**;
+  check HTTP status and the exact returned content as well.
+- For encrypted settings, a JSON envelope containing base64-encoded ciphertext is
+  a candidate transport, not a tested full synchronization implementation. Encrypt
+  locally before upload; base64 is not encryption. Never place plaintext secrets
+  in tool arguments, object probes, logs, or MCP responses.
+- Check MCP input/output limits independently of the REST upload limit. Test
+  realistic encrypted payload sizes, truncation detection, integrity, pagination,
+  and any chunking protocol before enabling synchronization. Do not treat failed
+  requests or truncated results as an absent object or empty bucket.
+- Start investigations with bounded reads. Run write probes only when authorized:
+  use a unique key in the intended bucket, non-secret data, exact read-back checks,
+  and cleanup in a `finally` path. Delete only the object created by that probe,
+  verify absence, and report cleanup failures without hiding the original error.
+- Preserve bucket privacy and unrelated lifecycle rules. Distinguish a successful
+  transport probe from encryption setup, synchronization enablement, and actual
+  second-device restoration.
+
+### Other R2 routes and authentication limits
+
+- The installed `cloudflare-bindings` catalog exposed bucket create/get/list/delete
+  tools, not object read/write tools, during verification. Inspect its current
+  catalog rather than assuming it has every R2 operation.
+- S3-compatible clients remain a valid alternative when S3 credentials are already
+  available or specifically needed. They are **not a prerequisite for all R2
+  access**. An existing S3-only implementation needs a transport change to use
+  Executor/MCP REST; finding this route does not automatically change that code.
+- Temporary S3 credentials derive from an existing parent R2 API token. They do
+  not remove that prerequisite or expand the parent's permissions. Inspect the
+  current Temporary Credentials API before proposing it as a solution.
+- Check granted permissions and the official MCP scope catalog linked below before
+  proposing reauthorization. At verification, the published OAuth catalog had no
+  API-token-management scope; `access-service-token.read/write` concerns Zero Trust
+  service tokens, not general API-token management. Do not promise that selecting
+  Full access or repeating OAuth will add an unsupported permission.
+- Only require a credential handoff or Dashboard token issuance when the chosen
+  route actually needs it and available authorized routes have been evaluated.
+  Keep existing working connections intact and never extract their credentials
+  from Executor storage to bypass the integration.
+
+References:
+
+- Official R2 skill: `cloudflare/references/r2/` via `local-skills`.
+- Current REST schemas: registered `cloudflare-api` Code Mode `search`.
+- R2 S3 token authentication: https://developers.cloudflare.com/r2/api/tokens/
+- Temporary credentials: https://developers.cloudflare.com/r2/api/s3/temporary-credentials/
+- Official API MCP: https://github.com/cloudflare/mcp
+
 ## Billing and authentication troubleshooting
 
 Treat these as separate states: catalog registration, MCP connection, tool listing,
