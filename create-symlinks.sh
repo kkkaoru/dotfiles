@@ -57,6 +57,13 @@ link_tree() {
   done
 }
 
+# ~/.agents contains all shared skills and their lockfile, not per-skill links.
+# Merge/back up an existing directory explicitly before installing this link.
+if [ -e "${HOME}/.agents" ] && [ ! -L "${HOME}/.agents" ]; then
+  echo "refuse: ${HOME}/.agents exists and is not a symlink; merge it into ${DOTPATH}/.agents first" >&2
+  exit 1
+fi
+
 # ~/.pi must be a symlink to this repository. An existing real directory
 # would hide the managed tree, so refuse instead of silently skipping it.
 if [ -e "${HOME}/.pi" ] && [ ! -L "${HOME}/.pi" ]; then
@@ -82,7 +89,6 @@ for f in .??*; do
   [ "$f" = ".git" ] && continue
   [ "$f" = ".tool-versions" ] && continue
   [ "$f" = ".config" ] && continue
-  [ "$f" = ".agents" ] && continue
   [ "$f" = ".claude" ] && continue
   [ "$f" = ".cursor" ] && continue
   [ "$f" = ".grok" ] && continue
@@ -123,12 +129,6 @@ for name in agents commands hooks rules skills; do
     link_tree "${DOTPATH}/.claude/${name}" "${HOME}/.claude/${name}"
   fi
 done
-
-# Shared Agent Skills are the canonical definitions used by pi and mirrored
-# into harness-specific skill directories where required.
-if [ -d "${DOTPATH}/.agents/skills" ]; then
-  link_tree "${DOTPATH}/.agents/skills" "${HOME}/.agents/skills"
-fi
 
 # Cursor keeps runtime state beside user skills, so merge only skills.
 if [ -L "${HOME}/.cursor" ]; then
@@ -296,6 +296,6 @@ if [ -d "${DOTPATH}/.config" ]; then
 fi
 
 # Provider-backed claudex children must not start their own agmsg watchers.
-# The agmsg skill is installed outside this repository, so apply the guard
-# idempotently when the dotfiles are installed or refreshed.
+# The agmsg skill lives in the repository-backed ~/.agents tree; apply the
+# guard idempotently when the dotfiles are installed or refreshed.
 "${DOTPATH}/scripts/ensure-agmsg-claudex-guard.sh"

@@ -19,6 +19,8 @@ integrations. These instructions apply to agents working here, including pi and 
 
 ## Configuration layout
 
+- `.agents/` — Entire shared Agent Skills home (`~/.agents` is a symlink), including
+  installed skills and `.skill-lock.json`. agmsg DB, runtime, and local teams are ignored.
 - `.config/fish/` — Fish shell configuration. `config.fish` sources `aliases.fish`,
   `envs.fish`, `binds.fish`, and `path.fish`; Homebrew and mise are integrated here.
 - `.config/mise/`, `.config/anyenv/` — Version-management configuration.
