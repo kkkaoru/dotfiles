@@ -205,3 +205,82 @@ it("uses distinct tmux servers and counters for different Pi sessions", () => {
   expect(first.sessionName).toMatch(/-1$/u);
   expect(second.sessionName).toMatch(/-1$/u);
 });
+
+it("keeps hard timeouts separate from estimates and preserves rewritten bash budgets", () => {
+  const runtime = new TmuxRuntime({ onComplete: (): void => undefined });
+  const estimated = runtime.createLaunch("wrangler tail", { estimatedDurationSeconds: 60 });
+  const bounded = runtime.createLaunch("wrangler tail", { timeoutSeconds: 90 });
+  const rewritten = runtime.rewriteLongBash({ command: "wrangler tail", timeout: 1200 });
+
+  expect(estimated.command).not.toMatch(/--kill-after/u);
+  expect(bounded.command).toMatch(/--verbose --kill-after=5s/u);
+  expect(bounded.command).toMatch(/90s/u);
+  expect(bounded.taskCommand).toBe("wrangler tail");
+  expect(rewritten?.command).toMatch(/--verbose --kill-after=5s/u);
+  expect(rewritten?.command).toMatch(/1200s/u);
+  expect(bounded.command).toMatch(/command -v gtimeout \|\| command -v timeout/u);
+  expect(bounded.command).toMatch(/GNU timeout is required/u);
+  expect(() => runtime.createLaunch("echo invalid", { timeoutSeconds: 0 })).toThrow(
+    "timeoutSeconds must be a finite positive number",
+  );
+  expect(() => runtime.createLaunch("echo invalid", { timeoutSeconds: Number.NaN })).toThrow(
+    "timeoutSeconds must be a finite positive number",
+  );
+  runtime.clear();
+});
+
+it("checks in once when a live job passes its estimate without marking it complete", () => {
+  vi.useFakeTimers();
+  const onOverdue = vi.fn();
+  const onComplete = vi.fn();
+  const runtime = new TmuxRuntime({
+    events: { subscribe: (): (() => void) => (): void => undefined },
+    onComplete,
+    onOverdue,
+    operations: { isRunning: (): boolean => true, read: (): string => "" },
+  });
+  runtime.trackLaunch(runtime.createLaunch("wrangler tail", { estimatedDurationSeconds: 120 }));
+
+  vi.advanceTimersByTime(60_000);
+  expect(onOverdue).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(60_000);
+  expect(onOverdue).toHaveBeenCalledExactlyOnceWith([
+    expect.objectContaining({ taskCommand: "wrangler tail" }),
+  ]);
+  vi.advanceTimersByTime(600_000);
+  expect(onOverdue).toHaveBeenCalledOnce();
+  expect(onComplete).not.toHaveBeenCalled();
+  runtime.clear();
+  vi.advanceTimersByTime(600_000);
+  expect(onOverdue).toHaveBeenCalledOnce();
+});
+
+it("reconciles completion before an overdue check-in and recovers overdue legacy jobs", () => {
+  vi.useFakeTimers();
+  const onOverdue = vi.fn();
+  const onComplete = vi.fn();
+  const read = vi.fn().mockReturnValue("");
+  const runtime = new TmuxRuntime({
+    events: { subscribe: (): (() => void) => (): void => undefined },
+    onComplete,
+    onOverdue,
+    operations: { isRunning: (): boolean => true, read },
+  });
+  runtime.startSession(SESSION_ID);
+  const launch = runtime.createLaunch("legacy watcher");
+  const { estimatedCompletionAt: omittedEstimate, ...legacy } = launch;
+  expect(omittedEstimate).toBeTypeOf("string");
+  vi.advanceTimersByTime(180_000);
+  runtime.restore([legacy]);
+  expect(onOverdue).toHaveBeenCalledOnce();
+  read.mockReturnValue("0\n");
+  vi.advanceTimersByTime(60_000);
+
+  runtime.trackLaunch(
+    runtime.createLaunch("finishes on deadline", { estimatedDurationSeconds: 1 }),
+  );
+  vi.advanceTimersByTime(60_000);
+  expect(onComplete).toHaveBeenCalledTimes(2);
+  expect(onOverdue).toHaveBeenCalledOnce();
+  runtime.clear();
+});

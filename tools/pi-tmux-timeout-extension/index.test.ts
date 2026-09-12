@@ -44,7 +44,7 @@ it("registers and executes the parallel tmux tool", async () => {
   const controller = new globalThis.AbortController();
   const result = await tool.execute(
     "call-1",
-    { command: "sleep 60", estimatedDurationSeconds: 600 },
+    { command: "sleep 60", estimatedDurationSeconds: 600, timeoutSeconds: 900 },
     controller.signal,
   );
   expect(exec).toHaveBeenCalledOnce();
@@ -52,9 +52,46 @@ it("registers and executes the parallel tmux tool", async () => {
   expect(result.details.sessionName).toMatch(/^pi-tmux-[a-f0-9]{32}-1$/u);
   expect(result.details.logPath).toMatch(/output\.log$/u);
   expect(result.details.statusPath).toMatch(/exit-status$/u);
+  expect(result.details.command).toMatch(/--verbose --kill-after=5s/u);
+
   expect(
     Date.parse(result.details.estimatedCompletionAt ?? "") - Date.parse(result.details.submittedAt),
   ).toBe(600_000);
+});
+
+it("routes overdue runtime check-ins through the extension lifecycle", async () => {
+  vi.useFakeTimers();
+  const tools: TmuxToolDefinition[] = [];
+  const handlers = new Map<string, (event: unknown, context?: CompletionDeliveryContext) => void>();
+  const sendUserMessage = vi.fn<TmuxExtensionHost["sendUserMessage"]>();
+  const host: TmuxExtensionHost = {
+    exec: vi.fn<TmuxExtensionHost["exec"]>().mockResolvedValue({ code: 0, stdout: "", stderr: "" }),
+    on: (name, handler) => {
+      handlers.set(name, handler);
+    },
+    registerTool: (tool) => {
+      tools.push(tool);
+    },
+    sendUserMessage,
+  };
+  tmuxTimeoutExtension(host, {
+    recovery: false,
+    events: { subscribe: (): (() => void) => (): void => undefined },
+    operations: { read: () => "", isRunning: () => true },
+  });
+  await tools[0]?.execute(
+    "overdue",
+    { command: "wrangler tail", estimatedDurationSeconds: 60 },
+    undefined,
+  );
+  vi.advanceTimersByTime(60_000);
+  expect(sendUserMessage).toHaveBeenCalledExactlyOnceWith(
+    expect.stringMatching(/^tmux overdue check-in/u),
+    { deliverAs: "followUp" },
+  );
+  handlers.get("session_shutdown")?.({});
+  vi.advanceTimersByTime(60_000);
+  expect(sendUserMessage).toHaveBeenCalledOnce();
 });
 
 it("controls session-scoped task display commands", async () => {

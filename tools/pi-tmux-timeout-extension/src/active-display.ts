@@ -1,7 +1,7 @@
 // This TypeScript file is executed with Bun.
 import type { CompletionDeliveryContext } from "./delivery.ts";
 import { formatLocalTimestamp } from "./policy.ts";
-import { DEFAULT_ESTIMATED_DURATION_SECONDS, type TmuxLaunch } from "./tmux.ts";
+import { estimatedCompletionTime, type TmuxLaunch } from "./tmux.ts";
 
 export const ACTIVE_DISPLAY_ENTRY_TYPE = "pi-tmux-active-display-v1";
 const MAX_TASK_IDENTITY_CHARACTERS = 160;
@@ -17,13 +17,11 @@ function taskIdentity(command: string): string {
 
 function runningTaskName(launch: TmuxLaunch): string {
   const submittedDate = new Date(launch.submittedAt);
-  const estimatedCompletionDate = new Date(
-    launch.estimatedCompletionAt ??
-      submittedDate.getTime() + DEFAULT_ESTIMATED_DURATION_SECONDS * 1000,
-  );
+  const estimatedCompletionDate = new Date(estimatedCompletionTime(launch));
+  const indicator: string = estimatedCompletionDate.getTime() <= Date.now() ? "⚠ overdue" : "⏳";
   const submittedAt: string = formatLocalTimestamp(submittedDate, "submitted");
   const estimatedCompletionAt: string = formatLocalTimestamp(estimatedCompletionDate, "submitted");
-  return `⏳ ${submittedAt} → ${estimatedCompletionAt} ${taskIdentity(launch.taskCommand)}`;
+  return `${indicator} ${submittedAt} → ${estimatedCompletionAt} ${taskIdentity(launch.taskCommand)}`;
 }
 
 function customDisplayData(entry: unknown): unknown {

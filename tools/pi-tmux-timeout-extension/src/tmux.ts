@@ -17,9 +17,13 @@ export const RECONCILIATION_INTERVAL_MILLISECONDS = 60_000;
 export const TMUX_LAUNCH_TIMEOUT_MILLISECONDS = 30_000;
 export const TMUX_LAUNCH_TIMEOUT_SECONDS = 30;
 
-export interface CreateTmuxLaunchInput {
-  readonly command: string;
+export interface TmuxTiming {
   readonly estimatedDurationSeconds?: number;
+  readonly timeoutSeconds?: number;
+}
+
+export interface CreateTmuxLaunchInput extends TmuxTiming {
+  readonly command: string;
   readonly id: number;
   readonly namespace: string;
 }
@@ -40,6 +44,7 @@ export interface TmuxRuntimeOptions {
   readonly events?: CompletionEvents;
   readonly onActiveChange?: (launches: readonly TmuxLaunch[]) => void;
   readonly onComplete: (completion: Completion) => void;
+  readonly onOverdue?: (launches: readonly TmuxLaunch[]) => void;
   readonly onTrack?: (launch: TmuxLaunch) => void;
   readonly operations?: StatusOperations;
 }
@@ -62,6 +67,25 @@ export function tmuxSessionNamespace(sessionId: string): string {
   return createHash("sha256").update(sessionId).digest("hex").slice(0, 32);
 }
 
+export function estimatedCompletionTime(launch: TmuxLaunch): number {
+  return launch.estimatedCompletionAt === undefined
+    ? Date.parse(launch.submittedAt) + DEFAULT_ESTIMATED_DURATION_SECONDS * 1000
+    : Date.parse(launch.estimatedCompletionAt);
+}
+
+function boundedTaskCommand(input: CreateTmuxLaunchInput): string {
+  if (input.timeoutSeconds === undefined) {
+    return input.command;
+  }
+  if (!Number.isFinite(input.timeoutSeconds) || input.timeoutSeconds <= 0) {
+    throw new Error("timeoutSeconds must be a finite positive number");
+  }
+  return [
+    String.raw`timeout_binary="$(command -v gtimeout || command -v timeout)" || { printf '%s\n' 'GNU timeout is required (macOS: brew install coreutils)' >&2; exit 127; }`,
+    `"$timeout_binary" --verbose --kill-after=5s ${shellQuote(`${String(input.timeoutSeconds)}s`)} sh -lc ${shellQuote(input.command)}`,
+  ].join("\n");
+}
+
 export function createTmuxLaunch(input: CreateTmuxLaunchInput): TmuxLaunch {
   const { command, id, namespace } = input;
   if (!/^[a-f0-9]{32}$/u.test(namespace)) {
@@ -79,7 +103,7 @@ export function createTmuxLaunch(input: CreateTmuxLaunchInput): TmuxLaunch {
   const estimatedCompletionAt: string = new Date(
     Date.parse(submittedAt) + estimatedDurationSeconds * 1000,
   ).toISOString();
-  const detachedScript = `(${command}) > ${shellQuote(logPath)} 2>&1\nexit_code=$?\nprintf '%s\\n' "$exit_code" > ${shellQuote(statusPath)}\ntmux -L ${shellQuote(socketName)} wait-for -S ${shellQuote(completionChannel)}`;
+  const detachedScript = `(${boundedTaskCommand(input)}) > ${shellQuote(logPath)} 2>&1\nexit_code=$?\nprintf '%s\\n' "$exit_code" > ${shellQuote(statusPath)}\ntmux -L ${shellQuote(socketName)} wait-for -S ${shellQuote(completionChannel)}`;
   const message = launchMessage({ logPath, sessionName, statusPath });
   const launch: TmuxLaunch = {
     command: "",
@@ -116,6 +140,8 @@ export class TmuxRuntime {
   readonly #onActiveChange: (launches: readonly TmuxLaunch[]) => void;
   readonly #onComplete: (completion: Completion) => void;
   readonly #onTrack: (launch: TmuxLaunch) => void;
+  readonly #onOverdue: (launches: readonly TmuxLaunch[]) => void;
+  readonly #overdueReported = new Set<string>();
   readonly #waiter: CompletionWaiter;
   #nextId = 1;
   #reconciliationTimer: NodeJS.Timeout | undefined;
@@ -125,6 +151,7 @@ export class TmuxRuntime {
     this.#onActiveChange = options.onActiveChange ?? ((): void => undefined);
     this.#onComplete = options.onComplete;
     this.#onTrack = options.onTrack ?? ((): void => undefined);
+    this.#onOverdue = options.onOverdue ?? ((): void => undefined);
     this.#waiter = new CompletionWaiter({
       ...options,
       onComplete: (completion: Completion): void => this.#complete(completion),
@@ -138,10 +165,10 @@ export class TmuxRuntime {
     return this.#namespace;
   }
 
-  createLaunch(command: string, estimatedDurationSeconds?: number): TmuxLaunch {
+  createLaunch(command: string, timing?: TmuxTiming): TmuxLaunch {
     const launch: TmuxLaunch = createTmuxLaunch({
       command,
-      ...(estimatedDurationSeconds === undefined ? {} : { estimatedDurationSeconds }),
+      ...timing,
       id: this.#nextId,
       namespace: this.#namespace,
     });
@@ -153,7 +180,12 @@ export class TmuxRuntime {
     if (!shouldDetachBash(input)) {
       return undefined;
     }
-    const launch: TmuxLaunch = this.createLaunch(input.command, input.timeout);
+    const launch: TmuxLaunch = this.createLaunch(
+      input.command,
+      input.timeout === undefined
+        ? undefined
+        : { estimatedDurationSeconds: input.timeout, timeoutSeconds: input.timeout },
+    );
     input.command = launch.command;
     input.timeout = TMUX_LAUNCH_TIMEOUT_SECONDS;
     return launch;
@@ -184,16 +216,31 @@ export class TmuxRuntime {
 
   reconcile(): void {
     this.#waiter.reconcile();
+    const overdue: readonly TmuxLaunch[] = [...this.#active.values()].filter(
+      (launch: TmuxLaunch): boolean =>
+        !this.#overdueReported.has(launch.completionChannel) &&
+        estimatedCompletionTime(launch) <= Date.now(),
+    );
+    if (overdue.length === 0) {
+      return;
+    }
+    this.#onOverdue(overdue);
+    overdue.map((launch: TmuxLaunch): Set<string> =>
+      this.#overdueReported.add(launch.completionChannel),
+    );
+    this.#notifyActiveChange();
   }
 
   clear(): void {
     this.#waiter.clear();
     this.#active.clear();
+    this.#overdueReported.clear();
     this.#notifyActiveChange();
   }
 
   #complete(completion: Completion): void {
     this.#active.delete(completion.launch.completionChannel);
+    this.#overdueReported.delete(completion.launch.completionChannel);
     this.#notifyActiveChange();
     this.#onComplete(completion);
   }

@@ -23,11 +23,17 @@ export function registerTmuxTool(host: TmuxExtensionHost, runtime: TmuxRuntime):
     promptGuidelines: [
       "Prefer tmux_exec whenever a shell command may block, has uncertain duration, or could take at least 30 seconds; when in doubt, detach it. Use it by default for tests, builds, deploys, containers, database or data processing, model training or evaluation, external-state waits, network transfers, and broad repository inspections.",
       "Use foreground bash only for bounded local commands confidently expected to finish within 30 seconds. Give intentionally foregrounded network or otherwise risky commands an explicit timeout below 30 seconds, and give tmux_exec a realistic estimatedDurationSeconds.",
-      "After tmux_exec starts a command, return control promptly; pi-tmux-timeout-extension will start a named continuation when its exit-status file appears.",
+      "After tmux_exec starts a command, return control promptly; pi-tmux-timeout-extension starts a continuation on completion or an overdue check-in. On a check-in, inspect progress and decide whether to keep waiting or stop the specific job; do not merely repeat its status or launch duplicates.",
+      "For tmux_exec log streams and watchers such as wrangler tail, supply timeoutSeconds for a bounded observation window. estimatedDurationSeconds only schedules a check-in and does not stop a command. Automatic bash detachment preserves an explicit timeout as the hard runtime limit.",
     ],
     promptSnippet: "Run potentially blocking or duration-uncertain shell work without blocking pi",
     async execute(_toolCallId, params, signal) {
-      const launch: TmuxLaunch = runtime.createLaunch(params.command, params.estimatedDurationSeconds);
+      const launch: TmuxLaunch = runtime.createLaunch(params.command, {
+        ...(params.estimatedDurationSeconds === undefined
+          ? {}
+          : { estimatedDurationSeconds: params.estimatedDurationSeconds }),
+        ...(params.timeoutSeconds === undefined ? {} : { timeoutSeconds: params.timeoutSeconds }),
+      });
       const options: Parameters<TmuxExtensionHost["exec"]>[2] =
         signal === undefined
           ? { timeout: TMUX_LAUNCH_TIMEOUT_MILLISECONDS }

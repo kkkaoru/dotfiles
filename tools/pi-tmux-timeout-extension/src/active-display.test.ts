@@ -1,11 +1,17 @@
 // This TypeScript file is executed with Bun.
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   ACTIVE_DISPLAY_ENTRY_TYPE,
   ActiveTaskDisplay,
   recoverActiveTaskDisplayState,
 } from "./active-display.ts";
 import type { CompletionDeliveryContext } from "./delivery.ts";
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-08-26T02:14:00.000Z"));
+});
+afterEach(() => vi.useRealTimers());
 
 it("shows active tmux tasks until they complete", () => {
   const notify = vi.fn<CompletionDeliveryContext["ui"]["notify"]>();
@@ -61,6 +67,32 @@ it("shows active tmux tasks until they complete", () => {
   display.clear();
   expect(setStatus).toHaveBeenLastCalledWith("tmux-running", undefined);
   expect(setWidget).toHaveBeenLastCalledWith("tmux-running-tasks", undefined);
+});
+
+it("distinguishes overdue jobs from jobs still within their estimate", () => {
+  vi.setSystemTime(new Date("2026-08-26T02:21:00.000Z"));
+  const setWidget = vi.fn<NonNullable<CompletionDeliveryContext["ui"]["setWidget"]>>();
+  const display = new ActiveTaskDisplay();
+  display.setContext({
+    isIdle: () => true,
+    ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget },
+  });
+  display.update([
+    {
+      command: "tmux command",
+      completionChannel: "pi-tmux-test-complete",
+      estimatedCompletionAt: "2026-08-26T02:20:00.000Z",
+      logPath: "/tmp/pi-tmux-test/output.log",
+      sessionName: "pi-tmux-test",
+      socketName: "pi-tmux-socket",
+      statusPath: "/tmp/pi-tmux-test/exit-status",
+      submittedAt: "2026-08-26T02:14:00.000Z",
+      taskCommand: "run a long verification",
+    },
+  ]);
+  expect(setWidget).toHaveBeenLastCalledWith("tmux-running-tasks", [
+    "⚠ overdue 08-26 11:14 → 08-26 11:20 run a long verification",
+  ]);
 });
 
 it("recovers the latest valid session display state", () => {

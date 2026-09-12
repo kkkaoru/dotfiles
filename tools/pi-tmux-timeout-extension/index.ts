@@ -265,6 +265,7 @@ export default function tmuxTimeoutExtension(
     ...runtimeOptions,
     onActiveChange: (launches: readonly TmuxLaunch[]): void => activeDisplay.update(launches),
     onComplete: (completion: Completion): void => delivery.complete(completion),
+    onOverdue: (launches: readonly TmuxLaunch[]): void => delivery.overdue(launches),
     onTrack: (launch: TmuxLaunch): void => persistTmuxLaunch(host.appendEntry, launch),
   });
   const rewriter: AutomaticTmuxRewriter = new AutomaticTmuxRewriter(runtime);

@@ -8,7 +8,15 @@ export const tmuxExecSchema = Type.Object({
   }),
   estimatedDurationSeconds: Type.Optional(
     Type.Integer({
-      description: "Estimated duration in seconds for expected completion time",
+      description: "Expected duration; exceeding it triggers a check-in, not termination",
+      maximum: 604_800,
+      minimum: 1,
+    }),
+  ),
+  timeoutSeconds: Type.Optional(
+    Type.Integer({
+      description:
+        "Hard runtime limit; terminate the command process group on expiry (requires GNU timeout)",
       maximum: 604_800,
       minimum: 1,
     }),

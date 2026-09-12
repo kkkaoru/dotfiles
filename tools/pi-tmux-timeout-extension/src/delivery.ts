@@ -1,9 +1,11 @@
 // This TypeScript file is executed with Bun.
 import { formatLocalTimestamp } from "./policy.ts";
+import type { TmuxLaunch } from "./tmux.ts";
 import type { Completion } from "./waiter.ts";
 
 const AGENT_BUSY_ERROR = "Agent is already processing a prompt";
 const MAX_COMPLETION_IDENTITY_CHARACTERS = 160;
+const MAX_OVERDUE_BATCH_SIZE = 20;
 const SETTLED_DELIVERY_DELAY_MS = 0;
 type SettledDelivery = ReturnType<typeof globalThis.setTimeout>;
 const COMPLETION_DELIVERY_OPTIONS: UserMessageDeliveryOptions = { deliverAs: "followUp" };
@@ -94,6 +96,21 @@ function deliveryPrompt(completions: readonly Completion[]): string {
   ].join("\n");
 }
 
+function overduePrompt(launches: readonly TmuxLaunch[]): string {
+  return [
+    `tmux overdue check-in: ${String(launches.length)} task(s) exceeded their estimated duration and have not completed. They are still tracked, not failed or stopped.`,
+    "Inspect the logs and process state now. For an open-ended watcher, finish the observation and stop only that specific job when appropriate. For useful ongoing work, arrange a bounded next check. Do not just repeat this notice, launch a duplicate, or wait forever for an exit-status file.",
+    ...launches.map((launch: TmuxLaunch): string =>
+      [
+        `task: ${completionIdentity(launch.taskCommand)}`,
+        `tmux socket: ${launch.socketName}; session: ${launch.sessionName}`,
+        `log: ${launch.logPath}`,
+        `status: ${launch.statusPath}`,
+      ].join("\n"),
+    ),
+  ].join("\n");
+}
+
 function isAgentBusyError(error: unknown): boolean {
   return error instanceof Error && error.message.includes(AGENT_BUSY_ERROR);
 }
@@ -108,6 +125,7 @@ export class CompletionDelivery {
   readonly #host: CompletionDeliveryHost;
   readonly #onDelivered: (completion: Completion) => void;
   #pending: Completion[] = [];
+  readonly #pendingOverdue = new Map<string, TmuxLaunch>();
   #settledDelivery: SettledDelivery | undefined;
 
   constructor(host: CompletionDeliveryHost, options?: CompletionDeliveryOptions) {
@@ -116,13 +134,21 @@ export class CompletionDelivery {
   }
 
   complete(completion: Completion): void {
+    this.#pendingOverdue.delete(completion.launch.completionChannel);
     if (this.#compacting || this.#context?.isIdle() === false) {
       this.#defer(completion);
       return;
     }
-    if (!this.#deliver([completion])) {
+    if (!this.#deliver([completion], [])) {
       this.#defer(completion);
     }
+  }
+
+  overdue(launches: readonly TmuxLaunch[]): void {
+    launches.map((launch: TmuxLaunch): Map<string, TmuxLaunch> =>
+      this.#pendingOverdue.set(launch.completionChannel, launch),
+    );
+    this.#flushIfIdle();
   }
 
   setContext(context: CompletionDeliveryContext): void {
@@ -165,12 +191,19 @@ export class CompletionDelivery {
     this.#cancelSettledDelivery();
     this.#compacting = false;
     this.#pending = [];
+    this.#pendingOverdue.clear();
     this.#updateStatus();
   }
 
-  #deliver(completions: readonly Completion[]): boolean {
+  #deliver(completions: readonly Completion[], overdue: readonly TmuxLaunch[]): boolean {
     try {
-      this.#host.sendUserMessage(deliveryPrompt(completions), COMPLETION_DELIVERY_OPTIONS);
+      const prompt: string = [
+        completions.length === 0 ? "" : deliveryPrompt(completions),
+        overdue.length === 0 ? "" : overduePrompt(overdue),
+      ]
+        .filter(Boolean)
+        .join("\n\n");
+      this.#host.sendUserMessage(prompt, COMPLETION_DELIVERY_OPTIONS);
       completions.map((completion: Completion): undefined => {
         try {
           this.#onDelivered(completion);
@@ -207,12 +240,23 @@ export class CompletionDelivery {
   }
 
   #flushIfIdle(): void {
-    if (this.#compacting || this.#context?.isIdle() === false || this.#pending.length === 0) {
+    if (
+      this.#compacting ||
+      this.#context?.isIdle() === false ||
+      (this.#pending.length === 0 && this.#pendingOverdue.size === 0)
+    ) {
       return;
     }
     const pending: readonly Completion[] = this.#pending;
-    if (this.#deliver(pending)) {
+    const overdue: readonly TmuxLaunch[] = [...this.#pendingOverdue.values()].slice(
+      0,
+      MAX_OVERDUE_BATCH_SIZE,
+    );
+    if (this.#deliver(pending, overdue)) {
       this.#pending = [];
+      overdue.map((launch: TmuxLaunch): boolean =>
+        this.#pendingOverdue.delete(launch.completionChannel),
+      );
     }
     this.#updateStatus();
   }

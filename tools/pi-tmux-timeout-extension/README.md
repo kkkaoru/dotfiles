@@ -25,17 +25,30 @@ long-running commands continue in detached tmux sessions.
 - Returns the tmux session name and both file paths immediately so pi remains available for input.
 - Shows every active task with its local start and estimated completion date/time in a persistent
   widget above the editor, and reports the active task count in the footer. Automatic Bash rewrites
-  use the original timeout as the estimate; explicit `tmux_exec` calls accept
-  `estimatedDurationSeconds`. Tasks restored after `/reload` or session resume are shown too.
+  use the original timeout as the estimate **and preserve it as a hard runtime limit**; explicit
+  `tmux_exec` calls accept separate `estimatedDurationSeconds` and `timeoutSeconds` values.
+  Tasks restored after `/reload` or session resume are shown too.
 - Reconciliation checks active tasks once per minute, removes orphaned tasks when both the tmux
   session and exit-status file are gone, marks them as `orphaned`, and prevents them from remaining in
   the widget indefinitely.
+- Reconciliation also detects live jobs past their estimate, changes their row to `⚠ overdue`, and
+  wakes Pi for a progress check without pretending that the command finished. Check-ins arrive within
+  one minute of the estimate, once per task per loaded extension instance. Reload/resume immediately
+  checks overdue restored jobs, including legacy jobs without an estimate (two-minute fallback).
+  Busy/compacting Pi sessions defer check-ins until safe delivery; jobs that finish in the meantime
+  are removed from pending check-ins. Batches contain at most 20 jobs, with the rest retained.
+- A hard `timeoutSeconds` uses GNU `gtimeout`/`timeout` to send TERM to the command process group,
+  escalating to KILL after five seconds. It runs inside the detached job, so enforcement continues
+  while Pi is closed. The normal completion path records the exit status and wakes Pi: usually 124
+  for timeout, or 137 after forced killing. Without GNU timeout the bounded job fails clearly with
+  exit 127 rather than silently running without a deadline. Estimates alone **never kill jobs**.
 - Registers `/tmux-tasks [status|clear|hide|show|reset]` for session-scoped display control. `clear`
   persistently dismisses currently visible rows without stopping their jobs or completion monitoring;
   `hide` and `show` control the whole widget, and `reset` restores all tracked rows. The state survives
   `/reload` and session resume through a custom session entry.
 - Subscribes to a per-command `tmux wait-for` completion channel and starts an immediate continuation
-  when tmux signals normal completion; the minute reconciliation is only the orphan fallback.
+  when tmux signals completion; minute reconciliation also covers missed signals, orphans, and overdue
+  check-ins.
 - Sends completion continuations with Pi's supported `{ deliverAs: "followUp" }` delivery mode. While
   Pi is busy, it also shows a transient completion notification and retains the continuation internally
   until `agent_settled`. Delivery from that event is deferred by one event-loop turn so multiple
@@ -107,7 +120,22 @@ An intentionally bounded external check stays in foreground:
 bash({ command: "curl --max-time 10 https://example.com/status", timeout: 10 })
 ```
 
+For open-ended log streams, always bound the observation window:
+
+```text
+tmux_exec({ command: "bunx wrangler tail --format=json > /tmp/worker-tail.json", estimatedDurationSeconds: 60, timeoutSeconds: 90 })
+```
+
+A check-in is not completion. Inspect progress and either stop the specific unnecessary job or
+arrange a bounded next check. Do not launch a duplicate watcher or wait indefinitely for it to exit.
+An estimate-only job receives one automatic overdue check-in per extension load, not repeated model
+wakeups. Existing jobs are not retroactively given a kill deadline by `/reload`.
+
 ## Install
+
+Hard deadlines require GNU coreutils (`brew install coreutils` on macOS). No additional package is
+needed for estimate-only check-ins. After updating, run `/reload` in each affected Pi conversation;
+this restores and checks its jobs without restarting or killing them.
 
 From the dotfiles root:
 

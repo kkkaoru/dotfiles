@@ -7,6 +7,7 @@ import {
   wakePiOnCompletion,
 } from "./delivery.ts";
 import type { Completion } from "./waiter.ts";
+import { createTmuxLaunch } from "./tmux.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -367,4 +368,95 @@ it("does not hide unrelated completion delivery errors", () => {
   };
 
   expect((): void => delivery.complete(completion)).toThrow("unexpected delivery failure");
+});
+
+it("wakes an idle agent for an overdue job without marking completion delivered", () => {
+  const sendUserMessage = vi.fn<CompletionDeliveryHost["sendUserMessage"]>();
+  const onDelivered = vi.fn();
+  const delivery = new CompletionDelivery({ sendUserMessage }, { onDelivered });
+  const launch = createTmuxLaunch({ command: "wrangler tail", id: 1, namespace: "a".repeat(32) });
+  delivery.overdue([launch]);
+
+  expect(sendUserMessage).toHaveBeenCalledExactlyOnceWith(
+    expect.stringMatching(/^tmux overdue check-in: 1 task\(s\)/u),
+    { deliverAs: "followUp" },
+  );
+  expect(sendUserMessage.mock.calls[0]?.[0]).toMatch(
+    /task: wrangler tail\ntmux socket: pi-tmux-a{32}; session: pi-tmux-a{32}-1/u,
+  );
+  expect(sendUserMessage.mock.calls[0]?.[0]).toMatch(/Inspect the logs and process state now/u);
+  expect(onDelivered).not.toHaveBeenCalled();
+});
+
+it("defers overdue check-ins across busy and compacting phases and drops completed jobs", () => {
+  const sendUserMessage = vi.fn<CompletionDeliveryHost["sendUserMessage"]>();
+  const onDelivered = vi.fn();
+  const delivery = new CompletionDelivery({ sendUserMessage }, { onDelivered });
+  const context: CompletionDeliveryContext = {
+    isIdle: () => true,
+    ui: { notify: vi.fn(), setStatus: vi.fn() },
+  };
+  const first = createTmuxLaunch({ command: "first watcher", id: 1, namespace: "a".repeat(32) });
+  const second = createTmuxLaunch({ command: "second watcher", id: 2, namespace: "a".repeat(32) });
+  delivery.setContext({ ...context, isIdle: () => false });
+  delivery.overdue([first, second]);
+  delivery.overdue([second]);
+  expect(sendUserMessage).not.toHaveBeenCalled();
+  delivery.beforeCompaction();
+  delivery.complete({ launch: first, completedAt: new Date().toISOString(), exitCode: 0 });
+  delivery.agentSettled(context);
+  expect(sendUserMessage).not.toHaveBeenCalled();
+  delivery.afterCompaction(context);
+
+  expect(sendUserMessage).toHaveBeenCalledOnce();
+  expect(sendUserMessage.mock.calls[0]?.[0]).toMatch(/tmux overdue check-in: 1 task\(s\)/u);
+  expect(sendUserMessage.mock.calls[0]?.[0]).toMatch(/task: second watcher/u);
+  expect(sendUserMessage.mock.calls[0]?.[0]).not.toMatch(/task: first watcher/u);
+  expect(onDelivered).toHaveBeenCalledOnce();
+});
+
+it("retains an overdue check-in on delivery races and clears it at shutdown", () => {
+  const sendUserMessage = vi
+    .fn<CompletionDeliveryHost["sendUserMessage"]>()
+    .mockImplementationOnce(() => {
+      throw new Error("Agent is already processing a prompt");
+    });
+  const delivery = new CompletionDelivery({ sendUserMessage });
+  const context: CompletionDeliveryContext = {
+    isIdle: () => true,
+    ui: { notify: vi.fn(), setStatus: vi.fn() },
+  };
+  const launch = createTmuxLaunch({ command: "watcher", id: 1, namespace: "a".repeat(32) });
+  delivery.overdue([launch]);
+  delivery.agentSettled(context);
+  expect(sendUserMessage).toHaveBeenCalledTimes(2);
+  delivery.beforeCompaction();
+  delivery.overdue([launch]);
+  delivery.clear();
+  delivery.afterCompaction(context);
+  expect(sendUserMessage).toHaveBeenCalledTimes(2);
+});
+
+it("bounds overdue batches without losing remaining task notices", () => {
+  const sendUserMessage = vi.fn<CompletionDeliveryHost["sendUserMessage"]>();
+  const delivery = new CompletionDelivery({ sendUserMessage });
+  const context: CompletionDeliveryContext = {
+    isIdle: () => true,
+    ui: { notify: vi.fn(), setStatus: vi.fn() },
+  };
+  const launches = Array.from({ length: 21 }, (_value, id) =>
+    createTmuxLaunch({ command: "watcher", id, namespace: "a".repeat(32) }),
+  );
+  delivery.overdue(launches);
+  expect(sendUserMessage).toHaveBeenCalledExactlyOnceWith(
+    expect.stringMatching(/^tmux overdue check-in: 20 task\(s\)/u),
+    { deliverAs: "followUp" },
+  );
+  delivery.agentSettled(context);
+  expect(sendUserMessage).toHaveBeenLastCalledWith(
+    expect.stringMatching(/^tmux overdue check-in: 1 task\(s\)/u),
+    { deliverAs: "followUp" },
+  );
+  delivery.agentSettled(context);
+  expect(sendUserMessage).toHaveBeenCalledTimes(2);
 });
