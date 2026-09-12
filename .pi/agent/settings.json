@@ -36,6 +36,7 @@
     "./packages/pi-my-devin-cli-provider",
     "./packages/pi-claudex-provider",
     "./packages/pi-lazy-external-extensions",
-    "./packages/executor-skills"
+    "./packages/executor-skills",
+    "npm:@ogulcancelik/pi-herdr"
   ]
 }
