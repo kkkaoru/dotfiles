@@ -70,6 +70,13 @@ if [ -e "${HOME}/.omlx" ] && [ ! -L "${HOME}/.omlx" ]; then
   exit 1
 fi
 
+# ~/.executor is repository-backed, but its database and runtime state are ignored.
+# Migrate an existing directory explicitly; never overwrite or merge a live DB.
+if [ -e "${HOME}/.executor" ] && [ ! -L "${HOME}/.executor" ]; then
+  echo "refuse: ${HOME}/.executor exists and is not a symlink; move it into ${DOTPATH}/.executor first" >&2
+  exit 1
+fi
+
 # Top-level dotfiles (stateful agent/config directories are merged below)
 for f in .??*; do
   [ "$f" = ".git" ] && continue

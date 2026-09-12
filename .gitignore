@@ -86,6 +86,11 @@ coverage_out/
 !.pi/agent/themes/**
 !.pi/web-search.json
 
+# Executor's home lives in this checkout, but its database may contain secrets.
+# Deny by default, including future config/state files; allow reviewed docs only.
+/.executor/**
+!/.executor/README.md
+
 # oMLX is repository-managed like .pi. Track DFlash/server config only.
 # Never commit weights, caches, logs, binaries, or the live settings.json
 # (it holds a generated secret_key).
