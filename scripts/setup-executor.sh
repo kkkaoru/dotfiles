@@ -55,7 +55,11 @@ register() {
       setup_call connect "$(jq -nc --arg slug "$slug" '{owner:"user",name:"default",integration:$slug,template:"none"}')"
     fi
   else
-    printf 'OAuth required in Executor UI: %s (no credentials stored in dotfiles)\n' "$slug"
+    if [[ "$slug" == cloudflare-* ]]; then
+      printf 'Start OAuth: ./scripts/executor-cloudflare-auth.sh %s (registration alone is not login)\n' "$slug"
+    else
+      printf 'OAuth required in Executor UI: %s (no credentials stored in dotfiles)\n' "$slug"
+    fi
   fi
 }
 
@@ -72,4 +76,5 @@ while IFS= read -r item; do
 done < <(jq -c '.remote[]' "$repo/tools/executor-skills/integrations.json")
 
 "$executor" tools integrations
-printf '\nOpen `executor web` to authorize the OAuth integrations you need.\n'
+printf '\nCloudflare login: ./scripts/executor-cloudflare-auth.sh cloudflare-api\n'
+printf 'Use `executor web` for connection status, policies, and other integrations.\n'
