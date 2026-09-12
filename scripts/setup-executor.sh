@@ -1,18 +1,46 @@
 #!/usr/bin/env bash
 # Provision the shared local catalog, never change approval policies or credentials.
 set -euo pipefail
-repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 executor="$repo/scripts/executor"
 approve=false
-case "${1:-}" in
-  '') ;;
-  --approve-registration) approve=true ;;
-  *) printf 'Usage: %s [--approve-registration]\n' "$0" >&2; exit 1 ;;
-esac
+install_service=false
+port=4789
+port_set=false
+usage() {
+  printf 'Usage: %s [--install-service] [--port 1-65535] [--approve-registration]\n' "$0"
+}
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --approve-registration) approve=true; shift ;;
+    --install-service) install_service=true; shift ;;
+    --port)
+      [[ $# -ge 2 ]] || { usage >&2; exit 1; }
+      port="$2"; port_set=true; shift 2 ;;
+    --help|-h) usage; exit 0 ;;
+    *) usage >&2; exit 1 ;;
+  esac
+done
+if [[ ! "$port" =~ ^[0-9]{1,5}$ ]] || (( 10#$port < 1 || 10#$port > 65535 )); then
+  printf 'Invalid service port: %s\n' "$port" >&2; exit 1
+fi
+if [[ "$install_service" != true && "$port_set" == true ]]; then
+  printf '%s\n' '--port requires --install-service' >&2; exit 1
+fi
+# Rebuild this checkout's catalog on each Mac; never transplant a database tenant.
+export EXECUTOR_SCOPE_DIR="$repo"
+if [[ "$install_service" == true ]]; then
+  [[ "$(uname -s)" == Darwin ]] || { printf 'Service setup requires macOS\n' >&2; exit 1; }
+  if [[ ! -L "$HOME/.executor" ]] || [[ "$(cd "$HOME/.executor" && pwd -P)" != "$repo/.executor" ]]; then
+    printf 'First link ~/.executor to %s/.executor; do not overwrite an existing home. See tools/executor-skills/SETUP.ja.md\n' "$repo" >&2
+    exit 1
+  fi
+fi
 command -v jq >/dev/null
 bun="$(command -v bun)"
 bunx="$(command -v bunx)"
 ctx="$(command -v ctx)"
+"$executor" --version
 mkdir -p "$HOME/.local/bin" "$HOME/.pi/agent/packages"
 if [[ ! -e "$HOME/.pi/agent/packages/executor-skills" && ! -L "$HOME/.pi/agent/packages/executor-skills" ]]; then
   ln -s "$repo/tools/executor-skills" "$HOME/.pi/agent/packages/executor-skills"
@@ -21,6 +49,12 @@ if [[ ! -e "$HOME/.local/bin/executor" && ! -L "$HOME/.local/bin/executor" ]]; t
   ln -s "$repo/scripts/executor" "$HOME/.local/bin/executor"
 fi
 (cd "$repo/tools/executor-skills" && "$bun" install --frozen-lockfile)
+
+if [[ "$install_service" == true ]]; then
+  # Executor persists EXECUTOR_SCOPE_DIR into the macOS LaunchAgent environment.
+  # Explicit opt-in: installing the service can restart an existing daemon.
+  "$executor" service install --port "$port"
+fi
 
 # Only the two setup operations below may be auto-approved, and only by opt-in.
 # A paused execution is NOT success, even when the CLI exits with status zero.
@@ -46,13 +80,18 @@ setup_call() {
 }
 
 register() {
-  local payload="$1" auth="$2" slug
+  local payload="$1" auth="$2" slug catalog connections
   slug="$(printf '%s' "$payload" | jq -r '.slug')"
-  if ! "$executor" tools integrations | jq -e --arg slug "$slug" '.items[] | select(.id == $slug)' >/dev/null; then
+  catalog="$("$executor" tools integrations --limit 1000)"
+  # Transport/tool errors and truncated catalogs are not evidence of absence.
+  printf '%s' "$catalog" | jq -e '(.items | type == "array") and (.hasMore == false)' >/dev/null
+  if ! printf '%s' "$catalog" | jq -e --arg slug "$slug" '.items[] | select(.id == $slug)' >/dev/null; then
     setup_call register "$payload"
   fi
   if [[ "$auth" == none ]]; then
-    if ! "$executor" call executor coreTools connections list '{}' | jq -e --arg slug "$slug" '.data.connections[] | select(.integration == $slug and .owner == "user" and .name == "default")' >/dev/null; then
+    connections="$("$executor" call executor coreTools connections list '{}')"
+    printf '%s' "$connections" | jq -e '.ok == true and (.data.connections | type == "array")' >/dev/null
+    if ! printf '%s' "$connections" | jq -e --arg slug "$slug" '.data.connections[] | select(.integration == $slug and .owner == "user" and .name == "default")' >/dev/null; then
       setup_call connect "$(jq -nc --arg slug "$slug" '{owner:"user",name:"default",integration:$slug,template:"none"}')"
     fi
   else

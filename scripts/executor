@@ -1,6 +1,21 @@
 #!/bin/sh
 # Use the CLI shipped with the Homebrew cask; do not install a second runtime.
 set -eu
+# Resolve this wrapper even when invoked through ~/.local/bin/executor.
+script="$0"
+while [ -L "$script" ]; do
+  dir=$(CDPATH= cd -P "$(dirname "$script")" && pwd)
+  target=$(readlink "$script")
+  case "$target" in
+    /*) script="$target" ;;
+    *) script="$dir/$target" ;;
+  esac
+done
+repo=$(CDPATH= cd -P "$(dirname "$script")/.." && pwd)
+# The daemon derives its catalog tenant from this path, not the database path.
+# Preserve an explicit override for callers intentionally using another scope.
+EXECUTOR_SCOPE_DIR="${EXECUTOR_SCOPE_DIR:-$repo}"
+export EXECUTOR_SCOPE_DIR
 binary="/Applications/Executor.app/Contents/Resources/executor/executor"
 if [ ! -x "$binary" ]; then
   printf '%s\n' 'Executor Desktop is missing. Install it with: brew install --cask executor' >&2

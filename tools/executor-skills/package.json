@@ -16,8 +16,9 @@
     "tsc": "tsc --noEmit",
     "lint": "biome check .",
     "format": "biome check --write .",
-    "test": "vitest run --coverage && bun run test:oauth",
-    "test:oauth": "bash ../../scripts/executor-cloudflare-auth.test.sh"
+    "test": "vitest run --coverage && bun run test:oauth && bun run test:setup",
+    "test:oauth": "bash ../../scripts/executor-cloudflare-auth.test.sh",
+    "test:setup": "bash ../../scripts/setup-executor.test.sh"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
