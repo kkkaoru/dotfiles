@@ -12,6 +12,7 @@ esac
 command -v jq >/dev/null
 bun="$(command -v bun)"
 bunx="$(command -v bunx)"
+ctx="$(command -v ctx)"
 mkdir -p "$HOME/.local/bin" "$HOME/.pi/agent/packages"
 if [[ ! -e "$HOME/.pi/agent/packages/executor-skills" && ! -L "$HOME/.pi/agent/packages/executor-skills" ]]; then
   ln -s "$repo/tools/executor-skills" "$HOME/.pi/agent/packages/executor-skills"
@@ -64,6 +65,10 @@ register() {
 }
 
 register "$(jq -nc --arg command "$bun" --arg entry "$repo/tools/executor-skills/cli.mjs" --arg global "$HOME/.agents/skills" --arg pi "$HOME/.pi/agent/skills" --arg project "$repo/.agents/skills" '{transport:"stdio",slug:"local-skills",name:"Local Agent Skills (read-only)",command:$command,args:[$entry,$global,$pi,$project]}')" none
+
+# These are executable integrations, separate from the read-only skill catalog.
+register "$(jq -nc --arg command "$ctx" '{transport:"stdio",slug:"ctx",name:"ctx Local Agent History",command:$command,args:["mcp","serve"]}')" none
+register "$(jq -nc --arg command "$bun" --arg entry "$repo/tools/executor-skills/agmsg-cli.mjs" --arg scripts "$HOME/.agents/skills/agmsg/scripts" '{transport:"stdio",slug:"agmsg",name:"agmsg Pi Messaging",command:$command,args:[$entry,$scripts]}')" none
 
 while IFS= read -r payload; do
   register "$payload" none

@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "pi": {
+    "extensions": [
+      "./pi.ts"
+    ],
     "skills": [
       "./skills"
     ]

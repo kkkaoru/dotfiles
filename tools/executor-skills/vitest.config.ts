@@ -5,7 +5,7 @@ export default defineConfig({
   test: {
     coverage: {
       provider: "v8",
-      include: ["catalog.ts", "server.ts"],
+      include: ["catalog.ts", "server.ts", "agmsg-server.ts", "pi.ts"],
       thresholds: { lines: 90, functions: 90, statements: 90, branches: 90 },
     },
   },

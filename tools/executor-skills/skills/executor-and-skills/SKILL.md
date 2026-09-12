@@ -1,6 +1,6 @@
 ---
 name: executor-and-skills
-description: Use for MCP/API integrations, Context7 docs, browser tools, or Cloudflare/Workers/Sandbox, MotherDuck/DuckDB/Dive, GPUI/Rust UI and web-performance tasks. Search and load installed domain skills through Executor before doing the task; discover service tools on demand.
+description: Use for cross-agent messaging (agmsg), prior agent history (ctx), MCP/API integrations, browser tools, Cloudflare, MotherDuck, GPUI and web performance. Load guidance and discover execution tools through Executor on demand.
 ---
 
 # Executor: skills and tools on demand
@@ -11,8 +11,8 @@ shared local catalog and starts its daemon on demand. Do not start a second
 
 ## Load domain guidance first
 
-The `local-skills` integration exposes installed Cloudflare, MotherDuck, GPUI,
-web-performance and coding-rule skills as **read-only** MCP tools. Their individual
+The `local-skills` integration exposes installed agmsg, ctx-agent-history-search,
+Cloudflare, MotherDuck, GPUI, web-performance and coding-rule skills as **read-only** MCP tools. Their individual
 descriptions are excluded from pi's startup prompt, not deleted from disk.
 
 1. Discover with `executor tools search 'search_skills' --namespace local-skills --limit 3`.
@@ -53,6 +53,8 @@ Do not guess namespaces or print every schema. Keep outputs bounded. Use
 
 | Task | Integration |
 |---|---|
+| Cross-agent identity, messages, team and history | `agmsg` |
+| Prior coding-agent sessions and decisions | `ctx` |
 | Cloudflare docs / Agents SDK docs | `cloudflare-docs` / `cloudflare-agents` |
 | DNS, Workers, R2, D1, KV, Zero Trust and other Cloudflare API operations | `cloudflare-api` (nested Code Mode: discover its search/execute schema first) |
 | Storage/AI/compute bindings | `cloudflare-bindings` |
@@ -64,10 +66,49 @@ Do not guess namespaces or print every schema. Keep outputs bounded. Use
 | Library documentation | `context7` |
 | Local Chrome / performance | `chrome-devtools` |
 
-OAuth integrations require connection authorization in `executor web` before
-service tools exist. Registration alone does not mean they are connected.
+OAuth integrations require connection authorization before service tools exist.
+Registration alone does not mean they are connected. For Cloudflare, use the
+`executor-cloudflare-auth.sh` helper from the dotfiles `scripts/` directory: it
+runs discovery, dynamic client registration, and OAuth start through Executor,
+then opens the returned authorization URL directly rather than relying on the
+management UI popup. Read the local setup guide at `../../SETUP.ja.md` with
+`read` (outside this skill directory, so not `read_reference`) for commands and
+approval flags. The user must complete login and consent in their browser.
+Use `executor web` for connection status and other providers such as MotherDuck.
 Use least-privilege scopes. Cloud operations may modify real resources or incur
 costs: skill availability and OAuth login do not authorize those operations.
+
+## Agent messaging and history
+
+Use Executor for **model-initiated** agmsg and ctx operations, not direct shell scripts or
+Pi's old `agmsg` tool. First read the corresponding skill through `local-skills`.
+The router extension disables only the direct model tool; Pi's existing agmsg extension
+still owns automatic incoming delivery and the user's `/agmsg` setup commands.
+
+- For messages, discover tools with `executor tools search 'agmsg_whoami' --namespace agmsg --limit 2`.
+  Pass the **originating Pi project's absolute path**, not Executor's cwd. The router supplies
+  the active identity from Pi's own session entry when available; match that name and team
+  against `agmsg_whoami`. If multiple identities exist and the active name is unknown,
+  ask the user to confirm with `/agmsg whoami`. Never silently pick another session's sender.
+- `agmsg_send`, `agmsg_history`, and `agmsg_inbox` require explicit `project`, `team`, and `agent`.
+  The server verifies the pair is registered for that project with agent type `pi` before
+  using the official scripts. `agmsg_inbox` marks messages read: use it only for an explicit
+  one-time inbox request, never periodic polling. Do not blindly retry a send.
+- The installed agmsg skill has Codex-specific examples. In Pi, retain agent type `pi` and
+  existing Pi delivery. Do not install Codex monitor hooks, change identities, or spawn agents
+  as part of ordinary message operations. Setup/identity changes remain user-driven `/agmsg`
+  commands; the Executor integration deliberately does not expose them.
+- Proactively use `ctx` when earlier sessions may contain relevant decisions or failed attempts.
+  Discover the native ctx MCP tools on demand. Bound searches and supply the originating
+  workspace/session filters explicitly: a shared MCP process cannot infer Pi's active session.
+  Native `ctx.search` reads the existing index without imports or refresh; its schemas use
+  snake_case (for example `primary_only`). It does not currently expose `exclude_session`:
+  do not claim automatic current-session exclusion; inspect/filter matching session hits.
+  Inspect cited events before relying on them. Keep transcripts private; no automatic imports,
+  reindexing, exports, or telemetry changes as part of this migration.
+- These services stay local to Executor Desktop. If unavailable, report the failure rather
+  than silently bypassing Executor or reading agmsg storage directly. No new permanent
+  approval policy is implied by enabling them.
 
 ## Management and approvals
 

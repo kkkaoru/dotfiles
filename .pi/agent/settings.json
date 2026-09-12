@@ -17,6 +17,8 @@
     "rampStartRatio": 0.6
   },
   "skills": [
+    "!agmsg",
+    "!ctx-agent-history-search",
     "!agents-sdk",
     "!cloudflare*",
     "!durable-objects",
