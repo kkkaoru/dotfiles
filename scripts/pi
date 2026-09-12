@@ -3,6 +3,18 @@
 
 set -euo pipefail
 
+# A terminal can retain a deleted directory after a checkout is replaced.
+# Recover before starting Node, which otherwise fails with uv_cwd/ENOENT.
+if ! builtin pwd -P >/dev/null 2>&1; then
+  if [ -n "${PWD:-}" ] && builtin cd -- "$PWD" 2>/dev/null; then
+    :
+  elif ! builtin cd -- "$HOME"; then
+    echo "pi wrapper: current directory is unavailable and cannot enter home directory" >&2
+    exit 1
+  fi
+  printf 'pi wrapper: recovered unavailable working directory; using %s\n' "$PWD" >&2
+fi
+
 find_node_binary() {
   for candidate in \
     "${PI_NODE_BINARY:-}" \

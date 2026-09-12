@@ -1,4 +1,7 @@
 function codex --description "Run Codex with scrollback preserved in Ghostty inside Zellij"
+    __recover_working_directory
+    or return 1
+
     set -l codex_argv $argv
     set -l codex_monitor_shim "$HOME/.agents/skills/agmsg/scripts/drivers/types/codex/codex-shim.sh"
     set -l requested_model
