@@ -43,6 +43,14 @@ after a command or tool schedules a job and stops when jobs are paused, cleared,
 are session-scoped and persist across extension reloads and later resume of the same Pi session, but
 do not migrate to an unrelated session.
 
+## Goal cooperation
+
+With the local `pi-goal-extension`, non-paused loop work owns continuation pacing. The goal
+adds durable objective guidance without creating a competing wakeup. Session-scoped activity
+queries report running/pending continuations and scheduled jobs; subscriptions are removed on
+shutdown. Pausing or clearing a goal does not stop independent loops; manage them with `/loop`.
+See `../pi-goal-extension/README.md` for the complete behavior and offline integration check.
+
 ## Install
 
 From the dotfiles root:

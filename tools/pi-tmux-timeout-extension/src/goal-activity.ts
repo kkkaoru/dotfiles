@@ -1,0 +1,1 @@
+../../pi-goal-extension/src/activity.ts

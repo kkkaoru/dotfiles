@@ -6,7 +6,10 @@ export interface CompleteResult {
 
 export interface LoopContext {
   readonly isIdle: () => boolean;
-  readonly sessionManager?: { readonly getEntries: () => readonly unknown[] };
+  readonly sessionManager?: {
+    readonly getEntries: () => readonly unknown[];
+    readonly getSessionId?: () => string;
+  };
   readonly ui: {
     readonly notify: (message: string, level?: "error" | "info" | "warning") => void;
     readonly setStatus: (key: string, value: string | undefined) => void;

@@ -86,6 +86,14 @@ output remains available
 for seven days and is also cleaned on the next Pi startup if Pi was not running at the scheduled
 cleanup time.
 
+## Goal cooperation
+
+With the local `pi-goal-extension`, session-scoped event-bus snapshots report live task names and
+pending completion/overdue delivery. Launch notices associate only jobs started while that session's
+goal is active; pre-existing unrelated jobs do not stall the goal. Goal continuations defer to these
+notifications and do not poll the model or relaunch live jobs. Pausing/clearing a goal does not kill
+processes or stop tmux monitoring. See `../pi-goal-extension/README.md` for limits and verification.
+
 ## Claudex integration
 
 This package exports its potentially blocking-command policy as

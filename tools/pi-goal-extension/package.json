@@ -1,0 +1,35 @@
+{
+  "name": "@kkkaoru/pi-goal-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "tsc": "tsc --noEmit",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "test": "vitest run --coverage",
+    "smoke": "bun run smoke.mjs",
+    "check": "bun run tsc && bun run lint && bun run test"
+  },
+  "dependencies": {
+    "typebox": "1.3.7",
+    "valibot": "1.1.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.85.1",
+    "@earendil-works/pi-ai": "0.85.1",
+    "@biomejs/biome": "2.2.4",
+    "@types/node": "24.10.1",
+    "@vitest/coverage-v8": "4.1.10",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.85.1"
+  }
+}

@@ -1,5 +1,6 @@
 // This TypeScript file is executed with Bun.
 import { type Static, Type, type TSchema } from "typebox";
+import { ActivityProvider, type ActivityBus } from "./src/goal-activity.ts";
 import { LoopRuntime, type LoopContext, type LoopHost } from "./src/runtime.ts";
 import { createLoopState, latestLoopState, type LoopRuntimeState } from "./src/state.ts";
 
@@ -73,6 +74,7 @@ export interface LoopCommandDefinition {
 }
 
 export interface LoopExtensionHost extends LoopHost {
+  readonly events?: ActivityBus;
   readonly on: (
     event: LifecycleEvent,
     handler: (event: unknown, context: LoopContext) => void,
@@ -90,6 +92,15 @@ function willRetryAfterCompaction(event: unknown): boolean {
 }
 
 function registerLifecycleHandlers(host: LoopExtensionHost, runtime: LoopRuntime): void {
+  const activity: ActivityProvider | undefined =
+    host.events === undefined
+      ? undefined
+      : new ActivityProvider(host.events, () => ({
+          source: "loop",
+          ownsContinuation: runtime.ownsContinuation(),
+          pendingDelivery: false,
+          tasks: [],
+        }));
   host.on("session_start", (_event: unknown, context: LoopContext): void => {
     const restored: LoopRuntimeState =
       latestLoopState(context.sessionManager?.getEntries() ?? []) ??
@@ -101,6 +112,11 @@ function registerLifecycleHandlers(host: LoopExtensionHost, runtime: LoopRuntime
         runningContinuation: undefined,
       });
     runtime.restore(restored, context);
+    activity?.stop();
+    const sessionId: string | undefined = context.sessionManager?.getSessionId?.();
+    if (sessionId !== undefined) {
+      activity?.start(sessionId);
+    }
   });
   host.on("session_compact", (event: unknown, context: LoopContext): void =>
     runtime.deferLifecycleContinuation((): void =>
@@ -110,7 +126,10 @@ function registerLifecycleHandlers(host: LoopExtensionHost, runtime: LoopRuntime
   host.on("agent_settled", (_event: unknown, context: LoopContext): void =>
     runtime.deferLifecycleContinuation((): void => runtime.agentSettled(context)),
   );
-  host.on("session_shutdown", (): void => runtime.shutdown());
+  host.on("session_shutdown", (): void => {
+    activity?.stop();
+    runtime.shutdown();
+  });
 }
 
 export default function loopExtension(host: LoopExtensionHost): void {

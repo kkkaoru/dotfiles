@@ -151,6 +151,10 @@ export class CompletionDelivery {
     this.#flushIfIdle();
   }
 
+  hasPending(): boolean {
+    return this.#pending.length > 0 || this.#pendingOverdue.size > 0;
+  }
+
   setContext(context: CompletionDeliveryContext): void {
     this.#context = context;
   }

@@ -1,3 +1,4 @@
+// This TypeScript file is executed with Bun.
 import type { CompleteResult, LoopContext, LoopHost } from "./contracts.ts";
 import { clearLoopDisplay, updateLoopDisplay } from "./display.ts";
 import { namedLoopFollowUp } from "./follow-up.ts";
@@ -48,6 +49,11 @@ export class LoopRuntime {
   constructor(host: LoopHost, scheduler: Scheduler = SYSTEM_SCHEDULER) {
     this.#host = host;
     this.#scheduler = scheduler;
+  }
+
+  ownsContinuation(): boolean {
+    const active: boolean = this.#runningContinuation !== undefined;
+    return !this.#paused && (active || this.#pendingContinuations.length + this.#jobs.size > 0);
   }
 
   setContext(context: LoopContext): void {

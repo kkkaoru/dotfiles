@@ -1,4 +1,5 @@
 // This TypeScript file is executed with Bun.
+import { ActivityProvider, announceTask, type ActivityBus } from "./src/goal-activity.ts";
 import type { Static } from "typebox";
 import { registerTmuxTool } from "./src/register-tool.ts";
 import type { tmuxExecSchema } from "./src/tool-schema.ts";
@@ -77,7 +78,13 @@ type TmuxLifecycleEvent =
   | "tool_call"
   | "tool_result";
 
+interface TmuxActivityState {
+  sessionId: string | undefined;
+  tasks: readonly string[];
+}
+
 export interface TmuxExtensionHost extends ActiveDisplayCommandHost, CompletionDeliveryHost {
+  readonly events?: ActivityBus;
   readonly exec: (
     command: string,
     args: readonly string[],
@@ -178,6 +185,8 @@ class AutomaticTmuxRewriter {
 }
 
 function registerLifecycleHandlers(input: {
+  readonly activity: ActivityProvider | undefined;
+  readonly activityState: TmuxActivityState;
   readonly activeDisplay: ActiveTaskDisplay;
   readonly cleaner: ArtifactCleaner;
   readonly delivery: CompletionDelivery;
@@ -196,6 +205,8 @@ function registerLifecycleHandlers(input: {
     if (sessionManager === undefined) {
       return;
     }
+    input.activityState.sessionId = sessionManager.getSessionId();
+    input.activity?.start(input.activityState.sessionId);
     input.activeDisplay.restore(recoverActiveTaskDisplayState(sessionManager.getEntries()));
     input.activeDisplay.setContext(context);
     input.delivery.setContext(context);
@@ -237,6 +248,9 @@ function registerLifecycleHandlers(input: {
     },
   );
   input.host.on("session_shutdown", (): void => {
+    input.activity?.stop();
+    input.activityState.sessionId = undefined;
+    input.activityState.tasks = [];
     input.cleaner.stop();
     input.delivery.clear();
     input.rewriter.clear();
@@ -261,12 +275,30 @@ export default function tmuxTimeoutExtension(
             markCompletionDelivered(completion.launch, recovery?.operations),
         },
   );
+  const activityState: TmuxActivityState = { sessionId: undefined, tasks: [] };
+  const activity: ActivityProvider | undefined =
+    host.events === undefined
+      ? undefined
+      : new ActivityProvider(host.events, () => ({
+          source: "tmux",
+          ownsContinuation: false,
+          pendingDelivery: delivery.hasPending(),
+          tasks: activityState.tasks,
+        }));
   const runtime: TmuxRuntime = new TmuxRuntime({
     ...runtimeOptions,
-    onActiveChange: (launches: readonly TmuxLaunch[]): void => activeDisplay.update(launches),
+    onActiveChange: (launches: readonly TmuxLaunch[]): void => {
+      activityState.tasks = launches.map((launch) => launch.sessionName);
+      activeDisplay.update(launches);
+    },
     onComplete: (completion: Completion): void => delivery.complete(completion),
     onOverdue: (launches: readonly TmuxLaunch[]): void => delivery.overdue(launches),
-    onTrack: (launch: TmuxLaunch): void => persistTmuxLaunch(host.appendEntry, launch),
+    onTrack: (launch: TmuxLaunch): void => {
+      persistTmuxLaunch(host.appendEntry, launch);
+      if (host.events !== undefined && activityState.sessionId !== undefined) {
+        announceTask(host.events, { sessionId: activityState.sessionId, name: launch.sessionName });
+      }
+    },
   });
   const rewriter: AutomaticTmuxRewriter = new AutomaticTmuxRewriter(runtime);
 
@@ -274,6 +306,8 @@ export default function tmuxTimeoutExtension(
   registerTmuxTool(host, runtime);
 
   registerLifecycleHandlers({
+    activity,
+    activityState,
     activeDisplay,
     cleaner,
     delivery,
