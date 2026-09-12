@@ -1,0 +1,339 @@
+{
+  "version": 3,
+  "skills": {
+    "motherduck-build-cfa-app": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/motherduckdb/agent-skills.git",
+      "skillPath": "skills/motherduck-build-cfa-app/SKILL.md",
+      "skillFolderHash": "bbf72cbe0cc2ef226df99970f727f84e8782f6f4",
+      "installedAt": "2026-05-05T15:36:37.673Z",
+      "updatedAt": "2026-05-05T15:36:47.854Z"
+    },
+    "motherduck-build-dashboard": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/motherduckdb/agent-skills.git",
+      "skillPath": "skills/motherduck-build-dashboard/SKILL.md",
+      "skillFolderHash": "3e5a76499bc3bbe3dfbcda1ffa15ce353066f333",
+      "installedAt": "2026-05-05T15:36:37.674Z",
+      "updatedAt": "2026-05-05T15:36:47.854Z"
+    },
+    "motherduck-build-data-pipeline": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/motherduckdb/agent-skills.git",
+      "skillPath": "skills/motherduck-build-data-pipeline/SKILL.md",
+      "skillFolderHash": "6f8d077dcb0b4a8102c0783bbe0c2c92bbc61293",
+      "installedAt": "2026-05-05T15:36:37.674Z",
+      "updatedAt": "2026-05-05T15:36:47.855Z"
+    },
+    "motherduck-connect": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/motherduckdb/agent-skills.git",
+      "skillPath": "skills/motherduck-connect/SKILL.md",
+      "skillFolderHash": "5979f1173b463442e03fdb869a745711fad3323a",
+      "installedAt": "2026-05-05T15:36:37.674Z",
+      "updatedAt": "2026-05-05T15:36:47.855Z"
+    },
+    "motherduck-create-dive": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/motherduckdb/agent-skills.git",
+      "skillPath": "skills/motherduck-create-dive/SKILL.md",
+      "skillFolderHash": "303e53278b9bdd8a7ecb290f10b99a57387e0a42",
+      "installedAt": "2026-05-05T15:36:37.675Z",
+      "updatedAt": "2026-05-05T15:36:47.857Z"
+    },
+    "motherduck-duckdb-sql": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/motherduckdb/agent-skills.git",
+      "skillPath": "skills/motherduck-duckdb-sql/SKILL.md",
+      "skillFolderHash": "97c26c369ef3e15a26f8fab34dadc67a92ed957c",
+      "installedAt": "2026-05-05T15:36:37.675Z",
+      "updatedAt": "2026-05-05T15:36:47.857Z"
+    },
+    "motherduck-ducklake": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/motherduckdb/agent-skills.git",
+      "skillPath": "skills/motherduck-ducklake/SKILL.md",
+      "skillFolderHash": "126fc87c05c699b96dbd458a1bf9356578a82972",
+      "installedAt": "2026-05-05T15:36:37.675Z",
+      "updatedAt": "2026-05-05T15:36:47.857Z"
+    },
+    "motherduck-enable-self-serve-analytics": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/motherduckdb/agent-skills.git",
+      "skillPath": "skills/motherduck-enable-self-serve-analytics/SKILL.md",
+      "skillFolderHash": "fb8bc62f269d5e58be6904bd56efd4b15a2e8281",
+      "installedAt": "2026-05-05T15:36:37.675Z",
+      "updatedAt": "2026-05-05T15:36:47.857Z"
+    },
+    "motherduck-explore": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/motherduckdb/agent-skills.git",
+      "skillPath": "skills/motherduck-explore/SKILL.md",
+      "skillFolderHash": "27d61f1cc4fa8ff22c044ed1128707d3345ac37d",
+      "installedAt": "2026-05-05T15:36:37.676Z",
+      "updatedAt": "2026-05-05T15:36:47.858Z"
+    },
+    "motherduck-load-data": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/motherduckdb/agent-skills.git",
+      "skillPath": "skills/motherduck-load-data/SKILL.md",
+      "skillFolderHash": "bf58a2f80ea0f6f01ccf7a219e07e2752c30a8c8",
+      "installedAt": "2026-05-05T15:36:37.676Z",
+      "updatedAt": "2026-05-05T15:36:47.858Z"
+    },
+    "motherduck-migrate-to-motherduck": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/motherduckdb/agent-skills.git",
+      "skillPath": "skills/motherduck-migrate-to-motherduck/SKILL.md",
+      "skillFolderHash": "fd30ee392bb449df55740016f00de7991583396d",
+      "installedAt": "2026-05-05T15:36:37.676Z",
+      "updatedAt": "2026-05-05T15:36:47.859Z"
+    },
+    "motherduck-model-data": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/motherduckdb/agent-skills.git",
+      "skillPath": "skills/motherduck-model-data/SKILL.md",
+      "skillFolderHash": "e76f46c58f05b2cfc17f2dee4ca3d0e8474d84cd",
+      "installedAt": "2026-05-05T15:36:37.676Z",
+      "updatedAt": "2026-05-05T15:36:47.859Z"
+    },
+    "motherduck-partner-delivery": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/motherduckdb/agent-skills.git",
+      "skillPath": "skills/motherduck-partner-delivery/SKILL.md",
+      "skillFolderHash": "b649bbf6c012e4826bb613796b201a09f5e66aac",
+      "installedAt": "2026-05-05T15:36:37.677Z",
+      "updatedAt": "2026-05-05T15:36:47.859Z"
+    },
+    "motherduck-pricing-roi": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/motherduckdb/agent-skills.git",
+      "skillPath": "skills/motherduck-pricing-roi/SKILL.md",
+      "skillFolderHash": "34015a72c7ebe4c3a91a51fb35a3c0c5c999028e",
+      "installedAt": "2026-05-05T15:36:37.677Z",
+      "updatedAt": "2026-05-05T15:36:47.860Z"
+    },
+    "motherduck-query": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/motherduckdb/agent-skills.git",
+      "skillPath": "skills/motherduck-query/SKILL.md",
+      "skillFolderHash": "3529d00f4d0fe0a53127d58e1fcd97c65bb2309d",
+      "installedAt": "2026-05-05T15:36:37.677Z",
+      "updatedAt": "2026-05-05T15:36:47.860Z"
+    },
+    "motherduck-rest-api": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/motherduckdb/agent-skills.git",
+      "skillPath": "skills/motherduck-rest-api/SKILL.md",
+      "skillFolderHash": "add861a1fcc4493412407520b861243f39c7ee99",
+      "installedAt": "2026-05-05T15:36:37.678Z",
+      "updatedAt": "2026-05-05T15:36:47.860Z"
+    },
+    "motherduck-security-governance": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/motherduckdb/agent-skills.git",
+      "skillPath": "skills/motherduck-security-governance/SKILL.md",
+      "skillFolderHash": "f6620ee1368b5d5e74f62990e96f8b59f4abd65e",
+      "installedAt": "2026-05-05T15:36:37.678Z",
+      "updatedAt": "2026-05-05T15:36:47.860Z"
+    },
+    "motherduck-share-data": {
+      "source": "motherduckdb/agent-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/motherduckdb/agent-skills.git",
+      "skillPath": "skills/motherduck-share-data/SKILL.md",
+      "skillFolderHash": "3cfd6cf0dcbd3498e6f23625500ec696345d6556",
+      "installedAt": "2026-05-05T15:36:37.678Z",
+      "updatedAt": "2026-05-05T15:36:47.861Z"
+    },
+    "ctx-agent-history-search": {
+      "source": "ctxrs/ctx",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/ctxrs/ctx.git",
+      "skillPath": "skills/ctx-agent-history-search/SKILL.md",
+      "skillFolderHash": "e69c7da0621f18f5113cc6f1ff35b37bcd2b0e1e",
+      "installedAt": "2026-07-06T16:31:46.118Z",
+      "updatedAt": "2026-07-06T16:31:46.118Z"
+    },
+    "find-skills": {
+      "source": "vercel-labs/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/vercel-labs/skills.git",
+      "skillPath": "skills/find-skills/SKILL.md",
+      "skillFolderHash": "eb6a23305aea6e340d14b9de3766e721f9f4861b",
+      "installedAt": "2026-07-06T16:31:48.544Z",
+      "updatedAt": "2026-07-06T16:31:48.544Z"
+    },
+    "agents-sdk": {
+      "source": "cloudflare/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/cloudflare/skills.git",
+      "skillPath": "skills/agents-sdk/SKILL.md",
+      "skillFolderHash": "fe7c98385541543a62abf65090654fcbc181c8b7",
+      "installedAt": "2026-08-09T17:51:48.104Z",
+      "updatedAt": "2026-08-23T17:16:56.090Z"
+    },
+    "cloudflare": {
+      "source": "cloudflare/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/cloudflare/skills.git",
+      "skillPath": "skills/cloudflare/SKILL.md",
+      "skillFolderHash": "a92bec38b7b5ff5e634b509c7ff3c289d9d61290",
+      "installedAt": "2026-08-09T17:51:48.105Z",
+      "updatedAt": "2026-08-23T17:16:56.092Z"
+    },
+    "cloudflare-email-service": {
+      "source": "cloudflare/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/cloudflare/skills.git",
+      "skillPath": "skills/cloudflare-email-service/SKILL.md",
+      "skillFolderHash": "af7bd16246149247d4b699382d951dc376491bac",
+      "installedAt": "2026-08-09T17:51:48.106Z",
+      "updatedAt": "2026-08-23T17:16:56.093Z"
+    },
+    "cloudflare-one": {
+      "source": "cloudflare/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/cloudflare/skills.git",
+      "skillPath": "skills/cloudflare-one/SKILL.md",
+      "skillFolderHash": "c692b9ddaf8ac60485b758a22100be27e4ec782e",
+      "installedAt": "2026-08-09T17:51:48.106Z",
+      "updatedAt": "2026-08-23T17:16:56.094Z"
+    },
+    "cloudflare-one-migrations": {
+      "source": "cloudflare/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/cloudflare/skills.git",
+      "skillPath": "skills/cloudflare-one-migrations/SKILL.md",
+      "skillFolderHash": "6ab7a1f3220dae699b5cb1325ec86b952ccf6a3e",
+      "installedAt": "2026-08-09T17:51:48.106Z",
+      "updatedAt": "2026-08-23T17:16:56.095Z"
+    },
+    "durable-objects": {
+      "source": "cloudflare/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/cloudflare/skills.git",
+      "skillPath": "skills/durable-objects/SKILL.md",
+      "skillFolderHash": "72810f48414f2e68d0aa65a8895f749c959dea91",
+      "installedAt": "2026-08-09T17:51:48.107Z",
+      "updatedAt": "2026-08-23T17:16:56.096Z"
+    },
+    "sandbox-migrate-to-next": {
+      "source": "cloudflare/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/cloudflare/skills.git",
+      "skillPath": "skills/sandbox-migrate-to-next/SKILL.md",
+      "skillFolderHash": "6653491197cd99b53582df12eca6b51dcf1e60a1",
+      "installedAt": "2026-08-09T17:51:48.107Z",
+      "updatedAt": "2026-08-23T17:16:56.099Z"
+    },
+    "sandbox-next": {
+      "source": "cloudflare/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/cloudflare/skills.git",
+      "skillPath": "skills/sandbox-next/SKILL.md",
+      "skillFolderHash": "79eb14458fd6008858c63e68f4ab75ae9ef7f861",
+      "installedAt": "2026-08-09T17:51:48.107Z",
+      "updatedAt": "2026-08-23T17:16:56.100Z"
+    },
+    "sandbox-stable": {
+      "source": "cloudflare/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/cloudflare/skills.git",
+      "skillPath": "skills/sandbox-stable/SKILL.md",
+      "skillFolderHash": "8be972b0142500bce72fda802ff4a37bd5c87b79",
+      "installedAt": "2026-08-09T17:51:48.107Z",
+      "updatedAt": "2026-08-23T17:16:56.101Z"
+    },
+    "turnstile-spin": {
+      "source": "cloudflare/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/cloudflare/skills.git",
+      "skillPath": "skills/turnstile-spin/SKILL.md",
+      "skillFolderHash": "8f135e415060480d73aeb8f0170c3e9cfb31c3ec",
+      "installedAt": "2026-08-09T17:51:48.108Z",
+      "updatedAt": "2026-08-23T17:16:56.102Z"
+    },
+    "web-perf": {
+      "source": "cloudflare/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/cloudflare/skills.git",
+      "skillPath": "skills/web-perf/SKILL.md",
+      "skillFolderHash": "e8e8c50ca6abf0849a4d9d69c1bed8b98b5d7411",
+      "installedAt": "2026-08-09T17:51:48.108Z",
+      "updatedAt": "2026-08-23T17:16:56.103Z"
+    },
+    "workers-best-practices": {
+      "source": "cloudflare/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/cloudflare/skills.git",
+      "skillPath": "skills/workers-best-practices/SKILL.md",
+      "skillFolderHash": "7dd384e79c76d3e388dfe53e12e93642679ff1fd",
+      "installedAt": "2026-08-09T17:51:48.108Z",
+      "updatedAt": "2026-08-23T17:16:56.104Z"
+    },
+    "wrangler": {
+      "source": "cloudflare/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/cloudflare/skills.git",
+      "skillPath": "skills/wrangler/SKILL.md",
+      "skillFolderHash": "45cc198b2aad3f06e8abf91333f55fbe7579f659",
+      "installedAt": "2026-08-09T17:51:48.108Z",
+      "updatedAt": "2026-08-23T17:16:56.104Z"
+    },
+    "gpui": {
+      "source": "longbridge/gpui-component",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/longbridge/gpui-component.git",
+      "skillPath": "skills/gpui/SKILL.md",
+      "skillFolderHash": "88b62722e57ef669f28c98e3137ca31a5b8cfff5",
+      "installedAt": "2026-08-26T13:33:30.100Z",
+      "updatedAt": "2026-08-26T13:33:30.100Z"
+    },
+    "gpui-component": {
+      "source": "longbridge/gpui-component",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/longbridge/gpui-component.git",
+      "skillPath": "skills/gpui-component/SKILL.md",
+      "skillFolderHash": "34cf29c487be81f2afaec954da0ee8dd5c4514ee",
+      "installedAt": "2026-08-26T13:33:30.101Z",
+      "updatedAt": "2026-08-26T13:33:30.101Z"
+    }
+  },
+  "dismissed": {
+    "findSkillsPrompt": true
+  },
+  "lastSelectedAgents": [
+    "amp",
+    "antigravity",
+    "antigravity-cli",
+    "cline",
+    "codex",
+    "cursor",
+    "deepagents",
+    "gemini-cli",
+    "github-copilot",
+    "kimi-code-cli",
+    "opencode",
+    "warp",
+    "zed",
+    "claude-code"
+  ]
+}
