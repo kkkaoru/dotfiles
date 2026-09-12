@@ -55,6 +55,35 @@ anyenv install nodenv
 ```
 
 
+## Dependency security
+
+JavaScript dependencies are pinned in each component's `package.json` and `bun.lock`.
+Use Bun, keep manifests and lockfiles together, and run the component's README checks
+plus `bun audit` after updates. Audit the root CLI bundle as well as every local tool:
+
+```sh
+for lock in bun.lock tools/*/bun.lock; do
+  (cd "$(dirname "$lock")" && bun audit) || exit 1
+done
+```
+
+An ordinary install can leave obsolete nested packages in an existing `node_modules`.
+After updating overrides, use `bun install --force --frozen-lockfile` and verify the
+actually resolved dependency. If obsolete packages remain, replace only that generated
+installation with a fresh frozen-lockfile installation; never move runtime databases
+or credentials. A clean lockfile audit alone does not inspect those leftover packages.
+
+CCR's `better-sqlite3` dependency needs its native addon installed. If Bun blocks its
+install script, review that package's script and explicitly approve only that package
+with `bun pm trust better-sqlite3`; do not blanket-trust dependencies. Verify with an
+in-memory SQLite query before starting CCR. No Executor credentials or service setup
+are involved in dependency verification.
+
+The vendored MotherDuck pipeline has a separate `uv.lock`; see its
+[dependency checks](.agents/skills/motherduck-build-data-pipeline/references/dlt-dbt-motherduck-project/README.md).
+Rust components can be checked with `cargo audit --file tools/<component>/Cargo.lock`.
+After updating loaded Pi dependencies, run `/reload` or start a new session.
+
 ## SHELL
 
 Use fish with oh-my-fish
