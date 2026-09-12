@@ -12,3 +12,13 @@ dependencies = [
 
 [tool.uv]
 package = false
+# Security floors for transitive dependencies; do not bypass upstream constraints.
+constraint-dependencies = [
+    "click>=8.3.3",
+    "gitpython>=3.1.59",
+    "idna>=3.15",
+    "msgpack>=1.2.1",
+    "setuptools>=83.0.0",
+    "sqlparse>=0.6.0",
+    "urllib3>=2.7.0",
+]

@@ -55,8 +55,22 @@ export MOTHERDUCK_PIPELINE_DB=md_skills_pipeline_demo
 Install dependencies with a supported Python:
 
 ```bash
-uv sync --python 3.12
+uv sync --locked --python 3.12
 ```
+
+The lockfile includes security updates for transitive dependencies. The
+`constraint-dependencies` entries in `pyproject.toml` retain minimum safe versions
+without overriding incompatible upstream requirements. After changing dependencies,
+run `uv lock --check`, export the locked requirements, and audit the complete graph:
+
+```bash
+uv export --locked --no-emit-project --no-hashes -o /tmp/md-pipeline-requirements.txt
+uvx pip-audit --strict --no-deps --disable-pip -r /tmp/md-pipeline-requirements.txt
+```
+
+Dependency-update validation can use an isolated local DuckDB database to test dlt
+loading and all dbt models/tests without cloud credentials. This is not a substitute
+for the real MotherDuck validation described below.
 
 Run the whole pipeline:
 
