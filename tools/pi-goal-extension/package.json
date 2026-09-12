@@ -27,7 +27,7 @@
     "@types/node": "24.10.1",
     "@vitest/coverage-v8": "4.1.10",
     "typescript": "5.9.3",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.85.1"
