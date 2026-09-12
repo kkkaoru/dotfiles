@@ -21,4 +21,27 @@ if [ ! -x "$binary" ]; then
   printf '%s\n' 'Executor Desktop is missing. Install it with: brew install --cask executor' >&2
   exit 127
 fi
+# No sync daemon: short-lived hooks surround ordinary tool use. Never recurse
+# into sync's own CLI calls, or intercept daemon/service/MCP lifecycle commands.
+sync_target=local
+for argument in "$@"; do
+  case "$argument" in
+    --scope|--scope=*|--base-url|--base-url=*|--server|--server=*) sync_target=explicit ;;
+  esac
+done
+case "${1:-}" in
+  call|tools|resume)
+    if [ "$sync_target" = local ] && [ "${EXECUTOR_SYNC_ACTIVE:-0}" != 1 ] && [ "$EXECUTOR_SCOPE_DIR" = "$repo" ] &&
+       [ -z "${EXECUTOR_DATA_DIR:-}" ] && [ -z "${EXECUTOR_KEYCHAIN_SERVICE_NAME:-}" ] &&
+       [ -f "$repo/.executor/sync.json" ] && [ -d "$repo/tools/executor-sync/node_modules" ] &&
+       command -v bun >/dev/null 2>&1; then
+      EXECUTOR_SYNC_ACTIVE=1 bun "$repo/tools/executor-sync/src/cli.ts" hook before >/dev/null ||
+        printf '%s\n' 'Executor settings sync unavailable; continuing locally.' >&2
+      if "$binary" "$@"; then status=0; else status=$?; fi
+      EXECUTOR_SYNC_ACTIVE=1 bun "$repo/tools/executor-sync/src/cli.ts" hook after >/dev/null ||
+        printf '%s\n' 'Executor settings sync unavailable; local result preserved.' >&2
+      exit "$status"
+    fi
+    ;;
+esac
 exec "$binary" "$@"

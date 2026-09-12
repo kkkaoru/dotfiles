@@ -1,0 +1,12 @@
+#!/bin/sh
+# Short-lived settings sync command; never starts a sync daemon.
+set -eu
+script="$0"
+while [ -L "$script" ]; do
+  dir=$(CDPATH= cd -P "$(dirname "$script")" && pwd)
+  target=$(readlink "$script")
+  case "$target" in /*) script="$target" ;; *) script="$dir/$target" ;; esac
+done
+repo=$(CDPATH= cd -P "$(dirname "$script")/.." && pwd)
+export EXECUTOR_SYNC_ACTIVE=1
+exec bun "$repo/tools/executor-sync/src/cli.ts" "$@"

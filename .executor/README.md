@@ -6,7 +6,7 @@
 ## Git 管理の境界
 
 ルートの `.gitignore` は `.executor` 配下をデフォルトで全除外し、
-この README だけを追跡対象にしています。新しいファイルも自動的に除外されます。
+この README と非秘密の `sync.json` だけを追跡対象にしています。新しいファイルも自動的に除外されます。
 共有可能な設定を追加する場合は、秘密情報や端末固有の値がないことを確認してから
 個別に許可リストへ追加してください。`git add -f` で実行時データを登録しないでください。
 
@@ -40,6 +40,17 @@ LaunchAgent に保存してから、連携を登録します（登録には別�
 別 Mac のパスが異なる場合は DB コピーに頼らず、セットアップスクリプトで再登録します。
 詳しい前提・リンク作成・認証・検証は
 [`tools/executor-skills/SETUP.ja.md`](../tools/executor-skills/SETUP.ja.md) を参照してください。
+
+## 設定・認証・ポリシーの同期（任意）
+
+[`tools/executor-sync/README.md`](../tools/executor-sync/README.md) を参照してください。
+共有先は非公開R2バケット `executor-config-sync`、保存形式はage暗号化スナップショットです。
+同期専用daemonは追加せず、既存CLIの前後と手動コマンドから同期します。
+`sync.json` は `{"format":2}` だけで、保存先・鍵・有効化状態を含みません。
+既存Executor OAuthでR2を操作し、保存先・age鍵・HMAC鍵・有効化状態は各MacのKeychainに保存します。
+別Macには、受信Macの鍵で暗号化したペアリング情報を送信元digestとともに検証して渡します。
+初期状態は無効です。詳細な手順と脅威モデルは上記READMEを参照してください。
+実DBと `sync-local/` は引き続きGit除外対象です。
 
 確認はリポジトリルートで `./scripts/executor service status` と
 `./scripts/executor tools integrations` を実行します。

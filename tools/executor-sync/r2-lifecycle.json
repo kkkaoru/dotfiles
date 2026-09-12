@@ -1,0 +1,12 @@
+{
+  "rules": [
+    {
+      "id": "executor-sync-history-30d",
+      "enabled": true,
+      "conditions": { "prefix": "v1/personal/history/" },
+      "deleteObjectsTransition": {
+        "condition": { "type": "Age", "maxAge": 2592000 }
+      }
+    }
+  ]
+}
