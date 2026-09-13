@@ -1,0 +1,66 @@
+---
+paths:
+  - "**/*.swift"
+---
+
+# Swiftコーディングルール
+
+これは正規英語版の日本語訳です。各要件は1個のRule IDだけを持ち、1箇所だけに記載します。Swift公式資料を参考にした厳格なリポジトリ方針であり、Swift公式のスタイル標準ではありません。MUST、MUST NOT、禁止事項は必須であり、優先方針は全必須ルールを満たす選択肢の間でのみ適用します。調査資料とバージョン上の注意は[sources.md](sources.md)に記載しています。
+
+## リポジトリと検証
+
+- **SW01 リポジトリ設定:** 設定済みのSwift/Xcode toolchain、Swift言語モード、SDK、deployment target、依存解決、project構成、scriptを使ってください。必要に応じて`Package.swift`、Xcode build settings、CIを確認してください。compiler version、言語モード、SDK availabilityは別々の制約です。別のbuild system、依存管理tool、不要な依存を追加しないでください。
+- **SW02 実装計画:** 実装前に、影響する契約、ownershipとisolation境界、互換性、検証を含む入念な計画を立ててください。
+- **SW03 検証toolchain:** 論理的な変更単位ごとに対象を絞ったcheckを行い、その後、設定済みのbuild、format-check、lint、testを実行してください。SwiftPMでは既存の`swift build`と`swift test`のworkflow、Xcodeでは指定されたscheme、configuration、destinationによる`xcodebuild`を使ってください。既存のformatter/linter設定を使い、`swift format`（swiftlang/swift-format）、SwiftFormat、SwiftLintを別のtoolとして扱ってください。対象targetのbuild、concurrency、lint、testのwarning/errorをすべてゼロにし、期待動作を再現して実際のcommand結果を確認してください。必須checkの失敗や実行不能は検証済み完了を妨げるblockerです。既存failureも含めて報告し、成功扱いや無断の検証範囲縮小をしないでください。
+- **SW04 品質の維持:** 診断抑制、lint rule無効化、失敗を隠すtestのskip/cancel、assertionのwarning化、言語/concurrency設定や品質gateの弱体化を禁止します。warning制御attribute、known-issue annotation、baseline除外、成功するまでの再実行も対象です。このルールセットの例外には、実装前のユーザーによる明示承認、技術的必要性の文書化、最小の適用範囲、補完test、例外の解消条件が必須です。このskillや一般的な実装依頼を例外承認と解釈しないでください。
+
+## 型、値、API
+
+- **SW05 ドメインモデル:** structとassociated valueを持つenumで有効状態、単位、errorを表現してください。identity、共有参照semantics、継承、framework要件が必要な場合はclassを使い、継承を意図しないclassは`final`にしてください。
+- **SW06 mutationと定数:** `let`を優先し、必要な狭いscopeの変更には`var`を使ってください。magic numberを意味のある名前付き定数にし、型で共有する値は`static let`、本当にlocalな値はlocal定数にしてください。保護されていないmutable global/static stateを避けてください。`let`の参照先までimmutableになるわけではありません。
+- **SW07 Optional:** 不在をoptionalで表現し、`guard let`、`if let`、pattern matchingで絞り込んでください。productionとtestの両方でforce unwrap、強制cast（`as!`）、implicitly unwrapped optionalの新規導入を禁止します。不可避な生成code/framework契約にはSW04の例外手続きと初期化・寿命保証の文書化が必要です。手書きcodeの利便性は正当化理由になりません。`??`は契約上のfallbackだけに使い、不正な値や必須入力の欠落を隠さないでください。
+- **SW08 抽象化と型:** concrete typeと小さなprotocolを優先してください。型の関係を保つ場合はgenericや`some Protocol`、異種の実行時storageが必要なら`any Protocol`を使ってください。SW04で承認された不可避な相互運用signatureを除き、`Any`、`AnyObject`、未検証の型消去の新規導入を禁止します。境界値は直ちに検証して具体的なdomain型へ変換してください。castの仮定より明示的な失敗処理を伴うconditional castを優先してください。推論で契約が明瞭な場合に冗長な型注釈を強制しないでください。
+- **SW09 API設計とaccess:** Swift API Design Guidelinesに従い、call siteの明瞭さ、意味のあるargument label、型/protocolの`UpperCamelCase`、memberの`lowerCamelCase`を優先してください。適切な最小access（`private`、`fileprivate`、`internal`、`package`、`public`、`open`）を選び、実装詳細を標準で公開しないでください。public契約と観測可能な副作用を文書化してください。
+- **SW10 網羅性とavailability:** 所有するenumは網羅的な`switch`を使い、不要な`default`で新しいcaseを隠さないでください。resilientな外部enumでは必要に応じて`@unknown default`を扱ってください。platform APIには適切なavailability check/annotationとcompile-time platform/import checkを使い、新compilerが新OS APIの利用を保証すると考えないでください。
+
+## 関数と制御フロー
+
+- **SW11 関数の凝集性:** 関数の責務を絞り、テスト以外を最大限DRYにしてください。`@main`、command entry point、application lifecycle handlerは薄いorchestration層にし、再利用可能なbusiness logicをUIやframework callbackから分離してください。
+- **SW12 分岐とiteration:** `guard`、early return、pattern matchingでネストを減らしてください。単純な条件式は明瞭な場合だけ使い、三項演算子をネストしないでください。`map`、`compactMap`、`filter`、`reduce`は明瞭な変換に使い、副作用や技巧的なaccumulator変更に使わないでください。loopが明瞭ならloopを使い、深いloopネストを避け、再利用するsort comparatorは別に命名してください。除外が契約でない限り`compactMap`で不正データを捨てないでください。
+- **SW13 引数:** 3個以上の関連optionは、invariantとcall siteが明瞭になる場合に型付きconfiguration値へまとめてください。個数だけを理由にwrapperを作らず、必須依存をsingletonや暗黙の状態へ隠さないでください。
+
+## error、resource、memory
+
+- **SW14 error処理:** 回復可能な失敗には構造化した`Error`と`throws`/`async throws`を使い、errorを含む値が必要なAPIでは`Result`を使ってください。typed throwsは固定failure型が有用で対応済みの契約になる場合だけ使ってください。errorを具体的にcatchし、有用な原因を保持してください。空の`catch`、`try?`、`try!`、失敗時の暗黙fallbackの新規導入を禁止します。意図した不在は明示的にmodel化し、すべてのerror経路を処理してください。production制御フローへの`fatalError`、`assertionFailure`、`preconditionFailure`、assertion、preconditionの新規導入を禁止します。不可避なinvariant trapにはSW04の承認、invariantの証明、境界testが必要です。
+- **SW15 データ境界:** domain値を構築する前に外部入力を検証してください。構造化serializationには型付き`Codable` modelを優先し、不正データ、欠損field、encoding、数値範囲、HTTP status codeを明示的に処理してください。decode成功だけではdomain検証になりません。path文字列の連結よりURL/path APIを使い、Unicodeを考慮した`String` indexingに従ってください。
+- **SW16 resource lifecycle:** file、lock、observer、stream、一時resourceには決定的なcleanup（`defer`、scoped API、明示的なlifecycle method）を使い、適時のcleanupを`deinit`だけに任せないでください。`defer`内のasync cleanupは設定済みcompilerが対応する場合だけ使い、未対応なら成功/error/cancellationごとの明示的なcleanup経路を設けてください。I/Oを最小化・buffer化し、順序依存や共有fileの危険がない独立処理だけを並列数を制限して実行してください。
+- **SW17 ARCとcapture:** 参照ownershipを明示し、delegate、escaping closure、subscription、taskの循環参照を防いでください。参照先が消える可能性がある場合は`weak`を使ってください。`unowned` capture/参照の新規導入にはSW04の承認と寿命の安全性の証明を文書化することが必要です。処理がownerを保持すべき場合に機械的な`[weak self]`を追加しないでください。taskがsuspensionをまたいで`self`を保持することや、循環参照で`deinit`によるcancelが実行されないことを考慮してください。
+- **SW18 unsafe相互運用:** pointer操作より安全なcollectionや対応済みの`Span`等の安全なviewを優先してください。SW04の承認なしにunsafe pointer、`unsafeBitCast`、`unsafeDowncast`、`Unmanaged`、unsafe continuation、その他の未検証memory操作を新規導入することを禁止します。承認済みの不可避なpointer/C/C++境界を安全なAPIの背後に隔離し、allocation、寿命、範囲、alignment、binding、ownershipのinvariantを記述して境界条件をtestしてください。scoped `withUnsafe…` APIからpointerをescapeさせず、`await`をまたいで有効と仮定しないでください。strict memory-safety checkはprojectが対応する設定を通じて導入し、toolchain基準を無断で変更しないでください。
+
+## concurrencyとisolation
+
+- **SW19 concurrency設定:** async codeを変更する前にtargetのdefault actor isolation、strict-concurrency check、upcoming-feature設定を確認してください。Swift 6言語モードはdata-race safetyを強制しますが、defaultの`MainActor` isolationを意味しません。Swift 6.2のnonisolated asyncがcallerのisolationで動作する挙動は設定依存です。すべての`async`関数がbackground executorで動くと仮定しないでください。対応済みの`@concurrent`は並行実行が意図され安全な場合だけ使ってください。
+- **SW20 state isolation:** 共有mutable stateをactor、global actor、または理由のあるscoped同期primitiveで保護してください。framework要件に従いUI stateと更新を`MainActor`上に置いてください。errorを黙らせる無関係なannotationではなくownershipからisolationを選んでください。lock scopeを短く保ち、blocking lockを保持して`await`しないでください。
+- **SW21 Sendability:** isolationをまたぐ共有に必要な場合は検証される`Sendable`適合と`@Sendable` closureを使ってください。対応済みの`sending` APIで安全な共有とownership移動を区別してください。compiler error回避のために`@unchecked Sendable`、`nonisolated(unsafe)`、`@preconcurrency` import、isolationの強制的な仮定を導入しないでください。不可避な相互運用の例外には明示的承認、safety invariantの文書化、対象を絞ったtestが必要です。
+- **SW22 structured concurrency:** 固定数の独立したchild処理は`async let`、動的な処理はtask groupを優先してください。無制限入力の各要素にtaskを作らず、並列数を制限してください。unstructured `Task`は必要なlifecycle/API境界だけに使い、owner、保持するhandle、完了/errorの観測、cancel/join方針を明示してください。fire-and-forget処理とthrowing taskのhandle破棄を禁止します。`Task.detached`の新規導入にはSW04の承認と、structured concurrencyやownerのあるactorでは要件を満たせない根拠が必要です。unstructured taskにはstructuredな親cancel伝播が自動では付与されません。
+- **SW23 cancellation:** cancelは協調的な制御フローとして扱ってください。長時間処理と回避可能な高負荷処理の前で確認し、API契約に従って伝播してresourceをcleanupしてください。cancelをretryしたり通常の失敗として報告したりしないでください。cancellation handlerと共有する状態を同期し、cancel raceをtestしてください。
+- **SW24 reentrancy:** すべての`await`を処理が交錯し得る箇所として扱ってください。suspension前にinvariantを回復し、必要なら復帰後に状態を再検証してください。actor isolationだけでは複数`await`を含む処理はatomicになりません。identity/version確認など文書化した方法で古い結果が新しいrequestを上書きすることを防いでください。
+- **SW25 実行境界:** 実際の非同期処理または必須protocol/API契約に`async`を使ってください。適切な並列数制限付き実行基盤やnative async APIにより、blocking I/Oや高負荷同期処理をUI isolationとcooperative executorから切り離してください。`Task {}`はactor isolationを継承し得て、`Task.detached`もcooperative poolを使うため、どちらもblocking codeを自動で安全にはしません。semaphore待機、blocking sleep、現在のexecutorへの同期dispatchでasync処理をbridgeしないでください。
+- **SW26 callback bridge:** native async APIを優先してください。callbackをbridgeする場合はchecked continuationを使い、完了する全success/error経路でresumeを正確に1回行ってください。cancel、同期callback、並行completionを明示的に設計し、continuationのleakや二重resumeを防いでください。`AsyncStream`/`AsyncThrowingStream`にはbuffering/backpressure方針を設け、termination時にproducerを停止してください。
+
+## UI、構成、診断
+
+- **SW27 UI ownership:** SwiftUIの`body`は宣言的にし、副作用や高負荷計算を置かないでください。view/modelのidentityを安定させ、ownershipとdeployment対応に基づいてstate/observation wrapperを選び、source of truthを重複させないでください。非同期loadを`.task(id:)`等の明示的なlifecycleへ結び付け、cancelと古い結果を処理してください。新APIがあるという理由だけで既存observation設計を移行しないでください。
+- **SW28 source構成:** file、module、extensionの凝集性を保ってください。importを先頭に、補助型宣言をfree function実装より前に置き、型内では既存方針に従ってstored state、初期化、method、適合をまとめてください。宣言順のために無関係な型を1fileへ集めないでください。dead code、未使用import/依存、古い互換分岐は削除し、underscore付きlocalでwarningを隠さないでください。意図的に無視する結果や必須だが未使用のparameterには`_`を使えます。
+- **SW29 文書と診断:** comment、DocC、log、開発者向けerrorは英語で記述し、構文の言い換えではなく契約、理由、invariantを説明してください。user向けtextはappのlocalization方針に従ってください。credentialや機微なuser情報をlogに出さず、設定済みloggingとprivacy制御を使ってください。
+- **SW30 performance:** 低水準ownership機能、unsafe storage、custom executor、macro、specialization、強制inlineを導入する前に計測してください。value semanticsを保ち、不要なallocation/copyを避けつつ、推測上の最適化のために検証済みの正しさや可読性を犠牲にしないでください。noncopyable containerや新iteration API等はversion対応を確認してください。
+
+## testとcoverage
+
+- **SW31 testの所有:** 非test Swift fileを作成・編集・削除したら、影響する動作、public契約、data modelのtestを追加・更新してください。既存test target/配置に従ってください。manifestのみの変更では`Package.swift`用unit testを無理に作らず、影響するpackageのbuildとtestで検証してください。
+- **SW32 test framework:** 既存frameworkを使ってください。対応済みSwift 6 toolchainの新projectではunit testに組み込みSwift Testing（`import Testing`、`@Test`、`#expect`、`#require`）を優先し、package依存を追加しないでください。既存suite、UI automation、performance計測で必要なXCTestを維持してください。共存可能でも、toolchain対応を確認せず同一test内にassertion/lifecycle APIを混在させないでください。
+- **SW33 testの明瞭性:** literalの期待結果を持つ明示的で独立したcaseを優先し、production logicで期待値を計算しないでください。対象動作を隠すDRY helper、loop内assertion、深いsuiteネストを避けてください。真に同じ動作のcase群にはmanual loopでなく、明示的なinput/expected dataを持つnative parameterized testを使ってください。前提条件にはforce unwrapではなく`#require`やframeworkのthrowing unwrapを使ってください。
+- **SW34 testの分離:** clock/clientの注入、一時resource、test doubleでnetwork、filesystem、環境、process依存を分離し、決定的かつ高速なtestにしてください。Swift Testingはdefaultで並列実行されるため、共有mutable fixtureや実行順の仮定を避けてください。serializationは文書化した不可避な共有resourceに限定し、raceを隠すために使わないでください。推測時間のsleepでなく観測可能な完了を待ち、対応するtime limitでasync testの実行時間を制限してください。
+- **SW35 test scenario:** 成功、不正/欠損入力、境界値、error伝播、resource cleanup、変更したconcurrency契約（cancel、reentrancy、古い結果の処理を含む）を検証してください。実境界を検証するintegration testと高速な分離testを分けてください。concurrent codeの変更には対応targetでThread Sanitizer、承認済みunsafe/相互運用memoryの変更には対応targetでAddress Sanitizerを、それぞれ互換性のある別configurationで実行してください。sanitizer成功は正しさの補助検証であり証明ではありません。未対応の必須検証はblockerとして報告するか、SW04に従って制約の明示承認を得てください。
+- **SW36 coverage:** 変更したtest可能な各source fileでline/function coverage 95%以上、設定済みtoolchainが対応する場合はbranch coverage 95%以上を必須にしてください。既存閾値が低くても免除されません。既存gateを下げず、project全体の平均で不足を隠さないでください。設定済みのSwiftPM `swift test --enable-code-coverage`またはXcode coverage workflowを使い、終了statusだけでなくfile単位reportを確認してください。tool不足、計測不能file/platform、到達不能branch、生成code/framework専用codeは対象範囲の評価を文書化し、免除にはSW04の承認を得てください。手書きbusiness logicを除外せず、承認なしにgateを変更しないでください。coverageはSW35の動作scenarioを代替しません。
+- **SW37 ルールレビュー:** 実装後、適用対象の全Rule IDを実際のdiffと照合して自動レビューしてください。検証済み完了を宣言する前に、正確な検証command/結果、file単位coverage、関連sanitizer結果、明示承認済み例外を報告してください。適用対象の未解決違反や必須checkの欠落を残したまま完了扱いにしてはいけません。
