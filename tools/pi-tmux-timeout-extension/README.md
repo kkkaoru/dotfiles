@@ -33,8 +33,9 @@ long-running commands continue in detached tmux sessions.
   the widget indefinitely.
 - Reconciliation also detects live jobs past their estimate, changes their row to `⚠ overdue`, and
   wakes Pi for a progress check without pretending that the command finished. Check-ins arrive within
-  one minute of the estimate, once per task per loaded extension instance. Reload/resume immediately
-  checks overdue restored jobs, including legacy jobs without an estimate (two-minute fallback).
+  one minute of the estimate and repeat every five minutes while the job remains active. Reload/resume
+  immediately checks overdue restored jobs, including legacy jobs without an estimate (two-minute
+  fallback).
   Busy/compacting Pi sessions defer check-ins until safe delivery; jobs that finish in the meantime
   are removed from pending check-ins. Batches contain at most 20 jobs, with the rest retained.
 - A hard `timeoutSeconds` uses GNU `gtimeout`/`timeout` to send TERM to the command process group,
@@ -136,8 +137,8 @@ tmux_exec({ command: "bunx wrangler tail --format=json > /tmp/worker-tail.json",
 
 A check-in is not completion. Inspect progress and either stop the specific unnecessary job or
 arrange a bounded next check. Do not launch a duplicate watcher or wait indefinitely for it to exit.
-An estimate-only job receives one automatic overdue check-in per extension load, not repeated model
-wakeups. Existing jobs are not retroactively given a kill deadline by `/reload`.
+An estimate-only job receives automatic overdue reminders every five minutes until it finishes or
+becomes orphaned. Existing jobs are not retroactively given a kill deadline by `/reload`.
 
 ## Install
 

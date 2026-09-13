@@ -14,6 +14,7 @@ import {
 export type { MutableBashInput } from "./policy.ts";
 export const DEFAULT_ESTIMATED_DURATION_SECONDS = 120;
 export const RECONCILIATION_INTERVAL_MILLISECONDS = 60_000;
+export const OVERDUE_REMINDER_INTERVAL_MILLISECONDS = 300_000;
 export const TMUX_LAUNCH_TIMEOUT_MILLISECONDS = 30_000;
 export const TMUX_LAUNCH_TIMEOUT_SECONDS = 30;
 
@@ -141,7 +142,7 @@ export class TmuxRuntime {
   readonly #onComplete: (completion: Completion) => void;
   readonly #onTrack: (launch: TmuxLaunch) => void;
   readonly #onOverdue: (launches: readonly TmuxLaunch[]) => void;
-  readonly #overdueReported = new Set<string>();
+  readonly #overdueReported = new Map<string, number>();
   readonly #waiter: CompletionWaiter;
   #nextId = 1;
   #reconciliationTimer: NodeJS.Timeout | undefined;
@@ -218,15 +219,18 @@ export class TmuxRuntime {
     this.#waiter.reconcile();
     const overdue: readonly TmuxLaunch[] = [...this.#active.values()].filter(
       (launch: TmuxLaunch): boolean =>
-        !this.#overdueReported.has(launch.completionChannel) &&
+        (this.#overdueReported.get(launch.completionChannel) ?? 0) <= Date.now() &&
         estimatedCompletionTime(launch) <= Date.now(),
     );
     if (overdue.length === 0) {
       return;
     }
     this.#onOverdue(overdue);
-    overdue.map((launch: TmuxLaunch): Set<string> =>
-      this.#overdueReported.add(launch.completionChannel),
+    overdue.map((launch: TmuxLaunch): Map<string, number> =>
+      this.#overdueReported.set(
+        launch.completionChannel,
+        Date.now() + OVERDUE_REMINDER_INTERVAL_MILLISECONDS,
+      ),
     );
     this.#notifyActiveChange();
   }

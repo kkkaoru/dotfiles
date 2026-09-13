@@ -229,7 +229,7 @@ it("keeps hard timeouts separate from estimates and preserves rewritten bash bud
   runtime.clear();
 });
 
-it("checks in once when a live job passes its estimate without marking it complete", () => {
+it("repeats overdue check-ins every five minutes until tracking ends", () => {
   vi.useFakeTimers();
   const onOverdue = vi.fn();
   const onComplete = vi.fn();
@@ -247,12 +247,16 @@ it("checks in once when a live job passes its estimate without marking it comple
   expect(onOverdue).toHaveBeenCalledExactlyOnceWith([
     expect.objectContaining({ taskCommand: "wrangler tail" }),
   ]);
-  vi.advanceTimersByTime(600_000);
+  vi.advanceTimersByTime(299_999);
   expect(onOverdue).toHaveBeenCalledOnce();
+  vi.advanceTimersByTime(1);
+  expect(onOverdue).toHaveBeenCalledTimes(2);
+  vi.advanceTimersByTime(300_000);
+  expect(onOverdue).toHaveBeenCalledTimes(3);
   expect(onComplete).not.toHaveBeenCalled();
   runtime.clear();
   vi.advanceTimersByTime(600_000);
-  expect(onOverdue).toHaveBeenCalledOnce();
+  expect(onOverdue).toHaveBeenCalledTimes(3);
 });
 
 it("reconciles completion before an overdue check-in and recovers overdue legacy jobs", () => {
