@@ -58,6 +58,9 @@ async function context(): Promise<Context> {
       return [name, path];
     }),
   );
+  // Optional UI integration: resolve the executable independently on each Mac.
+  const peekaboo: string | null = Bun.which("peekaboo");
+  if (peekaboo) commands.peekaboo = peekaboo;
   const age: string | null = Bun.which("age");
   check(age, "age is required");
   const dataDir: string = await realpath(`${home}/.executor`);

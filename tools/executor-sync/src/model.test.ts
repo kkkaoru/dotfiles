@@ -94,6 +94,42 @@ describe("portable settings contract", () => {
       '{"args":["${DOTFILES}/tool.ts","${HOME}/.agents"],"command":"${BIN:bun}","cwd":"${DOTFILES}"}',
     );
   });
+  it("exports optional Peekaboo arguments as an executable token", () => {
+    expect(
+      portableConfig(
+        '{"args":["--peekaboo","/opt/homebrew/bin/peekaboo"]}',
+        {
+          ...PATHS,
+          commands: {
+            ...PATHS.commands,
+            peekaboo: "/opt/homebrew/bin/peekaboo",
+          },
+        },
+        "export",
+      ),
+    ).toBe('{"args":["--peekaboo","${BIN:peekaboo}"]}');
+  });
+  it("imports optional Peekaboo using the receiving Mac executable", () => {
+    expect(
+      portableConfig(
+        '{"args":["--peekaboo","${BIN:peekaboo}"]}',
+        {
+          ...PATHS,
+          commands: { ...PATHS.commands, peekaboo: "/usr/local/bin/peekaboo" },
+        },
+        "import",
+      ),
+    ).toBe('{"args":["--peekaboo","/usr/local/bin/peekaboo"]}');
+  });
+  it("refuses an imported UI integration when Peekaboo is unavailable", () => {
+    expect(() =>
+      portableConfig(
+        '{"args":["--peekaboo","${BIN:peekaboo}"]}',
+        PATHS,
+        "import",
+      ),
+    ).toThrow("Missing local executable mapping");
+  });
   it("normalizes a bare home and repo", () => {
     expect(
       portableConfig(

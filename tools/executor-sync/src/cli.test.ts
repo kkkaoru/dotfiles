@@ -4,7 +4,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { main } from "./cli";
 import type { SyncPorts } from "./engine";
 import { envelope, snapshot } from "./fixtures";
-import { fingerprint } from "./model";
+import { fingerprint, type Paths } from "./model";
+
+interface AdapterConfiguration {
+  paths: Paths;
+}
 
 const mocks = vi.hoisted(() => ({
   files: new Map<string, string>(),
@@ -14,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   mkdir: vi.fn(),
   required: vi.fn(),
   exportLocal: vi.fn(),
+  pathCommands: vi.fn(),
   importLocal: vi.fn(),
   recover: vi.fn(),
   version: vi.fn(),
@@ -51,6 +56,9 @@ vi.mock("./io", () => ({
 }));
 vi.mock("./adapter", () => ({
   Adapter: class {
+    constructor(options: AdapterConfiguration) {
+      mocks.pathCommands(options.paths.commands);
+    }
     export = mocks.exportLocal;
   },
 }));
@@ -179,6 +187,26 @@ it("doctor is read-only and outputs only counts", async () => {
   expect(mocks.exportLocal).toHaveBeenCalledTimes(1);
   expect(mocks.write).not.toHaveBeenCalled();
   expect(mocks.importLocal).not.toHaveBeenCalled();
+});
+it("maps the installed optional Peekaboo executable without requiring UI use", async () => {
+  await run("doctor");
+  expect(mocks.pathCommands).toHaveBeenCalledWith({
+    bun: "/bin/bun",
+    bunx: "/bin/bunx",
+    ctx: "/bin/ctx",
+    peekaboo: "/bin/peekaboo",
+  });
+});
+it("does not require Peekaboo when it is not installed", async () => {
+  mocks.which.mockImplementation((name: string) =>
+    name === "peekaboo" ? null : `/bin/${name}`,
+  );
+  await run("doctor");
+  expect(mocks.pathCommands).toHaveBeenCalledWith({
+    bun: "/bin/bun",
+    bunx: "/bin/bunx",
+    ctx: "/bin/ctx",
+  });
 });
 it("doctor checks the actual binary version", async () => {
   mocks.required.mockResolvedValue(Buffer.from("executor v2"));
