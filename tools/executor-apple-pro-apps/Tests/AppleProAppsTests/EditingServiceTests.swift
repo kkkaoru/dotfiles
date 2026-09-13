@@ -1,0 +1,107 @@
+import Foundation
+import MCP
+import ProAppsCore
+import Testing
+
+@testable import AppleProApps
+
+struct EditingServiceTests {
+  private actor Capture {
+    var path: String?
+    func record(_ path: String) { self.path = path }
+  }
+
+  private func request(directory: String) -> EditRequest {
+    .init(
+      recipe: .init(
+        clips: [
+          .init(
+            sourcePath: "/tmp/synthetic.mov",
+            selection: .init(startSeconds: 0, durationSeconds: 2, rate: 2))
+        ], video: .init(width: 320, height: 240, frameRate: 30, resizeMode: .fit),
+        additionalAudio: []), outputDirectory: directory, outputName: "out.mp4")
+  }
+
+  @Test func planningDoesNotPretendToValidateSources() async throws {
+    let result = await NativeService().call(
+      .init(
+        name: "media_edit_plan", arguments: ["recipe": try Value(request(directory: "/tmp").recipe)]
+      ))
+    #expect(result.isError == false)
+    #expect(result.structuredContent?.objectValue?["sourceFilesValidated"] == .bool(false))
+    #expect(
+      result.structuredContent?.objectValue?["plan"]?.objectValue?["durationSeconds"]?.doubleValue
+        == 1
+        || result.structuredContent?.objectValue?["plan"]?.objectValue?["durationSeconds"]?.intValue
+          == 1
+    )
+  }
+
+  @Test(arguments: ["success", "failure", "cancelled"])
+  func renderingUsesAPrivateRequestAndCleansItOnEveryResult(_ mode: String) async throws {
+    let capture = Capture()
+    var native = NativeInterfaces()
+    native.editMedia = { path in
+      await capture.record(path)
+      let decoded = try JSONDecoder().decode(
+        EditRequest.self, from: Files.read(URL(fileURLWithPath: path)))
+      #expect(decoded.outputName == "out.mp4")
+      #expect(decoded.recipe.clips.count == 1)
+      if mode == "failure" { throw ProAppsError.unavailable("Synthetic renderer failure") }
+      if mode == "cancelled" { throw CancellationError() }
+      return try JSONDecoder().decode(
+        EditRenderResult.self,
+        from: Data(
+          "{\"outputPath\":\"/tmp/synthetic-out.mp4\",\"projectPath\":\"/tmp/edit-request.json\",\"expectedDurationSeconds\":1,\"actualDurationSeconds\":1,\"videoTrackCount\":1,\"audioTrackCount\":1}"
+            .utf8))
+    }
+    let value = try Value(request(directory: "/tmp"))
+    let arguments = try #require(value.objectValue)
+    let result = await NativeService(interfaces: native).call(
+      .init(name: "media_edit", arguments: arguments))
+    #expect(result.isError == (mode != "success"))
+    let path = try #require(await capture.path)
+    #expect(
+      !FileManager.default.fileExists(
+        atPath: URL(fileURLWithPath: path).deletingLastPathComponent().path))
+    if mode == "success" {
+      #expect(result.structuredContent?.objectValue?["fullMediaVerified"] == .bool(false))
+      #expect(
+        result.structuredContent?.objectValue?["render"]?.objectValue?["outputPath"]
+          == .string("/tmp/synthetic-out.mp4"))
+    } else if mode == "cancelled" {
+      #expect(result.structuredContent?.objectValue?["cancelled"] == .bool(true))
+    }
+  }
+
+  @Test func savedProjectsShareTheCLISchemaAndRejectUnknownKeys() async throws {
+    let output = try Files.reserveOutput(
+      directory: FileManager.default.temporaryDirectory.path, name: "request.json", kind: .edit)
+    defer {
+      do { try FileManager.default.removeItem(at: output.deletingLastPathComponent()) } catch {
+        Issue.record(error)
+      }
+    }
+    _ = try Files.writeNew(
+      JSONEncoder().encode(request(directory: "/tmp")), to: output.path, extensions: ["json"])
+    let service = NativeService()
+    let result = await service.call(
+      .init(name: "media_project_read", arguments: ["path": .string(output.path)]))
+    #expect(result.isError == false)
+    #expect(
+      result.structuredContent?.objectValue?["request"]?.objectValue?["outputName"]
+        == .string("out.mp4"))
+    let value = try Value(request(directory: "/tmp"))
+    var fields = try #require(value.objectValue)
+    fields["shell"] = .string("not permitted")
+    let bad = try Files.writeNew(
+      JSONEncoder().encode(Value.object(fields)),
+      to: output.deletingLastPathComponent().appendingPathComponent("bad.json").path,
+      extensions: ["json"])
+    await #expect(throws: (any Error).self) { try await service.readEditRequest(bad.path) }
+    await #expect(throws: (any Error).self) {
+      try await service.editing(
+        "unknown", .object([:]), render: { _ in throw ProAppsError.invalid("Must not run") })
+    }
+  }
+}
