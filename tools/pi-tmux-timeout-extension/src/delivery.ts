@@ -151,6 +151,36 @@ export class CompletionDelivery {
     this.#flushIfIdle();
   }
 
+  injectOverdue(event: unknown): { messages: unknown[] } | undefined {
+    if (
+      this.#compacting ||
+      this.#pendingOverdue.size === 0 ||
+      typeof event !== "object" ||
+      event === null ||
+      !("messages" in event) ||
+      !Array.isArray(event.messages)
+    ) {
+      return undefined;
+    }
+    const messages: readonly unknown[] = event.messages;
+    const overdue: readonly TmuxLaunch[] = this.#overdueBatch();
+    this.#removeOverdue(overdue);
+    // Context injection reaches the next model call without waiting for agent_settled.
+    // Avoid stale steering prompts during a long-running tool or compaction.
+    return {
+      messages: [
+        ...messages,
+        {
+          role: "custom",
+          customType: "tmux-overdue",
+          content: overduePrompt(overdue),
+          display: false,
+          timestamp: Date.now(),
+        },
+      ],
+    };
+  }
+
   hasPending(): boolean {
     return this.#pending.length > 0 || this.#pendingOverdue.size > 0;
   }
@@ -252,17 +282,22 @@ export class CompletionDelivery {
       return;
     }
     const pending: readonly Completion[] = this.#pending;
-    const overdue: readonly TmuxLaunch[] = [...this.#pendingOverdue.values()].slice(
-      0,
-      MAX_OVERDUE_BATCH_SIZE,
-    );
+    const overdue: readonly TmuxLaunch[] = this.#overdueBatch();
     if (this.#deliver(pending, overdue)) {
       this.#pending = [];
-      overdue.map((launch: TmuxLaunch): boolean =>
-        this.#pendingOverdue.delete(launch.completionChannel),
-      );
+      this.#removeOverdue(overdue);
     }
     this.#updateStatus();
+  }
+
+  #overdueBatch(): readonly TmuxLaunch[] {
+    return [...this.#pendingOverdue.values()].slice(0, MAX_OVERDUE_BATCH_SIZE);
+  }
+
+  #removeOverdue(launches: readonly TmuxLaunch[]): void {
+    launches.map((launch: TmuxLaunch): boolean =>
+      this.#pendingOverdue.delete(launch.completionChannel),
+    );
   }
 
   #notifyCompletion(completion: Completion): void {

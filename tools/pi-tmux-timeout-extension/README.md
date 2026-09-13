@@ -35,9 +35,11 @@ long-running commands continue in detached tmux sessions.
   wakes Pi for a progress check without pretending that the command finished. Check-ins arrive within
   one minute of the estimate and repeat every five minutes while the job remains active. Reload/resume
   immediately checks overdue restored jobs, including legacy jobs without an estimate (two-minute
-  fallback).
-  Busy/compacting Pi sessions defer check-ins until safe delivery; jobs that finish in the meantime
-  are removed from pending check-ins. Batches contain at most 20 jobs, with the rest retained.
+  fallback). While Pi is busy, pending check-ins are injected into the next model call via the `context`
+  event instead of waiting for the entire run to settle. This does not abort a streaming response or
+  running tool. Idle sessions still receive follow-up wakeups; compaction defers injection until safe.
+  Repeated pending notices are deduplicated, and reconciliation before context injection removes jobs
+  that finished in the meantime. Batches contain at most 20 jobs, with the rest retained.
 - A hard `timeoutSeconds` uses GNU `gtimeout`/`timeout` to send TERM to the command process group,
   escalating to KILL after five seconds. It runs inside the detached job, so enforcement continues
   while Pi is closed. The normal completion path records the exit status and wakes Pi: usually 124
@@ -138,7 +140,9 @@ tmux_exec({ command: "bunx wrangler tail --format=json > /tmp/worker-tail.json",
 A check-in is not completion. Inspect progress and either stop the specific unnecessary job or
 arrange a bounded next check. Do not launch a duplicate watcher or wait indefinitely for it to exit.
 An estimate-only job receives automatic overdue reminders every five minutes until it finishes or
-becomes orphaned. Existing jobs are not retroactively given a kill deadline by `/reload`.
+becomes orphaned. Busy sessions coalesce reminders until the next model call rather than accumulating
+queued prompts. Context-only notices are not persisted in conversation history; reload/resume rechecks
+live jobs. Existing jobs are not retroactively given a kill deadline by `/reload`.
 
 ## Install
 

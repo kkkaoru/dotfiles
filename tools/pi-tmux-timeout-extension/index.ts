@@ -70,6 +70,7 @@ export interface TmuxToolDefinition {
 type TmuxLifecycleEvent =
   | "agent_settled"
   | "agent_start"
+  | "context"
   | "session_before_compact"
   | "session_compact"
   | "session_compact_failed"
@@ -92,7 +93,7 @@ export interface TmuxExtensionHost extends ActiveDisplayCommandHost, CompletionD
   ) => Promise<ExecResult>;
   readonly on: (
     event: TmuxLifecycleEvent,
-    handler: (event: unknown, context?: CompletionDeliveryContext) => void,
+    handler: (event: unknown, context?: CompletionDeliveryContext) => unknown,
   ) => void;
   readonly registerTool: (definition: TmuxToolDefinition) => void;
 }
@@ -195,6 +196,10 @@ function registerLifecycleHandlers(input: {
   readonly rewriter: AutomaticTmuxRewriter;
   readonly runtime: TmuxRuntime;
 }): void {
+  input.host.on("context", (event: unknown) => {
+    input.runtime.reconcile();
+    return input.delivery.injectOverdue(event);
+  });
   input.host.on("tool_call", (event: unknown): void => input.rewriter.toolCall(event));
   input.host.on("tool_result", (event: unknown): void => input.rewriter.toolResult(event));
   input.host.on("session_start", (_event: unknown, context?: CompletionDeliveryContext): void => {
