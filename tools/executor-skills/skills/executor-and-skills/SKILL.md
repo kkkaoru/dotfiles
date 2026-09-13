@@ -1,6 +1,6 @@
 ---
 name: executor-and-skills
-description: Use for cross-agent messaging (agmsg), prior agent history (ctx), MCP/API integrations, browser tools, Cloudflare, MotherDuck, GPUI and web performance. Load guidance and discover execution tools through Executor on demand.
+description: Use for cross-agent messaging (agmsg), prior agent history (ctx), MCP/API integrations, Apple Pro apps (Motion, Compressor, Final Cut Pro, Logic Pro, MainStage), browser tools, Cloudflare, MotherDuck, GPUI and web performance. Load guidance and discover execution tools through Executor on demand.
 ---
 
 # Executor: skills and tools on demand
@@ -65,6 +65,13 @@ Do not guess namespaces or print every schema. Keep outputs bounded. Use
 | SQL, database exploration, Dive | `motherduck` |
 | Library documentation | `context7` |
 | Local Chrome / performance | `chrome-devtools` |
+| Apple Pro apps: native Swift CLI/XML/MIDI/OSC integration | `apple-pro-apps` |
+| Apple Pro apps: UI-only fallback using existing Peekaboo | `apple-pro-apps-ui` |
+
+For Apple Pro apps, load `apple-pro-apps` and the matching app skill first. Prefer
+native machine interfaces; discover `app_capabilities` for actual installed editions
+and limitations. Only use the separate UI namespace when no suitable native method
+exists. MIDI/OSC routing, app licenses and macOS permissions are not granted by setup.
 
 OAuth integrations require connection authorization before service tools exist.
 Registration alone does not mean they are connected. For Cloudflare, use the
