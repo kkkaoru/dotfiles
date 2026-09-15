@@ -35,8 +35,9 @@ public enum Interchange {
     else {
       throw ProAppsError.invalid("Expected bounded UTF-8 XML")
     }
-    // Standard FCPXML exports commonly contain this harmless empty DOCTYPE.
-    text = text.replacingOccurrences(of: "<!DOCTYPE fcpxml>", with: "")
+    // Accept only the exact empty declaration emitted by the selected app,
+    // in the XML prolog. Never load a DTD or strip declarations inside content.
+    removeEmptyDeclaration(from: &text, kind: kind)
     guard !text.localizedCaseInsensitiveContains("<!DOCTYPE"),
       !text.localizedCaseInsensitiveContains("<!ENTITY")
     else {
@@ -48,6 +49,16 @@ public enum Interchange {
       throw ProAppsError.invalid("Unexpected XML root")
     }
     return document
+  }
+
+  private static func removeEmptyDeclaration(from text: inout String, kind: InterchangeKind) {
+    let declaration =
+      kind == .fcpxml ? "<!DOCTYPE fcpxml>" : "<!DOCTYPE ozxmlscene>"
+    let prolog = #"\A(?:\uFEFF)?\s*(?:<\?xml\s[^?]*\?>\s*)?"#
+    let pattern = prolog + NSRegularExpression.escapedPattern(for: declaration)
+    guard let match = text.range(of: pattern, options: .regularExpression) else { return }
+    let start = text.index(match.upperBound, offsetBy: -declaration.count)
+    text.removeSubrange(start..<match.upperBound)
   }
 
   public static func inspect(_ data: Data, kind: InterchangeKind) throws -> XMLSummary {
