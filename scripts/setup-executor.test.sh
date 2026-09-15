@@ -71,7 +71,7 @@ fail() { printf 'FAIL: %s\n' "$*" >&2; tail -n 30 "$tmp/output" >&2; exit 1; }
 run --install-service --port 4790 || fail 'fresh setup'
 [[ "$(< "$TEST_STATE/scope")" == "$fixture" ]] || fail 'scope'
 [[ "$(< "$TEST_STATE/service")" == 'service install --port 4790' ]] || fail 'service port'
-jq -se --arg root "$fixture" --arg home "$HOME" 'any(.[]; .slug == "local-skills" and .args == [($root+"/tools/executor-skills/cli.mjs"),($home+"/.agents/skills"),($home+"/.pi/agent/skills"),($root+"/.agents/skills")])' "$TEST_STATE/registrations" >/dev/null || fail 'portable paths'
+jq -se --arg root "$fixture" --arg home "$HOME" 'any(.[]; .slug == "local-skills" and .args == [($root+"/tools/executor-skills/cli.mjs"),($home+"/.agents/skills"),($home+"/.pi/agent/skills"),($root+"/.agents/skills"),($home+"/.agents/skills-stroage")])' "$TEST_STATE/registrations" >/dev/null || fail 'portable paths'
 ! grep -q '/Users/kkk4oru/' "$TEST_STATE/registrations" || fail 'hardcoded home'
 registered="$(wc -l < "$TEST_STATE/registrations")"
 connected="$(wc -l < "$TEST_STATE/connections")"

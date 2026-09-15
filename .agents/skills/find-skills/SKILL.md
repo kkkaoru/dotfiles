@@ -7,6 +7,14 @@ description: Helps users discover and install agent skills when they ask questio
 
 This skill helps you discover and install skills from the open agent skills ecosystem.
 
+## Local library first
+
+In this environment, first use the `project-skills` skill to search
+`~/.agents/skills-stroage` and copy selected skills into the intended project's
+`.agents/skills`. Keep global `~/.agents/skills` generic. Research external skills
+only when the local library does not cover the need. Use `bunx` instead of `npx`
+for CLI commands below, following repository package-management policy.
+
 ## When to Use This Skill
 
 Use this skill when the user:
@@ -95,13 +103,11 @@ Learn more: https://skills.sh/vercel-labs/agent-skills/react-best-practices
 
 ### Step 6: Offer to Install
 
-If the user wants to proceed, you can install the skill for them:
-
-```bash
-npx skills add <owner/repo@skill> -g -y
-```
-
-The `-g` flag installs globally (user-level) and `-y` skips confirmation prompts.
+If the user wants to proceed, review the candidate and the current CLI's install
+options first. Put domain-specific skills in `~/.agents/skills-stroage`, then use
+`project-skills` to add reviewed copies to the intended project. Preserve existing
+files and upstream provenance. Do not use a blanket global `-g -y` installation:
+global startup skills are reserved for explicitly selected generic guidance.
 
 ## Common Skill Categories
 

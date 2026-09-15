@@ -18,17 +18,7 @@
   },
   "skills": [
     "!agmsg",
-    "!ctx-agent-history-search",
-    "!agents-sdk",
-    "!cloudflare*",
-    "!durable-objects",
-    "!gpui*",
-    "!motherduck-*",
-    "!sandbox-*",
-    "!turnstile-spin",
-    "!web-perf",
-    "!workers-best-practices",
-    "!wrangler"
+    "!ctx-agent-history-search"
   ],
   "packages": [
     "./packages/pi-effort-manager",

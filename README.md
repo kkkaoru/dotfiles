@@ -43,7 +43,7 @@ DeepSWE/Pier eval leftovers (task images, job dirs) can be removed with:
 Motion・Compressor・Final Cut Pro・Logic Pro・MainStageは、
 [Swift製の機械連携MCP](tools/executor-apple-pro-apps/README.md)をExecutor経由で操作します。
 公式CLI、FCPXML、プロジェクトファイル、CoreMIDI／OSCを優先し、公開APIで扱えない
-操作だけ既存Peekabooを別MCPとして利用します。6つの利用Skillも `.agents/skills/apple-*/`
+操作だけ既存Peekabooを別MCPとして利用します。6つの利用Skillも `.agents/skills-stroage/apple-*/`
 で管理しています。現状は登録済みプロトタイプで、Swiftの厳格な品質ゲートと
 GUI権限が未完了です。ネイティブ境界の限定例外は承認済みです。対応範囲・検証状況・登録方法は
 上記READMEを参照してください。
@@ -90,7 +90,7 @@ in-memory SQLite query before starting CCR. No Executor credentials or service s
 are involved in dependency verification.
 
 The vendored MotherDuck pipeline has a separate `uv.lock`; see its
-[dependency checks](.agents/skills/motherduck-build-data-pipeline/references/dlt-dbt-motherduck-project/README.md).
+[dependency checks](.agents/skills-stroage/motherduck-build-data-pipeline/references/dlt-dbt-motherduck-project/README.md).
 Rust components can be checked with `cargo audit --file tools/<component>/Cargo.lock`.
 After updating loaded Pi dependencies, run `/reload` or start a new session.
 

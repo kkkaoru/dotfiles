@@ -38,7 +38,7 @@ Mac ごとに独立した Executor を起動し、OAuth は各 Mac で本人が�
 この変更と `scripts/`・`tools/executor-skills/` の関連ファイルをコミット・push してから、
 別 Mac で clone / pull してください。ユーザー名や checkout パスは同じでなくて構いません。
 Executor Desktop（`brew install --cask executor`）、Bun / bunx、jq、ctx CLI、
-必要な `~/.agents/skills`（agmsg を含む）を用意します。
+共通の `~/.agents/skills`（agmsg を含む）と、選択式の `~/.agents/skills-stroage` を用意します。
 Executor の npm グローバル版は追加インストールしません。
 
 ### 2. Executor home をリンク
@@ -143,7 +143,7 @@ Cloudflare は下記 OAuth 手順、MotherDuck は接続画面から本人が認
 
 [Cloudflare 公式セットアップ手順](https://developers.cloudflare.com/agent-setup/prompt.md)
 にある MCP 登録と OAuth ログインを、pi からは Executor 経由で行います。
-公式 Skills は既存の `~/.agents/skills` にあり、`local-skills` 経由で利用できます。
+ドメイン別 Skills は `~/.agents/skills-stroage` にあります。更新したセットアップでは、この保管庫も読み取り専用の `local-skills` カタログに含みます。既存の登録はファイル移動だけでは更新されません。
 Codex/OpenCode 用の MCP 設定を別途追加したり、資格情報をコピーする必要はありません。
 
 **MCP 登録だけでは OAuth は始まりません。** Executor 1.6.8 の管理画面から認証ページに
@@ -199,11 +199,13 @@ Docs、Agents SDK Docs、local-skills、Context7、Chrome DevTools は OAuth 不
 **新しい pi セッションを開始してください。** `/reload` でもリソースは再読込されますが、
 既存の会話に含まれる長い一覧・取得結果は消えません。
 
-`.pi/agent/settings.json` の `skills` 除外設定は Cloudflare、MotherDuck、GPUI 等の
-個別説明を起動プロンプトから外します。案内 Skill から Executor を検索し、必要な
-Skill だけ読みます。agmsg と ctx-agent-history-search も同じ遅延読み込みに移します。
-起動時には Python/Rust/TypeScript 規約、Git commit、find-skills、案内 Skill の6件を残します。
-既存スキルファイルは削除せず、他エージェントの設定も変更しません。
+共通の `~/.agents/skills` には Python/Rust/Swift/TypeScript 規約、Git commit、
+find-skills、project-skills、agmsg/history の案内を置きます。agmsg/history は引き続き
+Executor 経由で遅延読み込みし、案内 Skill は pi パッケージから読み込みます。
+Cloudflare、MotherDuck、GPUI 等は `~/.agents/skills-stroage` に保管し、project-skills
+で選んだものだけ対象プロジェクトの `.agents/skills` にコピーします。保管庫全体を
+起動時探索に追加しないでください。プロジェクトで選んだ Skill まで隠れないよう、
+旧ドメイン名のグローバル除外設定は削除しました。変更後は `/reload` または新セッションが必要です。
 
 確認例：
 

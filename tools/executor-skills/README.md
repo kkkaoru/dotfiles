@@ -16,6 +16,14 @@ bun run tsc && bun run lint && bun run test
 bun run cli.mjs /absolute/path/to/skills /another/skills
 ```
 
+The setup recipe includes `~/.agents/skills-stroage` as a read-only catalog root
+alongside generic skill roots. This does not activate every stored skill in agent
+startup discovery. Use the generic `project-skills` skill to copy a reviewed
+selection into the target project's `.agents/skills`. Existing registrations are
+not automatically changed by filesystem reorganization; setup requires its usual
+explicit registration approval. Project-local customized copies should be read
+from that project, not silently replaced by a catalog version.
+
 Each root contains immediate child directories with `SKILL.md`. Symlinked
 skill directories are supported: supplying a root trusts its installed child
 skills. Reference symlinks escaping a skill directory are rejected. Missing

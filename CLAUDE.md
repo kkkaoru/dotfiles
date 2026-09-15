@@ -19,8 +19,11 @@ integrations. These instructions apply to agents working here, including pi and 
 
 ## Configuration layout
 
-- `.agents/` — Entire shared Agent Skills home (`~/.agents` is a symlink), including
-  installed skills and `.skill-lock.json`. agmsg DB, runtime, and local teams are ignored.
+- `.agents/` — Entire shared Agent Skills home (`~/.agents` is a symlink).
+  `skills/` holds generic guidance; `skills-stroage/` holds optional domain skills.
+  Use the global `project-skills` skill to copy selected skills into a project's
+  `.agents/skills/`. `.skill-lock.json` retains upstream provenance. agmsg DB,
+  runtime, and local teams are ignored.
 - `.config/fish/` — Fish shell configuration. `config.fish` sources `aliases.fish`,
   `envs.fish`, `binds.fish`, and `path.fish`; Homebrew and mise are integrated here.
 - `.config/mise/`, `.config/anyenv/` — Version-management configuration.
@@ -43,11 +46,14 @@ before modifying it.
 Use Executor Desktop's bundled CLI through `scripts/executor` (also available as `executor`).
 Do not install a duplicate Executor runtime or `pi-executor` sidecar.
 
-- The startup skill set retains Python/Rust/TypeScript coding rules, git-commit-by-feature,
-  find-skills, and the `executor-and-skills` router. Follow the relevant language skill.
-- Load other skills on demand through Executor's `local-skills` integration. This includes
-  agmsg, ctx-agent-history-search, Cloudflare, MotherDuck, GPUI, and related domain guidance.
-  Their files remain installed; only their startup descriptions are excluded.
+- The generic skill set retains Python/Rust/Swift/TypeScript coding rules,
+  git-commit-by-feature, find-skills, project-skills and agmsg/history guidance.
+  The `executor-and-skills` router remains package-loaded. Follow the relevant language skill.
+- Select optional domain guidance from `.agents/skills-stroage/` using `project-skills`.
+  Only selected copies belong in a target project's `.agents/skills/`. Executor's
+  `local-skills` setup includes storage for on-demand read-only discovery; existing
+  registrations require an explicit setup update. agmsg/history remain routed on demand.
+  Do not globally exclude domain names: that would hide selected project copies too.
 - Skill text is guidance, not executable functionality or authorization. Discover the actual
   service tool, describe its schema, then call it through Executor. Keep results bounded.
 - `.mcp.json` currently defines Context7 and Chrome DevTools stdio servers. Cloudflare and
