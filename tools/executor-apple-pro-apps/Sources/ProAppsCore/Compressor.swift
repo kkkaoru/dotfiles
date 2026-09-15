@@ -61,7 +61,19 @@ public enum Compressor {
     guard !batchName.isEmpty, batchName.utf8.count <= 200, !batchName.contains("\0") else {
       throw ProAppsError.invalid("Batch name must contain 1–200 bytes without NUL")
     }
-    var arguments = ["-batchname", batchName, "-jobpath", source.absoluteString]
+    let locations: [URL] = [source, preset, output]
+    let allLocal = locations.allSatisfy { location in
+      guard location.isFileURL else { return false }
+      guard let host = location.host else { return true }
+      return host.isEmpty || host == "localhost"
+    }
+    guard allLocal else {
+      throw ProAppsError.invalid("Compressor submission requires local file URLs")
+    }
+    // Regular-file jobs use filesystem paths. Creator Studio leaves percent
+    // escapes encoded when a file URL is supplied here, unlike -checkstream.
+    // Arguments are passed directly, never interpreted by a shell.
+    var arguments = ["-batchname", batchName, "-jobpath", source.path]
     // Attach the source interval before configuring this job's output target.
     if let range { arguments.append(contentsOf: try range.arguments()) }
     arguments.append(contentsOf: [

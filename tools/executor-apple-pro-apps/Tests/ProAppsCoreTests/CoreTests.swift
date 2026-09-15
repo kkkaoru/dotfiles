@@ -268,7 +268,7 @@ struct CoreTests {
       source: URL(fileURLWithPath: "/tmp/a ; b.mov"),
       preset: URL(fileURLWithPath: "/tmp/p.cmprstng"), output: URL(fileURLWithPath: "/tmp/out.mov"),
       batchName: "a ; b")
-    #expect(args[3] == "file:///tmp/a%20;%20b.mov")
+    #expect(args[3] == "/tmp/a ; b.mov")
     #expect(args[1] == "a ; b")
     #expect(throws: (any Error).self) {
       try Compressor.submissionArguments(
