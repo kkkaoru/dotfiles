@@ -1,5 +1,6 @@
 // This TypeScript file is executed with Bun.
 import { formatLocalTimestamp } from "./policy.ts";
+import { inspectedLogPath } from "./overdue-inspection.ts";
 import type { TmuxLaunch } from "./tmux.ts";
 import type { Completion } from "./waiter.ts";
 
@@ -99,7 +100,7 @@ function deliveryPrompt(completions: readonly Completion[]): string {
 function overduePrompt(launches: readonly TmuxLaunch[]): string {
   return [
     `tmux overdue check-in: ${String(launches.length)} task(s) exceeded their estimated duration and have not completed. They are still tracked, not failed or stopped.`,
-    "Inspect the logs and process state now. For an open-ended watcher, finish the observation and stop only that specific job when appropriate. For useful ongoing work, arrange a bounded next check. Do not just repeat this notice, launch a duplicate, or wait forever for an exit-status file.",
+    "Use read on the exact log path below and inspect process state now. A successful log read acknowledges this check-in, not job completion; failed reads and merely receiving this notice do not. For an open-ended watcher, finish the observation and stop only that specific job when appropriate. For useful ongoing work, arrange a bounded next check. Do not just repeat this notice, launch a duplicate, or wait forever for an exit-status file.",
     ...launches.map((launch: TmuxLaunch): string =>
       [
         `task: ${completionIdentity(launch.taskCommand)}`,
@@ -164,9 +165,12 @@ export class CompletionDelivery {
     }
     const messages: readonly unknown[] = event.messages;
     const overdue: readonly TmuxLaunch[] = this.#overdueBatch();
+    // Inclusion in a provider request is not evidence of inspection.
+    // Keep notices through ignored/failed calls; rotate batches to avoid starvation.
     this.#removeOverdue(overdue);
-    // Context injection reaches the next model call without waiting for agent_settled.
-    // Avoid stale steering prompts during a long-running tool or compaction.
+    overdue.map((launch: TmuxLaunch): Map<string, TmuxLaunch> =>
+      this.#pendingOverdue.set(launch.completionChannel, launch),
+    );
     return {
       messages: [
         ...messages,
@@ -179,6 +183,13 @@ export class CompletionDelivery {
         },
       ],
     };
+  }
+
+  inspectedLog(event: unknown): void {
+    const path: string | undefined = inspectedLogPath(event);
+    [...this.#pendingOverdue.values()]
+      .filter((launch: TmuxLaunch): boolean => launch.logPath === path)
+      .map((launch: TmuxLaunch): boolean => this.#pendingOverdue.delete(launch.completionChannel));
   }
 
   hasPending(): boolean {

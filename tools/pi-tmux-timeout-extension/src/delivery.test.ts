@@ -384,7 +384,9 @@ it("wakes an idle agent for an overdue job without marking completion delivered"
   expect(sendUserMessage.mock.calls[0]?.[0]).toMatch(
     /task: wrangler tail\ntmux socket: pi-tmux-a{32}; session: pi-tmux-a{32}-1/u,
   );
-  expect(sendUserMessage.mock.calls[0]?.[0]).toMatch(/Inspect the logs and process state now/u);
+  expect(sendUserMessage.mock.calls[0]?.[0]).toMatch(
+    /Use read on the exact log path below and inspect process state now/u,
+  );
   expect(onDelivered).not.toHaveBeenCalled();
 });
 

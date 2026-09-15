@@ -201,7 +201,10 @@ function registerLifecycleHandlers(input: {
     return input.delivery.injectOverdue(event);
   });
   input.host.on("tool_call", (event: unknown): void => input.rewriter.toolCall(event));
-  input.host.on("tool_result", (event: unknown): void => input.rewriter.toolResult(event));
+  input.host.on("tool_result", (event: unknown): void => {
+    input.rewriter.toolResult(event);
+    input.delivery.inspectedLog(event);
+  });
   input.host.on("session_start", (_event: unknown, context?: CompletionDeliveryContext): void => {
     if (context === undefined) {
       return;

@@ -54,13 +54,31 @@ it("delivers overdue context during an ongoing run and reconciles finished jobs 
   expect(handlers.get("context")?.({ messages: [] }, context)).toStrictEqual({
     messages: [expect.objectContaining({ customType: "tmux-overdue" })],
   });
+  const launch = await tools[0]?.execute(
+    "second",
+    { command: "bounded check", estimatedDurationSeconds: 60 },
+    undefined,
+  );
+  vi.advanceTimersByTime(60_000);
+  handlers.get("tool_result")?.({
+    toolName: "read",
+    isError: false,
+    input: { path: launch?.details.logPath },
+  });
+  expect(handlers.get("context")?.({ messages: [] }, context)).toStrictEqual({
+    messages: [
+      expect.objectContaining({
+        content: expect.stringMatching(/^tmux overdue check-in: 1 task/u),
+      }),
+    ],
+  });
   vi.advanceTimersByTime(300_000);
   read.mockReturnValue("0\n");
   expect(handlers.get("context")?.({ messages: [] }, context)).toBeUndefined();
   handlers.get("session_shutdown")?.({});
 });
 
-it("injects a deduplicated overdue batch at the next model call while still busy", () => {
+it("retains deduplicated notices across model calls until the log is read", () => {
   const sendUserMessage = vi.fn<CompletionDeliveryHost["sendUserMessage"]>();
   const delivery = new CompletionDelivery({ sendUserMessage });
   const context: CompletionDeliveryContext = {
@@ -87,6 +105,9 @@ it("injects a deduplicated overdue batch at the next model call while still busy
     ],
   });
   expect(event.messages).toStrictEqual([{ role: "user", content: "continue" }]);
+  expect(delivery.injectOverdue(event)?.messages).toHaveLength(2);
+  expect(delivery.hasPending()).toBe(true);
+  delivery.inspectedLog({ toolName: "read", input: { path: launch.logPath }, isError: false });
   expect(delivery.injectOverdue(event)).toBeUndefined();
   expect(delivery.hasPending()).toBe(false);
   expect(sendUserMessage).not.toHaveBeenCalled();
@@ -112,7 +133,7 @@ it("retains context notices during compaction and excludes jobs completed before
   expect(delivery.injectOverdue({ messages: [] })).toBeUndefined();
 });
 
-it("bounds busy context batches and retains overflow for the next model call", () => {
+it("rotates bounded busy batches without losing uninspected jobs", () => {
   const delivery = new CompletionDelivery({ sendUserMessage: vi.fn() });
   delivery.setContext({
     isIdle: () => false,
@@ -127,7 +148,9 @@ it("bounds busy context batches and retains overflow for the next model call", (
     expect.objectContaining({ content: expect.stringMatching(/^tmux overdue check-in: 20 task/u) }),
   ]);
   expect(delivery.injectOverdue({ messages: [] })?.messages).toStrictEqual([
-    expect.objectContaining({ content: expect.stringMatching(/^tmux overdue check-in: 1 task/u) }),
+    expect.objectContaining({ content: expect.stringMatching(/^tmux overdue check-in: 20 task/u) }),
   ]);
+  expect(delivery.hasPending()).toBe(true);
+  delivery.clear();
   expect(delivery.hasPending()).toBe(false);
 });

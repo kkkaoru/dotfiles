@@ -38,8 +38,14 @@ long-running commands continue in detached tmux sessions.
   fallback). While Pi is busy, pending check-ins are injected into the next model call via the `context`
   event instead of waiting for the entire run to settle. This does not abort a streaming response or
   running tool. Idle sessions still receive follow-up wakeups; compaction defers injection until safe.
+  Context injection alone does not acknowledge a check-in: busy calls retain and re-inject uninspected
+  notices until a successful `read` of that job's exact `logPath` (a leading `@` is accepted). Failed
+  reads, status-only reads and unrelated tools do not acknowledge it. The acknowledgment only covers
+  this check-in; the live job still receives the next five-minute reminder. If the agent settles
+  without inspecting, the pending notice is delivered once as a normal persistent follow-up instead
+  of being silently lost. Receiving that follow-up does not prove the model acted on it.
   Repeated pending notices are deduplicated, and reconciliation before context injection removes jobs
-  that finished in the meantime. Batches contain at most 20 jobs, with the rest retained.
+  that finished in the meantime. Batches contain at most 20 jobs and rotate so overflow is not starved.
 - A hard `timeoutSeconds` uses GNU `gtimeout`/`timeout` to send TERM to the command process group,
   escalating to KILL after five seconds. It runs inside the detached job, so enforcement continues
   while Pi is closed. The normal completion path records the exit status and wakes Pi: usually 124
@@ -140,9 +146,13 @@ tmux_exec({ command: "bunx wrangler tail --format=json > /tmp/worker-tail.json",
 A check-in is not completion. Inspect progress and either stop the specific unnecessary job or
 arrange a bounded next check. Do not launch a duplicate watcher or wait indefinitely for it to exit.
 An estimate-only job receives automatic overdue reminders every five minutes until it finishes or
-becomes orphaned. Busy sessions coalesce reminders until the next model call rather than accumulating
-queued prompts. Context-only notices are not persisted in conversation history; reload/resume rechecks
-live jobs. Existing jobs are not retroactively given a kill deadline by `/reload`.
+becomes orphaned. Busy sessions coalesce reminders and keep them in successive model calls until
+log inspection, rather than accumulating queued prompts. Use `read` on the reported log path to
+acknowledge the current check-in, then inspect process state and decide what to do; acknowledgment
+is not completion or evidence that the underlying work succeeded. Context-only notices are not
+persisted in conversation history; reload/resume rechecks live jobs. No notice can interrupt an
+already streaming model response or running tool: delivery resumes at the next model boundary or
+settled event. Existing jobs are not retroactively given a kill deadline by `/reload`.
 
 ## Install
 
