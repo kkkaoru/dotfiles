@@ -8,4 +8,6 @@ elif [ -x /usr/local/bin/brew ]; then
   export PATH="/usr/local/bin:/usr/local/sbin:${PATH}"
 fi
 
-. "$HOME/.cargo/env"
+if [ -f "$HOME/.cargo/env" ]; then
+  . "$HOME/.cargo/env"
+fi

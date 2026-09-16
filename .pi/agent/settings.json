@@ -34,6 +34,7 @@
     "./packages/pi-claudex-provider",
     "./packages/pi-lazy-external-extensions",
     "./packages/executor-skills",
-    "npm:@ogulcancelik/pi-herdr"
+    "npm:@ogulcancelik/pi-herdr",
+    "git:github.com/DietrichGebert/ponytail"
   ]
 }
