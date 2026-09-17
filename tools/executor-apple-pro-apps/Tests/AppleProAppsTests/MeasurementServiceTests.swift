@@ -11,6 +11,13 @@ struct MeasurementServiceTests {
     func record(_ path: String) { self.path = path }
   }
 
+  @Test func speechPreparationIsAMutationAndRecognitionRemainsReadOnly() throws {
+    let preparation = try #require(ToolSpec.all.first { $0.name == "speech_locale_reserve" })
+    let recognition = try #require(ToolSpec.all.first { $0.name == "audio_transcribe" })
+    #expect(!preparation.readOnly)
+    #expect(recognition.readOnly)
+  }
+
   @Test(arguments: ["success", "failure", "cancelled"])
   func requestFilesArePrivateAndRemovedOnAllOutcomes(_ mode: String) async throws {
     let capture = Capture()
@@ -46,7 +53,10 @@ struct MeasurementServiceTests {
     }
   }
 
-  @Test(arguments: ["media_verify_video", "audio_measure", "video_frame_measure"])
+  @Test(arguments: [
+    "media_verify_video", "audio_measure", "video_frame_measure", "audio_transcribe",
+    "speech_locale_reserve",
+  ])
   func nativeMeasurementCLIUsesTheSameStrictSchema(_ name: String) async throws {
     let request = try Files.reserveOutput(
       directory: FileManager.default.temporaryDirectory.path, name: "request.json", kind: .edit)
@@ -56,7 +66,7 @@ struct MeasurementServiceTests {
       .deletingLastPathComponent().deletingLastPathComponent()
     let video = package.appendingPathComponent("Tests/ProAppsNativeTests/Fixtures/black.mp4")
     var arguments: [String: Value] = ["path": .string(video.path)]
-    if name == "audio_measure" {
+    if name == "audio_measure" || name == "audio_transcribe" {
       // One second of silent mono PCM16 at 16000 Hz; literal RIFF header.
       let header: [UInt8] = [
         82, 73, 70, 70, 36, 125, 0, 0, 87, 65, 86, 69, 102, 109, 116, 32, 16, 0, 0, 0, 1, 0, 1, 0,
@@ -65,13 +75,23 @@ struct MeasurementServiceTests {
       let audio = root.appendingPathComponent("silence.wav")
       try (Data(header) + Data(repeating: 0, count: 32000)).write(
         to: audio, options: .withoutOverwriting)
-      arguments = ["path": .string(audio.path), "windows": .array([])]
+      arguments = ["path": .string(audio.path)]
+      if name == "audio_transcribe" {
+        arguments["locale"] = .string("ja-JP")
+      } else {
+        arguments["windows"] = .array([])
+      }
+    } else if name == "speech_locale_reserve" {
+      arguments = ["locale": .string("ja-JP")]
     } else if name == "video_frame_measure" {
       arguments["samples"] = .array([.object(["timeSeconds": .int(0)])])
     }
     _ = try Files.writeNew(
       JSONEncoder().encode(Value.object(arguments)), to: request.path, extensions: ["json"])
     let service = NativeService()
+    if name == "audio_transcribe" || name == "speech_locale_reserve" {
+      try #require(try await SpeechProbe().reserve(locale: "ja-JP").readyForTranscription)
+    }
     let text = try await service.measureLocalFile(name: name, path: request.path)
     let result = try JSONDecoder().decode(Value.self, from: Data(text.utf8))
     if name == "media_verify_video" {
@@ -87,6 +107,29 @@ struct MeasurementServiceTests {
       #expect(try JSONDecoder().decode(Value.self, from: Data(extendedText.utf8)) == result)
     } else if name == "audio_measure" {
       #expect(result.objectValue?["whole"]?.objectValue?["frames"] == .int(16000))
+      var extendedArguments = arguments
+      extendedArguments["maximumDurationSeconds"] = .int(60)
+      let extended = try Files.writeNew(
+        JSONEncoder().encode(Value.object(extendedArguments)),
+        to: root.appendingPathComponent("extended-audio.json").path, extensions: ["json"])
+      let extendedText = try await service.measureLocalFile(name: name, path: extended.path)
+      #expect(try JSONDecoder().decode(Value.self, from: Data(extendedText.utf8)) == result)
+    } else if name == "audio_transcribe" {
+      #expect(result.objectValue?["onDevice"] == .bool(true))
+      #expect(result.objectValue?["humanReviewed"] == .bool(false))
+      #expect(result.objectValue?["segments"]?.arrayValue?.isEmpty == true)
+      var timedArguments = arguments
+      timedArguments["wordTiming"] = .bool(true)
+      timedArguments["contextualStrings"] = .array([.string("編集")])
+      let timedPath = try Files.writeNew(
+        JSONEncoder().encode(Value.object(timedArguments)),
+        to: root.appendingPathComponent("timed-speech.json").path, extensions: ["json"])
+      let timedText = try await service.measureLocalFile(name: name, path: timedPath.path)
+      #expect(try JSONDecoder().decode(Value.self, from: Data(timedText.utf8)) == result)
+    } else if name == "speech_locale_reserve" {
+      #expect(result.objectValue?["locale"] == .string("ja_JP"))
+      #expect(result.objectValue?["readyForTranscription"] == .bool(true))
+      #expect(result.objectValue?["newlyReserved"] == .bool(false))
     } else {
       #expect(result.arrayValue?.count == 1)
     }
@@ -94,6 +137,16 @@ struct MeasurementServiceTests {
     var environment = ProcessInfo.processInfo.environment
     environment["LLVM_PROFILE_FILE"] =
       package.appendingPathComponent(".build/debug/codecov/measurement-%p-%m.profraw").path
+    if name == "audio_transcribe" || name == "speech_locale_reserve" {
+      let prepare = try Files.writeNew(
+        JSONEncoder().encode(Value.object(["locale": .string("ja-JP")])),
+        to: root.appendingPathComponent("prepare.json").path, extensions: ["json"])
+      let prepared = try await Runner.run(
+        binary, ["measure-media", "speech_locale_reserve", prepare.path], environment: environment)
+      try #require(prepared.status == 0)
+      let readiness = try JSONDecoder().decode(Value.self, from: Data(prepared.stdout.utf8))
+      try #require(readiness.objectValue?["readyForTranscription"] == .bool(true))
+    }
     let process = try await Runner.run(
       binary, ["measure-media", name, request.path], environment: environment, timeout: .seconds(15)
     )

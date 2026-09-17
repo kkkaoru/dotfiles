@@ -28,6 +28,20 @@ extension ToolSpec {
           "maximum": .double(MediaProbe.maximumVerificationSeconds),
         ]),
       ], required: ["path"], readOnly: true),
+    Self(
+      name: "speech_locale_reserve",
+      description:
+        "Explicitly reserve a supported SpeechTranscriber locale for this application on macOS 26+. Persistent app-scoped resource change: requires user approval. Does not download, install or release models/locales. Existing reservations are retained; full quota fails without eviction. Returns whether already-present assets are ready for this app. A locale listing alone does not prove readiness. Call before audio_transcribe when preparing an approved locale.",
+      properties: ["locale": string(maximum: 64)], required: ["locale"], readOnly: false),
+    .init(
+      name: "audio_transcribe",
+      description:
+        "Transcribe an existing local M4A/WAV/AIFF/CAF audio file of at most 60 seconds using macOS 26 SpeechAnalyzer and an already-installed locale model. No download, microphone capture or cloud fallback. Returns final text with approximate phrase-level timings by default. Opt-in wordTiming returns native audio-time-indexed text runs instead of character-proportional timing; missing lexical timing is rejected. Optional contextualStrings supplies up to 128 explicit local vocabulary hints (8192 UTF-8 bytes total), not automatic text correction. No volatile/fast results, speaker identification, guaranteed word alignment or human-reviewed accuracy. Empty segments mean no recognized speech. 45-second analysis watchdog within a 60-second disposable child deadline.",
+      properties: [
+        "path": string(), "locale": string(maximum: 64), "wordTiming": boolean,
+        "contextualStrings": array(string(maximum: 128), maximum: 128, minimum: 0),
+      ], required: ["path", "locale"],
+      readOnly: true),
     .init(
       name: "audio_measure",
       description:
@@ -87,6 +101,22 @@ extension NativeService {
             ?? MediaProbe.defaultVerificationSeconds))
     case "audio_cue_track":
       measured = try createCueTrack(arguments)
+    case "speech_locale_reserve":
+      struct Input: Decodable { let locale: String }
+      let input = try decode(Input.self, arguments)
+      measured = try await Value(SpeechProbe().reserve(locale: input.locale))
+    case "audio_transcribe":
+      struct Input: Decodable {
+        let path: String
+        let locale: String
+        let wordTiming: Bool?
+        let contextualStrings: [String]?
+      }
+      let input = try decode(Input.self, arguments)
+      let options = try SpeechRecognitionOptions(
+        wordTiming: input.wordTiming ?? false, contextualStrings: input.contextualStrings ?? [])
+      measured = try await Value(
+        SpeechProbe().transcribe(path: input.path, locale: input.locale, options: options))
     case "audio_measure":
       struct Input: Decodable {
         let path: String

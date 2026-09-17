@@ -184,7 +184,8 @@ actor NativeService {
         ]),
         "guiAutomation": .bool(false), "allOperationsGuaranteed": .bool(false),
       ])
-    case "media_verify_video", "audio_measure", "video_frame_measure", "audio_cue_track":
+    case "media_verify_video", "audio_measure", "video_frame_measure", "audio_cue_track",
+      "audio_transcribe", "speech_locale_reserve":
       return try await measurement(name, args, execute: interfaces.measureMedia)
     case "media_edit_plan", "media_edit", "media_project_read":
       return try await editing(name, args, render: interfaces.editMedia)
