@@ -70,6 +70,25 @@ struct ToolSpec: Sendable {
         required: ["app", "path"],
         readOnly: false),
       .init(
+        name: "motion_text_inspect",
+        description:
+          "Read Motion text-layer IDs, content, source SHA-256 and supported-layout flags without UI. Bounded single-style adapter; no render validation.",
+        properties: ["path": string()], required: ["path"], readOnly: true),
+      .init(
+        name: "motion_text_copy",
+        description:
+          "Create a NEW fingerprint-bound Motion copy, updating text, character objects and style-run lengths together. Requires explicit experimental-format opt-in. Supports observed ozml 4.0 single-style, neutral-kerning, single-line BMP text only; rejects unsupported formatting. No UI, overwrite or automatic render.",
+        properties: [
+          "inputPath": string(), "outputPath": string(), "expectedSHA256": string(maximum: 64),
+          "allowUndocumentedFormat": boolean,
+          "changes": array(
+            object(
+              [
+                "layerID": integer(1, Int(Int32.max)), "expectedText": string(maximum: 8192),
+                "replacement": string(maximum: 120),
+              ], ["layerID", "expectedText", "replacement"]), maximum: 32),
+        ], required: ["inputPath", "outputPath", "expectedSHA256", "changes"], readOnly: false),
+      .init(
         name: "interchange_inspect",
         description:
           "Inspect bounded local FCPXML or Motion XML without launching apps. Well-formedness only, NOT DTD validation.",

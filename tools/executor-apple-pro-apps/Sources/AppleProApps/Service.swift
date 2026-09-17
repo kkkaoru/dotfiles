@@ -222,6 +222,27 @@ actor NativeService {
         "validation": try await Value(interfaces.validateFCPXML(input.path, input.bundleID)),
         "sourceModified": .bool(false),
       ])
+    case "motion_text_inspect":
+      struct Input: Decodable { let path: String }
+      let input = try decode(Input.self, args)
+      let data = try Files.read(
+        Files.existing(input.path, extensions: InterchangeKind.motion.extensions))
+      return response([
+        "inventory": try Value(MotionText.inspect(data)), "sourceModified": .bool(false),
+      ])
+    case "motion_text_copy":
+      struct Input: Decodable {
+        let inputPath: String
+        let outputPath: String
+        let expectedSHA256: String
+        let changes: [MotionTextChange]
+        let allowUndocumentedFormat: Bool?
+      }
+      let input = try decode(Input.self, args)
+      return written(
+        try MotionText.copy(
+          input: input.inputPath, output: input.outputPath, expectedSHA256: input.expectedSHA256,
+          changes: input.changes, allowUndocumented: input.allowUndocumentedFormat ?? false))
     case "interchange_inspect":
       struct Input: Decodable {
         let kind: InterchangeKind

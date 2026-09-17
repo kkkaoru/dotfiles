@@ -6,8 +6,8 @@ import Testing
 
 struct ServiceTests {
   @Test func catalogIsClosedAndUsesHonestAnnotations() throws {
-    #expect(ToolSpec.all.count == 31)
-    #expect(Set(ToolSpec.all.map(\.name)).count == 31)
+    #expect(ToolSpec.all.count == 33)
+    #expect(Set(ToolSpec.all.map(\.name)).count == 33)
     #expect(!ToolSpec.all.contains { $0.name == "shell" || $0.name == "agent" })
   }
 
@@ -46,6 +46,7 @@ struct ServiceTests {
     let spec = try #require(ToolSpec.all.first { $0.name == name })
     let readOnlyNames: Set<String> = [
       "app_capabilities", "interchange_inspect", "interchange_query", "midi_destinations",
+      "motion_text_inspect",
       "compressor_inspect", "compressor_status", "media_inspect", "media_edit_plan",
       "media_project_read", "media_verify_video", "audio_measure", "video_frame_measure",
       "audio_transcribe", "video_text_recognize",
