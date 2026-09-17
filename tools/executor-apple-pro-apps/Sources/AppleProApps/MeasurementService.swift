@@ -59,6 +59,22 @@ extension ToolSpec {
         ),
       ], required: ["path", "windows"], readOnly: true),
     .init(
+      name: "video_text_recognize",
+      description:
+        "Recognize Japanese/English visible text locally with Apple Vision in 1–8 selected video frames or regions. Returns actual frame times, OCR text/confidence and full-frame top-left pixel rectangles. Regions round outward to pixel boundaries. At most 64 text lines per frame and 32 KiB text per batch; excessive results fail rather than truncate. No video/image upload, screenshot, playback or source writes. OCR confidence is not speech accuracy; burned-in captions are corroboration, not ground truth. 60-second disposable child deadline.",
+      properties: [
+        "path": string(),
+        "samples": array(
+          object(
+            [
+              "timeSeconds": number,
+              "region": object(
+                ["x": number, "y": number, "width": number, "height": number],
+                ["x", "y", "width", "height"]),
+            ], ["timeSeconds"]), maximum: FrameProbe.maximumSamples),
+      ],
+      required: ["path", "samples"], readOnly: true),
+    .init(
       name: "video_frame_measure",
       description:
         "Measure mean device-RGB values (0–1) in 1–8 selected decoded video frames/regions. Regions use top-left display-oriented pixels. Returns actual sample times and dimensions. Limited to 16 megapixels; no screenshots, image export or playback. Selected-region evidence only, not full-file verification.",
@@ -129,6 +145,14 @@ extension NativeService {
           path: input.path, windows: input.windows,
           maximumDurationSeconds: input.maximumDurationSeconds
             ?? PCMMeasurement.defaultDurationSeconds))
+    case "video_text_recognize":
+      struct Input: Decodable {
+        let path: String
+        let samples: [FrameSample]
+      }
+      let input = try decode(Input.self, arguments)
+      measured = try await Value(
+        FrameProbe().recognizeText(path: input.path, samples: input.samples))
     case "video_frame_measure":
       struct Input: Decodable {
         let path: String

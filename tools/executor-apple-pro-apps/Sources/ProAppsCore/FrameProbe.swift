@@ -3,6 +3,7 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import Dispatch
 import Foundation
+import Vision
 
 public struct FrameSample: Codable, Sendable {
   public let timeSeconds: Double
@@ -23,6 +24,21 @@ public struct FrameMeasurement: Codable, Sendable {
   public let meanBlue: Double
 }
 
+public struct FrameTextLine: Codable, Sendable {
+  public let text: String
+  public let confidence: Float
+  public let boundsClipped: Bool
+  public let region: EditCrop
+}
+
+public struct FrameTextMeasurement: Codable, Sendable {
+  public let requestedTimeSeconds: Double
+  public let actualTimeSeconds: Double
+  public let width: Int
+  public let height: Int
+  public let lines: [FrameTextLine]
+}
+
 /// Managed CoreImage/CoreGraphics sampling, no screenshots or exported images.
 /// Region coordinates are top-left pixels in the display-oriented decoded frame.
 public actor FrameProbe {
@@ -35,7 +51,9 @@ public actor FrameProbe {
 
   public init() {}
 
-  public func measure(path: String, samples: [FrameSample]) async throws -> [FrameMeasurement] {
+  private func source(path: String, samples: [FrameSample]) async throws
+    -> sending AVAssetImageGenerator
+  {
     try Task.checkCancellation()
     guard (1...Self.maximumSamples).contains(samples.count) else {
       throw ProAppsError.invalid("Supply 1–8 frame samples")
@@ -53,13 +71,20 @@ public actor FrameProbe {
     generator.appliesPreferredTrackTransform = true
     generator.requestedTimeToleranceBefore = .zero
     generator.requestedTimeToleranceAfter = .zero
+    for sample in samples {
+      guard sample.timeSeconds.isFinite, sample.timeSeconds >= 0, sample.timeSeconds < duration,
+        sample.timeSeconds <= 86400
+      else { throw ProAppsError.invalid("Frame sample lies outside source duration") }
+    }
+    return generator
+  }
+
+  public func measure(path: String, samples: [FrameSample]) async throws -> [FrameMeasurement] {
+    let generator = try await source(path: path, samples: samples)
     let context = CIContext()
     var result: [FrameMeasurement] = []
     for sample in samples {
       try Task.checkCancellation()
-      guard sample.timeSeconds.isFinite, sample.timeSeconds >= 0, sample.timeSeconds < duration,
-        sample.timeSeconds <= 86400
-      else { throw ProAppsError.invalid("Frame sample lies outside source duration") }
       let frame = try await generator.image(
         at: CMTime(seconds: sample.timeSeconds, preferredTimescale: EditPlan.timeScale))
       let image = CIImage(cgImage: frame.image)
@@ -73,6 +98,76 @@ public actor FrameProbe {
           meanGreen: color.green, meanBlue: color.blue))
     }
     return result
+  }
+
+  /// Local Japanese/English OCR; confidence is an OCR score, not speech accuracy.
+  /// Returned rectangles use full-frame top-left pixels even for cropped input.
+  public func recognizeText(path: String, samples: [FrameSample]) async throws
+    -> [FrameTextMeasurement]
+  {
+    let generator = try await source(path: path, samples: samples)
+    let context = CIContext()
+    let maximumLinesPerFrame = 64
+    let maximumTextBytes = 32768
+    var bytes = 0
+    var result: [FrameTextMeasurement] = []
+    for sample in samples {
+      try Task.checkCancellation()
+      let frame = try await generator.image(
+        at: CMTime(seconds: sample.timeSeconds, preferredTimescale: EditPlan.timeScale))
+      let selected = try Self.region(
+        sample.region, width: frame.image.width, height: frame.image.height
+      ).integral
+      guard let bitmap = context.createCGImage(CIImage(cgImage: frame.image), from: selected) else {
+        throw ProAppsError.unavailable("Cannot prepare the selected OCR frame")
+      }
+      var request = RecognizeTextRequest()
+      request.recognitionLevel = .accurate
+      request.recognitionLanguages = [
+        Locale.Language(identifier: "ja-JP"), Locale.Language(identifier: "en-US"),
+      ]
+      request.usesLanguageCorrection = false
+      let observations = try await request.perform(on: bitmap)
+      guard observations.count <= maximumLinesPerFrame else { throw ProAppsError.outputLimit }
+      var lines: [FrameTextLine] = []
+      for observation in observations {
+        try Task.checkCancellation()
+        guard let candidate = observation.topCandidates(1).first else {
+          throw ProAppsError.unavailable("OCR observation has no text candidate")
+        }
+        bytes += candidate.string.utf8.count
+        guard bytes <= maximumTextBytes else { throw ProAppsError.outputLimit }
+        let rawRectangle = observation.boundingBox.toImageCoordinates(
+          CGSize(width: bitmap.width, height: bitmap.height), origin: .upperLeft)
+        let rectangle = try Self.textRectangle(
+          rawRectangle, imageSize: CGSize(width: bitmap.width, height: bitmap.height))
+        let top = Double(frame.image.height) - selected.maxY
+        lines.append(
+          FrameTextLine(
+            text: candidate.string, confidence: candidate.confidence,
+            boundsClipped: rectangle != rawRectangle,
+            region: .init(
+              x: selected.minX + rectangle.minX, y: top + rectangle.minY,
+              width: rectangle.width, height: rectangle.height)))
+      }
+      result.append(
+        FrameTextMeasurement(
+          requestedTimeSeconds: sample.timeSeconds, actualTimeSeconds: frame.actualTime.seconds,
+          width: frame.image.width, height: frame.image.height, lines: lines))
+    }
+    return result
+  }
+
+  static func textRectangle(_ rectangle: CGRect, imageSize: CGSize) throws -> CGRect {
+    guard !rectangle.isInfinite, !rectangle.isNull,
+      rectangle.origin.x.isFinite, rectangle.origin.y.isFinite,
+      rectangle.width.isFinite, rectangle.height.isFinite, rectangle.width > 0, rectangle.height > 0
+    else { throw ProAppsError.invalid("Invalid OCR rectangle") }
+    let clipped = rectangle.intersection(CGRect(origin: .zero, size: imageSize))
+    guard !clipped.isNull, !clipped.isEmpty else {
+      throw ProAppsError.invalid("OCR rectangle lies outside the selected image")
+    }
+    return clipped
   }
 
   static func validateGeometry(size: CGSize, transform: CGAffineTransform) throws {
