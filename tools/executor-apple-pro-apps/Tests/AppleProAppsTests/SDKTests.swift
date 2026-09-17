@@ -48,7 +48,7 @@ struct SDKTests {
       try await server.start(transport: serverTransport)
       _ = try await client.connect(transport: clientTransport)
       let catalog = try await client.listTools()
-      #expect(catalog.tools.count == 30)
+      #expect(catalog.tools.count == 31)
       #expect(catalog.nextCursor == nil)
       let result = try await client.callTool(name: "app_capabilities", arguments: [:])
       #expect(result.isError == false)

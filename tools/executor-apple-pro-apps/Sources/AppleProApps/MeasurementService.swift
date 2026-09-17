@@ -5,6 +5,16 @@ import ProAppsCore
 extension ToolSpec {
   static let measurements: [ToolSpec] = [
     .init(
+      name: "audio_separate_vocals",
+      description:
+        "Separate a bounded stereo audio segment with an explicitly installed, approved HTDemucs Core ML model. leftPath/rightPath are equal-length mono PCM16 WAVs at 44100 Hz, up to 343980 samples (7.8 seconds); shorter inputs are zero-padded for inference then trimmed. compiledModelPath is the local mlmodelc directory with the fixed Float16 spectral/waveform contract; CPU-only inference, no download/upload/playback. Output is a NEW private stereo Float32 WAV and request sidecar. No clipping or normalization; peak and humanReviewed:false are reported. Model inference is not proof of complete BGM removal or voice preservation. Long recordings require explicit overlapping segments and verified overlap-add. Bounded child operation, not a live app edit.",
+      properties: [
+        "leftPath": string(), "rightPath": string(), "compiledModelPath": string(),
+        "outputDirectory": string(), "outputName": string(maximum: 180),
+      ],
+      required: ["leftPath", "rightPath", "compiledModelPath", "outputDirectory", "outputName"],
+      readOnly: false),
+    .init(
       name: "audio_sound_activity",
       description:
         "Classify local prepared mono PCM16 WAV audio (0.5–60 seconds) with Apple's built-in version1 SoundAnalysis classifier. Returns overlapping window start/duration and speech/music confidence, requested 0.5-second windows and 50% overlap. Actual window duration is reported. Scores are estimates, not exact speech boundaries or reviewed cut decisions; no transcription, speaker identity, stem separation or automatic cuts. Local file only, no playback, model download, upload or source writes. Runs synchronously in a bounded disposable child on a dedicated audio worker; cancellation is checked before/after native analysis.",
@@ -151,6 +161,9 @@ extension NativeService {
         wordTiming: input.wordTiming ?? false, contextualStrings: input.contextualStrings ?? [])
       measured = try await Value(
         SpeechProbe().transcribe(path: input.path, locale: input.locale, options: options))
+    case "audio_separate_vocals":
+      let input = try decode(DemucsRequest.self, arguments)
+      measured = try await Value(DemucsSeparator().separate(input))
     case "audio_sound_activity":
       struct Input: Decodable { let path: String }
       let input = try decode(Input.self, arguments)

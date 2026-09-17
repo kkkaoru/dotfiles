@@ -186,7 +186,7 @@ actor NativeService {
       ])
     case "media_verify_video", "audio_measure", "video_frame_measure", "audio_cue_track",
       "audio_transcribe", "speech_locale_reserve", "video_text_recognize",
-      "audio_reference_analyze", "audio_sound_activity":
+      "audio_reference_analyze", "audio_sound_activity", "audio_separate_vocals":
       return try await measurement(name, args, execute: interfaces.measureMedia)
     case "media_edit_plan", "media_edit", "media_project_read", "speech_cut_plan",
       "caption_cut_plan":
