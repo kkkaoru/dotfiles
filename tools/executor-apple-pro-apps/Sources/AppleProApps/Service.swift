@@ -188,7 +188,7 @@ actor NativeService {
       "audio_transcribe", "speech_locale_reserve", "video_text_recognize",
       "audio_reference_analyze", "audio_sound_activity":
       return try await measurement(name, args, execute: interfaces.measureMedia)
-    case "media_edit_plan", "media_edit", "media_project_read":
+    case "media_edit_plan", "media_edit", "media_project_read", "speech_cut_plan":
       return try await editing(name, args, render: interfaces.editMedia)
     case "media_inspect":
       struct Input: Decodable { let path: String }

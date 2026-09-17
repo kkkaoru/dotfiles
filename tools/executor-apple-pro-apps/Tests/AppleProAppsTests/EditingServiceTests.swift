@@ -47,6 +47,23 @@ struct EditingServiceTests {
     #expect(result.isError == (end > 1))
   }
 
+  @Test func speechPlanningPreservesProvidedSpanVerificationBoundary() async throws {
+    let request = SpeechCutRequest(
+      sourceDurationSeconds: 10,
+      spans: [.init(startSeconds: 2, endSeconds: 4)], paddingSeconds: 0,
+      minimumRemovedGapSeconds: 0.5)
+    let arguments = try #require(try Value(request).objectValue)
+    let result = await NativeService().call(.init(name: "speech_cut_plan", arguments: arguments))
+    #expect(result.isError == false)
+    let value = try #require(result.structuredContent?.objectValue?["plan"])
+    let plan = try JSONDecoder().decode(SpeechCutPlan.self, from: JSONEncoder().encode(value))
+    #expect(plan.outputDurationSeconds == 2)
+    #expect(plan.segments.first?.sourceStartSeconds == 2)
+    #expect(!plan.speechVerified)
+    let invalid = await NativeService().call(.init(name: "speech_cut_plan", arguments: [:]))
+    #expect(invalid.isError == true)
+  }
+
   @Test func planningDoesNotPretendToValidateSources() async throws {
     let result = await NativeService().call(
       .init(

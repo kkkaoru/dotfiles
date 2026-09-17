@@ -90,6 +90,20 @@ extension ToolSpec {
 
   static let editing: [ToolSpec] = [
     .init(
+      name: "speech_cut_plan",
+      description:
+        "Build a cut plan from explicit ordered source-time spans, not automatic speech detection. Pad each span by paddingSeconds (0–2), clamp to source duration (up to 21600 seconds), merge overlaps and interior gaps no larger than minimumRemovedGapSeconds (0–5). Leading/trailing gaps outside padding are removed independently. Returns retained source/output intervals and removed spans, with speechVerified:false. Empty input is refused rather than deleting the entire video. At most 30000 spans. No file access, render, frame quantization or source writes; clients must map captions and quantize cuts before export.",
+      properties: [
+        "sourceDurationSeconds": number, "paddingSeconds": number,
+        "minimumRemovedGapSeconds": number,
+        "spans": array(
+          object(
+            ["startSeconds": number, "endSeconds": number],
+            ["startSeconds", "endSeconds"]), maximum: 30_000),
+      ],
+      required: ["sourceDurationSeconds", "paddingSeconds", "minimumRemovedGapSeconds", "spans"],
+      readOnly: true),
+    .init(
       name: "media_edit_plan",
       description:
         "Validate an editing recipe and calculate ordered output-time spans. Supports source ranges, concat/reordering, optional per-clip transitionInSeconds (0–5, at most half either adjacent output clip; absent on first), rate 0.25–4, gain/fades, timed additional audio, mute/replacement, canvas fit/fill/crop/quarter-turns. No source loading or rendering; this is shape/timeline validation only. At most 60 clips, 16 audio layers, 16 additional video layers, 600 output seconds. Additional video requires a canvas and fits within the base timeline; later layers appear above earlier ones.",

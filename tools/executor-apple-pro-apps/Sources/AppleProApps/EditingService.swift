@@ -28,6 +28,12 @@ extension NativeService {
     render: @Sendable (String) async throws -> EditRenderResult
   ) async throws -> CallTool.Result {
     switch name {
+    case "speech_cut_plan":
+      let request = try decode(SpeechCutRequest.self, arguments)
+      return response([
+        "plan": try Value(SpeechCutPlan.make(request)), "sourceFilesValidated": .bool(false),
+        "verificationScope": .string("provided-spans-and-timeline-only"),
+      ])
     case "media_edit_plan":
       struct Input: Decodable { let recipe: EditRecipe }
       let input = try decode(Input.self, arguments)
