@@ -5,6 +5,11 @@ import ProAppsCore
 extension ToolSpec {
   static let measurements: [ToolSpec] = [
     .init(
+      name: "audio_sound_activity",
+      description:
+        "Classify local prepared mono PCM16 WAV audio (0.5–60 seconds) with Apple's built-in version1 SoundAnalysis classifier. Returns overlapping window start/duration and speech/music confidence, requested 0.5-second windows and 50% overlap. Actual window duration is reported. Scores are estimates, not exact speech boundaries or reviewed cut decisions; no transcription, speaker identity, stem separation or automatic cuts. Local file only, no playback, model download, upload or source writes. Runs synchronously in a bounded disposable child on a dedicated audio worker; cancellation is checked before/after native analysis.",
+      properties: ["path": string()], required: ["path"], readOnly: true),
+    .init(
       name: "audio_reference_analyze",
       description:
         "Fit an explicitly aligned local reference BGM against source audio with a bounded sample-offset search. Inputs must be prepared mono PCM16 WAVs, equal sample rates, at most 60 seconds and one million samples each. No implicit mixing/resampling, cloud or source writes. referenceStartSample is the center offset inside the reference, searchRadiusSamples scans on both sides; all candidates must fit. At most 16 million sample products. Returns gain, signed normalized correlation and estimated residual RMS; correlation is not proof of voice preservation. Unmatched/silent/excessive-gain inputs fail. Read-only analysis, not an exported separated track.",
@@ -146,6 +151,10 @@ extension NativeService {
         wordTiming: input.wordTiming ?? false, contextualStrings: input.contextualStrings ?? [])
       measured = try await Value(
         SpeechProbe().transcribe(path: input.path, locale: input.locale, options: options))
+    case "audio_sound_activity":
+      struct Input: Decodable { let path: String }
+      let input = try decode(Input.self, arguments)
+      measured = try await Value(SoundActivityProbe().analyze(path: input.path))
     case "audio_reference_analyze":
       struct Input: Decodable {
         let sourcePath: String
