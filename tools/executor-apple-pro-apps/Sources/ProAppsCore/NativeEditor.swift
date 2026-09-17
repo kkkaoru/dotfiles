@@ -27,6 +27,12 @@ public actor NativeEditor {
     let instruction: AVMutableVideoCompositionLayerInstruction
   }
 
+  private struct TimedOverlay: Sendable {
+    let image: CIImage
+    let startSeconds: Double
+    let endSeconds: Double
+  }
+
   private struct Prepared {
     let composition: AVMutableComposition
     let instructions: [AVVideoCompositionInstructionProtocol]
@@ -75,7 +81,10 @@ public actor NativeEditor {
     try await session.export(to: staging, as: plan.audioOnly ? .m4a : .mp4)
     try Task.checkCancellation()
     var finalStaging = staging
-    if let video = recipe.video, video.color != nil || !(video.titles ?? []).isEmpty {
+    if let video = recipe.video,
+      video.color != nil || !(video.titles ?? []).isEmpty || !(video.captions ?? []).isEmpty
+        || !(video.masks ?? []).isEmpty
+    {
       try await applyEffects(video, source: staging, destination: graded)
       finalStaging = graded
     }
@@ -116,18 +125,35 @@ public actor NativeEditor {
     async throws
   {
     try Task.checkCancellation()
-    var preparedTitles: [CIImage] = []
+    var preparedTitles: [TimedOverlay] = []
+    var pixels = 0
     for title in settings.titles ?? [] {
       let bitmap = try await TitleRenderer.render(title, canvas: settings)
       try Task.checkCancellation()
+      pixels = try TitleRenderer.addingPixels(
+        width: bitmap.width, height: bitmap.height, to: pixels)
+      let image = CIImage(cgImage: bitmap).transformed(
+        by: CGAffineTransform(
+          translationX: title.x, y: Double(settings.height) - title.y - Double(bitmap.height)))
       preparedTitles.append(
-        CIImage(cgImage: bitmap).transformed(
-          by: CGAffineTransform(
-            translationX: title.x, y: Double(settings.height) - title.y - Double(bitmap.height))))
+        TimedOverlay(image: image, startSeconds: 0, endSeconds: EditPlan.maximumDurationSeconds))
+    }
+    for caption in settings.captions ?? [] {
+      let bitmap = try await TitleRenderer.renderCaption(caption, canvas: settings)
+      try Task.checkCancellation()
+      pixels = try TitleRenderer.addingPixels(
+        width: bitmap.width, height: bitmap.height, to: pixels)
+      let image = try TitleRenderer.captionImage(bitmap, canvas: settings).transformed(
+        by: CGAffineTransform(
+          translationX: Double(settings.width - bitmap.width) / 2,
+          y: TitleRenderer.captionBottomMargin(settings, imageHeight: bitmap.height)))
+      preparedTitles.append(
+        TimedOverlay(
+          image: image, startSeconds: caption.startSeconds, endSeconds: caption.endSeconds))
     }
     let overlays = preparedTitles
     let asset = AVURLAsset(url: source)
-    let composition = try await AVVideoComposition.videoComposition(
+    let composition = try await AVMutableVideoComposition.videoComposition(
       with: asset,
       applyingCIFiltersWithHandler: { request in
         // Each callback owns its mutable filter; only the Sendable settings cross
@@ -152,9 +178,24 @@ public actor NativeEditor {
           }
           image = adjusted
         }
-        for overlay in overlays { image = overlay.composited(over: image) }
+        let seconds = request.compositionTime.seconds
+        do {
+          image = try MaskRenderer.apply(
+            settings.masks ?? [], to: image, at: seconds, canvasHeight: settings.height)
+        } catch {
+          request.finish(with: error)
+          return
+        }
+        for overlay in overlays
+        where seconds >= overlay.startSeconds && seconds < overlay.endSeconds {
+          image = overlay.image.composited(over: image)
+        }
         request.finish(with: image.cropped(to: request.sourceImage.extent), context: nil)
       })
+    // Preserve the recipe's cadence rather than inheriting source sample timing
+    // after rate changes. Apple's mutable CI composition explicitly supports this.
+    composition.sourceTrackIDForFrameTiming = kCMPersistentTrackID_Invalid
+    composition.frameDuration = CMTime(value: 1, timescale: CMTimeScale(settings.frameRate))
     guard
       let session = AVAssetExportSession(
         asset: asset, presetName: AVAssetExportPresetHighestQuality)

@@ -13,6 +13,8 @@ public struct EditPlan: Codable, Sendable {
   public static let maximumDurationSeconds: Double = 600
   public static let maximumTransitionSeconds = 5.0
   public static let maximumTitles = 8
+  public static let maximumMasks = 8
+  public static let maximumCaptions = 120
   public static let maximumClips = 60
   public static let maximumAudioLayers = 16
   public static let maximumPixels = 8_294_400
@@ -98,6 +100,8 @@ public struct EditPlan: Codable, Sendable {
       else { throw ProAppsError.invalid("Additional audio must fit within the edited timeline") }
       try validate(layer.audio ?? .unity, duration: duration)
     }
+    try validate(recipe.video?.captions ?? [], duration: cursor)
+    try validateMaskTimes(recipe.video?.masks ?? [], duration: cursor)
     return EditPlan(spans: spans, durationSeconds: cursor, audioOnly: recipe.video == nil)
   }
 
@@ -142,7 +146,81 @@ public struct EditPlan: Codable, Sendable {
     }
   }
 
+  static func validateMaskTimes(_ masks: [EditMask], duration: Double) throws {
+    for mask in masks {
+      switch (mask.startSeconds, mask.endSeconds) {
+      case (nil, nil): break
+      case (.some(let start), .some(let end)):
+        guard start.isFinite, end.isFinite, start >= 0, end <= duration,
+          end - start >= minimumTimeSeconds
+        else { throw ProAppsError.invalid("Mask interval must lie inside the output timeline") }
+      default:
+        throw ProAppsError.invalid("Mask startSeconds and endSeconds must be supplied together")
+      }
+    }
+  }
+
+  static func validate(_ captions: [EditCaption], duration: Double) throws {
+    guard captions.count <= maximumCaptions else {
+      throw ProAppsError.invalid("At most 120 timed captions are supported")
+    }
+    var previousEnd = 0.0
+    for caption in captions {
+      guard !caption.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        caption.text.count <= 120, caption.text.utf8.count <= 1024, !caption.text.contains("\0"),
+        caption.startSeconds.isFinite, caption.endSeconds.isFinite,
+        caption.startSeconds >= previousEnd, caption.endSeconds <= duration,
+        caption.endSeconds - caption.startSeconds >= minimumTimeSeconds
+      else {
+        throw ProAppsError.invalid(
+          "Caption text/times must be bounded, ordered, nonoverlapping and inside the output timeline"
+        )
+      }
+      previousEnd = caption.endSeconds
+    }
+  }
+
   static func validate(_ video: EditVideoSettings) throws {
+    if let style = video.captionStyle {
+      let maximumOutlineWidth = 6.0
+      guard style.outlineWidth.isFinite, (0...maximumOutlineWidth).contains(style.outlineWidth),
+        style.backgroundOpacity.isFinite, (0...1).contains(style.backgroundOpacity)
+      else { throw ProAppsError.invalid("Caption outline requires 0–6 pixels and box opacity 0–1") }
+      if let fontSize = style.fontSize {
+        guard fontSize.isFinite, (16...64).contains(fontSize) else {
+          throw ProAppsError.invalid("Caption font size must be 16–64 output pixels")
+        }
+      }
+      if let center = style.centerY {
+        guard center.isFinite, center > 0, center < Double(video.height), style.bottomMargin == nil
+        else {
+          throw ProAppsError.invalid(
+            "Caption centerY must be inside the canvas and excludes bottomMargin")
+        }
+      }
+      if let bottomMargin = style.bottomMargin {
+        guard bottomMargin.isFinite, bottomMargin >= 0, bottomMargin < Double(video.height) else {
+          throw ProAppsError.invalid("Caption bottom margin must be finite and inside the canvas")
+        }
+      }
+    }
+    let masks = video.masks ?? []
+    try validateMaskTimes(masks, duration: maximumDurationSeconds)
+    guard masks.count <= maximumMasks else {
+      throw ProAppsError.invalid("At most eight source concealment masks are supported")
+    }
+    for mask in masks {
+      try validate(mask.region)
+      if let radius = mask.blurRadius {
+        guard radius.isFinite, (1...64).contains(radius) else {
+          throw ProAppsError.invalid("Mask blur radius must be 1–64 output pixels")
+        }
+      }
+      guard mask.opacity.isFinite, (0...1).contains(mask.opacity),
+        mask.region.x + mask.region.width <= Double(video.width),
+        mask.region.y + mask.region.height <= Double(video.height)
+      else { throw ProAppsError.invalid("Mask must fit the canvas with opacity 0–1") }
+    }
     let titles = video.titles ?? []
     guard titles.count <= maximumTitles else {
       throw ProAppsError.invalid("At most eight static titles are supported")
@@ -164,6 +242,9 @@ public struct EditPlan: Codable, Sendable {
     else {
       throw ProAppsError.invalid(
         "Canvas requires even bounded dimensions, at most 4K pixels and 1–60 fps")
+    }
+    if !(video.captions ?? []).isEmpty, video.width < 160 || video.height < 90 {
+      throw ProAppsError.invalid("Caption canvas must be at least 160 by 90 pixels")
     }
   }
 

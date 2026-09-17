@@ -18,8 +18,33 @@ struct EditingServiceTests {
           .init(
             sourcePath: "/tmp/synthetic.mov",
             selection: .init(startSeconds: 0, durationSeconds: 2, rate: 2))
-        ], video: .init(width: 320, height: 240, frameRate: 30, resizeMode: .fit),
+        ],
+        video: .init(
+          width: 320, height: 240, frameRate: 30, resizeMode: .fit,
+          captions: [
+            .init(text: String(repeating: "字幕の検証", count: 12), startSeconds: 0.1, endSeconds: 0.9)
+          ], captionStyle: .init(outlineWidth: 3, backgroundOpacity: 0, centerY: 120)),
         additionalAudio: []), outputDirectory: directory, outputName: "out.mp4")
+  }
+
+  @Test(arguments: [0.9, 1.1])
+  func timedBlurSchemaAndTimelineBounds(_ end: Double) async throws {
+    let recipe = EditRecipe(
+      clips: [
+        .init(
+          sourcePath: "/tmp/synthetic.mov",
+          selection: .init(startSeconds: 0, durationSeconds: 1, rate: 1))
+      ],
+      video: .init(
+        width: 320, height: 240, frameRate: 30, resizeMode: .fit,
+        masks: [
+          .init(
+            region: .init(x: 0, y: 100, width: 320, height: 40),
+            opacity: 0.9, blurRadius: 16, startSeconds: 0.1, endSeconds: end)
+        ]))
+    let result = await NativeService().call(
+      .init(name: "media_edit_plan", arguments: ["recipe": try Value(recipe)]))
+    #expect(result.isError == (end > 1))
   }
 
   @Test func planningDoesNotPretendToValidateSources() async throws {
@@ -47,6 +72,7 @@ struct EditingServiceTests {
         EditRequest.self, from: Files.read(URL(fileURLWithPath: path)))
       #expect(decoded.outputName == "out.mp4")
       #expect(decoded.recipe.clips.count == 1)
+      #expect(decoded.recipe.video?.captions?.first?.text == String(repeating: "字幕の検証", count: 12))
       if mode == "failure" { throw ProAppsError.unavailable("Synthetic renderer failure") }
       if mode == "cancelled" { throw CancellationError() }
       return try JSONDecoder().decode(

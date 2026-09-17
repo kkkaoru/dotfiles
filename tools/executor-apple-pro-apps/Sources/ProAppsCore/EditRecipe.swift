@@ -159,6 +159,71 @@ public struct EditTitle: Codable, Sendable {
   }
 }
 
+/// Half-open output-time interval [startSeconds, endSeconds). Captions are
+/// wrapped white text on a translucent dark box, centered near the bottom.
+/// Text is never silently clipped; these are supplied cues, not speech recognition.
+public struct EditCaption: Codable, Sendable {
+  public let text: String
+  public let startSeconds: Double
+  public let endSeconds: Double
+
+  public init(text: String, startSeconds: Double, endSeconds: Double) {
+    self.text = text
+    self.startSeconds = startSeconds
+    self.endSeconds = endSeconds
+  }
+}
+
+/// Top-left output-pixel region applied before titles/captions.
+/// Missing blurRadius preserves black concealment; a radius blends Gaussian blur
+/// by opacity instead. Blur is not guaranteed text removal or reconstruction.
+/// Optional start/end must be supplied together in output seconds.
+public struct EditMask: Codable, Sendable {
+  public let region: EditCrop
+  public let opacity: Double
+  public let blurRadius: Double?
+  public let startSeconds: Double?
+  public let endSeconds: Double?
+
+  public init(
+    region: EditCrop, opacity: Double, blurRadius: Double? = nil,
+    startSeconds: Double? = nil, endSeconds: Double? = nil
+  ) {
+    self.region = region
+    self.opacity = opacity
+    self.blurRadius = blurRadius
+    self.startSeconds = startSeconds
+    self.endSeconds = endSeconds
+  }
+
+  /// Missing times mean the whole output; supplied times are half-open.
+  public func isActive(at seconds: Double) -> Bool {
+    seconds.isFinite && seconds >= (startSeconds ?? 0)
+      && seconds < (endSeconds ?? EditPlan.maximumDurationSeconds)
+  }
+}
+
+/// White captions with an expanded-alpha black outline (output pixels).
+/// Background opacity applies to the caption box, independently of source masks.
+public struct EditCaptionStyle: Codable, Sendable {
+  public let outlineWidth: Double
+  public let backgroundOpacity: Double
+  public let fontSize: Double?
+  public let bottomMargin: Double?
+  public let centerY: Double?
+
+  public init(
+    outlineWidth: Double, backgroundOpacity: Double, fontSize: Double? = nil,
+    bottomMargin: Double? = nil, centerY: Double? = nil
+  ) {
+    self.outlineWidth = outlineWidth
+    self.backgroundOpacity = backgroundOpacity
+    self.fontSize = fontSize
+    self.bottomMargin = bottomMargin
+    self.centerY = centerY
+  }
+}
+
 public struct EditVideoSettings: Codable, Sendable {
   public enum ResizeMode: String, Codable, Sendable { case fit, fill }
   public let width: Int
@@ -167,10 +232,14 @@ public struct EditVideoSettings: Codable, Sendable {
   public let resizeMode: ResizeMode
   public let color: EditColor?
   public let titles: [EditTitle]?
+  public let captions: [EditCaption]?
+  public let masks: [EditMask]?
+  public let captionStyle: EditCaptionStyle?
 
   public init(
     width: Int, height: Int, frameRate: Int, resizeMode: ResizeMode, color: EditColor? = nil,
-    titles: [EditTitle]? = nil
+    titles: [EditTitle]? = nil, captions: [EditCaption]? = nil, masks: [EditMask]? = nil,
+    captionStyle: EditCaptionStyle? = nil
   ) {
     self.width = width
     self.height = height
@@ -178,5 +247,8 @@ public struct EditVideoSettings: Codable, Sendable {
     self.resizeMode = resizeMode
     self.color = color
     self.titles = titles
+    self.captions = captions
+    self.masks = masks
+    self.captionStyle = captionStyle
   }
 }

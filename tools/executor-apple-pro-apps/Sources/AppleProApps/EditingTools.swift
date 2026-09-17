@@ -39,8 +39,28 @@ extension ToolSpec {
           "resizeMode": string(["fit", "fill"]),
           "titles": array(
             object(
-              ["text": string(maximum: 120), "x": number, "y": number, "fontSize": number],
+              ["text": string(maximum: 1024), "x": number, "y": number, "fontSize": number],
               ["text", "x", "y", "fontSize"]), maximum: EditPlan.maximumTitles, minimum: 0),
+          "masks": array(
+            object(
+              [
+                "region": object(
+                  ["x": number, "y": number, "width": number, "height": number],
+                  ["x", "y", "width", "height"]),
+                "opacity": number, "blurRadius": number,
+                "startSeconds": number, "endSeconds": number,
+              ], ["region", "opacity"]), maximum: EditPlan.maximumMasks, minimum: 0),
+          "captionStyle": object(
+            [
+              "outlineWidth": number, "backgroundOpacity": number, "fontSize": number,
+              "bottomMargin": number, "centerY": number,
+            ],
+            ["outlineWidth", "backgroundOpacity"]),
+          "captions": array(
+            object(
+              ["text": string(maximum: 1024), "startSeconds": number, "endSeconds": number],
+              ["text", "startSeconds", "endSeconds"]), maximum: EditPlan.maximumCaptions, minimum: 0
+          ),
           "color": object(
             ["brightness": number, "contrast": number, "saturation": number],
             ["brightness", "contrast", "saturation"]),
@@ -70,7 +90,7 @@ extension ToolSpec {
     .init(
       name: "media_edit",
       description:
-        "Render a typed video/audio recipe with native AVFoundation. With video settings, produce MP4; without them, audio-only M4A. Optional video.color clamps input working RGB to SDR 0–1 (not HDR-preserving) and applies brightness -1–1, contrast 0–4 and saturation 0–2 in an additional native encoding pass (omission keeps one pass). Optional video.titles adds up to eight static single-line white bold system titles in top-left output pixels, fontSize 8–128; overflowing text is refused, not truncated. Titles and color share one extra encoding pass. Optional clip.transitionInSeconds overlaps adjacent clips with video cross-dissolve and linear audio crossfade; it shortens the timeline. Transition and explicit audio fades use the longer duration, rejecting overlap within a clip. Gain is linear 0–1; fades and audio offsets use output seconds. Preserves every source; creates a private edit-UUID subdirectory and reusable edit-request.json. Processing has a 300-second child deadline; failure can leave partial staging but never replaces existing media. No playback or proprietary editor timeline mutation. Use an absolute outputDirectory under ~/Movies/Apple-Pro-Apps-Verification for this user's tests.",
+        "Render a typed video/audio recipe with native AVFoundation. With video settings, produce MP4; without them, audio-only M4A. Optional video.color clamps input working RGB to SDR 0–1 (not HDR-preserving) and applies brightness -1–1, contrast 0–4 and saturation 0–2 in an additional native encoding pass (omission keeps one pass). Optional video.titles adds up to eight static single-line white bold system titles in top-left output pixels, fontSize 8–128; overflowing text is refused, not truncated. Optional video.captions supplies up to 120 ordered, nonoverlapping output-time cues (text/startSeconds/endSeconds), 120 characters/1024 UTF-8 bytes each, with half-open timing, automatic wrapping and white bold text on a dark bottom box. Optional video.captionStyle controls a black expanded-alpha outlineWidth (0–6 output pixels) and caption box backgroundOpacity (0–1); optional fontSize (16–64 pixels) and bottomMargin (pixels from output bottom) position the text above a source mask. Alternatively centerY sets the vertical center of each caption block in top-left output pixels, independent of wrapping; it cannot be combined with bottomMargin. Text must still fit the canvas. Omission preserves automatic size/position, no outline and 0.7 box opacity. These are supplied captions, not automatic recognition. Canvas must be at least 160x90; oversized text is refused. All text bitmaps share a 16-megapixel budget. Optional video.masks supplies up to eight regions (top-left output pixels, opacity 0–1), applied before new text. Optional blurRadius (1–64 output pixels) blends Gaussian blur instead of black concealment. Optional startSeconds/endSeconds must be supplied together and define a half-open output-time interval; omission means the whole output. Full-opacity black masks conceal burned-in subtitles; blur and partial opacity do not guarantee unreadability, and neither reconstructs the hidden scene. Masks, titles, captions and color share one extra encoding pass. Optional clip.transitionInSeconds overlaps adjacent clips with video cross-dissolve and linear audio crossfade; it shortens the timeline. Transition and explicit audio fades use the longer duration, rejecting overlap within a clip. Gain is linear 0–1; fades and audio offsets use output seconds. Preserves every source; creates a private edit-UUID subdirectory and reusable edit-request.json. Processing has a 300-second child deadline; failure can leave partial staging but never replaces existing media. No playback or proprietary editor timeline mutation. Use an absolute outputDirectory under ~/Movies/Apple-Pro-Apps-Verification for this user's tests.",
       properties: editProperties, required: editRequired, readOnly: false),
     .init(
       name: "media_project_read",

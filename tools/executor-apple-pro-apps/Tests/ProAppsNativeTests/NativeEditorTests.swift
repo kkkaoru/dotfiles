@@ -331,6 +331,138 @@ struct NativeEditorTests {
     }
   }
 
+  @Test func captionsAppearOnlyInsideTheirIntervalAndKeepAudio() async throws {
+    let root = try directory()
+    defer { do { try FileManager.default.removeItem(at: root) } catch { Issue.record(error) } }
+    let source = try await ContinuousVideoFixture.make(in: root)
+    let audio = try tone(in: root)
+    let clip = EditClip(
+      sourcePath: source.path, selection: .init(startSeconds: 0, durationSeconds: 1, rate: 1))
+    let recipe = EditRecipe(
+      clips: [clip, clip],
+      video: .init(
+        width: 320, height: 240, frameRate: 30, resizeMode: .fit,
+        captions: [.init(text: "Timed caption", startSeconds: 0.5, endSeconds: 1.2)]),
+      additionalAudio: [
+        .init(
+          sourcePath: audio, selection: .init(startSeconds: 0, durationSeconds: 2, rate: 1),
+          offsetSeconds: 0)
+      ])
+    let rendered = try await NativeEditor().render(
+      recipe, directory: root.path, name: "captions.mp4")
+    #expect(rendered.actualDurationSeconds == 2)
+    #expect(try await MediaProbe().verifyShortVideo(path: rendered.outputPath).decodedFrames == 60)
+    let bottom = EditCrop(x: 32, y: 188, width: 256, height: 48)
+    let control = EditCrop(x: 8, y: 8, width: 32, height: 32)
+    let frames = try await FrameProbe().measure(
+      path: rendered.outputPath,
+      samples: [
+        .init(timeSeconds: 0.25, region: bottom), .init(timeSeconds: 0.5, region: bottom),
+        .init(timeSeconds: 0.75, region: bottom), .init(timeSeconds: 1.2, region: bottom),
+        .init(timeSeconds: 1.5, region: bottom),
+        .init(timeSeconds: 0.25, region: control), .init(timeSeconds: 0.75, region: control),
+      ])
+    try #require(frames.count == 7)
+    #expect(abs(frames[1].actualTimeSeconds - 0.5) < 0.000001)
+    #expect(abs(frames[3].actualTimeSeconds - 1.2) < 0.000001)
+    #expect(abs(frames[0].meanBlue - frames[1].meanBlue) > 0.02)
+    #expect(abs(frames[0].meanBlue - frames[2].meanBlue) > 0.02)
+    #expect(abs(frames[0].meanBlue - frames[3].meanBlue) < 0.015)
+    #expect(abs(frames[0].meanBlue - frames[4].meanBlue) < 0.015)
+    #expect(abs(frames[5].meanRed - frames[6].meanRed) < 0.015)
+    #expect(try await AudioProbe().measure(path: rendered.outputPath, windows: []).whole.rms > 0.1)
+  }
+
+  @Test(arguments: [
+    (seconds: 60, frames: 1800, audioFrames: 960000),
+    (seconds: 90, frames: 2700, audioFrames: 1_440_000),
+  ])
+  func decoratedVideoPreservesVoiceAndTimesCueSoundsAtBothLengths(
+    _ sample: (seconds: Int, frames: Int, audioFrames: Int)
+  ) async throws {
+    let root = try directory()
+    defer { do { try FileManager.default.removeItem(at: root) } catch { Issue.record(error) } }
+    let image = try await ContinuousVideoFixture.make(in: root)
+    let voice = try tone(in: root)
+    let seed = try await NativeEditor().render(
+      .init(
+        clips: [
+          .init(
+            sourcePath: image.path, selection: .init(startSeconds: 0, durationSeconds: 1, rate: 0.5)
+          )
+        ],
+        video: .init(width: 320, height: 240, frameRate: 30, resizeMode: .fill),
+        additionalAudio: [
+          .init(
+            sourcePath: voice, selection: .init(startSeconds: 0, durationSeconds: 2, rate: 1),
+            offsetSeconds: 0)
+        ]),
+      directory: root.path, name: "voiced-seed.mp4")
+    let sourceBefore = try Data(contentsOf: URL(fileURLWithPath: seed.outputPath))
+    let seconds = Double(sample.seconds)
+    let sound = root.appendingPathComponent("cue.wav")
+    try CueSound(durationSeconds: seconds, onsetSeconds: [1, 30, seconds - 1], gain: 0.2).wave()
+      .write(to: sound, options: .withoutOverwriting)
+    let clip = EditClip(
+      sourcePath: seed.outputPath, selection: .init(startSeconds: 0, durationSeconds: 2, rate: 1),
+      audio: .init(volume: 0.5, fadeInSeconds: 0, fadeOutSeconds: 0))
+    let recipe = EditRecipe(
+      clips: Array(repeating: clip, count: sample.seconds / 2),
+      video: .init(
+        width: 320, height: 240, frameRate: 30, resizeMode: .fill,
+        captions: [
+          .init(text: "TEST", startSeconds: 1, endSeconds: 3),
+          .init(text: "TEST", startSeconds: 30, endSeconds: 32),
+          .init(text: "TEST", startSeconds: seconds - 1, endSeconds: seconds - 0.5),
+        ],
+        masks: [.init(region: .init(x: 0, y: 140, width: 320, height: 70), opacity: 1)],
+        captionStyle: .init(outlineWidth: 3, backgroundOpacity: 0, fontSize: 20, bottomMargin: 40)),
+      additionalAudio: [
+        .init(
+          sourcePath: sound.path,
+          selection: .init(startSeconds: 0, durationSeconds: seconds, rate: 1), offsetSeconds: 0)
+      ])
+    let result = try await NativeEditor().render(
+      recipe, directory: root.path, name: "decorated.mp4")
+    #expect(
+      try await MediaProbe().verifyShortVideo(
+        path: result.outputPath, maximumFrames: 3000, maximumDurationSeconds: 100
+      ).decodedFrames == sample.frames)
+    let region = EditCrop(x: 100, y: 145, width: 120, height: 60)
+    let control = EditCrop(x: 240, y: 30, width: 30, height: 30)
+    let frames = try await FrameProbe().measure(
+      path: result.outputPath,
+      samples: [
+        .init(timeSeconds: 0.5, region: region), .init(timeSeconds: 1.5, region: region),
+        .init(timeSeconds: 30.5, region: region),
+        .init(timeSeconds: seconds - 0.75, region: region),
+        .init(timeSeconds: seconds - 0.25, region: region),
+        .init(timeSeconds: 0.5, region: control), .init(timeSeconds: 30.5, region: control),
+        .init(timeSeconds: seconds - 0.25, region: control),
+      ])
+    try #require(frames.count == 8)
+    #expect(frames[0].meanBlue < 0.01 && frames[4].meanBlue < 0.01)
+    #expect(frames[1].meanBlue > 0.02 && frames[2].meanBlue > 0.02 && frames[3].meanBlue > 0.02)
+    #expect(frames[5].meanGreen > 0.8 && frames[6].meanGreen > 0.8 && frames[7].meanGreen > 0.8)
+    let audio = try await AudioProbe().measure(
+      path: result.outputPath,
+      windows: [
+        .init(startSeconds: 0.5, durationSeconds: 0.08),
+        .init(startSeconds: 1, durationSeconds: 0.08),
+        .init(startSeconds: 30, durationSeconds: 0.08),
+        .init(startSeconds: seconds - 1, durationSeconds: 0.08),
+        .init(startSeconds: 1.2, durationSeconds: 0.08),
+      ], maximumDurationSeconds: 100)
+    try #require(audio.windows.count == 5)
+    #expect(audio.whole.frames == sample.audioFrames && audio.whole.peak < 0.6)
+    #expect(audio.windows[0].rms > 0.09 && audio.windows[0].rms < 0.13)
+    #expect(audio.windows[1].rms > audio.windows[0].rms * 1.08)
+    #expect(audio.windows[2].rms > audio.windows[0].rms * 1.08)
+    #expect(audio.windows[3].rms > audio.windows[0].rms * 1.08)
+    #expect(abs(audio.windows[4].rms - audio.windows[0].rms) < 0.005)
+    #expect(try Data(contentsOf: URL(fileURLWithPath: seed.outputPath)) == sourceBefore)
+  }
+
   @Test(arguments: [1800, 1801, 7200])
   func oneMinuteVerificationRequiresExplicitDurationBudget(_ frameBudget: Int) async throws {
     let root = try directory()
