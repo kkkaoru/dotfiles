@@ -1,6 +1,6 @@
 # Apple Pro Apps — native Swift MCP through Executor
 
-**Machine integration first, UI last.** The Swift source catalog now defines 22 typed
+**Machine integration first, UI last.** The Swift source catalog now defines 34 typed
 MCP tools, including the editing expansion, for the existing Executor Desktop runtime.
 See the verification report for the most recently confirmed deployed catalog. The separate optional
 Peekaboo integration handles UI gaps. There is no new Shell implementation,
@@ -10,6 +10,103 @@ parallel Executor runtime, permanent daemon, model-provider account or API key.
 results, current quality gates and remaining application-specific verification. The user's native-boundary approval is
 scoped in [NATIVE-BOUNDARIES.md](NATIVE-BOUNDARIES.md); it does not waive quality
 checks. Registration is not production sign-off.
+
+## Replay editing development (not yet deployed)
+
+See [REPLAY-EDITING-PLAN.md](REPLAY-EDITING-PLAN.md). The working source extends
+`video.masks` with optional `blurRadius` (1–64 output pixels) and paired
+`startSeconds` / `endSeconds` (half-open output-time intervals). Missing radius
+retains black concealment; missing times retain whole-output application. Blur is
+blended by the existing opacity and cropped to the requested rectangle before new
+titles/captions. It does not guarantee unreadability or reconstruct the background.
+The existing eight-mask and bounded-render limits remain unchanged. Full tests,
+per-file coverage, sanitizer checks, release deployment and real 60/90-second
+acceptance must pass before this becomes a verified deployed feature. Reference
+BGM removal, speech-aware cutting and full-replay orchestration remain planned,
+not implemented by this mask change.
+
+## Motion animation compositing prototype
+
+The deployed recipe adds optional `additionalVideo`: up to 16 output-timed,
+video-only placements with selection/rate, geometry and opacity. Later entries
+are on top; alpha is composited, while opaque sources cover the base. Layer audio
+is ignored and global effects run afterward. This is intended to combine a
+Motion-rendered animation with native AVFoundation editing, not to represent an
+AVFoundation timeline as a Motion project. All 230 tests, 37 per-file coverage gates,
+separate full sanitizers and release verification passed. Real 60/90-second
+**diagnostic opaque-band** composites fully decoded and passed selected temporal,
+audio and source-control checks. Synthetic ProRes alpha compositing passed, but
+actual Motion-to-ProRes export failed. Template text is unchanged; experimental
+Motion copy-edit authorization is pending. This is not finished animation-editing
+acceptance. See [MOTION-NATIVE-PLAN.md](MOTION-NATIVE-PLAN.md).
+
+## Follow-up deployment boundary
+
+The verified deployment has **26 tools**, adding `audio_cue_track` and local
+`video_text_recognize` to caption rendering and on-device transcription. The latest
+feature gate passed **179 tests / 32 suites**, all 31 production-file gates and
+separate full sanitizers. Real decorated 60/90-second outputs were decoded fully,
+with audio, caption boundaries, SE/control windows and source-preservation checks.
+Recognition remains unreviewed; an explicit evaluation records disagreements, not
+a fabricated accuracy score. Executor-hosted permissions now pass. An unchanged
+Motion template has rendered through Compressor CLI; edited TikTok animation
+acceptance remains pending (see [MOTION-NATIVE-PLAN.md](MOTION-NATIVE-PLAN.md)).
+See [CAPTION-DECORATION-PLAN.md](CAPTION-DECORATION-PLAN.md) and
+[CAPTION-DECORATION-VERIFICATION.md](CAPTION-DECORATION-VERIFICATION.md).
+
+- `video.captions`: up to 120 ordered/nonoverlapping `{text,startSeconds,endSeconds}`
+  output-time cues, with half-open intervals. Text is automatically wrapped, white
+  and bold on a translucent bottom box; overflow is refused. Minimum canvas 160×90.
+  Static titles and captions share a 16-megapixel aggregate bitmap limit and the
+  existing effects pass. `video.captionStyle` adds a black expanded-alpha outline
+  (0–6px), box opacity (0–1), optional font size (16–64px) and bottom margin. Text
+  must fit above the selected margin. `video.masks` supplies up to eight black
+  rectangles in top-left output pixels, applied before text, with opacity 0–1.
+  Concealment does not reconstruct the original background. Cues are supplied
+  text, not automatic recognition.
+- `audio_transcribe`: local M4A/WAV/AIFF/CAF up to 60 seconds, macOS 26+, explicit
+  locale and already-installed SpeechTranscriber assets. It returns final phrases,
+  approximate times, `onDevice: true` and `humanReviewed: false`. No download,
+  microphone, cloud fallback, speaker identification or forced word alignment.
+- `audio_measure.maximumDurationSeconds`: opt-in up to 120 seconds; omission
+  retains 30 seconds, with fixed PCM byte/window and subprocess limits.
+
+`installedLocales` alone does not prove app-scoped readiness. After user-approved
+bootstrap installation, a separate application's Japanese status still reported
+`supported` until that app reserved the locale. Use `speech_locale_reserve` only
+with approval for the selected locale; it retains existing reservations and never
+downloads/releases/evicts. Check `readyForTranscription`, then call `audio_transcribe`.
+Missing assets still need separately approved setup; creating an
+`assetInstallationRequest` can itself reserve locales and is not read-only.
+
+Apple references: [SpeechAnalyzer](https://developer.apple.com/documentation/speech/speechanalyzer),
+[privacy](https://developer.apple.com/documentation/speech/asking-permission-to-use-speech-recognition),
+[asset requests](https://developer.apple.com/documentation/speech/assetinventory/assetinstallationrequest(supporting:)).
+
+## Motion text and local Whisper update
+
+The current catalog adds `motion_text_inspect`, `motion_text_copy` and
+`audio_transcribe_whisper`. Discover/describe them through Executor before use.
+Motion text copying is source-SHA-bound and updates the text, character objects
+and style-run length together in a new file. The deliberately narrow adapter
+supports observed ozml 4.0, single-style, neutral-kerning, single-line BMP text;
+unsupported rich formatting and non-BMP text fail rather than being flattened.
+It does not generate arbitrary scene factories, animate parameters or prove a render.
+
+Whisper uses explicit installed local Core ML/tokenizer directories, no download
+or cloud fallback, and bounded disposable-child inference. Native Float alignment
+timestamps are recovered as integer 20-ms ticks, avoiding CMTime truncation of
+values such as 0.9. Speech accuracy remains unreviewed.
+
+The current update passed 274 tests / 59 suites, strict format/warnings, separate
+full TSan and ASan, restored normal coverage for all 47 production files (minimum
+95.238% lines/functions), and release build in verification job 216. No runtime
+`warning:` messages were found in that job. These gates are separate from actual
+media acceptance. Executor discovery confirmed all three tools afterward.
+A same-length Japanese Motion copy rendered via the official Compressor CLI and
+fully decoded (180 frames); different-length adapter and real Whisper comparisons
+are ongoing. One-minute studies and complete new captioned replay output remain
+unfinished. See the Motion/Whisper plans for the latest artifact evidence.
 
 ## Build / register
 
@@ -64,7 +161,11 @@ The native release binary must still be built for each Mac's architecture.
 | Tools | Implementation | Important limits |
 |---|---|---|
 | `media_edit_plan`, `media_edit`, `media_project_read` | Typed recipes, AVFoundation timeline rendering and reusable project sidecars | Native media editing, not proprietary editor timeline mutation |
-| `media_verify_video` | Full video decode to end-of-stream | ≤30 seconds / 1800 frames; does not verify audio or every effect |
+| `audio_cue_track` | Local synthesized 16kHz mono PCM16 WAV | New private output, ≤120s/120 nonoverlapping 80ms cues, peak setting ≤0.25; mix with headroom |
+| `video_text_recognize` | Local Vision Japanese/English OCR | 1–8 frames, ≤64 lines/frame, ≤32KiB text; actual times and bounded crop-mapped rectangles; not ground truth |
+| `speech_locale_reserve` | Explicit app-scoped Speech locale reservation | Requires approval; no downloads, release or eviction; returns readiness |
+| `audio_transcribe` | On-device SpeechAnalyzer/SpeechTranscriber, installed locale only | macOS 26+, ≤60s audio file, approximate phrases; no download/cloud fallback or human-review claim |
+| `media_verify_video` | Full video decode to end-of-stream | Defaults to 30s/1800 frames; explicit budgets up to 120s/7200; not audio or every effect |
 | `audio_measure` | Native conversion and bounded PCM analysis | Mono PCM16/16000 Hz; RMS/peak/zero crossings, not per-channel/LUFS/pitch proof |
 | `video_frame_measure` | Managed CoreImage region RGB averages | 1–8 samples, display-oriented top-left pixels; selected-frame evidence only |
 | `media_inspect` | AVFoundation metadata and first-frame BGRA decode in a deadline-limited child | Scalars only, no playback/capture; not full-stream or editor import validation |
@@ -184,6 +285,18 @@ System Audio Recording and Accessibility to the reported host; keyboard/physical
 pointer delivery also needs Event Synthesizing. Never manipulate TCC storage or
 automate consent. Do not kill other users' Peekaboo hosts. Screenshots and inline
 base64 results must not be committed or dumped unbounded into logs.
+
+## Approved Demucs model development
+
+The current native Demucs integration tests require `DEMUCS_TEST_MODEL` to point
+to an explicitly approved, checksum-verified compiled `.mlmodelc` directory.
+They never download or install model assets and fail clearly when the fixture is
+absent; there is no skip or fallback. The approved archive SHA-256 is
+`0fbb941e15a5b2fa425d14fe630ed4c14b6dee72780c1f5b2b05f58803bce5f7`.
+Despite its F32 filename, the inspected model uses Float16 spectral/waveform
+inputs and outputs; the native adapter validates the actual fixed contract and
+uses CPU-only inference. Models and private sample media must not be committed.
+This is under development, not yet a verified real-audio separation feature.
 
 ## Quality checks
 

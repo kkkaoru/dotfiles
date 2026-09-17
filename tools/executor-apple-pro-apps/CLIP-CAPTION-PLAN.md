@@ -43,5 +43,28 @@ per-production-file line/function coverage >=95%, separate TSan/ASan and restore
 normal instrumentation. Refresh and describe affected Executor tools before real
 calls. Inspect structured envelopes/artifacts rather than tmux status alone.
 
-Current blocker: the 2026-09-14 recheck still reports Accessibility and Event
-Synthesizing not granted to the Executor-hosted UI path; Screen Recording is granted.
+## Current result and blockers
+
+- The real 60-second three-source MP4 is created, with full 1800-frame decode,
+  unchanged input hashes and source/region comparisons at both joins. The Movies
+  root index links its source-range README.
+- A different VRChat recording was transcribed locally (12-second excerpt, two
+  unreviewed phrases) and rendered with captions in a 14-second contextual output.
+  Full 420-frame decode, timed region/control comparisons, 224,000-sample audio
+  measurements and unchanged source/output hashes passed. Raw ASR, mapped cues and
+  SRT are retained privately; words were not corrected or invented.
+- Timed captions and opt-in 120-second audio measurement are deployed. Audio's
+  default stays at 30 seconds; the real minute output measured 960,000 samples.
+- The 24-tool release passed 155 tests / 27 suites, all 30 per-file gates and separate
+  full sanitizers with normal instrumentation restored. Earlier failures remain
+  documented in VERIFICATION.md; they were resolved, not skipped.
+- User-approved Japanese bootstrap setup completed. Readiness is app-scoped:
+  separate executables still needed their own Japanese reservation. The explicit
+  mutating `speech_locale_reserve` tool prepares that binding, without downloading,
+  eviction or release. Executor confirmed readiness before real recognition.
+  The read-only transcription tool never implicitly reserves/downloads. Unreserved
+  locales are rejected without mutation; existing reservations remain intact.
+- Executor-hosted Accessibility and Event Synthesizing are still not granted;
+  Screen Recording is granted. Motion authoring/rendering remains blocked.
+
+See VERIFICATION.md for the exact full/focused test results and coverage scope.

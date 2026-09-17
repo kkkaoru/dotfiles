@@ -1,10 +1,97 @@
 # Verification status — 2026-09-14
 
+## Latest decorated 60/90-second deliverables
+
+Both real 720×1280 outputs are rendered and verified: **1800/2700 frames**,
+**960,000/1,440,000 mono samples**, outlined/positioned captions over an opaque
+source-subtitle mask, and 5/8 onset SEs. Selected boundary-frame OCR, black mask/gap
+regions, upper source/control comparisons and hashes passed. ASR is explicitly
+unreviewed; contextual re-recognition and source OCR expose unresolved names and
+phrases. No accuracy percentage or human-listening sign-off is claimed.
+
+The 26-tool feature release passed **179 tests / 32 suites**, 31 file gates and
+full separate sanitizers. See [CAPTION-DECORATION-VERIFICATION.md](CAPTION-DECORATION-VERIFICATION.md)
+for rules review, commands, limits and the final unchanged-cap consolidation audit.
+Private viewing indexes include both videos, raw recognition, SRT and evaluation.
+
+## Earlier verified transcription follow-up
+
+The native **24-tool user/default release** passed **155 test functions / 27 suites**,
+all **30 production-file** gates (minimum 95.24% lines / 96.55% functions), separate
+full TSan/ASan runs, restored full normal instrumentation, strict formatting,
+warnings-as-errors release build and Executor refresh. No source exclusions or
+failing-test waivers were added. Discovery/schema inspection preceded real calls.
+
+After explicit user approval, Apple's setup request prepared Japanese assets.
+Readiness differed across applications: a supported locale must also be reserved
+by the calling app. A separate mutating `speech_locale_reserve` tool now performs
+that approved app-scoped reservation, without download or eviction. Read-only
+`audio_transcribe` never reserves/downloads implicitly. Tests prove recognition,
+idempotent preparation and rejection of an unreserved alternative without reserving it.
+
+Executor transcribed a distinct 12-second source excerpt into two unreviewed phrases
+and rendered a 14-second contextual video with captions during [1,13). It decoded
+all **420 frames**. At 0.5/1/4/9/13/13.5 seconds, matching-time comparisons against
+a caption-free control found bottom-region average RGB differences of 3–5/255
+while visible, and at most about 1/255 outside the interval and in the central
+control region. This is not full-pixel or OCR verification. Both audio tracks had
+224,000 mono samples; RMS differed by about 1e-9. Source/output hashes were unchanged.
+Original ASR JSON, mapped cues and SRT are retained privately with the viewing output;
+text is uncorrected, timing approximate, and the approximately 23.5ms container tail
+is clipped to the original 12-second selection before adding the context offset.
+
+The real one-minute edit additionally yielded **960,000 mono samples**, RMS 0.18689,
+with nonzero join-window RMS. Both this and the caption output peak at 1; no absence
+of clipping, perceptual fidelity or per-channel validation is claimed.
+
+**Motion animation remains unfinished:** the latest Executor-hosted checks still
+denied Accessibility and Event Synthesizing. Chat approval does not grant OS consent.
+No Motion animation or proprietary-app GUI sign-off is claimed.
+
+## Historical checkpoint: before approved Speech preparation (superseded)
+
+The following records the earlier blocked state, not the current deployment.
+
+The deployed 22-tool release subsequently passed **129 tests / 23 suites**, all
+28 production-file gates and separate sanitizers for explicit long-video decode
+budgets (default 30s/1800 frames, opt-in up to 120s/7200). A real three-source
+60-second, 720×1280 output decoded all **1800 frames**; all three source hashes
+matched. At 19.9/20.1/39.9/40.1 seconds, whole-frame and central-region measurements
+matched the corresponding source times, with maximum average RGB difference about
+2/255. This is region agreement, not exact pixel identity. Audio-wide measurement
+of the real one-minute output remains pending deployment.
+
+**New Speech source is not deployed or verified complete.** Nine transcript/lifecycle
+tests passed, but native Japanese recognition failed its installed-asset guard.
+Both SpeechTranscriber and DictationTranscriber report AssetInventory `supported`,
+not `installed`, despite their installedLocales listings containing Japanese.
+No download/reservation was performed and the failing test was not skipped or
+weakened. Further model preparation needs user permission. The source catalog
+currently includes a pending 23rd `audio_transcribe` tool; the deployed catalog is
+still 22. Timed captions and explicit long-audio measurement are now implemented,
+but remain undeployed with the pending Speech changes. The follow-up full run had
+**153 test functions / 27 suites and two failures**, both from the Speech asset guard.
+Failed-run raw LLVM profiles were merged explicitly (SwiftPM did not create its
+usual merged profile). All production files except `SpeechProbe.swift` meet the
+95% line/function gate; that file has **61.43% lines / 100% functions** because
+recognition is blocked. No source was excluded to conceal it.
+
+The **38 focused tests / 8 suites** for captions, long audio, schema round-trips,
+Speech lifecycle and model-independent native failure paths passed separate TSan
+and ASan runs. Normal instrumentation was restored with the same focused set.
+These are not a replacement for the failing full suite. Caption tests verify
+visibility at the exact start, absence at the exact end, overflow refusal and
+preserved audio; a 60-second PCM fixture yields 960,000 samples. Motion GUI
+permissions still fail. No recognition asset reservation/download was performed.
+
+The evidence and plan are separate from the earlier completed slice below; see
+`CLIP-CAPTION-PLAN.md`. Do not apply its older counts to the pending source changes.
+
 **Native editing/measurement slice verified; proprietary-app GUI integration is
 not signed off.** Do not conflate export, decoded measurements, DTD validity,
 Open Document delivery and completed editor import. No quality gate was waived.
 
-## Current release and quality gates
+## Earlier native-editing release and quality gates
 
 - Swift 6.3.3, Swift 6 language mode, macOS 15+ deployment; MCP SDK 0.12.1.
 - Executor's refreshed **user/default** native connection exposes **22 tools**.
