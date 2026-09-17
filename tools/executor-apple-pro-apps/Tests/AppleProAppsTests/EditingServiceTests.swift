@@ -47,6 +47,23 @@ struct EditingServiceTests {
     #expect(result.isError == (end > 1))
   }
 
+  @Test func captionProjectionIsReadOnlyAndDoesNotClaimWordAlignment() async throws {
+    let request = CaptionProjectionRequest(
+      sourceCaptions: [
+        .init(text: "字幕", startSeconds: 0, endSeconds: 4)
+      ], retainedSpans: [.init(startSeconds: 1, endSeconds: 3)], maximumCharacters: 24)
+    let arguments = try #require(try Value(request).objectValue)
+    let result = await NativeService().call(.init(name: "caption_cut_plan", arguments: arguments))
+    #expect(result.isError == false)
+    let value = try #require(result.structuredContent?.objectValue?["plan"])
+    let plan = try JSONDecoder().decode(
+      CaptionProjectionResult.self, from: JSONEncoder().encode(value))
+    #expect(plan.captions.count == 1)
+    #expect(plan.captions.first?.startSeconds == 0)
+    #expect(plan.captions.first?.endSeconds == 2)
+    #expect(plan.timingIsEstimated)
+  }
+
   @Test func speechPlanningPreservesProvidedSpanVerificationBoundary() async throws {
     let request = SpeechCutRequest(
       sourceDurationSeconds: 10,

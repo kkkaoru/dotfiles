@@ -28,6 +28,11 @@ extension NativeService {
     render: @Sendable (String) async throws -> EditRenderResult
   ) async throws -> CallTool.Result {
     switch name {
+    case "caption_cut_plan":
+      let request = try decode(CaptionProjectionRequest.self, arguments)
+      return response([
+        "plan": try Value(CaptionProjection.make(request)), "sourceFilesValidated": .bool(false),
+      ])
     case "speech_cut_plan":
       let request = try decode(SpeechCutRequest.self, arguments)
       return response([

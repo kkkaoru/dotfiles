@@ -90,6 +90,21 @@ extension ToolSpec {
 
   static let editing: [ToolSpec] = [
     .init(
+      name: "caption_cut_plan",
+      description:
+        "Split supplied source captions into bounded text and project them through explicit retained source spans. Source captions must be ordered; overlapping time is clipped and counted, not a correction of duplicated or incorrect ASR words. Character-proportional subcue timing is estimated, not word alignment. Up to 5000 source captions of at most 2048 characters, 3000 ordered nonoverlapping cuts, maximumCharacters 8–80; fixed computation/output budgets. Returns output captions, duration and omission/overlap counts with humanReviewed:false and timingIsEstimated:true. No file access, render or source writes.",
+      properties: [
+        "sourceCaptions": array(
+          object(
+            ["text": string(maximum: 8192), "startSeconds": number, "endSeconds": number],
+            ["text", "startSeconds", "endSeconds"]), maximum: 5000),
+        "retainedSpans": array(
+          object(
+            ["startSeconds": number, "endSeconds": number],
+            ["startSeconds", "endSeconds"]), maximum: 3000),
+        "maximumCharacters": integer(8, 80),
+      ], required: ["sourceCaptions", "retainedSpans", "maximumCharacters"], readOnly: true),
+    .init(
       name: "speech_cut_plan",
       description:
         "Build a cut plan from explicit ordered source-time spans, not automatic speech detection. Pad each span by paddingSeconds (0–2), clamp to source duration (up to 21600 seconds), merge overlaps and interior gaps no larger than minimumRemovedGapSeconds (0–5). Leading/trailing gaps outside padding are removed independently. Returns retained source/output intervals and removed spans, with speechVerified:false. Empty input is refused rather than deleting the entire video. At most 30000 spans. No file access, render, frame quantization or source writes; clients must map captions and quantize cuts before export.",
