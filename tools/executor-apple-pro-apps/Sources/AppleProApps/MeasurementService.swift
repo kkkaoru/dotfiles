@@ -5,6 +5,19 @@ import ProAppsCore
 extension ToolSpec {
   static let measurements: [ToolSpec] = [
     .init(
+      name: "audio_cue_track",
+      description:
+        "Generate one local mono PCM16/16kHz WAV track of up to 120 seconds with up to 120 ordered, nonoverlapping caption-onset sounds. Each sound is an 80ms 880Hz sine with a smooth envelope, gain 0–0.25. Output seconds round to PCM samples. No playback, recording or downloaded assets. Creates a private edit directory and cue-request.json without replacing files. Use one additionalAudio layer to mix it with source voice; allow headroom. This is sound generation, not audio measurement.",
+      properties: [
+        "outputDirectory": string(), "outputName": string(maximum: 180),
+        "track": object(
+          [
+            "durationSeconds": number, "gain": number,
+            "onsetSeconds": array(number, maximum: CueSound.maximumCues, minimum: 0),
+          ], ["durationSeconds", "gain", "onsetSeconds"]),
+      ],
+      required: ["outputDirectory", "outputName", "track"], readOnly: false),
+    .init(
       name: "media_verify_video",
       description:
         "Decode every video frame in a local clip. Defaults to 30 seconds/1800 frames; longer verification requires explicit maximumDurationSeconds (up to 120) and, if needed, maximumFrames (up to 7200). End-of-stream required. Audio, visual effects and editor import are not verified. Deadline-limited offline child; no playback or source writes.",
@@ -72,6 +85,8 @@ extension NativeService {
           maximumFrames: input.maximumFrames ?? MediaProbe.defaultVerificationFrames,
           maximumDurationSeconds: input.maximumDurationSeconds
             ?? MediaProbe.defaultVerificationSeconds))
+    case "audio_cue_track":
+      measured = try createCueTrack(arguments)
     case "audio_measure":
       struct Input: Decodable {
         let path: String
@@ -95,6 +110,34 @@ extension NativeService {
       throw ProAppsError.invalid("Unknown measurement operation")
     }
     return String(decoding: try JSONEncoder().encode(measured), as: UTF8.self)
+  }
+
+  private func createCueTrack(_ arguments: Value) throws -> Value {
+    struct Input: Decodable {
+      let outputDirectory: String
+      let outputName: String
+      let track: CueSound
+    }
+    let input = try decode(Input.self, arguments)
+    guard URL(fileURLWithPath: input.outputName).pathExtension.lowercased() == "wav" else {
+      throw ProAppsError.invalid("Cue track output requires a WAV extension")
+    }
+    let wave = try input.track.wave()
+    let output = try Files.reserveOutput(
+      directory: input.outputDirectory, name: input.outputName, kind: .edit)
+    do {
+      let project = output.deletingLastPathComponent().appendingPathComponent("cue-request.json")
+      _ = try writeCueArtifact(JSONEncoder().encode(input.track), to: project.path)
+      try Task.checkCancellation()
+      _ = try writeCueArtifact(wave, to: output.path)
+      return .object([
+        "outputPath": .string(output.path), "projectPath": .string(project.path),
+        "cueCount": .int(input.track.onsetSeconds.count), "generatedTone": .bool(true),
+      ])
+    } catch {
+      Cleanup.perform { try FileManager.default.removeItem(at: output.deletingLastPathComponent()) }
+      throw error
+    }
   }
 
   func measurement(

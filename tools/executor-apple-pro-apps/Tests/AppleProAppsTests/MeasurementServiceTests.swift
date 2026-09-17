@@ -108,6 +108,81 @@ struct MeasurementServiceTests {
     }
   }
 
+  @Test func cueTrackUsesTheNativeCLIAndCreatesOnlyNewOutputs() async throws {
+    let request = try Files.reserveOutput(
+      directory: FileManager.default.temporaryDirectory.path, name: "cue-input.json", kind: .edit)
+    let root = request.deletingLastPathComponent()
+    defer { do { try FileManager.default.removeItem(at: root) } catch { Issue.record(error) } }
+    let arguments: [String: Value] = [
+      "outputDirectory": .string(root.path), "outputName": .string("cue.wav"),
+      "track": .object([
+        "durationSeconds": .int(1), "onsetSeconds": .array([.double(0.25)]), "gain": .double(0.12),
+      ]),
+    ]
+    // XCTest's Bundle.main is the test runner, not the shipped command. Inject
+    // the compiled CLI boundary while retaining real serialization and dispatch.
+    let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+      .deletingLastPathComponent().deletingLastPathComponent()
+    let binary = package.appendingPathComponent(".build/debug/apple-pro-apps")
+    var environment = ProcessInfo.processInfo.environment
+    environment["LLVM_PROFILE_FILE"] =
+      package.appendingPathComponent(".build/debug/codecov/cue-%p-%m.profraw").path
+    let childEnvironment = environment
+    var interfaces = NativeInterfaces()
+    interfaces.measureMedia = { name, path in
+      let process = try await Runner.run(
+        binary, ["measure-media", name, path], environment: childEnvironment)
+      guard process.status == 0 else { throw ProAppsError.commandFailed(process.status) }
+      return try JSONDecoder().decode(Value.self, from: Data(process.stdout.utf8))
+    }
+    let result = await NativeService(interfaces: interfaces).call(
+      .init(name: "audio_cue_track", arguments: arguments))
+    try #require(result.isError != true)
+    let output = try #require(
+      result.structuredContent?.objectValue?["measurement"]?.objectValue?["outputPath"]?.stringValue
+    )
+    let measured = try PCMMeasurement.analyze(Files.read(URL(fileURLWithPath: output)), windows: [])
+    #expect(measured.whole.frames == 16000)
+    #expect(measured.whole.rms > 0)
+    #expect(output.hasPrefix(root.path + "/edit-"))
+    let spec = try #require(ToolSpec.all.first { $0.name == "audio_cue_track" })
+    #expect(!spec.readOnly)
+    var bad = arguments
+    bad["outputName"] = .string("bad.mp4")
+    _ = try Files.writeNew(
+      JSONEncoder().encode(Value.object(bad)), to: request.path, extensions: ["json"])
+    await #expect(throws: ProAppsError.self) {
+      try await NativeService().measureLocalFile(name: "audio_cue_track", path: request.path)
+    }
+  }
+
+  @Test func cuePublicationFailureRemovesItsDirectoryAndRetainsTheError() async throws {
+    let request = try Files.reserveOutput(
+      directory: FileManager.default.temporaryDirectory.path, name: "cue-input.json", kind: .edit)
+    let root = request.deletingLastPathComponent()
+    defer { do { try FileManager.default.removeItem(at: root) } catch { Issue.record(error) } }
+    let arguments: Value = .object([
+      "outputDirectory": .string(root.path), "outputName": .string("cue.wav"),
+      "track": .object([
+        "durationSeconds": .int(1), "onsetSeconds": .array([.double(0.25)]), "gain": .double(0.12),
+      ]),
+    ])
+    _ = try Files.writeNew(JSONEncoder().encode(arguments), to: request.path, extensions: ["json"])
+    var interfaces = NativeInterfaces()
+    interfaces.writeCueArtifact = { data, path in
+      if URL(fileURLWithPath: path).pathExtension == "wav" { throw ProAppsError.commandFailed(42) }
+      return try Files.writeNew(data, to: path, extensions: ["json"])
+    }
+    do {
+      _ = try await NativeService(interfaces: interfaces).measureLocalFile(
+        name: "audio_cue_track", path: request.path)
+      Issue.record("Expected the simulated audio publication failure")
+    } catch ProAppsError.commandFailed(let code) {
+      #expect(code == 42)
+    }
+    #expect(try FileManager.default.contentsOfDirectory(atPath: root.path) == ["cue-input.json"])
+  }
+
   @Test func malformedCLIAndUnknownOperationFailClosed() async {
     #expect(throws: (any Error).self) { try Command.parse(["measure-media"]) }
     await #expect(throws: (any Error).self) {

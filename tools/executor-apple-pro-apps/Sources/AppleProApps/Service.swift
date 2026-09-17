@@ -5,6 +5,9 @@ import ProAppsCore
 
 /// Explicit framework boundaries keep tests away from real projects, sound and jobs.
 struct NativeInterfaces: Sendable {
+  var writeCueArtifact: @Sendable (Data, String) throws -> URL = { data, path in
+    try Files.writeNew(data, to: path, extensions: ["json", "wav"])
+  }
   var validateFCPXML: @Sendable (String, String?) async throws -> FCPXMLValidation = {
     path, bundleID in
     let app = try await Applications.resolve(.finalCutPro, bundleID: bundleID)
@@ -101,6 +104,10 @@ actor NativeService {
     }
   }
 
+  func writeCueArtifact(_ data: Data, to path: String) throws -> URL {
+    try interfaces.writeCueArtifact(data, path)
+  }
+
   func decode<T: Decodable>(_ type: T.Type, _ value: Value) throws -> T {
     try JSONDecoder().decode(type, from: JSONEncoder().encode(value))
   }
@@ -177,7 +184,7 @@ actor NativeService {
         ]),
         "guiAutomation": .bool(false), "allOperationsGuaranteed": .bool(false),
       ])
-    case "media_verify_video", "audio_measure", "video_frame_measure":
+    case "media_verify_video", "audio_measure", "video_frame_measure", "audio_cue_track":
       return try await measurement(name, args, execute: interfaces.measureMedia)
     case "media_edit_plan", "media_edit", "media_project_read":
       return try await editing(name, args, render: interfaces.editMedia)
