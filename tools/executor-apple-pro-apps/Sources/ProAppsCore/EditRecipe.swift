@@ -8,15 +8,18 @@ public struct EditRecipe: Codable, Sendable {
   public let video: EditVideoSettings?
   public let additionalAudio: [EditAudioLayer]?
   public let muteOriginalAudio: Bool?
+  public let additionalVideo: [EditVideoLayer]?
 
   public init(
     clips: [EditClip], video: EditVideoSettings? = nil,
-    additionalAudio: [EditAudioLayer]? = nil, muteOriginalAudio: Bool? = nil
+    additionalAudio: [EditAudioLayer]? = nil, muteOriginalAudio: Bool? = nil,
+    additionalVideo: [EditVideoLayer]? = nil
   ) {
     self.clips = clips
     self.video = video
     self.additionalAudio = additionalAudio
     self.muteOriginalAudio = muteOriginalAudio
+    self.additionalVideo = additionalVideo
   }
 }
 

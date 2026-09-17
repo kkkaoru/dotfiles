@@ -216,34 +216,14 @@ public actor NativeEditor {
       let clip = recipe.clips[span.clipIndex]
       let asset = try await load(clip.sourcePath, selection: clip.selection)
       if let canvas = recipe.video {
-        let video = try await asset.loadTracks(withMediaType: .video)
-        guard let source = video.first else {
-          throw ProAppsError.invalid("Video clip has no video track")
-        }
-        let destination = try await insert(
-          source, selection: clip.selection, offset: span.startSeconds, into: composition,
-          timelineEnd: plan.durationSeconds)
-        destination.preferredTransform = .identity
-        let size = try await source.load(.naturalSize)
-        let preferred = try await source.load(.preferredTransform)
-        let geometry = try EditTransform.make(
-          naturalSize: size, preferred: preferred, geometry: clip.geometry, canvas: canvas)
-        let layer = AVMutableVideoCompositionLayerInstruction(assetTrack: destination)
-        layer.setTransform(geometry.transform, at: time(span.startSeconds))
-        layer.setCropRectangle(geometry.sourceCrop, at: time(span.startSeconds))
-        if span.transitionInSeconds > 0 {
-          // Incoming-over-opaque-outgoing avoids the dark dip caused by fading
-          // both alpha layers simultaneously over the black canvas.
-          layer.setOpacityRamp(
-            fromStartOpacity: 0, toEndOpacity: 1,
-            timeRange: CMTimeRange(
-              start: time(span.startSeconds), duration: time(span.transitionInSeconds)))
-        }
         videoLayers.append(
-          VideoLayer(
-            range: CMTimeRange(
-              start: time(span.startSeconds), duration: time(span.durationSeconds)),
-            instruction: layer))
+          try await videoLayer(
+            asset: asset,
+            placement: EditVideoLayer(
+              sourcePath: clip.sourcePath, selection: clip.selection,
+              offsetSeconds: span.startSeconds, geometry: clip.geometry),
+            canvas: canvas, composition: composition, timelineEnd: plan.durationSeconds,
+            transition: span.transitionInSeconds))
       }
       let audio = try await asset.loadTracks(withMediaType: .audio)
       if let source = audio.first {
@@ -256,6 +236,16 @@ public actor NativeEditor {
             duration: span.durationSeconds))
       } else if recipe.muteOriginalAudio != true && (plan.audioOnly || clip.audio != nil) {
         throw ProAppsError.invalid("Requested clip audio is missing")
+      }
+    }
+    if let canvas = recipe.video {
+      for placement in recipe.additionalVideo ?? [] {
+        try Task.checkCancellation()
+        let asset = try await load(placement.sourcePath, selection: placement.selection)
+        videoLayers.append(
+          try await videoLayer(
+            asset: asset, placement: placement, canvas: canvas,
+            composition: composition, timelineEnd: plan.durationSeconds, transition: 0))
       }
     }
     for layer in recipe.additionalAudio ?? [] {
@@ -276,6 +266,40 @@ public actor NativeEditor {
     return Prepared(
       composition: composition, instructions: instructions(videoLayers),
       audioParameters: audioParameters)
+  }
+
+  private func videoLayer(
+    asset: AVURLAsset, placement: EditVideoLayer, canvas: EditVideoSettings,
+    composition: AVMutableComposition, timelineEnd: Double, transition: Double
+  ) async throws -> VideoLayer {
+    let tracks = try await asset.loadTracks(withMediaType: .video)
+    guard let source = tracks.first else {
+      throw ProAppsError.invalid("Video clip has no video track")
+    }
+    let destination = try await insert(
+      source, selection: placement.selection, offset: placement.offsetSeconds,
+      into: composition, timelineEnd: timelineEnd)
+    destination.preferredTransform = .identity
+    let size = try await source.load(.naturalSize)
+    let preferred = try await source.load(.preferredTransform)
+    let geometry = try EditTransform.make(
+      naturalSize: size, preferred: preferred, geometry: placement.geometry, canvas: canvas)
+    let start = time(placement.offsetSeconds)
+    let opacity = Float(placement.opacity ?? 1)
+    let instruction = AVMutableVideoCompositionLayerInstruction(assetTrack: destination)
+    instruction.setTransform(geometry.transform, at: start)
+    instruction.setCropRectangle(geometry.sourceCrop, at: start)
+    instruction.setOpacity(opacity, at: start)
+    if transition > 0 {
+      // Fade only the incoming alpha layer, avoiding a dark crossfade dip.
+      instruction.setOpacityRamp(
+        fromStartOpacity: 0, toEndOpacity: opacity,
+        timeRange: CMTimeRange(start: start, duration: time(transition)))
+    }
+    return VideoLayer(
+      range: CMTimeRange(
+        start: start, duration: time(try EditPlan.outputDuration(placement.selection))),
+      instruction: instruction)
   }
 
   private func instructions(_ layers: [VideoLayer]) -> [AVVideoCompositionInstructionProtocol] {

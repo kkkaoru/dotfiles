@@ -17,6 +17,7 @@ public struct EditPlan: Codable, Sendable {
   public static let maximumCaptions = 120
   public static let maximumClips = 60
   public static let maximumAudioLayers = 16
+  public static let maximumVideoLayers = 16
   public static let maximumPixels = 8_294_400
   public static let maximumCanvasDimension = 3840
   public static let maximumFrameRate = 60
@@ -35,6 +36,9 @@ public struct EditPlan: Codable, Sendable {
     guard (1...maximumClips).contains(recipe.clips.count),
       (recipe.additionalAudio?.count ?? 0) <= maximumAudioLayers
     else { throw ProAppsError.invalid("Editing requires 1–60 clips and at most 16 audio layers") }
+    guard (recipe.additionalVideo?.count ?? 0) <= maximumVideoLayers,
+      recipe.video != nil || (recipe.additionalVideo ?? []).isEmpty
+    else { throw ProAppsError.invalid("Additional video requires a canvas and at most 16 layers") }
     if let video = recipe.video { try validate(video) }
     guard
       recipe.video != nil || recipe.muteOriginalAudio != true
@@ -99,6 +103,18 @@ public struct EditPlan: Codable, Sendable {
         layer.offsetSeconds + duration <= cursor + timingTolerance
       else { throw ProAppsError.invalid("Additional audio must fit within the edited timeline") }
       try validate(layer.audio ?? .unity, duration: duration)
+    }
+    for layer in recipe.additionalVideo ?? [] {
+      _ = try Files.absolute(layer.sourcePath)
+      let duration = try outputDuration(layer.selection)
+      let opacity = layer.opacity ?? 1
+      guard layer.offsetSeconds.isFinite, layer.offsetSeconds >= 0,
+        layer.offsetSeconds + duration <= cursor + timingTolerance,
+        opacity.isFinite, (0...1).contains(opacity)
+      else {
+        throw ProAppsError.invalid("Additional video must fit the timeline with opacity 0–1")
+      }
+      if let crop = layer.geometry?.crop { try validate(crop) }
     }
     try validate(recipe.video?.captions ?? [], duration: cursor)
     try validateMaskTimes(recipe.video?.masks ?? [], duration: cursor)
