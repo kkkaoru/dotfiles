@@ -119,6 +119,29 @@ public struct PCMMeasurement: Codable, Sendable {
       windows: measured)
   }
 
+  /// Decode samples only after the shared RIFF validator has accepted the file.
+  /// Bounds, duplicate chunks, PCM encoding and duration are validated by analyze.
+  public static func decodedSamples(_ data: Data) throws -> (sampleRate: Int, samples: [Double]) {
+    let measurement = try analyze(data, windows: [], maximumDurationSeconds: 60)
+    let bytes = [UInt8](data)
+    var offset = 12
+    while tag(bytes, offset) != "data" {
+      let length = integer32(bytes, offset + 4)
+      offset += 8 + length + length % 2
+    }
+    let lower = offset + 8
+    let count = integer32(bytes, offset + 4) / 2
+    var samples: [Double] = []
+    samples.reserveCapacity(count)
+    for index in 0..<count {
+      if index.isMultiple(of: 4096) { try Task.checkCancellation() }
+      let position = lower + 2 * index
+      let bits = UInt16(bytes[position]) | UInt16(bytes[position + 1]) << 8
+      samples.append(Double(Int16(bitPattern: bits)) / 32768)
+    }
+    return (measurement.sampleRate, samples)
+  }
+
   private static func level(_ bytes: [UInt8], pcmStart: Int, frames: Range<Int>, rate: Int)
     -> AudioLevel
   {

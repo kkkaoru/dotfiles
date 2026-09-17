@@ -5,6 +5,19 @@ import ProAppsCore
 extension ToolSpec {
   static let measurements: [ToolSpec] = [
     .init(
+      name: "audio_reference_analyze",
+      description:
+        "Fit an explicitly aligned local reference BGM against source audio with a bounded sample-offset search. Inputs must be prepared mono PCM16 WAVs, equal sample rates, at most 60 seconds and one million samples each. No implicit mixing/resampling, cloud or source writes. referenceStartSample is the center offset inside the reference, searchRadiusSamples scans on both sides; all candidates must fit. At most 16 million sample products. Returns gain, signed normalized correlation and estimated residual RMS; correlation is not proof of voice preservation. Unmatched/silent/excessive-gain inputs fail. Read-only analysis, not an exported separated track.",
+      properties: [
+        "sourcePath": string(), "referencePath": string(),
+        "search": object(
+          [
+            "referenceStartSample": integer(0, ReferenceAudio.maximumSamples),
+            "searchRadiusSamples": integer(0, ReferenceAudio.maximumSamples),
+            "minimumCorrelation": number,
+          ], ["referenceStartSample", "searchRadiusSamples", "minimumCorrelation"]),
+      ], required: ["sourcePath", "referencePath", "search"], readOnly: true),
+    .init(
       name: "audio_cue_track",
       description:
         "Generate one local mono PCM16/16kHz WAV track of up to 120 seconds with up to 120 ordered, nonoverlapping caption-onset sounds. Each sound is an 80ms 880Hz sine with a smooth envelope, gain 0–0.25. Output seconds round to PCM samples. No playback, recording or downloaded assets. Creates a private edit directory and cue-request.json without replacing files. Use one additionalAudio layer to mix it with source voice; allow headroom. This is sound generation, not audio measurement.",
@@ -133,6 +146,16 @@ extension NativeService {
         wordTiming: input.wordTiming ?? false, contextualStrings: input.contextualStrings ?? [])
       measured = try await Value(
         SpeechProbe().transcribe(path: input.path, locale: input.locale, options: options))
+    case "audio_reference_analyze":
+      struct Input: Decodable {
+        let sourcePath: String
+        let referencePath: String
+        let search: ReferenceAudioSearch
+      }
+      let input = try decode(Input.self, arguments)
+      measured = try await Value(
+        ReferenceAudioProbe().analyze(
+          sourcePath: input.sourcePath, referencePath: input.referencePath, search: input.search))
     case "audio_measure":
       struct Input: Decodable {
         let path: String
