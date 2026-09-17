@@ -5,6 +5,10 @@ import ProAppsCore
 
 /// Explicit framework boundaries keep tests away from real projects, sound and jobs.
 struct NativeInterfaces: Sendable {
+  static func measurementTimeout(_ name: String) -> Duration {
+    name == "audio_transcribe_whisper" ? .seconds(180) : .seconds(60)
+  }
+
   var writeCueArtifact: @Sendable (Data, String) throws -> URL = { data, path in
     try Files.writeNew(data, to: path, extensions: ["json", "wav"])
   }
@@ -19,7 +23,8 @@ struct NativeInterfaces: Sendable {
     guard let binary = Bundle.main.executableURL else {
       throw ProAppsError.unavailable("Cannot locate the measurement executable")
     }
-    let result = try await Runner.run(binary, ["measure-media", name, path], timeout: .seconds(60))
+    let result = try await Runner.run(
+      binary, ["measure-media", name, path], timeout: measurementTimeout(name))
     guard result.status == 0 else { throw ProAppsError.commandFailed(result.status) }
     return try JSONDecoder().decode(Value.self, from: Data(result.stdout.utf8))
   }
@@ -184,9 +189,10 @@ actor NativeService {
         ]),
         "guiAutomation": .bool(false), "allOperationsGuaranteed": .bool(false),
       ])
-    case "media_verify_video", "audio_measure", "video_frame_measure", "audio_cue_track",
-      "audio_transcribe", "speech_locale_reserve", "video_text_recognize",
-      "audio_reference_analyze", "audio_sound_activity", "audio_separate_vocals":
+    case "media_verify_video", "audio_measure", "video_frame_measure", "audio_transcribe",
+      "audio_reference_analyze", "audio_sound_activity", "audio_separate_vocals",
+      "audio_cue_track", "video_text_recognize",
+      "speech_locale_reserve", "audio_transcribe_whisper":
       return try await measurement(name, args, execute: interfaces.measureMedia)
     case "media_edit_plan", "media_edit", "media_project_read", "speech_cut_plan",
       "caption_cut_plan":

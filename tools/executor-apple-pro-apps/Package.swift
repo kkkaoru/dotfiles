@@ -6,10 +6,13 @@ let package = Package(
   platforms: [.macOS(.v15)],
   products: [.executable(name: "apple-pro-apps", targets: ["AppleProApps"])],
   dependencies: [
-    .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", exact: "0.12.1")
+    .package(url: "https://github.com/modelcontextprotocol/swift-sdk.git", exact: "0.12.1"),
+    .package(url: "https://github.com/argmaxinc/argmax-oss-swift.git", exact: "1.1.0"),
   ],
   targets: [
-    .target(name: "ProAppsCore"),
+    .target(
+      name: "ProAppsCore",
+      dependencies: [.product(name: "WhisperKit", package: "argmax-oss-swift")]),
     .executableTarget(
       name: "AppleProApps",
       dependencies: ["ProAppsCore", .product(name: "MCP", package: "swift-sdk")]

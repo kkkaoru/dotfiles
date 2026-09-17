@@ -56,6 +56,12 @@ extension ToolSpec {
           "maximum": .double(MediaProbe.maximumVerificationSeconds),
         ]),
       ], required: ["path"], readOnly: true),
+    .init(
+      name: "audio_transcribe_whisper",
+      description:
+        "Transcribe up to 60 seconds of an explicit local audio file in Japanese using installed local WhisperKit Core ML and tokenizer directories. Requires macOS 26 for timed lexical caption grouping. No model/tokenizer download, microphone, automatic language detection, previous-text prompt or cloud fallback. Returns unreviewed native word timing; missing lexical timing fails rather than guessing. First model specialization may be slow; a disposable native child has a 180-second hard deadline. No source writes.",
+      properties: ["path": string(), "modelDirectory": string(), "tokenizerDirectory": string()],
+      required: ["path", "modelDirectory", "tokenizerDirectory"], readOnly: true),
     Self(
       name: "speech_locale_reserve",
       description:
@@ -145,6 +151,9 @@ extension NativeService {
             ?? MediaProbe.defaultVerificationSeconds))
     case "audio_cue_track":
       measured = try createCueTrack(arguments)
+    case "audio_transcribe_whisper":
+      let request = try decode(WhisperProbe.Request.self, arguments)
+      measured = try await Value(WhisperProbe.transcribe(request))
     case "speech_locale_reserve":
       struct Input: Decodable { let locale: String }
       let input = try decode(Input.self, arguments)
