@@ -27,6 +27,12 @@ export interface WakeupInput {
   readonly reason: string;
 }
 
+export function requireActiveLoop(continuation: string | undefined, toolName: string): void {
+  if (continuation === undefined) {
+    throw new Error(`${toolName} requires an active /loop tick`);
+  }
+}
+
 export function commandPrompt(prompt: string): string {
   const task: string = prompt.length === 0 ? AUTONOMOUS_PROMPT : prompt;
   return `${SELF_PACED_GUIDANCE}\n\nTask:\n${task}`;

@@ -3,6 +3,10 @@
 A global [pi extension](https://pi.dev/docs/latest/extensions) for continuing work without
 repeated manual prompts.
 
+- `start_loop` lets the agent autonomously define a self-paced loop grounded in the user's established
+  task. It adopts the current turn without injecting or queuing another initial prompt, then uses
+  the same `loop_wakeup`/`loop_complete` decisions and persistence as `/loop`. It refuses empty tasks,
+  existing loops and paused loops. It grants no permissions and must not bypass a paused goal or safe mode.
 - `/loop <prompt>` runs immediately as a self-paced loop. The agent must finish immediately
   actionable work, schedule a useful later tick with `loop_wakeup`, or explicitly stop with
   `loop_complete` only when complete or blocked on user input.
@@ -42,6 +46,18 @@ updates the in-memory schedule and does not need to serialize sibling tools. Pol
 after a command or tool schedules a job and stops when jobs are paused, cleared, or exhausted. Jobs
 are session-scoped and persist across extension reloads and later resume of the same Pi session, but
 do not migrate to an unrelated session.
+
+## Failure safety
+
+Failed or aborted compaction pauses all loop scheduling immediately, including pending and
+self-paced continuations. An assistant error/abort also pauses loops once Pi settles (a successful
+native retry can recover first). Paused state is persisted across reloads. Settled delivery checks
+both pause state and actual idleness; it never treats a failed turn as unfinished successful work.
+Pi first attempts automatic compression and retry, including the effort-manager package's bounded
+and emergency recovery. Successful recovery continues the active loop automatically; no manual
+`/compact`, `continue` or resume is needed. Only failed recovery enters the paused safe mode.
+After that stop, use `/compact` to recover context, then explicitly `/loop resume`; resuming without
+resolving the failure will pause again. Successful manual compression does not resume a paused loop. `/loop pause` also suppresses already-retained continuations.
 
 ## Goal cooperation
 

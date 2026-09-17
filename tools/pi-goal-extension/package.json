@@ -14,6 +14,7 @@
     "format": "biome check --write .",
     "test": "vitest run --coverage",
     "smoke": "bun run smoke.mjs",
+    "smoke:recovery": "bun run recovery-smoke.mjs",
     "check": "bun run tsc && bun run lint && bun run test"
   },
   "dependencies": {

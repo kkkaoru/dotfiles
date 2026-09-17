@@ -38,6 +38,86 @@ function setup() {
   return { host, runtime };
 }
 
+it("adopts an agent-defined goal into the current run and accounts subsequent work", () => {
+  const { runtime } = setup();
+  runtime.begin();
+  runtime.startFromAgent("Verify the user's requested build");
+  runtime.recordTokens(20);
+  runtime.recordTool("read");
+  runtime.end(null);
+  expect(runtime.state).toMatchObject({
+    status: "active",
+    turn: 1,
+    tokensUsed: 20,
+    tokenBudget: null,
+    noProgressTurns: 0,
+  });
+  runtime.update("complete", "Build and tests verified.");
+  expect(runtime.state?.status).toBe("complete");
+});
+
+it("refuses agent replacement or resumption of an unfinished or paused goal", () => {
+  const { runtime } = setup();
+  runtime.startFromAgent("authorized work");
+  expect(() => runtime.startFromAgent("replacement")).toThrow(
+    "unfinished goal",
+  );
+  runtime.pause();
+  expect(() => runtime.startFromAgent("bypass pause")).toThrow(
+    "unfinished goal",
+  );
+  expect(runtime.state?.status).toBe("paused");
+});
+
+it("continues after successful context recovery without requiring manual resume", () => {
+  const { host, runtime } = setup();
+  runtime.start({ objective: "recover", tokenBudget: null });
+  runtime.begin();
+  runtime.end(
+    "Provider error; inspect the original Pi error and explicitly resume.",
+  );
+  runtime.compactionFinished(true);
+  runtime.settled();
+  vi.advanceTimersByTime(5000);
+  expect(runtime.state?.status).toBe("active");
+  expect(host.send).toHaveBeenCalledOnce();
+});
+
+it("enters safe mode after failed recovery and does not retry indefinitely", () => {
+  const { host, runtime } = setup();
+  runtime.start({ objective: "recover", tokenBudget: null });
+  runtime.compactionFinished(false);
+  runtime.settled();
+  runtime.compactionFinished(true);
+  vi.advanceTimersByTime(60_000);
+  expect(runtime.state?.status).toBe("paused");
+  expect(runtime.state?.reason).toMatch(/safe mode/u);
+  expect(host.send).not.toHaveBeenCalled();
+});
+
+it("never resumes manual pauses or creates a goal after successful compaction", () => {
+  const { host, runtime } = setup();
+  runtime.compactionFinished(true);
+  expect(runtime.state).toBeNull();
+  runtime.start({ objective: "recover", tokenBudget: null });
+  runtime.pause();
+  runtime.compactionFinished(true);
+  runtime.settled();
+  vi.advanceTimersByTime(60_000);
+  expect(runtime.state?.status).toBe("paused");
+  expect(host.send).not.toHaveBeenCalled();
+});
+
+it("does not mistake a user abort for a recovered provider error", () => {
+  const { runtime } = setup();
+  runtime.start({ objective: "recover", tokenBudget: null });
+  runtime.begin();
+  runtime.end("Run aborted; only the user can resume the goal.");
+  runtime.compactionFinished(true);
+  runtime.settled();
+  expect(runtime.state?.status).toBe("paused");
+});
+
 it("never invents a goal, refuses implicit replacement and validates edits", () => {
   const { host, runtime } = setup();
   vi.advanceTimersByTime(5000);

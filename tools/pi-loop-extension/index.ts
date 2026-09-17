@@ -1,5 +1,11 @@
 // This TypeScript file is executed with Bun.
 import { type Static, Type, type TSchema } from "typebox";
+import { registerAgentLoop, type StartLoopToolDefinition } from "./src/agent-start.ts";
+import {
+  failedAgentRun,
+  pauseAfterAgentFailure,
+  pauseAfterCompactionFailure,
+} from "./src/compaction-failure.ts";
 import { ActivityProvider, type ActivityBus } from "./src/goal-activity.ts";
 import { LoopRuntime, type LoopContext, type LoopHost } from "./src/runtime.ts";
 import { createLoopState, latestLoopState, type LoopRuntimeState } from "./src/state.ts";
@@ -20,7 +26,13 @@ const completeSchema = Type.Object({
   }),
 }) satisfies TSchema;
 
-type LifecycleEvent = "agent_settled" | "session_compact" | "session_shutdown" | "session_start";
+type LifecycleEvent =
+  | "agent_end"
+  | "agent_settled"
+  | "session_compact"
+  | "session_compact_failed"
+  | "session_shutdown"
+  | "session_start";
 
 interface WakeupToolResult {
   readonly content: readonly [{ readonly text: string; readonly type: "text" }];
@@ -63,7 +75,10 @@ export interface LoopCompleteToolDefinition {
   readonly promptGuidelines: readonly string[];
   readonly promptSnippet: string;
 }
-export type LoopToolDefinition = LoopCompleteToolDefinition | LoopWakeupToolDefinition;
+export type LoopToolDefinition =
+  | LoopCompleteToolDefinition
+  | LoopWakeupToolDefinition
+  | StartLoopToolDefinition;
 
 export interface LoopCommandDefinition {
   readonly description: string;
@@ -92,6 +107,7 @@ function willRetryAfterCompaction(event: unknown): boolean {
 }
 
 function registerLifecycleHandlers(host: LoopExtensionHost, runtime: LoopRuntime): void {
+  const health = { failed: false };
   const activity: ActivityProvider | undefined =
     host.events === undefined
       ? undefined
@@ -123,9 +139,18 @@ function registerLifecycleHandlers(host: LoopExtensionHost, runtime: LoopRuntime
       runtime.continueAfterCompaction(willRetryAfterCompaction(event), context),
     ),
   );
-  host.on("agent_settled", (_event: unknown, context: LoopContext): void =>
-    runtime.deferLifecycleContinuation((): void => runtime.agentSettled(context)),
+  host.on("session_compact_failed", (_event: unknown, context: LoopContext): void =>
+    pauseAfterCompactionFailure(runtime, context),
   );
+  host.on("agent_end", (event: unknown): void => {
+    health.failed = failedAgentRun(event);
+  });
+  host.on("agent_settled", (_event: unknown, context: LoopContext): void => {
+    if (health.failed) {
+      pauseAfterAgentFailure(runtime, context);
+    }
+    runtime.deferLifecycleContinuation((): void => runtime.agentSettled(context));
+  });
   host.on("session_shutdown", (): void => {
     activity?.stop();
     runtime.shutdown();
@@ -197,5 +222,6 @@ export default function loopExtension(host: LoopExtensionHost): void {
     handler: (args: string, context: LoopContext): void => runtime.command(args, context),
   });
 
+  registerAgentLoop(host, runtime);
   registerLifecycleHandlers(host, runtime);
 }

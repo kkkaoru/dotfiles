@@ -93,6 +93,32 @@ function harness(): Harness {
   };
 }
 
+it("lets the agent define a grounded goal but never replace or resume it", async () => {
+  const h: Harness = harness();
+  await h.call("session_start", {});
+  await h.call("agent_start", {});
+  expect(
+    await h.tool("start_goal", { objective: "Verify the user's build" }),
+  ).toMatchObject({
+    details: {
+      goal: {
+        status: "active",
+        objective: "Verify the user's build",
+        tokenBudget: null,
+        turn: 1,
+      },
+    },
+  });
+  await expect(
+    h.tool("start_goal", { objective: "replacement" }),
+  ).rejects.toThrow("unfinished goal");
+  await h.command("pause");
+  await expect(
+    h.tool("start_goal", { objective: "bypass pause" }),
+  ).rejects.toThrow("unfinished goal");
+  await h.call("session_shutdown", {});
+});
+
 it("registers explicit goal commands and tools without creating a goal", async () => {
   const h: Harness = harness();
   await h.command("task");
@@ -232,9 +258,9 @@ it("compaction, blocking UI and pending user input prevent competing delivery", 
   h.context.hasPendingMessages.mockReturnValue(false);
   await h.call("session_compact_failed", {});
   await vi.advanceTimersByTimeAsync(5000);
-  expect(h.pi.sendUserMessage).toHaveBeenCalledTimes(1);
+  expect(h.pi.sendUserMessage).not.toHaveBeenCalled();
   expect(await h.tool("get_goal", {})).toMatchObject({
-    details: { goal: { tokensUsed: 5 } },
+    details: { goal: { tokensUsed: 5, status: "paused" } },
   });
   await h.call("session_shutdown", {});
 });

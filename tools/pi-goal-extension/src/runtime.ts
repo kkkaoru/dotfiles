@@ -49,6 +49,8 @@ const BUSY_ERROR: string = "Agent is already processing a prompt";
 const MAX_STALLED_TURNS: number = 3;
 const CONTROL_TOOLS: ReadonlySet<string> = new Set([
   "get_goal",
+  "start_goal",
+  "start_loop",
   "update_goal",
   "goal_wait",
   "loop_wakeup",
@@ -105,6 +107,12 @@ export class GoalRuntime {
     );
     this.#lastError = null;
     this.#schedule();
+  }
+
+  startFromAgent(objective: string): void {
+    this.start({ objective, tokenBudget: null });
+    // Adopt the current run so its work, audits and subsequent tokens count toward the new goal.
+    if (this.#inRun) this.begin();
   }
 
   pause(): void {
@@ -274,6 +282,19 @@ export class GoalRuntime {
         ? "Three consecutive goal turns ended without tool evidence or a verified wait."
         : goal.reason,
     });
+  }
+
+  compactionFinished(succeeded: boolean): void {
+    if (this.#goal?.status !== "active") return;
+    if (!succeeded) {
+      this.#stopWithReason(
+        "Context recovery failed or was cancelled; safe mode requires explicit resume.",
+      );
+      return;
+    }
+    // Successful compaction recovers a provider error, but not an explicit user abort.
+    if (this.#lastError?.startsWith("Provider error;") === true)
+      this.#lastError = null;
   }
 
   settled(): void {

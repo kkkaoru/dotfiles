@@ -51,6 +51,7 @@ it("registers the loop command, tools, and shutdown handler", () => {
   expect(tools.map((tool: LoopToolDefinition): string => tool.name)).toStrictEqual([
     "loop_wakeup",
     "loop_complete",
+    "start_loop",
   ]);
   const [wakeupTool] = tools;
   expect(wakeupTool?.executionMode).toBe("parallel");

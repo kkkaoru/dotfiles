@@ -271,7 +271,7 @@ describe("LoopRuntime compaction", () => {
       ),
       { deliverAs: "followUp" },
     );
-    expect(notify).toHaveBeenCalledWith("Continuing loop after compaction.", "info");
+    expect(notify).toHaveBeenCalledWith("Continuing unfinished loop work.", "info");
   });
 
   it("does not duplicate continuation when pi retries or a recurring job remains", () => {

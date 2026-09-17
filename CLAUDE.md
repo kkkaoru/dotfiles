@@ -82,7 +82,10 @@ For an active self-paced `/loop`, continue actionable work, schedule a later che
 finish only when complete or blocked on user input.
 
 `/goal <objective>` explicitly starts a persistent goal; `/goal pause`, `resume`, and `clear`
-control its future continuations. Goals defer to existing loop pacing and tmux notifications.
+control its future continuations. Agents may also deliberately use `start_goal` and `start_loop`
+for work grounded in the user's established request, without waiting for slash commands. Reuse
+existing goals/loops, never invent unrelated tasks or permissions, and never bypass a manual pause
+or safe-mode stop by creating another task. Only the user can resume stopped automation. Goals defer to existing loop pacing and tmux notifications.
 Pause/clear do not abort the current turn, stop independent loops, or kill detached jobs. Optional
 `--tokens N` budgets are soft per-agent-run limits, not billing caps or external-agent budgets.
 See `tools/pi-goal-extension/README.md` for completion audits, stall safeguards and restoration.

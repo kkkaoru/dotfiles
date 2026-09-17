@@ -1,6 +1,7 @@
 # pi /goal
 
-An explicitly user-created, session-scoped objective that survives compaction and reload.
+A session-scoped objective, defined by the user or agent from the user's established task,
+that survives compaction and reload.
 Inspired by Codex's `codex-rs/ext/goal` objective/state/continuation design (reference checkout
 `c4017a87`); this is a
 Pi implementation, not a complete port of Codex's TUI, attachments or accounting system.
@@ -22,7 +23,12 @@ Requires Pi 0.85.1 or newer. State validation uses Valibot.
 /goal clear
 ```
 
-- An ordinary conversation never creates a goal. Only `/goal <objective>` does.
+- Startup and ordinary messages do not create goals implicitly. The user can use `/goal <objective>`;
+  the agent can deliberately call `start_goal` when the established request benefits from durable
+  completion tracking. This grants no new permissions and must not invent unrelated work.
+- `start_goal` adopts the current run without submitting a duplicate prompt, creates no token budget,
+  and refuses an existing unfinished/paused/blocked goal. Only the user can resume stopped goals.
+  Agent-defined goals use the same persistence, evidence, accounting and stall safeguards.
 - An unfinished goal cannot be silently replaced. Explicitly edit or clear it first.
 - No token budget is invented. `budget none` explicitly removes an existing limit.
 - Editing the objective or budget leaves the goal paused; resume explicitly. Cancelling the
@@ -35,7 +41,7 @@ Requires Pi 0.85.1 or newer. State validation uses Valibot.
 
 ## Agent tools and stopping
 
-Three small schemas are registered: `get_goal`, `update_goal`, and `goal_wait`. The detailed
+Four small schemas are registered: `start_goal`, `get_goal`, `update_goal`, and `goal_wait`. The detailed
 objective guidance is added only when a goal exists; no additional skills or integration
 catalogs are loaded. `get_goal` can return null; mutations require an active goal.
 
@@ -49,7 +55,11 @@ agent audit; the extension does not independently prove all acceptance criteria.
 
 Goal/control reads and pacing tools alone are not work evidence. Errors, aborts and empty
 assistant responses pause the goal after Pi settles, rather than retrying indefinitely.
-Pi's own retries/compaction may recover first. Only the user can resume a stopped goal.
+Pi's own retries/compaction may recover first: successful automatic context recovery keeps the
+active goal running without manual `/compact`, `continue` or resume. A failed/cancelled compaction
+puts an active goal in safe mode immediately, preventing goal pacing from bypassing a paused loop.
+A failed retry after successful compression also stops automatically. Only the user can resume a
+stopped goal; successful manual compaction never overrides a manual pause or safe-mode stop.
 
 `goal_wait` schedules a justified recheck in 60–3,600 seconds. Prefer existing loop pacing
 or live tmux completion notifications; do not create duplicate timers for the same wait.
@@ -112,7 +122,13 @@ cd tools/pi-goal-extension
 bun install --frozen-lockfile
 bun run check
 bun run smoke
+bun run smoke:recovery
 ```
+
+`smoke:recovery` uses the real Pi SDK with an offline scripted provider to verify agent-created
+`start_goal`/`start_loop`, automatic overflow-to-emergency-compaction-to-task retry, preserved original
+history, summary failure safe mode and exhausted-retry safe mode. It submits no recovery commands
+and checks that no duplicate continuation arrives afterward. Only temporary and in-memory state is used.
 
 `check` runs strict TypeScript, Biome and Vitest coverage (90% minimum). Unit tests mock clocks,
 filesystem/process activity and Pi delivery. Also run `bun run check` in

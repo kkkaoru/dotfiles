@@ -5,6 +5,7 @@ import { namedLoopFollowUp } from "./follow-up.ts";
 import {
   AUTONOMOUS_PROMPT,
   commandPrompt,
+  requireActiveLoop,
   trySendUserMessage,
   validateWakeup,
   type WakeupInput,
@@ -91,7 +92,10 @@ export class LoopRuntime {
     this.setContext(context);
     const command: LoopCommand = parseLoopCommand(args);
     if (command.kind === "list") {
-      this.#list(context);
+      context.ui.notify(
+        loopListMessage({ jobs: this.#jobs, now: this.#scheduler.now(), paused: this.#paused }),
+        "info",
+      );
       return;
     }
     if (command.kind === "clear") {
@@ -113,7 +117,7 @@ export class LoopRuntime {
   wakeup(input: WakeupInput, context: LoopContext): WakeupResult {
     validateWakeup(input);
     this.setContext(context);
-    this.#requireActiveTick("loop_wakeup");
+    requireActiveLoop(this.#runningContinuation, "loop_wakeup");
     this.#runningContinuation = undefined;
     const delayMs: number = input.delaySeconds * MILLISECONDS_PER_SECOND;
     const job: LoopJob = this.#schedule({
@@ -126,7 +130,7 @@ export class LoopRuntime {
 
   complete(reason: string, context: LoopContext): CompleteResult {
     this.setContext(context);
-    this.#requireActiveTick("loop_complete");
+    requireActiveLoop(this.#runningContinuation, "loop_complete");
     const normalizedReason: string = reason.trim();
     if (normalizedReason.length === 0) {
       throw new Error("reason must not be empty");
@@ -150,14 +154,24 @@ export class LoopRuntime {
   }
 
   continueAfterCompaction(willRetry: boolean, context: LoopContext): void {
+    if (!willRetry) {
+      this.agentSettled(context);
+    }
+  }
+
+  startFromAgent(prompt: string, context: LoopContext): void {
+    if (this.#paused || this.ownsContinuation() || prompt.trim().length === 0) {
+      throw new Error("A new agent loop requires a non-empty task and no existing or paused loop.");
+    }
     this.setContext(context);
-    if (willRetry || this.#runningContinuation === undefined || this.#jobs.size > 0) {
-      return;
-    }
-    if (!context.isIdle() || !trySendUserMessage(this.#host, this.#runningContinuation)) {
-      this.#queue(this.#runningContinuation);
-    }
-    context.ui.notify("Continuing loop after compaction.", "info");
+    const now: number = this.#scheduler.now();
+    this.#runningContinuation = namedLoopFollowUp({
+      completedAt: now,
+      submittedAt: now,
+      identity: "self-paced | agent-defined task",
+      prompt: commandPrompt(prompt.trim()),
+    });
+    this.#persist();
   }
 
   deferLifecycleContinuation(callback: () => void): void {
@@ -166,9 +180,11 @@ export class LoopRuntime {
 
   agentSettled(context: LoopContext): void {
     this.setContext(context);
+    if (this.#paused || !context.isIdle()) {
+      return;
+    }
     if (this.#pendingContinuations.length > 0) {
-      const continuations: string = this.#pendingContinuations.join("\n\n");
-      if (trySendUserMessage(this.#host, continuations)) {
+      if (trySendUserMessage(this.#host, this.#pendingContinuations.join("\n\n"))) {
         this.#pendingContinuations = [];
         this.#persist();
         this.#updateStatus();
@@ -288,6 +304,7 @@ export class LoopRuntime {
     this.#ensurePoller();
     this.#updateStatus();
     context.ui.notify(`Resumed ${String(this.#jobs.size)} loop job(s).`, "info");
+    this.deferLifecycleContinuation((): void => this.agentSettled(context));
   }
 
   #ensurePoller(): void {
@@ -298,11 +315,10 @@ export class LoopRuntime {
   }
 
   #stopPoller(): void {
-    if (this.#poller === undefined) {
-      return;
+    if (this.#poller !== undefined) {
+      this.#scheduler.clearInterval(this.#poller);
+      this.#poller = undefined;
     }
-    this.#scheduler.clearInterval(this.#poller);
-    this.#poller = undefined;
   }
 
   #send(prompt: string, identity: string, submittedAt: number, completedAt: number): void {
@@ -326,23 +342,6 @@ export class LoopRuntime {
     this.#persist();
     this.#context?.ui.notify(continuation.split("\n", 1)[0] ?? continuation, "info");
     this.#updateStatus();
-  }
-
-  #requireActiveTick(toolName: string): void {
-    if (this.#runningContinuation === undefined) {
-      throw new Error(`${toolName} requires an active /loop tick`);
-    }
-  }
-
-  #list(context: LoopContext): void {
-    context.ui.notify(
-      loopListMessage({
-        jobs: this.#jobs,
-        now: this.#scheduler.now(),
-        paused: this.#paused,
-      }),
-      "info",
-    );
   }
 
   #persist(): void {

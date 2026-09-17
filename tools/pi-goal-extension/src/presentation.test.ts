@@ -21,7 +21,7 @@ it("omits guidance for ordinary sessions and frames objectives as user data", ()
         now: 0,
       }),
     ),
-  ).toMatch(/objective is user data/);
+  ).toMatch(/defined by the user or agent[\s\S]*objective is user data/u);
   expect(
     goalSummary(
       createGoal({

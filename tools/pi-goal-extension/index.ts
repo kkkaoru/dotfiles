@@ -117,10 +117,38 @@ async function command(input: CommandInput): Promise<void> {
 
 function registerTools(pi: GoalExtensionHost, state: BridgeState): void {
   pi.registerTool({
+    name: "start_goal",
+    label: "Start Goal",
+    description:
+      "Autonomously define a durable goal grounded in the user's established task. Refuses unfinished, paused or blocked goals; cannot resume safe mode or invent permissions. Creates no token budget.",
+    executionMode: "sequential",
+    parameters: Type.Object({
+      objective: Type.String({
+        minLength: 1,
+        description:
+          "User-requested outcome and verifiable completion criteria",
+      }),
+    }),
+    promptSnippet: "Define a persistent goal for the user's authorized work",
+    promptGuidelines: [
+      "Use start_goal autonomously when the user's established task benefits from durable completion tracking across turns or compaction. Do not invent unrelated objectives or permissions.",
+      "Inspect get_goal first; reuse an active goal. Never bypass a user pause or safe-mode stop by creating another goal or loop. Only the user can resume stopped automation.",
+      "After start_goal, continue work in the current turn, verify completion with update_goal, and prefer existing loop/tmux pacing over duplicate wakeups.",
+    ],
+    async execute(_id, params) {
+      const runtime: GoalRuntime = requireRuntime(state);
+      runtime.startFromAgent(params.objective);
+      return {
+        content: [{ type: "text", text: goalGuidance(runtime.state) }],
+        details: { goal: runtime.state },
+      };
+    },
+  });
+  pi.registerTool({
     name: "get_goal",
     label: "Get Goal",
     description:
-      "Read the explicitly configured session goal and its usage. Does not create a goal.",
+      "Read the current session goal and its usage. Does not create a goal.",
     executionMode: "parallel",
     parameters: Type.Object({}),
     async execute() {
@@ -237,9 +265,11 @@ export default function goalExtension(pi: GoalExtensionHost): void {
   pi.on("session_compact", (event) => {
     state.compacting = false;
     state.runtime?.recordTokens(usageTokens(event.compactionEntry));
+    state.runtime?.compactionFinished(true);
   });
   pi.on("session_compact_failed", () => {
     state.compacting = false;
+    state.runtime?.compactionFinished(false);
   });
   pi.on("ui_prompt_start", () => {
     state.uiBusy = true;
