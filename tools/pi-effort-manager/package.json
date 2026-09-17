@@ -29,7 +29,8 @@
   },
   "pi": {
     "extensions": [
-      "./index.ts"
+      "./index.ts",
+      "./src/context-guard.ts"
     ]
   }
 }

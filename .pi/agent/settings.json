@@ -5,6 +5,11 @@
   "defaultProvider": "openai-codex",
   "defaultModel": "gpt-6-astra",
   "defaultThinkingLevel": "medium",
+  "compaction": {
+    "enabled": true,
+    "reserveTokens": 65536,
+    "keepRecentTokens": 12000
+  },
   "pi-effort-manager": {
     "dynamicDefault": true,
     "startEffort": "medium",

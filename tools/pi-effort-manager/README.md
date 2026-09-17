@@ -3,6 +3,39 @@
 Repository-owned Pi package for dynamic reasoning-effort management. It extends Pi's standard
 static effort controls and has no runtime dependency on the former third-party package.
 
+## Bounded compaction guard
+
+The package also loads `src/context-guard.ts` as an independent safety extension. Small normal
+compactions use Pi's implementation. Overflow recovery and oversized serialized histories use
+sequential, bounded summary segments with the selected model and its existing credentials.
+The previous summary, split-turn prefix and user focus are included; the retained-message boundary
+and file-operation metadata are preserved. Original JSONL history is never rewritten.
+
+Each request is limited conservatively using UTF-8 bytes (at most half the model's advertised token
+window, capped at 96,000 bytes), leaving room for framing and output. A short running summary
+carries decisions between segments. Output is capped at 4,096 tokens, uses low OpenAI reasoning,
+and disables prompt caching with a fresh request session ID. Successful calls' usage is accumulated.
+Histories larger than the 128-segment full-summary allowance automatically enter **lossy emergency
+recovery** rather than cancelling: select the beginning (one quarter) and the newest tail (three
+quarters) of an eight-segment character budget. With the explicit gap marker, this uses at most nine
+model calls. The UI warns before those calls, and the saved summary permanently records that the
+historical middle was omitted. It must not be treated as evidence that missing work was completed;
+consult the preserved original session for missing requirements and decisions. Sampling happens
+before allocating code-point arrays, and selection never cuts a UTF-16 surrogate pair.
+
+Abort, provider errors, tool calls and empty/truncated/oversized summaries still cancel compaction
+rather than falling back to the same oversized request or saving partial history. This bounds work;
+it cannot guarantee success for incorrect model metadata, provider failures or oversized retained
+recent messages. The loop extension then pauses for explicit recovery rather than spinning.
+
+The repository global settings now reserve 65,536 tokens for proactive compaction and retain
+12,000 recent tokens. Project overrides still take precedence. This global reserve is intended
+for the configured 272k model; use a smaller project reserve for models with small windows.
+Restart Pi to load settings and the new package entry point. For a failed existing session,
+first `/loop pause` and `/goal pause`, then `/compact`; only resume scheduling after successful
+compaction. If bounded recovery fails, use `/tree` to an earlier safe point or `/new` with a concise
+handoff, retaining the original session for reference. Do not repeatedly send `continue`.
+
 ## Controls
 
 Pi's standard controls remain authoritative for static effort selection:
