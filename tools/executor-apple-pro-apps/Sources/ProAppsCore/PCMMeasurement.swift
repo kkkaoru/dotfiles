@@ -26,12 +26,19 @@ public struct PCMMeasurement: Codable, Sendable {
   public let whole: AudioLevel
   public let windows: [AudioLevel]
 
-  public static let maximumDurationSeconds = 30.0
+  public static let defaultDurationSeconds = 30.0
+  public static let maximumDurationSeconds = 120.0
   public static let maximumWindows = 16
 
   /// Strict RIFF/WAVE mono signed little-endian PCM16 analysis. No raw pointers,
   /// alignment assumptions, arbitrary codec guesses or implicit channel mixing.
-  public static func analyze(_ data: Data, windows: [AudioWindow]) throws -> PCMMeasurement {
+  public static func analyze(
+    _ data: Data, windows: [AudioWindow],
+    maximumDurationSeconds: Double = PCMMeasurement.defaultDurationSeconds
+  ) throws -> PCMMeasurement {
+    guard maximumDurationSeconds.isFinite, maximumDurationSeconds > 0,
+      maximumDurationSeconds <= Self.maximumDurationSeconds
+    else { throw ProAppsError.invalid("Audio duration budget must be >0–120 seconds") }
     guard data.count <= Files.maximumBytes, data.count >= 44, windows.count <= maximumWindows else {
       throw ProAppsError.invalid("PCM input/window limit exceeded")
     }
@@ -90,7 +97,7 @@ public struct PCMMeasurement: Codable, Sendable {
     }
     let frames = pcm.count / 2
     guard Double(frames) / Double(rate) <= maximumDurationSeconds else {
-      throw ProAppsError.invalid("Audio measurements are limited to 30-second clips")
+      throw ProAppsError.invalid("Audio exceeds the requested measurement duration budget")
     }
     var measured: [AudioLevel] = []
     for window in windows {

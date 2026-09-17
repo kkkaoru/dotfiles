@@ -146,6 +146,28 @@ struct PCMMeasurementTests {
     #expect(window.startSeconds == 1.65)
   }
 
+  @Test func extendedDurationRequiresOptInAndHasAHardCeiling() throws {
+    let minute = wave(samples: Array(repeating: 0, count: 240), rate: 4)
+    #expect(throws: ProAppsError.self) { try PCMMeasurement.analyze(minute, windows: []) }
+    let report = try PCMMeasurement.analyze(
+      minute, windows: [.init(startSeconds: 20, durationSeconds: 20)], maximumDurationSeconds: 60)
+    #expect(report.whole.frames == 240)
+    #expect(report.whole.durationSeconds == 60)
+    #expect(report.windows.first?.frames == 80)
+    #expect(
+      try PCMMeasurement.analyze(
+        wave(samples: Array(repeating: 0, count: 480), rate: 4), windows: [],
+        maximumDurationSeconds: 120
+      ).whole.durationSeconds == 120)
+  }
+
+  @Test(arguments: [0.0, -1.0, 120.001, Double.infinity, Double.nan])
+  func invalidExtendedDurationBudgetsAreRefused(_ seconds: Double) {
+    #expect(throws: ProAppsError.self) {
+      try PCMMeasurement.analyze(wave(), windows: [], maximumDurationSeconds: seconds)
+    }
+  }
+
   @Test func durationAndWindowCountsAreBounded() {
     #expect(throws: (any Error).self) {
       try PCMMeasurement.analyze(wave(samples: Array(repeating: 0, count: 121)), windows: [])

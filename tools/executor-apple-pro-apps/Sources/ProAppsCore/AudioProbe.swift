@@ -12,8 +12,14 @@ public actor AudioProbe {
 
   public init() {}
 
-  public func measure(path: String, windows: [AudioWindow]) async throws -> PCMMeasurement {
+  public func measure(
+    path: String, windows: [AudioWindow],
+    maximumDurationSeconds: Double = PCMMeasurement.defaultDurationSeconds
+  ) async throws -> PCMMeasurement {
     try Task.checkCancellation()
+    guard maximumDurationSeconds.isFinite, maximumDurationSeconds > 0,
+      maximumDurationSeconds <= PCMMeasurement.maximumDurationSeconds
+    else { throw ProAppsError.invalid("Audio duration budget must be >0–120 seconds") }
     guard windows.count <= PCMMeasurement.maximumWindows else {
       throw ProAppsError.invalid("Too many audio windows")
     }
@@ -22,10 +28,10 @@ public actor AudioProbe {
     let duration = try await asset.load(.duration).seconds
     let audio = try await asset.loadTracks(withMediaType: .audio)
     guard !audio.isEmpty, duration.isFinite, duration > 0,
-      duration <= PCMMeasurement.maximumDurationSeconds
+      duration <= maximumDurationSeconds
     else {
       throw ProAppsError.invalid(
-        "Audio measurement requires an audio-bearing clip of at most 30 seconds")
+        "Audio measurement requires an audio-bearing clip within the requested duration budget")
     }
     for window in windows {
       guard window.startSeconds.isFinite, window.durationSeconds.isFinite,
@@ -46,6 +52,7 @@ public actor AudioProbe {
       ], timeout: .seconds(30))
     guard result.status == 0 else { throw ProAppsError.commandFailed(result.status) }
     try Task.checkCancellation()
-    return try PCMMeasurement.analyze(Files.read(pcm), windows: windows)
+    return try PCMMeasurement.analyze(
+      Files.read(pcm), windows: windows, maximumDurationSeconds: maximumDurationSeconds)
   }
 }

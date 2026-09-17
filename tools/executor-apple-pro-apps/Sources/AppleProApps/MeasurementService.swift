@@ -18,9 +18,13 @@ extension ToolSpec {
     .init(
       name: "audio_measure",
       description:
-        "Decode a local audio-bearing clip of at most 30 seconds to temporary mono PCM16/16000 Hz using macOS afconvert. Measure whole-clip and requested-window RMS, peak and zero crossings. Mono conversion is not per-channel verification, LUFS or a robust pitch estimate. No playback; temporary PCM is removed.",
+        "Decode a local audio-bearing clip to temporary mono PCM16/16000 Hz using macOS afconvert. Default duration budget is 30 seconds; explicit maximumDurationSeconds permits up to 120 seconds, keeping fixed byte/sample and subprocess limits. Measure whole-clip and requested-window RMS, peak and zero crossings. Mono conversion is not per-channel verification, LUFS or a robust pitch estimate. No playback; temporary PCM is removed.",
       properties: [
         "path": string(),
+        "maximumDurationSeconds": .object([
+          "type": .string("number"), "exclusiveMinimum": .double(0),
+          "maximum": .double(PCMMeasurement.maximumDurationSeconds),
+        ]),
         "windows": array(
           object(
             ["startSeconds": number, "durationSeconds": number],
@@ -72,9 +76,14 @@ extension NativeService {
       struct Input: Decodable {
         let path: String
         let windows: [AudioWindow]
+        let maximumDurationSeconds: Double?
       }
       let input = try decode(Input.self, arguments)
-      measured = try await Value(AudioProbe().measure(path: input.path, windows: input.windows))
+      measured = try await Value(
+        AudioProbe().measure(
+          path: input.path, windows: input.windows,
+          maximumDurationSeconds: input.maximumDurationSeconds
+            ?? PCMMeasurement.defaultDurationSeconds))
     case "video_frame_measure":
       struct Input: Decodable {
         let path: String
