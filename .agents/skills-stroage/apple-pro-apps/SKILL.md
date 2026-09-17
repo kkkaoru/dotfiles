@@ -17,8 +17,10 @@ use, read `tools/executor-apple-pro-apps/VERIFICATION.md` in the originating dot
 checkout. Native-boundary exceptions have been explicitly approved and scoped in
 `NATIVE-BOUNDARIES.md`. Editing/measurement coverage and sanitizer gates have passed;
 check the report for subsequent changes and outstanding verification.
-The Executor-hosted UI fallback still lacks some TCC permissions. Do not treat successful registration or passing unit tests as an
-exception to these gates.
+On this host, Executor-based checks now confirm Screen Recording, Accessibility
+and Event Synthesizing. Recheck after host/session changes; permission alone does
+not prove app-specific action success. Do not treat successful registration or
+passing unit tests as an exception to application-specific verification.
 
 ## Discovery and authorization
 
@@ -41,7 +43,11 @@ exception to these gates.
 | Need | Native MCP tools | Boundary |
 |---|---|---|
 | Edit video/audio offline | `media_edit_plan`, `media_edit`, `media_project_read` | Trim/reorder/speed, geometry, gain/fades/mix, MP4/M4A and reusable JSON; not live editor control |
-| Decode short output fully | `media_verify_video` | ≤30 seconds / 1800 video frames; audio is separate |
+| Prepare an approved Speech locale for this app | `speech_locale_reserve` | Persistent mutation, macOS 26+; no download/release/eviction. Require user approval and `readyForTranscription:true` |
+| Transcribe a local audio file | `audio_transcribe` | ≤60s, prepared locale; read-only, on-device, approximate phrases, unreviewed; no implicit reservation/download/cloud fallback |
+| Decode output fully with a bounded budget | `media_verify_video` | Defaults to 30s/1800 frames; explicit maximumDurationSeconds ≤120 and maximumFrames ≤7200; audio is separate |
+| Generate caption-onset SE | `audio_cue_track` | New private WAV, ≤120s/120 cues, 80ms smooth 880Hz sounds; no playback; mix as one audio layer with headroom |
+| Locate existing visible subtitles | `video_text_recognize` | Local Japanese/English Vision OCR, 1–8 frames, cropped/full-frame top-left bounds; no images uploaded/exported; OCR confidence is not speech accuracy |
 | Measure audio/selected image regions | `audio_measure`, `video_frame_measure` | Mono PCM RMS/peak/zero crossings and device-RGB averages; not LUFS, robust pitch or all-pixel proof |
 | Verify a local video without opening an editor | `media_inspect` | AVFoundation scalar metadata + first decoded frame, bounded child process; not full-file or app import validation |
 | Installed editions/capabilities | `app_capabilities` | Does not launch apps or prove license activation |
@@ -60,8 +66,22 @@ Ranges are source seconds; fades and additional-audio offsets are output seconds
 Optional `video.color` controls brightness/contrast/saturation via an extra native
 encoding pass with SDR-clamped input, not HDR preservation. Describe the current
 schema before using it. Optional static `video.titles` uses white bold system text
-and top-left pixel positions; overflow is refused. Color/titles share an extra
-encoding pass. Optional clip `transitionInSeconds` overlaps adjacent clips with
+and top-left pixel positions; overflow is refused. `video.captions` supplies timed
+cues; `captionStyle` supports a real black outline, box opacity, optional font size
+and bottom margin. `video.masks` covers source rectangles before text; full opacity
+conceals burned-in subtitles but does not restore their background. These effects
+share the extra encoding pass. Keep raw ASR/review evidence; never treat repeated
+recognition or source-subtitle OCR as ground truth. Only native-clock end rounding
+within one tick is normalized, with `originalDurationSeconds` retained.
+
+For this user's video-generation changes, **both 60-second and 90-second cases are
+mandatory**. At 30fps verify full 1800/2700 frames, whole audio, caption/mask/outline
+samples and transitions, SE onset/control windows, and source preservation. Neither
+one length nor a first-frame probe completes acceptance. Audio decoding beyond 30s
+requires explicit `maximumDurationSeconds`; transcription remains ≤60s per input,
+so longer material needs documented chunks and boundary review.
+
+Optional clip `transitionInSeconds` overlaps adjacent clips with
 video dissolve and linear audio crossfade, shortening the timeline. It is limited
 to 5 seconds and half either adjacent output clip; explicit/transition audio fades
 use the longer duration, not competing ramps. Inspect export, full decode, measured effects and app
@@ -102,6 +122,16 @@ standalone edition. This Mac has all five Creator Studio apps plus standalone
 MainStage. Do not derive IDs by appending `App`, or open one project in two editions.
 Never purchase, subscribe, accept licenses, download sound packs, install plugins
 or change audio/MIDI device settings as an incidental automation step.
+
+## Continually expand machine interfaces
+
+The user requires non-UI capabilities to keep expanding. Prefer native APIs,
+typed official CLI calls and validated file interchange. Before repeating a UI
+workflow, check whether a bounded native adapter can replace it. Record missing
+contracts, develop with the component's quality gates, and verify real artifacts.
+Do not broaden unsafe/private API use or make unsupported headless claims just
+to avoid UI. Motion project editing, Motion rendering and AVFoundation rendering
+remain distinct capabilities and need separate evidence.
 
 ## Peekaboo fallback — only after identifying the native gap
 
