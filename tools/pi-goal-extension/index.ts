@@ -125,7 +125,7 @@ function registerTools(pi: GoalExtensionHost, state: BridgeState): void {
     name: "start_goal",
     label: "Start Goal",
     description:
-      "Autonomously define a durable goal grounded in the user's established task. Refuses unfinished, paused or blocked goals; cannot resume safe mode or invent permissions. Creates no token budget.",
+      "Autonomously define a durable goal grounded in the user's established task. Refuses active, paused or budget-limited goals and cannot resume stopped automation; it may supersede an already blocked goal. Cannot invent permissions or bypass safe mode. Creates no token budget.",
     executionMode: "sequential",
     parameters: Type.Object({
       objective: Type.String({
@@ -137,7 +137,7 @@ function registerTools(pi: GoalExtensionHost, state: BridgeState): void {
     promptSnippet: "Define a persistent goal for the user's authorized work",
     promptGuidelines: [
       "Use start_goal autonomously when the user's established task benefits from durable completion tracking across turns or compaction. Do not invent unrelated objectives or permissions.",
-      "Inspect get_goal first; reuse an active goal. Never bypass a user pause or safe-mode stop by creating another goal or loop. Only the user can resume stopped automation.",
+      "Inspect get_goal first; reuse an active goal. Never bypass a user pause or safe-mode stop by creating another goal or loop. Only the user can resume stopped automation; start_goal may supersede an already blocked goal but must stay inside the user's established task.",
       "After start_goal, continue work in the current turn, verify completion with update_goal, and prefer existing loop/tmux pacing over duplicate wakeups.",
     ],
     async execute(_id, params) {

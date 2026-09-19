@@ -178,6 +178,63 @@ it("keeps a completed goal replaceable and leaves the old goal in history", asyn
   await h.call("session_shutdown", {});
 });
 
+it("supersedes only a blocked goal with a new agent-defined objective", async () => {
+  const h: Harness = harness();
+  await h.call("session_start", {});
+  await h.command("stalled task");
+  await h.call("agent_start", {});
+  await h.call("agent_end", {
+    messages: [{ role: "assistant", stopReason: "stop" }],
+  });
+  await h.call("agent_settled", {});
+  await h.call("agent_start", {});
+  await h.call("agent_end", {
+    messages: [{ role: "assistant", stopReason: "stop" }],
+  });
+  await h.call("agent_settled", {});
+  await h.call("agent_start", {});
+  await h.call("agent_end", {
+    messages: [{ role: "assistant", stopReason: "stop" }],
+  });
+  expect(await h.tool("get_goal", {})).toMatchObject({
+    details: { goal: { status: "blocked", objective: "stalled task" } },
+  });
+  await h.call("agent_start", {});
+  expect(
+    await h.tool("start_goal", { objective: "Pursue the corrected delivery" }),
+  ).toMatchObject({
+    details: {
+      goal: {
+        status: "active",
+        objective: "Pursue the corrected delivery",
+        tokensUsed: 0,
+        turn: 1,
+        blocker: null,
+      },
+    },
+  });
+  await h.call("session_shutdown", {});
+});
+
+it("refuses to supersede a budget-limited goal", async () => {
+  const h: Harness = harness();
+  await h.call("session_start", {});
+  await h.command("--tokens 5 stalled task");
+  await h.call("agent_start", {});
+  await h.call("message_end", { message: { usage: { totalTokens: 10 } } });
+  await h.call("agent_end", {
+    messages: [{ role: "assistant", stopReason: "stop" }],
+  });
+  await h.call("agent_settled", {});
+  expect(await h.tool("get_goal", {})).toMatchObject({
+    details: { goal: { status: "budget_limited" } },
+  });
+  await expect(
+    h.tool("start_goal", { objective: "replacement" }),
+  ).rejects.toThrow("unfinished goal");
+  await h.call("session_shutdown", {});
+});
+
 it("registers explicit goal commands and tools without creating a goal", async () => {
   const h: Harness = harness();
   await h.command("task");

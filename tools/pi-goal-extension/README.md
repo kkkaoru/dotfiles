@@ -26,8 +26,10 @@ Requires Pi 0.85.1 or newer. State validation uses Valibot.
 - Startup and ordinary messages do not create goals implicitly. The user can use `/goal <objective>`;
   the agent can deliberately call `start_goal` when the established request benefits from durable
   completion tracking. This grants no new permissions and must not invent unrelated work.
-- `start_goal` adopts the current run without submitting a duplicate prompt, creates no token budget,
-  and refuses an existing unfinished/paused/blocked goal. Only the user can resume stopped goals.
+- `start_goal` adopts the current run without submitting a duplicate prompt and creates no token
+  budget. It refuses an active, paused or budget-limited goal. It may supersede a goal that is
+  already **blocked**, because that blocker was already reported to the user and the replacement
+  starts fresh accounting; only the user can resume stopped automation.
   Agent-defined goals use the same persistence, evidence, accounting and stall safeguards.
 - `/goal <objective>` replaces an unfinished goal immediately, without a confirmation prompt. The
   replaced goal stays in session history and replacement resets usage; independent loops and

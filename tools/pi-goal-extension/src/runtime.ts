@@ -97,6 +97,25 @@ export class GoalRuntime {
   start(input: StartInput): void {
     if (this.#goal !== null && this.#goal.status !== "complete")
       throw new Error("Clear or edit the existing unfinished goal first.");
+    this.#create(input);
+  }
+
+  startFromAgent(objective: string): void {
+    // A blocked goal already reported its blocker to the user, so the agent may supersede it with
+    // a new objective from the same established task. Active, paused and budget-limited goals stay
+    // protected: only the user resumes those.
+    if (
+      this.#goal !== null &&
+      this.#goal.status !== "complete" &&
+      this.#goal.status !== "blocked"
+    )
+      throw new Error("Clear or edit the existing unfinished goal first.");
+    this.#create({ objective, tokenBudget: null });
+    // Adopt the current run so its work, audits and subsequent tokens count toward the new goal.
+    if (this.#inRun) this.begin();
+  }
+
+  #create(input: StartInput): void {
     this.#save(
       createGoal({
         ...input,
@@ -107,12 +126,6 @@ export class GoalRuntime {
     );
     this.#lastError = null;
     this.#schedule();
-  }
-
-  startFromAgent(objective: string): void {
-    this.start({ objective, tokenBudget: null });
-    // Adopt the current run so its work, audits and subsequent tokens count toward the new goal.
-    if (this.#inRun) this.begin();
   }
 
   pause(): void {
