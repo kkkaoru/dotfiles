@@ -72,9 +72,14 @@ async function command(input: CommandInput): Promise<void> {
   const parsed = parseGoalCommand(input.args);
   const runtime: GoalRuntime = requireRuntime(input.state);
   switch (parsed.kind) {
-    case "create":
+    case "create": {
+      // An explicit /goal <objective> replaces an unfinished goal without a dialog; the old goal
+      // stays in session history and independent loops or tmux jobs are untouched.
+      const previous = runtime.state;
+      if (previous !== null && previous.status !== "complete") runtime.clear();
       runtime.start(parsed);
       break;
+    }
     case "status":
       break;
     case "pause":

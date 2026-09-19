@@ -29,7 +29,9 @@ Requires Pi 0.85.1 or newer. State validation uses Valibot.
 - `start_goal` adopts the current run without submitting a duplicate prompt, creates no token budget,
   and refuses an existing unfinished/paused/blocked goal. Only the user can resume stopped goals.
   Agent-defined goals use the same persistence, evidence, accounting and stall safeguards.
-- An unfinished goal cannot be silently replaced. Explicitly edit or clear it first.
+- `/goal <objective>` replaces an unfinished goal immediately, without a confirmation prompt. The
+  replaced goal stays in session history and replacement resets usage; independent loops and
+  detached processes are not stopped. No UI is required.
 - No token budget is invented. `budget none` explicitly removes an existing limit.
 - Editing the objective or budget leaves the goal paused; resume explicitly. Cancelling the
   goal editor also leaves it paused. Usage already consumed is not reset by editing.

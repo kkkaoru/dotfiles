@@ -44,12 +44,14 @@ function fakePi() {
 function fakeContext() {
   return {
     sessionManager: { getSessionId: () => "session", getBranch: () => [] },
+    hasUI: true,
     isIdle: vi.fn(() => true),
     hasPendingMessages: vi.fn(() => false),
     ui: {
       setStatus: vi.fn(),
       notify: vi.fn(),
       editor: vi.fn<() => Promise<string | undefined>>(),
+      confirm: vi.fn<() => Promise<boolean>>(),
     },
   };
 }
@@ -116,6 +118,63 @@ it("lets the agent define a grounded goal but never replace or resume it", async
   await expect(
     h.tool("start_goal", { objective: "bypass pause" }),
   ).rejects.toThrow("unfinished goal");
+  await h.call("session_shutdown", {});
+});
+
+it("replaces an unfinished goal without any approval prompt", async () => {
+  const h: Harness = harness();
+  await h.call("session_start", {});
+  await h.command("old task");
+  await h.command("pause");
+  await h.command("--tokens 100 new task");
+  expect(h.context.ui.confirm).not.toHaveBeenCalled();
+  expect(await h.tool("get_goal", {})).toMatchObject({
+    details: {
+      goal: {
+        objective: "new task",
+        status: "active",
+        tokenBudget: 100,
+        tokensUsed: 0,
+      },
+    },
+  });
+  await h.call("session_shutdown", {});
+});
+
+it("replaces an unfinished goal without UI or an approval prompt", async () => {
+  const h: Harness = harness();
+  await h.call("session_start", {});
+  await h.command("old task");
+  h.context.hasUI = false;
+  await h.command("new task");
+  expect(h.context.ui.confirm).not.toHaveBeenCalled();
+  expect(await h.tool("get_goal", {})).toMatchObject({
+    details: {
+      goal: {
+        objective: "new task",
+        status: "active",
+        tokenBudget: null,
+        tokensUsed: 0,
+      },
+    },
+  });
+  await h.call("session_shutdown", {});
+});
+
+it("keeps a completed goal replaceable and leaves the old goal in history", async () => {
+  const h: Harness = harness();
+  await h.call("session_start", {});
+  await h.command("old task");
+  await h.tool("update_goal", {
+    status: "complete",
+    reason: "Verified artifacts",
+  });
+  const writes: number = h.pi.appendEntry.mock.calls.length;
+  await h.command("new task");
+  expect(h.pi.appendEntry).toHaveBeenCalledTimes(writes + 1);
+  expect(await h.tool("get_goal", {})).toMatchObject({
+    details: { goal: { objective: "new task", status: "active" } },
+  });
   await h.call("session_shutdown", {});
 });
 
