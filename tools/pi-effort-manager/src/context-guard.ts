@@ -1,6 +1,7 @@
 // This TypeScript file is executed with Bun.
 import { Buffer } from "node:buffer";
-import { uuidv7 } from "@earendil-works/pi-ai";
+import { URL } from "node:url";
+import { uuidv7, type ProviderHeaders } from "@earendil-works/pi-ai";
 import {
   convertToLlm,
   serializeConversation,
@@ -20,8 +21,38 @@ export interface GuardContext {
   readonly ui: Pick<ExtensionContext["ui"], "notify">;
 }
 
+export interface SessionHeaderTarget {
+  readonly provider: string;
+  readonly baseUrl: string;
+}
+
 const MAX_OUTPUT_TOKENS = 4096;
 const OUTPUT_WINDOW_DIVISOR = 8;
+const OPENCODE_HOST = "opencode.ai";
+const OPENCODE_PROVIDERS: ReadonlySet<string> = new Set(["opencode", "opencode-go"]);
+
+function hostOf(baseUrl: string): string | undefined {
+  try {
+    return new URL(baseUrl).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Pi's provider runner adds these headers to its own requests. Extension model calls bypass that
+ * runner, and OpenCode rejects a request without the session header (MissingSessionID), so the
+ * bounded compaction requests must carry them explicitly.
+ */
+export function providerSessionHeaders(
+  model: SessionHeaderTarget,
+  sessionId: string,
+): ProviderHeaders {
+  if (!OPENCODE_PROVIDERS.has(model.provider) && hostOf(model.baseUrl) !== OPENCODE_HOST) {
+    return {};
+  }
+  return { "x-opencode-session": sessionId, "x-opencode-client": "pi" };
+}
 
 export async function guardedCompaction(
   event: SessionBeforeCompactEvent,
@@ -52,6 +83,7 @@ export async function guardedCompaction(
       "Compacting oversized history in bounded segments. Original history is preserved.",
       "info",
     );
+    const sessionId: string = uuidv7();
     const result = await summarizeBounded({
       text,
       contextWindow: model.contextWindow,
@@ -74,7 +106,8 @@ export async function guardedCompaction(
             ),
             reasoningEffort: "low",
             cacheRetention: "none",
-            sessionId: uuidv7(),
+            sessionId,
+            headers: providerSessionHeaders(model, sessionId),
           },
         ),
     });

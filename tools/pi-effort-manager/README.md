@@ -14,7 +14,12 @@ and file-operation metadata are preserved. Original JSONL history is never rewri
 Each request is limited conservatively using UTF-8 bytes (at most half the model's advertised token
 window, capped at 96,000 bytes), leaving room for framing and output. A short running summary
 carries decisions between segments. Output is capped at 4,096 tokens, uses low OpenAI reasoning,
-and disables prompt caching with a fresh request session ID. Successful calls' usage is accumulated.
+and disables prompt caching with a fresh per-compaction session ID. Each segment also sends Pi's
+OpenCode session headers (`x-opencode-session`, `x-opencode-client`) when the model belongs to
+`opencode`/`opencode-go` or points at `opencode.ai`: Pi's provider runner adds those to its own
+requests, extension-initiated model calls bypass that runner, and OpenCode rejects a request without
+the session header (`MissingSessionID`) instead of falling back. Other providers' headers are left
+alone. Successful calls' usage is accumulated.
 Histories larger than the 128-segment full-summary allowance automatically enter **lossy emergency
 recovery** rather than cancelling: select the beginning (one quarter) and the newest tail (three
 quarters) of an eight-segment character budget. With the explicit gap marker, this uses at most nine

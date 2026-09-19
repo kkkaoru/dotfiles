@@ -4,6 +4,7 @@ import type { SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent"
 import { expect, it, vi } from "vitest";
 import contextGuard, {
   guardedCompaction,
+  providerSessionHeaders,
   type GuardContext,
   type GuardHost,
 } from "./context-guard.ts";
@@ -143,6 +144,37 @@ it("saves a recovery summary and warns instead of cancelling histories above 128
       firstKeptEntryId: "kept",
       summary: expect.stringMatching(/^Emergency recovery compaction:/u),
     },
+  });
+});
+
+it("sends the opencode session header that Pi's own requests carry", () => {
+  expect(providerSessionHeaders({ ...MODEL, provider: "opencode-go" }, "session-1")).toStrictEqual({
+    "x-opencode-session": "session-1",
+    "x-opencode-client": "pi",
+  });
+  expect(
+    providerSessionHeaders(
+      { ...MODEL, provider: "custom", baseUrl: "https://opencode.ai/zen" },
+      "session-1",
+    ),
+  ).toStrictEqual({ "x-opencode-session": "session-1", "x-opencode-client": "pi" });
+  expect(providerSessionHeaders(MODEL, "session-1")).toStrictEqual({});
+  expect(
+    providerSessionHeaders({ ...MODEL, provider: "custom", baseUrl: "not a url" }, "session-1"),
+  ).toStrictEqual({});
+});
+
+it("passes those headers and one session ID to every summary segment", async () => {
+  const complete = vi.fn().mockResolvedValue(RESPONSE);
+  const result = await guardedCompaction(EVENT, {
+    model: { ...MODEL, provider: "opencode-go", baseUrl: "https://opencode.ai/zen" },
+    modelRegistry: { complete },
+    ui: { notify: vi.fn() },
+  });
+  expect(result).toHaveProperty("compaction");
+  expect(complete.mock.calls[0]?.[2]).toMatchObject({
+    headers: { "x-opencode-session": expect.any(String), "x-opencode-client": "pi" },
+    sessionId: expect.any(String),
   });
 });
 
