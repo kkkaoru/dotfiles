@@ -42,13 +42,28 @@ it("adopts the current turn without queuing a duplicate initial prompt", async (
   runtime.shutdown();
 });
 
-it("refuses empty, duplicate and paused agent loops", () => {
+it("replaces existing loop work instead of refusing", () => {
+  const appendEntry = vi.fn();
+  const runtime = new LoopRuntime({ sendUserMessage: vi.fn(), appendEntry });
+  runtime.startFromAgent("first task", context);
+  runtime.wakeup({ delaySeconds: 60, prompt: "later check", reason: "old job" }, context);
+  runtime.startFromAgent("Second task.", context);
+  expect(appendEntry.mock.lastCall?.[1]).toMatchObject({
+    jobs: [],
+    paused: false,
+    pendingContinuations: [],
+    runningContinuation: expect.stringContaining("Second task."),
+  });
+  expect(runtime.clear()).toBe(0);
+  runtime.shutdown();
+});
+
+it("refuses empty and paused agent loops", () => {
   const runtime = new LoopRuntime({ sendUserMessage: vi.fn() });
   expect(() => runtime.startFromAgent(" ", context)).toThrow("non-empty");
   runtime.startFromAgent("check", context);
-  expect(() => runtime.startFromAgent("replacement", context)).toThrow("existing or paused");
   runtime.command("pause", context);
-  expect(() => runtime.startFromAgent("bypass", context)).toThrow("existing or paused");
+  expect(() => runtime.startFromAgent("bypass", context)).toThrow("paused");
   runtime.shutdown();
 });
 

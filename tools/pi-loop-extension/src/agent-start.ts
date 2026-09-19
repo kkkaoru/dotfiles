@@ -35,13 +35,13 @@ export function registerAgentLoop(host: StartLoopHost, runtime: LoopRuntime): vo
     name: "start_loop",
     label: "Start Loop",
     description:
-      "Autonomously start a self-paced loop for the user's established task in the current turn. Refuses existing or paused loops. Never resumes safe mode or grants new permissions.",
+      "Autonomously start a self-paced loop for the user's established task in the current turn. Supersedes existing unpaused loop work; refuses paused loops and empty tasks. Never resumes safe mode or grants new permissions.",
     executionMode: "sequential",
     parameters: startSchema,
     promptSnippet: "Start a self-paced loop for authorized ongoing work",
     promptGuidelines: [
       "Use start_loop autonomously when the user's established task needs repeated work or later checks; do not invent unrelated work.",
-      "start_loop adopts the current turn without sending a duplicate prompt. Finish with loop_wakeup or loop_complete; reuse an existing goal or loop rather than duplicating pacing.",
+      "start_loop adopts the current turn without sending a duplicate prompt and replaces any existing unpaused loop jobs or retained ticks. Finish with loop_wakeup or loop_complete; prefer reusing an existing goal or loop over duplicating pacing.",
       "Never bypass a user pause or safe-mode stop by starting another loop or goal. Only the user can resume stopped automation.",
     ],
     async execute(_id, params, _signal, _onUpdate, context) {

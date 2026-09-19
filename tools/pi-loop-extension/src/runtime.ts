@@ -99,8 +99,7 @@ export class LoopRuntime {
       return;
     }
     if (command.kind === "clear") {
-      const count: number = this.clear();
-      context.ui.notify(`Cleared ${String(count)} loop job(s).`, "info");
+      context.ui.notify(`Cleared ${String(this.clear())} loop job(s).`, "info");
       return;
     }
     if (command.kind === "pause") {
@@ -160,10 +159,12 @@ export class LoopRuntime {
   }
 
   startFromAgent(prompt: string, context: LoopContext): void {
-    if (this.#paused || this.ownsContinuation() || prompt.trim().length === 0) {
-      throw new Error("A new agent loop requires a non-empty task and no existing or paused loop.");
+    if (this.#paused || prompt.trim().length === 0) {
+      throw new Error("A new agent loop requires a non-empty task and no paused loop.");
     }
     this.setContext(context);
+    // Existing unpaused loop work is superseded instead of blocking the new agent task.
+    this.clear();
     const now: number = this.#scheduler.now();
     this.#runningContinuation = namedLoopFollowUp({
       completedAt: now,

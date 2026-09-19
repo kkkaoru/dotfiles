@@ -5,8 +5,10 @@ repeated manual prompts.
 
 - `start_loop` lets the agent autonomously define a self-paced loop grounded in the user's established
   task. It adopts the current turn without injecting or queuing another initial prompt, then uses
-  the same `loop_wakeup`/`loop_complete` decisions and persistence as `/loop`. It refuses empty tasks,
-  existing loops and paused loops. It grants no permissions and must not bypass a paused goal or safe mode.
+  the same `loop_wakeup`/`loop_complete` decisions and persistence as `/loop`. Starting one supersedes
+  existing unpaused loop jobs and retained ticks, so leftover work never blocks a new agent task.
+  It still refuses empty tasks and paused loops. It grants no permissions and must not bypass a
+  paused goal or safe mode.
 - `/loop <prompt>` runs immediately as a self-paced loop. The agent must finish immediately
   actionable work, schedule a useful later tick with `loop_wakeup`, or explicitly stop with
   `loop_complete` only when complete or blocked on user input.
