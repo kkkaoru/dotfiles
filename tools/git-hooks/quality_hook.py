@@ -150,7 +150,11 @@ def validate_changed_files(root: Path, paths: set[str]) -> None:
             check=True,
             stdout=subprocess.DEVNULL,
         )
-    shell_files = [str(root / path) for path in sorted(paths) if path.endswith(".sh")]
+    shell_files = [
+        str(root / path)
+        for path in sorted(paths)
+        if path.endswith(".sh") and (root / path).is_file()
+    ]
     if shell_files:
         subprocess.run(("shellcheck", *shell_files), check=True)
     if any(path.startswith(".claude/agents/") or path == ".gitignore" for path in paths):
