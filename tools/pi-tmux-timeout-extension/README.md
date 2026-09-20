@@ -113,9 +113,10 @@ This package exports its potentially blocking-command policy as
 `@kkkaoru/pi-tmux-timeout-extension/policy`. `pi-claudex-provider` consumes that policy because its
 Claudex gateway calls Pi providers directly without running Pi's agent loop. In that environment the
 matching operation is delegated to Claude Code's native `run_in_background` Bash lifecycle instead
-of starting another tmux session. Claudex's isolated Claude Code settings also run
-`claudex-hook.ts` as a `PreToolUse` fallback, so the final Claude Code tool input is normalized even
-when a routed provider omits the background flag. A Bash `PostToolUse` `asyncRewake` hook then watches
+of starting another tmux session. This package only ships `claudex-hook.ts`; it is installed into
+Claudex's isolated Claude Code settings as a `PreToolUse` fallback, so the final Claude Code tool
+input is normalized even when a routed provider omits the background flag. A Bash `PostToolUse`
+`asyncRewake` hook then watches
 the native output file with `fs.watch`; completion wakes the exact originating Claude context with
 task ID, exit status, output path, and a result-inspection request. It does not poll, `TaskStop`, or
 control SubAgent lifetime. Normal standalone Pi usage continues to use `tmux_exec` and `tmux wait-for`
