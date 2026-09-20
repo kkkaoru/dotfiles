@@ -98,7 +98,12 @@ it("uses bounded compaction for overflow and preserves boundary, files, usage, p
   expect(JSON.stringify(complete.mock.calls[0]?.[1])).toMatch(
     /old summary[\s\S]*historical request[\s\S]*Keep next steps/u,
   );
-  expect(complete.mock.calls[0]?.[2]).toMatchObject({ cacheRetention: "none", maxTokens: 3000 });
+  expect(complete.mock.calls[0]?.[2]).toMatchObject({
+    cacheRetention: "none",
+    maxTokens: 3000,
+    reasoning: "low",
+    maxRetries: 6,
+  });
 });
 
 it("also guards oversized threshold compaction with split turn prefixes and no previous summary", async () => {
@@ -117,6 +122,49 @@ it("also guards oversized threshold compaction with split turn prefixes and no p
   );
   expect(result).toHaveProperty("compaction");
   expect(complete).toHaveBeenCalledTimes(8);
+});
+
+it("keeps Pi's single-call compaction when its summarization request fits the window", async () => {
+  const complete = vi.fn().mockResolvedValue(RESPONSE);
+  const ctx: GuardContext = { model: MODEL, modelRegistry: { complete }, ui: { notify: vi.fn() } };
+  const result = await guardedCompaction(
+    {
+      ...EVENT,
+      reason: "threshold",
+      preparation: {
+        ...EVENT.preparation,
+        tokensBefore: 400_000,
+        messagesToSummarize: [{ role: "user", content: "x".repeat(200_000), timestamp: 0 }],
+        settings: { enabled: true, reserveTokens: 65_536, keepRecentTokens: 12_000 },
+      },
+    },
+    { ...ctx, model: { ...MODEL, contextWindow: 600_000, maxTokens: 65_536 } },
+  );
+  expect(result).toBeUndefined();
+  expect(complete).not.toHaveBeenCalled();
+});
+
+it("bounds a fitting window when the model's output exceeds the compaction reserve", async () => {
+  const complete = vi.fn().mockResolvedValue(RESPONSE);
+  const result = await guardedCompaction(
+    {
+      ...EVENT,
+      reason: "threshold",
+      preparation: {
+        ...EVENT.preparation,
+        tokensBefore: 400_000,
+        messagesToSummarize: [{ role: "user", content: "x".repeat(200_000), timestamp: 0 }],
+        settings: { enabled: true, reserveTokens: 65_536, keepRecentTokens: 12_000 },
+      },
+    },
+    {
+      model: { ...MODEL, contextWindow: 600_000, maxTokens: 384_000 },
+      modelRegistry: { complete },
+      ui: { notify: vi.fn() },
+    },
+  );
+  expect(result).toHaveProperty("compaction");
+  expect(complete).toHaveBeenCalled();
 });
 
 it("saves a recovery summary and warns instead of cancelling histories above 128 chunks", async () => {
@@ -151,13 +199,18 @@ it("sends the opencode session header that Pi's own requests carry", () => {
   expect(providerSessionHeaders({ ...MODEL, provider: "opencode-go" }, "session-1")).toStrictEqual({
     "x-opencode-session": "session-1",
     "x-opencode-client": "pi",
+    "User-Agent": "pi-coding-agent",
   });
   expect(
     providerSessionHeaders(
       { ...MODEL, provider: "custom", baseUrl: "https://opencode.ai/zen" },
       "session-1",
     ),
-  ).toStrictEqual({ "x-opencode-session": "session-1", "x-opencode-client": "pi" });
+  ).toStrictEqual({
+    "x-opencode-session": "session-1",
+    "x-opencode-client": "pi",
+    "User-Agent": "pi-coding-agent",
+  });
   expect(providerSessionHeaders(MODEL, "session-1")).toStrictEqual({});
   expect(
     providerSessionHeaders({ ...MODEL, provider: "custom", baseUrl: "not a url" }, "session-1"),
@@ -173,8 +226,43 @@ it("passes those headers and one session ID to every summary segment", async () 
   });
   expect(result).toHaveProperty("compaction");
   expect(complete.mock.calls[0]?.[2]).toMatchObject({
-    headers: { "x-opencode-session": expect.any(String), "x-opencode-client": "pi" },
+    headers: {
+      "x-opencode-session": expect.any(String),
+      "x-opencode-client": "pi",
+      "User-Agent": "pi-coding-agent",
+    },
     sessionId: expect.any(String),
+    maxRetries: 6,
+  });
+});
+
+it("saves emergency recovery when a segment hits the output token cap", async () => {
+  const complete = vi.fn().mockResolvedValue({
+    ...RESPONSE,
+    stopReason: "length",
+    content: [{ type: "text", text: "partial" }],
+  });
+  const notify = vi.fn();
+  const result = await guardedCompaction(
+    {
+      ...EVENT,
+      preparation: {
+        ...EVENT.preparation,
+        messagesToSummarize: [{ role: "user", content: "x".repeat(2_000_000), timestamp: 0 }],
+      },
+    },
+    { model: MODEL, modelRegistry: { complete }, ui: { notify } },
+  );
+  expect(result).toHaveProperty("compaction");
+  expect(result).not.toHaveProperty("cancel");
+  expect(notify).toHaveBeenCalledWith(
+    expect.stringMatching(/^Emergency recovery compaction:/u),
+    "warning",
+  );
+  expect(result).toMatchObject({
+    compaction: {
+      summary: expect.stringMatching(/^Emergency recovery compaction:[\s\S]*partial$/u),
+    },
   });
 });
 

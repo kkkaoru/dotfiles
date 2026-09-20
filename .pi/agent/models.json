@@ -1,5 +1,36 @@
 {
   "providers": {
+    "opencode-go": {
+      "modelOverrides": {
+        "deepseek-v4-flash": { "contextWindow": 600000, "maxTokens": 65536 },
+        "deepseek-v4-flash-vision-exp": { "contextWindow": 600000, "maxTokens": 65536 },
+        "deepseek-v4-pro": { "contextWindow": 600000, "maxTokens": 65536 },
+        "deepseek-v4.1-flash": { "contextWindow": 600000, "maxTokens": 65536 },
+        "glm-5.1": { "contextWindow": 121651, "maxTokens": 32768 },
+        "glm-5.2": { "contextWindow": 600000, "maxTokens": 65536 },
+        "glm-5.3": { "contextWindow": 600000, "maxTokens": 65536 },
+        "glm-5.3-flash": { "contextWindow": 600000, "maxTokens": 65536 },
+        "gpt-5.6-luna": { "contextWindow": 630000, "maxTokens": 65536 },
+        "grok-4.6": { "contextWindow": 300000, "maxTokens": 65536 },
+        "hy3": { "contextWindow": 153600, "maxTokens": 65536 },
+        "hy4-preview": { "contextWindow": 614400, "maxTokens": 64000 },
+        "kimi-k2.6": { "contextWindow": 157286, "maxTokens": 65536 },
+        "kimi-k2.7-code": { "contextWindow": 157286, "maxTokens": 65536 },
+        "kimi-k3": { "contextWindow": 629145, "maxTokens": 65536 },
+        "longcat-2.0": { "contextWindow": 600000, "maxTokens": 65536 },
+        "mimo-v2.5": { "contextWindow": 600000, "maxTokens": 65536 },
+        "mimo-v2.5-pro": { "contextWindow": 629145, "maxTokens": 65536 },
+        "minimax-m2.7": { "contextWindow": 122880, "maxTokens": 65536 },
+        "minimax-m3": { "contextWindow": 600000, "maxTokens": 65536 },
+        "muse-spark-1.2-contributor": { "contextWindow": 629145, "maxTokens": 65536 },
+        "muse-spark-1.3-contributor": { "contextWindow": 629145, "maxTokens": 65536 },
+        "qwen3.6-plus": { "contextWindow": 600000, "maxTokens": 65536 },
+        "qwen3.7-max": { "contextWindow": 600000, "maxTokens": 65536 },
+        "qwen3.7-plus": { "contextWindow": 600000, "maxTokens": 65536 },
+        "qwen3.8-flash": { "contextWindow": 600000, "maxTokens": 65536 },
+        "qwen3.8-max": { "contextWindow": 600000, "maxTokens": 65536 }
+      }
+    },
     "sakana": {
       "name": "Sakana AI",
       "baseUrl": "https://api.sakana.ai/v1",

@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "0.85.1",
+  "lastChangelogVersion": "0.86.1",
   "theme": "dracula",
   "tuiMode": "fullscreen",
   "defaultProvider": "openai-codex",
@@ -9,6 +9,10 @@
     "enabled": true,
     "reserveTokens": 65536,
     "keepRecentTokens": 12000
+  },
+  "retry": {
+    "enabled": true,
+    "maxRetries": 6
   },
   "pi-effort-manager": {
     "dynamicDefault": true,

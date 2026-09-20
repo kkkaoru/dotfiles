@@ -1,7 +1,7 @@
 // This TypeScript file is executed with Bun.
 import { Buffer } from "node:buffer";
 import { URL } from "node:url";
-import { uuidv7, type ProviderHeaders } from "@earendil-works/pi-ai";
+import { uuidv7, type Api, type Model, type ProviderHeaders } from "@earendil-works/pi-ai";
 import {
   convertToLlm,
   serializeConversation,
@@ -26,9 +26,13 @@ export interface SessionHeaderTarget {
   readonly baseUrl: string;
 }
 
-const MAX_OUTPUT_TOKENS = 4096;
+const MAX_OUTPUT_TOKENS = 8192;
 const OUTPUT_WINDOW_DIVISOR = 8;
+const PROVIDER_MAX_RETRIES = 6;
+/** Tokens Pi's own summarization prompt adds on top of the history it summarizes. */
+const SUMMARIZATION_PROMPT_TOKENS = 4096;
 const OPENCODE_HOST = "opencode.ai";
+const OPENCODE_CLIENT = "pi-coding-agent";
 const OPENCODE_PROVIDERS: ReadonlySet<string> = new Set(["opencode", "opencode-go"]);
 
 function hostOf(baseUrl: string): string | undefined {
@@ -37,6 +41,24 @@ function hostOf(baseUrl: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * Pi summarizes a compaction in one request: the retained turns stay out of the input and the output
+ * is capped by the compaction reserve, so Pi handles the compaction itself whenever that request
+ * fits in the context window. Deferring to it keeps a long history in a single call instead of
+ * dropping the middle of it in bounded segments.
+ */
+export function piCompactionFits(
+  preparation: SessionBeforeCompactEvent["preparation"],
+  model: Pick<Model<Api>, "contextWindow" | "maxTokens">,
+): boolean {
+  const { tokensBefore, settings } = preparation;
+  const outputTokens = Math.max(settings.reserveTokens, model.maxTokens);
+  return (
+    tokensBefore - settings.keepRecentTokens + outputTokens + SUMMARIZATION_PROMPT_TOKENS <=
+    model.contextWindow
+  );
 }
 
 /**
@@ -51,7 +73,12 @@ export function providerSessionHeaders(
   if (!OPENCODE_PROVIDERS.has(model.provider) && hostOf(model.baseUrl) !== OPENCODE_HOST) {
     return {};
   }
-  return { "x-opencode-session": sessionId, "x-opencode-client": "pi" };
+  return {
+    "x-opencode-session": sessionId,
+    "x-opencode-client": "pi",
+    // OpenCode Go drops generic SDK/fetch user-agents; Pi's runner sets this, extension complete() does not.
+    "User-Agent": OPENCODE_CLIENT,
+  };
 }
 
 export async function guardedCompaction(
@@ -75,7 +102,8 @@ export async function guardedCompaction(
     ].join("\n\n");
     if (
       event.reason !== "overflow" &&
-      Buffer.byteLength(text, "utf8") < summaryInputBudget(model.contextWindow) / 2
+      (Buffer.byteLength(text, "utf8") < summaryInputBudget(model.contextWindow) / 2 ||
+        piCompactionFits(preparation, model))
     ) {
       return undefined;
     }
@@ -104,9 +132,10 @@ export async function guardedCompaction(
               model.maxTokens,
               Math.floor(model.contextWindow / OUTPUT_WINDOW_DIVISOR),
             ),
-            reasoningEffort: "low",
+            reasoning: "low",
             cacheRetention: "none",
             sessionId,
+            maxRetries: PROVIDER_MAX_RETRIES,
             headers: providerSessionHeaders(model, sessionId),
           },
         ),

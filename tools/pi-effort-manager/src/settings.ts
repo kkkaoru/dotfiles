@@ -8,6 +8,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -142,8 +143,12 @@ export function resolveSettingsTarget(
 ): { readonly mode?: number; readonly path: string } {
   try {
     const statistics = inspect(settingsPath);
-    const { mode } = statistics;
-    return { mode, path: statistics.isSymbolicLink() ? realpathSync(settingsPath) : settingsPath };
+    if (!statistics.isSymbolicLink()) {
+      return { mode: statistics.mode, path: settingsPath };
+    }
+    // A symlink reports its own 0755 mode, not the target's mode, so read the resolved file.
+    const targetPath = realpathSync(settingsPath);
+    return { mode: statSync(targetPath).mode, path: targetPath };
   } catch (error: unknown) {
     if (errnoCode(error) === "ENOENT") {
       return { path: settingsPath };

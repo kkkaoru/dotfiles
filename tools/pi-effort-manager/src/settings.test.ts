@@ -97,6 +97,7 @@ it("writes manager booleans atomically through a settings symlink", () => {
   const target = path.join(directory, "settings-target.json");
   const link = path.join(directory, "settings.json");
   fs.writeFileSync(target, `${JSON.stringify({ theme: "dark" })}\n`);
+  fs.chmodSync(target, 0o600);
   fs.symlinkSync(target, link);
 
   writeManagerBoolean(link, "fastMode", true);
@@ -107,6 +108,7 @@ it("writes manager booleans atomically through a settings symlink", () => {
     "pi-effort-manager": { dynamicDefault: true, fastMode: true },
   });
   expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+  expect(fs.statSync(target).mode % 0o1000).toBe(0o600);
 
   const missing = path.join(directory, "nested", "settings.json");
   writeManagerBoolean(missing, "fastMode", true);

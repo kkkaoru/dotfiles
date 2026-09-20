@@ -3,10 +3,10 @@ import { expect, it } from "vitest";
 import { recoveryNotice, selectRecoverySource } from "./recovery-source.ts";
 
 it("keeps histories at the full-summary threshold unchanged", () => {
-  const text: string = "x".repeat(128_000);
+  const text: string = "x".repeat(8000);
   const result = selectRecoverySource(text, 1000);
   expect(result.omittedCodeUnits).toBe(0);
-  expect(result.text.length).toBe(128_000);
+  expect(result.text.length).toBe(8000);
   expect(result.text === text).toBe(true);
 });
 

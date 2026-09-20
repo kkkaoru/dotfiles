@@ -3,7 +3,7 @@ export interface RecoverySource {
   readonly text: string;
   readonly omittedCodeUnits: number;
 }
-const MAX_FULL_CHUNKS = 128;
+const MAX_FULL_CHUNKS = 8;
 const RECOVERY_CHUNKS = 8;
 const HEAD_DIVISOR = 4;
 
