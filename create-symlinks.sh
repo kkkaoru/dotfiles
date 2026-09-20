@@ -161,7 +161,7 @@ done
 # ~/.pi is a top-level symlink to this repository. Keep repository-owned
 # extensions inside the managed tree so a fresh clone still installs them.
 mkdir -p "${DOTPATH}/.pi/agent/extensions" "${DOTPATH}/.pi/agent/packages"
-for extension in agmsg goal loop omlx-lifecycle tmux-timeout; do
+for extension in goal loop omlx-lifecycle tmux-timeout; do
   extension_path="${DOTPATH}/tools/pi-${extension}-extension"
   if [ -d "$extension_path" ]; then
     link_path "$extension_path" "${DOTPATH}/.pi/agent/extensions/${extension}"
@@ -176,23 +176,6 @@ for package in pi-effort-manager pi-my-clinepass-provider pi-my-cursor-provider 
     link_path "$package_path" "${DOTPATH}/.pi/agent/packages/${package}"
   fi
 done
-pi_agmsg_extension="${DOTPATH}/tools/pi-agmsg-extension"
-
-# Register pi as an external agmsg agent type through agmsg's supported plugin
-# surface. Trust is path-pinned and must be managed by plugin.sh, never by
-# editing agmsg's trust/config files directly.
-agmsg_skill="${HOME}/.agents/skills/agmsg"
-agmsg_pi_plugin="${pi_agmsg_extension}/agmsg-plugin/pi"
-agmsg_pi_dest="${agmsg_skill}/plugins/types/pi"
-if [ -x "${agmsg_skill}/scripts/plugin.sh" ] && [ -d "$agmsg_pi_plugin" ]; then
-  link_path "$agmsg_pi_plugin" "$agmsg_pi_dest"
-  if [ -L "$agmsg_pi_dest" ] && [ "$(readlink "$agmsg_pi_dest")" = "$agmsg_pi_plugin" ]; then
-    "${agmsg_skill}/scripts/plugin.sh" trust types/pi
-  else
-    echo "skip: cannot trust types/pi because ${agmsg_pi_dest} is not the managed symlink" >&2
-  fi
-fi
-
 # Git 2.54+ config-based hooks invoke this stable per-user path from every repository.
 mkdir -p "${HOME}/.local/bin"
 link_path "${DOTPATH}/tools/git-hooks/dotfiles-git-quality" \
@@ -228,8 +211,6 @@ fi
 ln -s "$adapter_target" "$adapter_link"
 printf '%s -> %s\n' "$adapter_link" "$adapter_target"
 link_path "${DOTPATH}/scripts/claudex-hot-swap" "${HOME}/.local/bin/claudex-hot-swap"
-link_path "${DOTPATH}/scripts/ensure-agmsg-claudex-guard.sh" \
-  "${HOME}/.local/bin/ensure-agmsg-claudex-guard"
 link_path "${DOTPATH}/scripts/claudex-install-adapter" "${HOME}/.local/bin/claudex-install-adapter"
 link_path "${DOTPATH}/scripts/serena-dotfiles-mcp" "${HOME}/.local/bin/serena-dotfiles-mcp"
 link_path "${DOTPATH}/scripts/ensure-omlx.sh" "${HOME}/.local/bin/ensure-omlx"
@@ -294,8 +275,3 @@ if [ -d "${DOTPATH}/.config" ]; then
     esac
   done
 fi
-
-# Provider-backed claudex children must not start their own agmsg watchers.
-# The agmsg skill lives in the repository-backed ~/.agents tree; apply the
-# guard idempotently when the dotfiles are installed or refreshed.
-"${DOTPATH}/scripts/ensure-agmsg-claudex-guard.sh"

@@ -1,5 +1,0 @@
-# Preserve agmsg's live data locally, never version conversations, process state,
-# machine-specific teams, or path-pinned plugin trust.
-/skills/agmsg/db/
-/skills/agmsg/run/
-/skills/agmsg/teams/
