@@ -43,8 +43,9 @@ that tick internally so the loop continues from the compacted context. Every sch
 fire, clear, and ready continuation writes a versioned custom session entry. On `/reload`, the newest
 entry restores job IDs, absolute deadlines, paused remaining delays, pending continuations, and the
 persistent widget. Overdue restored jobs fire immediately; paused jobs remain paused until `/loop resume`.
-Pi's own retry and recurring jobs are left untouched to avoid duplicate runs. `loop_wakeup` uses parallel tool execution because it only
-updates the in-memory schedule and does not need to serialize sibling tools. Polling starts only
+Pi's own retry and recurring jobs are left untouched to avoid duplicate runs. `loop_wakeup` uses
+parallel tool execution because its schedule, state and persistence updates are synchronous and it
+does not need to serialize sibling tools. Polling starts only
 after a command or tool schedules a job and stops when jobs are paused, cleared, or exhausted. Jobs
 are session-scoped and persist across extension reloads and later resume of the same Pi session, but
 do not migrate to an unrelated session.
