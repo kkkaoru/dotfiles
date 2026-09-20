@@ -10,6 +10,8 @@ export interface ActivitySnapshot {
   readonly source: "loop" | "tmux";
   readonly ownsContinuation: boolean;
   readonly pendingDelivery: boolean;
+  /** Task names whose completion or overdue notice is still undelivered. */
+  readonly pendingTasks?: readonly string[];
   readonly tasks: readonly string[];
 }
 export interface ActivityRequest {

@@ -214,7 +214,7 @@ function nextBlocker(goal: GoalState, reason: string): GoalBlocker {
 
 export function updateGoal(input: GoalUpdateInput): GoalState {
   const reason: string = parse(TEXT, input.reason);
-  if (input.goal.status !== "active")
+  if (input.goal.status !== "active" && input.status !== "complete")
     throw new Error("Only an active goal can be updated by the agent.");
   const blocker: GoalBlocker = nextBlocker(input.goal, reason);
   const blocked: boolean =

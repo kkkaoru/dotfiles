@@ -47,9 +47,13 @@ Requires Pi 0.85.1 or newer. State validation uses Valibot.
 
 Four small schemas are registered: `start_goal`, `get_goal`, `update_goal`, and `goal_wait`. The detailed
 objective guidance is added only when a goal exists; no additional skills or integration
-catalogs are loaded. `get_goal` can return null; mutations require an active goal.
+catalogs are loaded. `get_goal` can return null. Blockers and waits require an active goal; a
+verified completion audit is also accepted for a stopped goal, because closing it is bookkeeping
+rather than resumption.
 
-`update_goal` accepts a verified completion audit or a stable blocker reason. The same
+`update_goal` accepts a verified completion audit or a stable blocker reason. A completion audit is
+recorded even when the goal stopped (manual pause, provider error, safe mode or exhausted budget)
+and never resumes pacing; a blocker report still requires an active goal. The same
 blocker must be reported on three consecutive agent runs before the goal becomes blocked;
 repeated calls in one run do not advance that counter. A changed blocker or a gap resets
 it. Three successful runs without tool activity, an explicit wait, a live owned task, or
@@ -85,8 +89,9 @@ No global lock files or inferred task completion:
    Pre-existing unrelated jobs do not stall a new goal.
 3. Owned live jobs are monitored without model polling. Existing tmux notifications wake
    useful inspection; an estimate timeout is not completion and never justifies relaunching
-   a duplicate job. Completion audits are refused while owned jobs are live or their
-   notifications are pending. Missing monitoring pauses rather than fabricating success.
+   a duplicate job. Completion audits are refused while an owned job is live or its own completion
+   or overdue notice is still undelivered; the refusal names those tasks, and a pending notice for a
+   task the goal does not own never blocks it. Missing monitoring pauses rather than fabricating success.
 4. Otherwise an idle check runs every five seconds, respecting compaction, UI prompts,
    pending messages, explicit waits and the active session. Only one goal prompt is pending
    at a time. Busy races retry later; a still-unaccepted prompt pauses for inspection at

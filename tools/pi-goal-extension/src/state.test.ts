@@ -209,6 +209,18 @@ it("completion requires a nonempty audit and clears blocker", () => {
   expect(() =>
     updateGoal({ goal: GOAL, status: "complete", reason: " ", now: 200 }),
   ).toThrow();
+  const paused: GoalState = { ...GOAL, status: "paused" };
+  expect(() =>
+    updateGoal({ goal: paused, status: "blocked", reason: "x", now: 200 }),
+  ).toThrow("Only an active goal");
+  expect(
+    updateGoal({
+      goal: paused,
+      status: "complete",
+      reason: "Verified against current artifacts",
+      now: 200,
+    }).status,
+  ).toBe("complete");
   const completed = updateGoal({
     goal: GOAL,
     status: "complete",

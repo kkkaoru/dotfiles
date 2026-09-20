@@ -69,6 +69,24 @@ it("refuses agent replacement or resumption of an unfinished or paused goal", ()
   expect(runtime.state?.status).toBe("paused");
 });
 
+it("records a verified completion for a stopped goal without resuming it", () => {
+  const { host, runtime } = setup();
+  runtime.start({ objective: "task", tokenBudget: null });
+  runtime.begin();
+  runtime.end(
+    "Provider error; inspect the original Pi error and explicitly resume.",
+  );
+  runtime.settled();
+  expect(runtime.state?.status).toBe("paused");
+  expect(() => runtime.update("blocked", "still stuck")).toThrow("not active");
+  runtime.update("complete", "Verified against current artifacts");
+  runtime.end(null);
+  runtime.settled();
+  expect(runtime.state?.status).toBe("complete");
+  vi.advanceTimersByTime(5000);
+  expect(host.send).not.toHaveBeenCalled();
+  expect(() => runtime.update("complete", "again")).toThrow("already complete");
+});
 it("continues after successful context recovery without requiring manual resume", () => {
   const { host, runtime } = setup();
   runtime.start({ objective: "recover", tokenBudget: null });
@@ -240,6 +258,58 @@ it("tracks only new session-owned jobs and waits without model polling", () => {
   tmux.stop();
   vi.advanceTimersByTime(5000);
   expect(runtime.state?.status).toBe("paused");
+});
+it("blocks only for owned tasks whose notices are pending", () => {
+  const { host, runtime } = setup();
+  const tmux: ActivityProvider = new ActivityProvider(host.bus, () => ({
+    source: "tmux",
+    ownsContinuation: false,
+    pendingDelivery: true,
+    pendingTasks: ["unrelated"],
+    tasks: [],
+  }));
+  tmux.start("session");
+  runtime.start({ objective: "task", tokenBudget: null });
+  announceTask(host.bus, { sessionId: "session", name: "owned" });
+
+  expect(() => runtime.update("complete", "claimed done")).not.toThrow();
+  expect(runtime.state?.status).toBe("complete");
+  tmux.stop();
+});
+it("names the owned task that blocks completion", () => {
+  const { host, runtime } = setup();
+  const tmux: ActivityProvider = new ActivityProvider(host.bus, () => ({
+    source: "tmux",
+    ownsContinuation: false,
+    pendingDelivery: true,
+    pendingTasks: ["owned"],
+    tasks: [],
+  }));
+  tmux.start("session");
+  runtime.start({ objective: "task", tokenBudget: null });
+  announceTask(host.bus, { sessionId: "session", name: "owned" });
+
+  expect(() => runtime.update("complete", "claimed done")).toThrow(
+    "Inspect owned tmux tasks before claiming goal completion: owned",
+  );
+  tmux.stop();
+});
+it("keeps the aggregate pending signal for publishers without per-task notices", () => {
+  const { host, runtime } = setup();
+  const tmux: ActivityProvider = new ActivityProvider(host.bus, () => ({
+    source: "tmux",
+    ownsContinuation: false,
+    pendingDelivery: true,
+    tasks: [],
+  }));
+  tmux.start("session");
+  runtime.start({ objective: "task", tokenBudget: null });
+  announceTask(host.bus, { sessionId: "session", name: "owned" });
+
+  expect(() => runtime.update("complete", "claimed done")).toThrow(
+    "Inspect owned tmux tasks",
+  );
+  tmux.stop();
 });
 it("unrelated pre-existing tasks do not block a goal", () => {
   const { host, runtime } = setup();

@@ -168,7 +168,7 @@ function registerTools(pi: GoalExtensionHost, state: BridgeState): void {
     name: "update_goal",
     label: "Audit Goal",
     description:
-      "Audit an active goal as verified complete or report the same genuine blocker once per turn. Three consecutive blocked turns stop continuation. Cannot resume or replace goals.",
+      "Audit the goal as verified complete or report the same genuine blocker once per turn. Completion is accepted even for a stopped goal, because closing it is bookkeeping rather than resumption. Three consecutive blocked turns stop continuation. Cannot resume or replace goals.",
     executionMode: "sequential",
     parameters: Type.Object({
       status: Type.Union([Type.Literal("complete"), Type.Literal("blocked")]),

@@ -187,11 +187,21 @@ export class GoalRuntime {
   }
 
   update(status: "complete" | "blocked", reason: string): void {
-    const goal: GoalState = this.#active();
-    if (status === "complete" && this.#hasLiveTasks(goal))
-      throw new Error(
-        "Inspect owned tmux tasks before claiming goal completion.",
-      );
+    const goal: GoalState = this.#require();
+    if (goal.status === "complete")
+      throw new Error("Goal is already complete.");
+    // A verified completion closes the goal: bookkeeping, not resumption. Record it even when the
+    // goal stopped (manual pause, provider error, safe mode or exhausted budget). Blocker reports
+    // still need an active goal, because only an active goal keeps pacing work.
+    if (status === "blocked" && goal.status !== "active")
+      throw new Error("Goal is not active; only the user can resume it.");
+    if (status === "complete") {
+      const blocking: readonly string[] = this.#blockingTasks(goal);
+      if (blocking.length > 0)
+        throw new Error(
+          `Inspect owned tmux tasks before claiming goal completion: ${blocking.join(", ")}`,
+        );
+    }
     this.#save(updateGoal({ goal, status, reason, now: Date.now() }));
   }
 
@@ -368,7 +378,7 @@ export class GoalRuntime {
     });
   }
 
-  #hasLiveTasks(goal: GoalState): boolean {
+  #blockingTasks(goal: GoalState): readonly string[] {
     const tmux = queryActivity(this.#host.bus, this.#host.sessionId).find(
       (snapshot) => snapshot.source === "tmux",
     );
@@ -376,10 +386,15 @@ export class GoalRuntime {
       throw new Error(
         "Owned task monitoring is unavailable; enable the tmux extension before continuing.",
       );
-    return (
-      tmux !== undefined &&
-      (goal.tasks.some((name) => tmux.tasks.includes(name)) ||
-        (goal.tasks.length > 0 && tmux.pendingDelivery))
+    if (tmux === undefined) return [];
+    // Per-task pending notices are authoritative. A publisher that only reports the aggregate
+    // cannot say which task is pending, so it blocks every owned task.
+    const pending: readonly string[] = tmux.pendingTasks ?? [];
+    const aggregatePending: boolean =
+      tmux.pendingTasks === undefined && tmux.pendingDelivery;
+    return goal.tasks.filter(
+      (name) =>
+        aggregatePending || tmux.tasks.includes(name) || pending.includes(name),
     );
   }
 
@@ -427,7 +442,7 @@ export class GoalRuntime {
     )
       return;
     if (goal.wait !== null && goal.wait.until > Date.now()) return;
-    if (this.#hasLiveTasks(goal)) return;
+    if (this.#blockingTasks(goal).length > 0) return;
     this.#ticket = {
       text: `${GOAL_MESSAGE_PREFIX}${randomUUID()}]\n${CONTINUATION}`,
       revision: goal.revision,
