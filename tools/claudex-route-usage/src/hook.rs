@@ -241,17 +241,26 @@ mod tests {
         let ctx = output["hookSpecificOutput"]["additionalContext"]
             .as_str()
             .unwrap();
+        assert_user_prompt_context(ctx);
+        let sub = hook_output_for_agent(&summary, "SubagentStart", None).unwrap();
+        assert_eq!(sub["hookSpecificOutput"]["hookEventName"], "SubagentStart");
+        let sub_ctx = sub["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert_subagent_start_context(sub_ctx);
+        assert!(!ctx.contains("advisor() — it is main-session only"));
+    }
+
+    fn assert_user_prompt_context(ctx: &str) {
         assert!(ctx.contains(r"\n"));
         assert!(ctx.contains("claudex-routing-local-hook"));
         assert!(ctx.contains("main orchestrator"));
         assert!(ctx.contains("one scope uses one ordinary worker"));
         assert!(ctx.contains("not for ordinary external research"));
         assert!(!ctx.contains("external_research_or_multiple_sources"));
-        let sub = hook_output_for_agent(&summary, "SubagentStart", None).unwrap();
-        assert_eq!(sub["hookSpecificOutput"]["hookEventName"], "SubagentStart");
-        let sub_ctx = sub["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .unwrap();
+    }
+
+    fn assert_subagent_start_context(sub_ctx: &str) {
         assert!(sub_ctx.contains("SubAgent"));
         assert!(sub_ctx.contains("do NOT apply"));
         assert!(sub_ctx.contains("subagent-full-tools"));
@@ -261,7 +270,6 @@ mod tests {
         assert!(sub_ctx.contains("mcp__claude_ai_*"));
         assert!(sub_ctx.contains("After any `No such tool available` error"));
         assert!(sub_ctx.contains("do not retry or guess another connector tool"));
-        assert!(!ctx.contains("advisor() — it is main-session only"));
     }
 
     #[test]
@@ -402,12 +410,35 @@ mod tests {
             "delegation_required": true,
             "direct_main_execution": "fallback-only"
         });
+        assert_command_code_agent_detection();
+        assert_agent_type_from_payload();
+        let slim = hook_output_for_agent(
+            &summary,
+            "SubagentStart",
+            Some("claudex-command-code-muse-spark-1-2-contributor"),
+        )
+        .unwrap();
+        let ctx = slim["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert_slimmed_command_code_context(ctx);
+        let other = hook_output_for_agent(&summary, "SubagentStart", Some("claudex-grok")).unwrap();
+        let other_ctx = other["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert_other_subagent_context(other_ctx);
+    }
+
+    fn assert_command_code_agent_detection() {
         assert!(is_command_code_agent(Some(
             "claudex-command-code-muse-spark-1-2-contributor"
         )));
         assert!(is_command_code_agent(Some("claudex-command-code")));
         assert!(is_command_code_agent(Some("command-code")));
         assert!(!is_command_code_agent(Some("claudex-grok")));
+    }
+
+    fn assert_agent_type_from_payload() {
         assert_eq!(
             agent_type_from_payload(&json!({
                 "agent_type":"claudex-command-code-muse-spark-1-2-contributor"
@@ -420,15 +451,9 @@ mod tests {
             })),
             Some("claudex-command-code-muse-spark-1-2-contributor")
         );
-        let slim = hook_output_for_agent(
-            &summary,
-            "SubagentStart",
-            Some("claudex-command-code-muse-spark-1-2-contributor"),
-        )
-        .unwrap();
-        let ctx = slim["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .unwrap();
+    }
+
+    fn assert_slimmed_command_code_context(ctx: &str) {
         assert!(ctx.contains("Command Code Muse Spark"));
         assert!(ctx.contains("Do not greet"));
         assert!(ctx.contains("▶ name: query/path/url"));
@@ -436,10 +461,9 @@ mod tests {
         assert!(!ctx.contains("claudex-routing-local-hook"));
         assert!(!ctx.contains("selected_workers"));
         assert!(ctx.len() < 500);
-        let other = hook_output_for_agent(&summary, "SubagentStart", Some("claudex-grok")).unwrap();
-        let other_ctx = other["hookSpecificOutput"]["additionalContext"]
-            .as_str()
-            .unwrap();
+    }
+
+    fn assert_other_subagent_context(other_ctx: &str) {
         assert!(other_ctx.contains("subagent-full-tools"));
         assert!(other_ctx.contains("Disabled SubAgent models"));
         assert!(!other_ctx.contains("claudex-routing-local-hook"));
