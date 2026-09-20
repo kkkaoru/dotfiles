@@ -43,9 +43,15 @@ export function registerTmuxTool(host: TmuxExtensionHost, runtime: TmuxRuntime):
         ["-lc", launch.command],
         options,
       );
-      if (result.code !== 0) {
+      // Pi's exec reports a signalled kill as exit code 0 with killed=true.
+      // Treat that as a failed launch instead of a started task.
+      if (result.code !== 0 || result.killed === true) {
         throw new Error(
-          result.stderr.trim() || result.stdout.trim() || "Failed to start tmux command",
+          result.stderr.trim() ||
+            result.stdout.trim() ||
+            (result.killed === true
+              ? `tmux launch timed out after ${String(TMUX_LAUNCH_TIMEOUT_MILLISECONDS)}ms`
+              : "Failed to start tmux command"),
         );
       }
       runtime.trackLaunch(launch);
