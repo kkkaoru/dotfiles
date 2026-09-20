@@ -17,7 +17,6 @@ internal struct ConnectionCoordinator: Sendable {
       return
     }
     guard context.store.healthDecisionIsAllowed(for: state.signature) else {
-      context.logger.log("action=target-health-skip reason=already-decided")
       return
     }
 
@@ -25,23 +24,15 @@ internal struct ConnectionCoordinator: Sendable {
     try context.store.recordHealthDecision(for: state.signature)
     Thread.sleep(forTimeInterval: Self.healthDecisionDelaySeconds)
     guard let candidate = targetStateAfterDelay(startedAt: startedAt) else {
+      try context.store.recordHealthOutcome(isHealthy: false)
       return
     }
 
     let initialHealth = context.probe.oneShotHealth(for: candidate)
     context.logger.log("action=target-health-once \(initialHealth.logFields)")
     let health = recoverTargetConnectivity(initialHealth: initialHealth, startedAt: startedAt)
-    guard !health.isHealthy else {
-      return
-    }
-    guard withinDecisionWindow(startedAt) else {
-      context.logger.log(
-        "action=fallback-skip reason=decision-window-expired "
-          + "window_seconds=\(Int(Self.decisionWindowSeconds))"
-      )
-      return
-    }
-    try fallbackToTethering(reason: health.reason)
+    try context.store.recordHealthOutcome(isHealthy: health.isHealthy)
+    try fallbackIfNeeded(health: health, startedAt: startedAt)
   }
 
   internal func connectTarget() throws {
@@ -61,12 +52,23 @@ internal struct ConnectionCoordinator: Sendable {
     }
     context.logger.log("action=target-health-once \(initialHealth.logFields)")
     let health = recoverTargetConnectivity(initialHealth: initialHealth, startedAt: startedAt)
+    try context.store.recordHealthOutcome(isHealthy: health.isHealthy)
 
     if health.isHealthy {
       try finishSuccessfulTargetConnection()
       return
     }
+    try fallbackIfNeeded(health: health, startedAt: startedAt)
+  }
 
+  private func fallbackIfNeeded(health: NetworkHealth, startedAt: Date) throws {
+    guard !health.isHealthy else {
+      return
+    }
+    guard !health.gatewayIsReachable else {
+      context.logger.log("action=fallback-skip reason=gateway-reachable")
+      return
+    }
     guard withinDecisionWindow(startedAt) else {
       context.logger.log(
         "action=fallback-skip reason=decision-window-expired "

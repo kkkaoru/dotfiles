@@ -14,6 +14,10 @@ extension ConnectionCoordinator {
     guard !userspaceHealth.isHealthy, withinDecisionWindow(startedAt) else {
       return userspaceHealth
     }
+    guard !userspaceHealth.gatewayIsReachable else {
+      context.logger.log("action=target-reassociate-skip reason=gateway-reachable")
+      return userspaceHealth
+    }
 
     return performReassociationRecovery()
   }
@@ -22,6 +26,7 @@ extension ConnectionCoordinator {
     context.resynchronizer.full().forEach { context.logger.log($0) }
     context.logger.log(context.tailscaleResynchronizer.reconcile())
     Thread.sleep(forTimeInterval: Self.userspaceRecoverySettleSeconds)
+    context.logger.log(context.tailscaleResynchronizer.reconcile())
 
     let candidate = context.probe.currentState()
     let health = targetHealth(for: candidate)

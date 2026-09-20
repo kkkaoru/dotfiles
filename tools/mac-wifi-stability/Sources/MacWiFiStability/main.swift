@@ -65,6 +65,7 @@ internal enum MacWiFiStabilityMain {
 
     let previous = context.store.readSignature()
     guard previous != current.signature else {
+      try ConnectionCoordinator(context: context).evaluateTargetHealth(state: current)
       return
     }
     try handleNetworkChange(context: context, current: current, previous: previous)

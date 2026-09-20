@@ -6,11 +6,9 @@ internal struct NetworkProbe: Sendable {
   private static let oneShotPingPacketCount = 1
   private static let stateCommandTimeoutSeconds: TimeInterval = 5
   private static let pingTimeoutSeconds: TimeInterval = 10
-  private static let noPacketLoss = 0.0
   private static let httpConnectTimeoutSeconds = 3
   private static let httpTimeoutSeconds: TimeInterval = 8
   private static let httpProcessOverheadSeconds: TimeInterval = 2
-  private static let httpSuccessCode = 200
 
   internal let runner: CommandRunner
   internal let wifiDevice: String
@@ -19,33 +17,21 @@ internal struct NetworkProbe: Sendable {
     gateway: PingResult,
     http: ProbeOutputParser.HTTPCheck
   ) -> NetworkHealth {
-    // This is a reachability decision, not a latency policy. A Multi-AP mesh
-    // can briefly take a slower path while it roams; falling back on that
-    // transient latency would make a healthy ohomemesh association flap.
-    let gatewayGood = gateway.packetLossPercent == Self.noPacketLoss
-    let httpDurationGood =
-      http.response.seconds.map { seconds in
-        seconds <= Self.httpTimeoutSeconds
-      } ?? false
-    let httpGood =
-      http.command.succeeded
-      && http.response.statusCode == Self.httpSuccessCode
-      && httpDurationGood
-    let reason: String
-    if !gatewayGood {
-      reason = "gateway-unreachable"
-    } else if !httpGood {
-      reason = http.command.timedOut ? "internet-check-timeout" : "internet-check-failed"
-    } else {
-      reason = "ok"
-    }
-
+    // Gateway latency is not a health signal: mesh roam can be briefly slow.
+    // A 3s HTTP 200 after tether-to-Wi-Fi is DNS fallback, not a recovered path.
+    let verdict = ConnectivityEvaluator.evaluate(
+      gatewayLossPercent: gateway.packetLossPercent,
+      httpSucceeded: http.command.succeeded,
+      httpStatusCode: http.response.statusCode,
+      httpSeconds: http.response.seconds,
+      httpTimedOut: http.command.timedOut
+    )
     return NetworkHealth(
-      isHealthy: gatewayGood && httpGood,
+      isHealthy: verdict.isHealthy,
       gateway: gateway,
       httpStatusCode: http.response.statusCode,
       httpSeconds: http.response.seconds,
-      reason: reason
+      reason: verdict.reason
     )
   }
 

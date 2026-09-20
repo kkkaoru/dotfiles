@@ -1,4 +1,5 @@
 import Foundation
+import MacWiFiStabilityCore
 
 internal struct NetworkHealth: Sendable {
   internal let isHealthy: Bool
@@ -6,6 +7,10 @@ internal struct NetworkHealth: Sendable {
   internal let httpStatusCode: Int?
   internal let httpSeconds: Double?
   internal let reason: String
+
+  internal var gatewayIsReachable: Bool {
+    gateway?.packetLossPercent == ConnectivityEvaluator.noPacketLoss
+  }
 
   internal var logFields: String {
     let gatewayAverage = gateway?.averageMilliseconds.map { String(format: "%.3f", $0) } ?? "none"

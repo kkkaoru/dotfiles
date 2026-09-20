@@ -11,7 +11,8 @@ internal enum NetworkStateTests {
     parsesRunningTailscaleState()
     parsesStoppedTailscaleState()
     rejectsMalformedTailscaleState()
-    print("Swift tests: 8 passed")
+    ProbeDecisionTests.run()
+    print("Swift tests: 14 passed")
   }
 
   private static func parsesHealthyDHCPState() {

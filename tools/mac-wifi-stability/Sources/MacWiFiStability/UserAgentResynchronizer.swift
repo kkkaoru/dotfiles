@@ -6,8 +6,8 @@ internal struct UserAgentResynchronizer: Sendable {
 
   internal func light() -> [String] {
     [
-      restart(label: "com.apple.wifi.WiFiAgent", processToken: "WiFiAgent"),
       restart(label: "com.apple.networkserviceproxy", processToken: "networkserviceproxy"),
+      flushDNSCache(),
     ]
   }
 
@@ -16,7 +16,9 @@ internal struct UserAgentResynchronizer: Sendable {
     // network transition can make macOS treat its previous registration as a
     // name collision and persist a suffixed ComputerName (for example, "Mac (2)").
     // It is unrelated to IP path recovery, so deliberately leave it running.
-    light() + [flushDNSCache()]
+    // WiFiAgent restarts belong here only: doing them on every network change
+    // breaks a just-associated home mesh path after leaving tethering.
+    [restart(label: "com.apple.wifi.WiFiAgent", processToken: "WiFiAgent")] + light()
   }
 
   private func restart(label: String, processToken: String) -> String {

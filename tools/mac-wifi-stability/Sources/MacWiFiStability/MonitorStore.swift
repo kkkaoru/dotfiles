@@ -3,12 +3,14 @@ import Foundation
 internal struct MonitorStore: Sendable {
   private static let directoryPermissions = 0o700
   private static let filePermissions = 0o600
-  private static let lightActionCooldown: TimeInterval = 60
+  internal static let lightActionCooldown: TimeInterval = 60
 
   internal let stateDirectory: URL
   internal let signatureURL: URL
   internal let lastLightActionURL: URL
   internal let lastHealthDecisionURL: URL
+  internal let lastHealthResultURL: URL
+  internal let lastHealthAttemptURL: URL
   internal let transactionLockURL: URL
 
   internal init(home: URL) {
@@ -19,6 +21,8 @@ internal struct MonitorStore: Sendable {
     signatureURL = stateDirectory.appending(path: "network.signature")
     lastLightActionURL = stateDirectory.appending(path: "last-light-action.epoch")
     lastHealthDecisionURL = stateDirectory.appending(path: "last-health-decision.signature")
+    lastHealthResultURL = stateDirectory.appending(path: "last-health-result")
+    lastHealthAttemptURL = stateDirectory.appending(path: "last-health-attempt.epoch")
     transactionLockURL = stateDirectory.appending(path: "connection.transaction.lock")
   }
 
@@ -62,22 +66,6 @@ internal struct MonitorStore: Sendable {
     try saveEpoch(Date().timeIntervalSince1970, to: lastLightActionURL)
   }
 
-  internal func healthDecisionIsAllowed(for signature: String) -> Bool {
-    readText(from: lastHealthDecisionURL) != signature
-  }
-
-  internal func recordHealthDecision(for signature: String) throws {
-    try saveText(signature, to: lastHealthDecisionURL)
-  }
-
-  internal func clearHealthDecision() throws {
-    guard FileManager.default.fileExists(atPath: lastHealthDecisionURL.path(percentEncoded: false))
-    else {
-      return
-    }
-    try FileManager.default.removeItem(at: lastHealthDecisionURL)
-  }
-
   internal func acquireTransactionLock() -> ProcessLock? {
     let lock = ProcessLock(url: transactionLockURL)
     if lock != nil {
@@ -89,7 +77,7 @@ internal struct MonitorStore: Sendable {
     return lock
   }
 
-  private func saveEpoch(_ epoch: TimeInterval, to url: URL) throws {
+  internal func saveEpoch(_ epoch: TimeInterval, to url: URL) throws {
     try Data("\(Int(epoch))\n".utf8).write(to: url, options: .atomic)
     try FileManager.default.setAttributes(
       [.posixPermissions: Self.filePermissions],
@@ -97,7 +85,7 @@ internal struct MonitorStore: Sendable {
     )
   }
 
-  private func readEpoch(from url: URL) -> TimeInterval? {
+  internal func readEpoch(from url: URL) -> TimeInterval? {
     guard let data = try? Data(contentsOf: url),
       let string = String(bytes: data, encoding: .utf8),
       let value = Double(string.trimmingCharacters(in: .whitespacesAndNewlines))
@@ -108,7 +96,7 @@ internal struct MonitorStore: Sendable {
     return value
   }
 
-  private func saveText(_ value: String, to url: URL) throws {
+  internal func saveText(_ value: String, to url: URL) throws {
     try Data("\(value)\n".utf8).write(to: url, options: .atomic)
     try FileManager.default.setAttributes(
       [.posixPermissions: Self.filePermissions],
@@ -116,12 +104,19 @@ internal struct MonitorStore: Sendable {
     )
   }
 
-  private func readText(from url: URL) -> String? {
+  internal func readText(from url: URL) -> String? {
     guard let data = try? Data(contentsOf: url) else {
       return nil
     }
     let value = (String(bytes: data, encoding: .utf8) ?? "")
       .trimmingCharacters(in: .whitespacesAndNewlines)
     return value.isEmpty ? nil : value
+  }
+
+  internal func removeIfPresent(_ url: URL) throws {
+    guard FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else {
+      return
+    }
+    try FileManager.default.removeItem(at: url)
   }
 }

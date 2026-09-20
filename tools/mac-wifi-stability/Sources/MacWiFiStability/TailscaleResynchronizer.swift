@@ -22,19 +22,9 @@ internal struct TailscaleResynchronizer: Sendable {
       return "action=tailscale-rebind result=skip reason=not-installed"
     }
 
-    let preferences = runner.run(
-      binary,
-      arguments: ["debug", "prefs"],
-      timeout: Self.commandTimeoutSeconds
-    )
-    switch TailscaleRunStateParser.parse(preferences.stdout) {
+    switch resolveRunState() {
     case .running:
-      let rebound = runner.run(
-        binary,
-        arguments: ["debug", "rebind"],
-        timeout: Self.commandTimeoutSeconds
-      )
-      return "action=tailscale-rebind result=\(rebound.succeeded ? "ok" : "failed")"
+      return rebind()
 
     case .stopped:
       // `debug rebind` wakes the on-demand macOS Network Extension even when
@@ -43,7 +33,37 @@ internal struct TailscaleResynchronizer: Sendable {
       return "action=tailscale-rebind result=skip reason=stopped"
 
     case .unavailable:
-      return "action=tailscale-rebind result=skip reason=state-unavailable"
+      // Prefs often fail during a tether-to-Wi-Fi transition. Skipping rebind
+      // leaves MagicDNS bound to the old path while gateway ping still works.
+      return rebind() + " reason=state-unavailable"
     }
+  }
+
+  private func resolveRunState() -> TailscaleRunState {
+    let preferences = runner.run(
+      binary,
+      arguments: ["debug", "prefs"],
+      timeout: Self.commandTimeoutSeconds
+    )
+    let fromPrefs = TailscaleRunStateParser.parse(preferences.stdout)
+    guard fromPrefs == .unavailable else {
+      return fromPrefs
+    }
+
+    let status = runner.run(
+      binary,
+      arguments: ["status", "--json"],
+      timeout: Self.commandTimeoutSeconds
+    )
+    return TailscaleRunStateParser.parseStatus(status.stdout)
+  }
+
+  private func rebind() -> String {
+    let rebound = runner.run(
+      binary,
+      arguments: ["debug", "rebind"],
+      timeout: Self.commandTimeoutSeconds
+    )
+    return "action=tailscale-rebind result=\(rebound.succeeded ? "ok" : "failed")"
   }
 }

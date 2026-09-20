@@ -15,4 +15,26 @@ public enum TailscaleRunStateParser {
 
     return wantRunning ? .running : .stopped
   }
+
+  /// Parses `tailscale status --json` when `debug prefs` is unavailable.
+  public static func parseStatus(_ output: String) -> TailscaleRunState {
+    guard let data = output.data(using: .utf8),
+      let object = try? JSONSerialization.jsonObject(with: data),
+      let payload = object as? [String: Any],
+      let backendState = payload["BackendState"] as? String
+    else {
+      return .unavailable
+    }
+
+    switch backendState {
+    case "Running":
+      return .running
+
+    case "Stopped":
+      return .stopped
+
+    default:
+      return .unavailable
+    }
+  }
 }
