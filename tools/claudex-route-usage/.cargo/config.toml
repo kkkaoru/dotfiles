@@ -1,5 +1,11 @@
 [build]
 # Keep Rust debug/test artifacts out of the checkout, matching the adapter crate.
+#
+# The refresh worker resolves itself with current_exe() and refuses any executable under a
+# world-writable directory, so a build under /tmp (mode 1777) cannot spawn it and skips the
+# routing-cache refresh. Point CARGO_TARGET_DIR at a private directory instead - for example
+# ../claudex-agent-adapter/scripts/cargo-ephemeral.sh, which builds under TMPDIR - when
+# exercising the worker path.
 target-dir = "/tmp/claudex-route-usage-target"
 
 [alias]

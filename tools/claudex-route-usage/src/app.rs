@@ -192,7 +192,11 @@ fn fast_snapshot(arguments: &Arguments, state: &RuntimeState) -> Result<Value> {
         curl_program: &arguments.curl_program,
         configuration_key: &state.key,
     };
-    let _ = refresh::schedule(&request, fresh);
+    // A silent failure here disables routing refresh for the whole session, so report it. The
+    // worker trust check refuses executables under a world-writable directory such as /tmp.
+    if let Err(error) = refresh::schedule(&request, fresh) {
+        eprintln!("claudex-route-usage: routing cache refresh skipped: {error}");
+    }
     Ok(summary)
 }
 

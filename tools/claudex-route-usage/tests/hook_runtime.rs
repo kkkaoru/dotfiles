@@ -3,14 +3,31 @@ use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
 use std::os::fd::AsRawFd as _;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::mpsc;
+use std::sync::{OnceLock, mpsc};
 use std::time::{Duration, Instant};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn binary() -> &'static str {
-    env!("CARGO_BIN_EXE_claudex-route-usage")
+    static COPY: OnceLock<String> = OnceLock::new();
+    COPY.get_or_init(|| {
+        // The hook spawns the refresh worker from current_exe(), and that worker trust check
+        // rejects any path under a world-writable directory such as /tmp. Run a copy under the
+        // private TMPDIR instead so the suite passes whatever CARGO_TARGET_DIR was used.
+        let directory = std::env::temp_dir().join(format!(
+            "claudex-route-usage-test-bin-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&directory).expect("create test binary directory");
+        let copy = directory.join("claudex-route-usage");
+        fs::copy(env!("CARGO_BIN_EXE_claudex-route-usage"), &copy).expect("copy test binary");
+        fs::set_permissions(&copy, fs::Permissions::from_mode(0o700)).expect("chmod test binary");
+        copy.into_os_string()
+            .into_string()
+            .expect("utf-8 binary path")
+    })
 }
 
 struct Fixture {
