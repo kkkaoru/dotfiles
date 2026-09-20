@@ -15,7 +15,8 @@ export interface ModelSwitchInput {
  * Decide what to do with the omlx server when the active model/provider changes.
  * - Switching into omlx (from any other provider, or from no model at all) starts it.
  * - Switching away from omlx (to any other provider) nudges the idle-stop check.
- * - Anything else (switching between two non-omlx providers, or staying on omlx) is a no-op.
+ * - Switching between two non-omlx providers is a no-op. A model change inside omlx re-runs the
+ *   idempotent start check, so the server is up before the new omlx model is used.
  */
 export function decideModelSwitchAction(input: ModelSwitchInput): OmlxAction {
   const enteringOmlx: boolean = input.nextProvider === OMLX_PROVIDER_ID;

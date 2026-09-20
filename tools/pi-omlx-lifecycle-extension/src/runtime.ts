@@ -8,6 +8,8 @@ import {
 
 export interface OmlxRunResult {
   readonly code: number;
+  /** Set by pi's exec when the command was killed by its timeout or abort signal. */
+  readonly killed?: boolean;
   readonly stderr: string;
   readonly stdout: string;
 }
@@ -77,13 +79,18 @@ export class OmlxLifecycleRuntime {
     const plan: CommandPlan = this.planFor(action);
     try {
       const result: OmlxRunResult = await this.runner.run(plan.command, [], plan.timeoutMs);
-      if (result.code === 0) {
+      // Pi's exec reports a signalled kill as exit code 0 with killed=true.
+      // Treat that as a failure instead of a successful start.
+      if (result.code === 0 && result.killed !== true) {
         return { action, ok: true };
       }
       return {
         action,
         ok: false,
-        reason: result.stderr.trim() || `exit code ${String(result.code)}`,
+        reason:
+          result.killed === true
+            ? `timed out after ${String(plan.timeoutMs)}ms`
+            : result.stderr.trim() || `exit code ${String(result.code)}`,
       };
     } catch (error) {
       return { action, ok: false, reason: error instanceof Error ? error.message : String(error) };

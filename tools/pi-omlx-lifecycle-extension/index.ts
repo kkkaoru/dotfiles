@@ -15,6 +15,7 @@ interface ExecOptionsLike {
 
 interface ExecResultLike {
   readonly code: number;
+  readonly killed?: boolean;
   readonly stderr: string;
   readonly stdout: string;
 }

@@ -83,6 +83,26 @@ it("falls back to the exit code when a failing command has no stderr", async () 
   expect(outcome).toStrictEqual({ action: "start", ok: false, reason: "exit code 127" });
 });
 
+it("treats a killed (timed-out) command as a non-ok outcome even when pi reports exit code 0", async () => {
+  const runner: OmlxCommandRunner = runnerReturning({
+    code: 0,
+    killed: true,
+    stderr: "",
+    stdout: "",
+  });
+  const runtime = new OmlxLifecycleRuntime(runner, CONFIG);
+
+  const outcome = await runtime.onModelSelect({
+    nextProvider: "omlx",
+    previousProvider: undefined,
+  });
+
+  expect(outcome).toStrictEqual({
+    action: "start",
+    ok: false,
+    reason: `timed out after ${String(CONFIG.ensureTimeoutMs)}ms`,
+  });
+});
 it("treats a thrown Error (e.g. ENOENT because omlx was never installed) as a non-ok outcome", async () => {
   const runner: OmlxCommandRunner = { run: vi.fn().mockRejectedValue(new Error("ENOENT")) };
   const runtime = new OmlxLifecycleRuntime(runner, CONFIG);
