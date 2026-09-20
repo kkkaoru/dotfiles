@@ -14,7 +14,7 @@ repeated manual prompts.
   `loop_complete` only when complete or blocked on user input.
 - `/loop 5m <prompt>` and `/loop <prompt> every 5 minutes` run immediately and then recur on a
   fixed, session-scoped schedule. Supported units are seconds, minutes, hours, and days; intervals
-  below one minute are rounded up.
+  below one minute are rounded up and intervals above 30 days are rejected.
 - Bare `/loop` continues only work already established in the conversation.
 - `/loop list` shows pending jobs; `/loop pause` freezes and persists their remaining delays;
   `/loop resume` restores the countdown from that exact remainder; `/loop clear` cancels and persists
