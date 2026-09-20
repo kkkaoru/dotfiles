@@ -63,7 +63,9 @@ long-running commands continue in detached tmux sessions.
   until `agent_settled`. Delivery from that event is deferred by one event-loop turn so multiple
   settled handlers cannot all observe idle before an earlier asynchronous `sendUserMessage` call has
   activated or queued its run. Together with the explicit delivery mode, this prevents re-entrant
-  prompt dispatch and a new prompt racing the final handoff. If several tasks finish while Pi remains
+  prompt dispatch and a new prompt racing the final handoff. Settled delivery does not require full
+  idleness: `followUp` queues behind whatever Pi is already running, so a queued notice or check-in is
+  never starved by a continuous continuation loop. If several tasks finish while Pi remains
   busy, their eventual follow-up reports aggregate success/failure counts and only the newest task's
   command and artifact paths. All tasks are still marked delivered, so stale intermediate details do
   not flood a later agent turn or return after `/reload`.
@@ -97,9 +99,11 @@ cleanup time.
 
 ## Goal cooperation
 
-With the local `pi-goal-extension`, session-scoped event-bus snapshots report live task names and
-pending completion/overdue delivery. Launch notices associate only jobs started while that session's
-goal is active; pre-existing unrelated jobs do not stall the goal. Goal continuations defer to these
+With the local `pi-goal-extension`, session-scoped event-bus snapshots report live task names, the
+pending completion/overdue delivery flag, and which task names that pending delivery belongs to.
+Launch notices associate only jobs started while that session's
+goal is active; pre-existing unrelated jobs do not stall the goal, and neither does a pending notice
+for a job the goal does not own. Goal continuations defer to these
 notifications and do not poll the model or relaunch live jobs. Pausing/clearing a goal does not kill
 processes or stop tmux monitoring. See `../pi-goal-extension/README.md` for limits and verification.
 

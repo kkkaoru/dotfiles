@@ -105,6 +105,7 @@ it("exposes only session-scoped launches and disposes providers", async () => {
     expect.objectContaining({ sessionId: "session", name: expect.stringMatching(/^pi-tmux-/u) }),
   );
   expect(queryActivity(harness.events, "session")[0]?.tasks).toHaveLength(1);
+  expect(queryActivity(harness.events, "session")[0]?.pendingTasks).toStrictEqual([]);
   expect(queryActivity(harness.events, "foreign")).toStrictEqual([]);
   harness.stop();
   expect(queryActivity(harness.events, "session")).toStrictEqual([]);
@@ -113,16 +114,23 @@ it("reports overdue and completed work pending delivery, not false completion", 
   vi.useFakeTimers();
   const harness: Harness = setup();
   harness.start();
-  await harness.launch();
+  const launched = (await harness.launch()) as { details: { sessionName: string } };
   await vi.advanceTimersByTimeAsync(60_000);
   expect(queryActivity(harness.events, "session")[0]?.pendingDelivery).toBe(true);
+  expect(queryActivity(harness.events, "session")[0]?.pendingTasks).toStrictEqual([
+    launched.details.sessionName,
+  ]);
   harness.read.mockReturnValue("0");
   await vi.advanceTimersByTimeAsync(60_000);
   expect(queryActivity(harness.events, "session")[0]?.tasks).toStrictEqual([]);
   expect(queryActivity(harness.events, "session")[0]?.pendingDelivery).toBe(true);
+  expect(queryActivity(harness.events, "session")[0]?.pendingTasks).toStrictEqual([
+    launched.details.sessionName,
+  ]);
   harness.idle.mockReturnValue(true);
   harness.settled();
   await vi.advanceTimersByTimeAsync(0);
   expect(queryActivity(harness.events, "session")[0]?.pendingDelivery).toBe(false);
+  expect(queryActivity(harness.events, "session")[0]?.pendingTasks).toStrictEqual([]);
   harness.stop();
 });

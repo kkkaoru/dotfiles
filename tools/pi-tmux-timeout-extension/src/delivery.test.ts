@@ -417,6 +417,40 @@ it("defers overdue check-ins across busy and compacting phases and drops complet
   expect(onDelivered).toHaveBeenCalledOnce();
 });
 
+it("delivers a pending notice once the agent settles even while it stays busy", () => {
+  const sendUserMessage = vi.fn<CompletionDeliveryHost["sendUserMessage"]>();
+  const context: CompletionDeliveryContext = {
+    isIdle: (): boolean => false,
+    ui: { notify: vi.fn(), setStatus: vi.fn() },
+  };
+  const delivery = new CompletionDelivery({ sendUserMessage });
+  const launch = createTmuxLaunch({ command: "long watcher", id: 1, namespace: "a".repeat(32) });
+  delivery.setContext(context);
+  delivery.overdue([launch]);
+  expect(sendUserMessage).not.toHaveBeenCalled();
+  expect(delivery.pendingTaskNames()).toStrictEqual([launch.sessionName]);
+
+  delivery.agentSettled(context);
+
+  expect(sendUserMessage).toHaveBeenCalledOnce();
+  expect(sendUserMessage.mock.calls[0]?.[0]).toMatch(/tmux overdue check-in/u);
+  expect(delivery.pendingTaskNames()).toStrictEqual([]);
+});
+
+it("lists task names with queued completion and overdue notices", () => {
+  const delivery = new CompletionDelivery({ sendUserMessage: vi.fn() });
+  const first = createTmuxLaunch({ command: "first", id: 1, namespace: "a".repeat(32) });
+  const second = createTmuxLaunch({ command: "second", id: 2, namespace: "a".repeat(32) });
+  delivery.setContext({
+    isIdle: (): boolean => false,
+    ui: { notify: vi.fn(), setStatus: vi.fn() },
+  });
+  delivery.complete({ launch: first, completedAt: new Date().toISOString(), exitCode: 0 });
+  delivery.overdue([second]);
+
+  expect(delivery.pendingTaskNames()).toStrictEqual([first.sessionName, second.sessionName]);
+});
+
 it("retains an overdue check-in on delivery races and clears it at shutdown", () => {
   const sendUserMessage = vi
     .fn<CompletionDeliveryHost["sendUserMessage"]>()

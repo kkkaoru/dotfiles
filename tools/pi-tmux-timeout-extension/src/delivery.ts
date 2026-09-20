@@ -149,7 +149,7 @@ export class CompletionDelivery {
     launches.map((launch: TmuxLaunch): Map<string, TmuxLaunch> =>
       this.#pendingOverdue.set(launch.completionChannel, launch),
     );
-    this.#flushIfIdle();
+    this.#flushPending(false);
   }
 
   injectOverdue(event: unknown): { messages: unknown[] } | undefined {
@@ -196,6 +196,18 @@ export class CompletionDelivery {
     return this.#pending.length > 0 || this.#pendingOverdue.size > 0;
   }
 
+  /** Session names whose completion or overdue notice is still queued locally. */
+  pendingTaskNames(): readonly string[] {
+    const names = new Set<string>();
+    for (const completion of this.#pending) {
+      names.add(completion.launch.sessionName);
+    }
+    for (const launch of this.#pendingOverdue.values()) {
+      names.add(launch.sessionName);
+    }
+    return [...names];
+  }
+
   setContext(context: CompletionDeliveryContext): void {
     this.#context = context;
   }
@@ -212,7 +224,7 @@ export class CompletionDelivery {
     if (context !== undefined) {
       this.setContext(context);
     }
-    this.#flushIfIdle();
+    this.#flushPending(false);
   }
 
   deferAfterCompaction(context?: CompletionDeliveryContext): void {
@@ -229,7 +241,8 @@ export class CompletionDelivery {
 
   agentSettled(context: CompletionDeliveryContext): void {
     this.setContext(context);
-    this.#flushIfIdle();
+    // Settled delivery must not wait for full idleness; followUp queues behind the current run.
+    this.#flushPending(true);
   }
 
   clear(): void {
@@ -284,11 +297,11 @@ export class CompletionDelivery {
     }, SETTLED_DELIVERY_DELAY_MS);
   }
 
-  #flushIfIdle(): void {
+  #flushPending(settled: boolean): void {
     if (
       this.#compacting ||
-      this.#context?.isIdle() === false ||
-      (this.#pending.length === 0 && this.#pendingOverdue.size === 0)
+      (this.#pending.length === 0 && this.#pendingOverdue.size === 0) ||
+      (!settled && this.#context?.isIdle() === false)
     ) {
       return;
     }
@@ -311,16 +324,12 @@ export class CompletionDelivery {
     );
   }
 
-  #notifyCompletion(completion: Completion): void {
+  #defer(completion: Completion): void {
+    this.#pending.push(completion);
     this.#context?.ui.notify(
       completionName(completion),
       completion.exitCode === 0 ? "info" : "warning",
     );
-  }
-
-  #defer(completion: Completion): void {
-    this.#pending.push(completion);
-    this.#notifyCompletion(completion);
     this.#updateStatus();
   }
 

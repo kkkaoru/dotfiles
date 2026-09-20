@@ -33,6 +33,7 @@ interface ExecOptions {
 }
 interface ExecResult {
   readonly code: number;
+  readonly killed?: boolean;
   readonly stderr: string;
   readonly stdout: string;
 }
@@ -291,6 +292,7 @@ export default function tmuxTimeoutExtension(
           source: "tmux",
           ownsContinuation: false,
           pendingDelivery: delivery.hasPending(),
+          pendingTasks: delivery.pendingTaskNames(),
           tasks: activityState.tasks,
         }));
   const runtime: TmuxRuntime = new TmuxRuntime({
