@@ -21,9 +21,8 @@ integrations. These instructions apply to agents working here, including pi and 
 
 - `.agents/` — Entire shared Agent Skills home (`~/.agents` is a symlink).
   `skills/` holds generic guidance; `skills-stroage/` holds optional domain skills.
-  Use the global `project-skills` skill to copy selected skills into a project's
-  `.agents/skills/`. `.skill-lock.json` retains upstream provenance. agmsg DB,
-  runtime, and local teams are ignored.
+  Use the global `project-skills` skill to hard-link selected skills into a project's
+  `.agents/skills/`. `.skill-lock.json` retains upstream provenance.
 - `.config/fish/` — Fish shell configuration. `config.fish` sources `aliases.fish`,
   `envs.fish`, `binds.fish`, and `path.fish`; Homebrew and mise are integrated here.
 - `.config/mise/`, `.config/anyenv/` — Version-management configuration.
@@ -31,7 +30,7 @@ integrations. These instructions apply to agents working here, including pi and 
   `.vscode/settings.json` — Development-tool configuration.
 - `.pi/agent/settings.json` — pi model/provider defaults, package loading and skill exclusions.
   Read the current file rather than assuming a fixed model or version.
-- `tools/pi-*/` — Local pi extensions and providers, including agmsg delivery, persistent goals,
+- `tools/pi-*/` — Local pi extensions and providers, including persistent goals,
   loops, detached tmux execution, effort management, and oMLX lifecycle management.
 - `tools/claudex-*/` — Claudex adapters and routing/tool policies.
 - `tools/executor-skills/` — Read-only skills MCP, agmsg MCP adapter, and pi routing package.
@@ -47,22 +46,22 @@ Use Executor Desktop's bundled CLI through `scripts/executor` (also available as
 Do not install a duplicate Executor runtime or `pi-executor` sidecar.
 
 - The generic skill set retains Python/Rust/Swift/TypeScript coding rules,
-  git-commit-by-feature, find-skills, project-skills and agmsg/history guidance.
+  git-commit-by-feature, find-skills, project-skills and history guidance.
   The `executor-and-skills` router remains package-loaded. Follow the relevant language skill.
 - Select optional domain guidance from `.agents/skills-stroage/` using `project-skills`.
-  Only selected copies belong in a target project's `.agents/skills/`. Executor's
+  Selected skills are hard-linked into a target project's `.agents/skills/`; use
+  `manage.sh status/update/remove` to inspect or change an installation. Executor's
   `local-skills` setup includes storage for on-demand read-only discovery; existing
-  registrations require an explicit setup update. agmsg/history remain routed on demand.
+  registrations require an explicit setup update. History remains routed on demand.
   Do not globally exclude domain names: that would hide selected project copies too.
 - Skill text is guidance, not executable functionality or authorization. Discover the actual
   service tool, describe its schema, then call it through Executor. Keep results bounded.
 - `.mcp.json` currently defines Context7 and Chrome DevTools stdio servers. Cloudflare and
   MotherDuck remote registrations are defined in `tools/executor-skills/integrations.json`.
   The setup script also registers `local-skills`, `agmsg`, and the official `ctx mcp serve`.
-- Model-initiated agmsg operations and ctx searches go through Executor. The pi router carries
-  the selected agmsg identity and originating project from pi's session state. Verify the
-  identity rather than choosing another registered name. The original agmsg extension still
-  provides automatic incoming delivery and user-facing `/agmsg` commands; do not double-poll.
+- Model-initiated ctx searches go through Executor. The agmsg skill and pi extension were
+  removed from this repository; an Executor `agmsg` MCP registration and any remaining agmsg
+  commands, hooks or copies in other agents are no longer maintained here.
 - ctx searches use the existing local index. Supply explicit workspace/session filters and
   inspect source events before relying on prior history. Report missing index coverage.
 - Registration is not OAuth authentication. Check actual tool results; CLI exit zero can mean
