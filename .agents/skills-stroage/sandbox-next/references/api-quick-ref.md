@@ -2,14 +2,14 @@
 
 Scan aid for the **process / terminal / interpreter** shapes that differ most from stable. **Not exhaustive.**
 
-| For… | Go here |
-| ---- | ------- |
-| Full signatures and types | Installed `@cloudflare/sandbox@next` package types |
-| Preview API hub | https://developers.cloudflare.com/sandbox/1-0-preview/api/ |
-| Processes · terminals · errors · interpreter | Same hub (dedicated pages) |
-| Files, mounts, backups, ports, tunnels, lifecycle options | Main docs linked from the hub and from **`sandbox-next`** § Retrieve — ignore stable-only session/transport bits |
-| Mental model (exec, durability, ID vs container) | https://developers.cloudflare.com/sandbox/1-0-preview/processes/ · https://developers.cloudflare.com/sandbox/1-0-preview/lifecycle/ |
-| `Sandbox` extends `Container` | [Cloudflare Containers](https://developers.cloudflare.com/containers/) + Sandbox lifecycle docs above |
+| For…                                                      | Go here                                                                                                                             |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Full signatures and types                                 | Installed `@cloudflare/sandbox@next` package types                                                                                  |
+| Preview API hub                                           | https://developers.cloudflare.com/sandbox/1-0-preview/api/                                                                          |
+| Processes · terminals · errors · interpreter              | Same hub (dedicated pages)                                                                                                          |
+| Files, mounts, backups, ports, tunnels, lifecycle options | Main docs linked from the hub and from **`sandbox-next`** § Retrieve — ignore stable-only session/transport bits                    |
+| Mental model (exec, durability, ID vs container)          | https://developers.cloudflare.com/sandbox/1-0-preview/processes/ · https://developers.cloudflare.com/sandbox/1-0-preview/lifecycle/ |
+| `Sandbox` extends `Container`                             | [Cloudflare Containers](https://developers.cloudflare.com/containers/) + Sandbox lifecycle docs above                               |
 
 If something is missing here, it is almost certainly **documented elsewhere or in types**—do not invent it from this file.
 
@@ -87,7 +87,7 @@ await sandbox.interpreter.deleteCodeContext(id)
 ## Environment
 
 ```ts
-await sandbox.setEnvVars(Record<string, string | undefined>) // undefined removes
+await sandbox.setEnvVars(Record<string, string | undefined>); // undefined removes
 // plus env on exec / createTerminal
 ```
 

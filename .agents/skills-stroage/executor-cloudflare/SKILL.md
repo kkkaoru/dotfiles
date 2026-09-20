@@ -58,17 +58,17 @@ Never print credentials or read Executor's credential database directly.
 The names below are local conventions, not guaranteed connection paths.
 Discover the installed catalog every time context is uncertain.
 
-| Task | Preferred integration | Official endpoint |
-| --- | --- | --- |
-| Account/resource API, Workers, DNS, R2, D1, KV | `cloudflare-api` | `https://mcp.cloudflare.com/mcp` |
-| Current product docs and pricing | `cloudflare-docs` | `https://docs.mcp.cloudflare.com/mcp` |
-| Bindings and resource discovery | `cloudflare-bindings` | `https://bindings.mcp.cloudflare.com/mcp` |
-| Build/deploy diagnostics | `cloudflare-builds` | `https://builds.mcp.cloudflare.com/mcp` |
-| Workers logs and metrics | `cloudflare-observability` | `https://observability.mcp.cloudflare.com/mcp` |
-| Analytics and usage | `cloudflare-graphql` | Discover installed integration |
-| Browser rendering | `cloudflare-browser` | Discover installed integration |
-| Agents SDK documentation | `cloudflare-agents` | Discover installed integration |
-| Billing-token connection to the same official API MCP | `cloudflare-billing-mcp`, if installed | `https://mcp.cloudflare.com/mcp` |
+| Task                                                  | Preferred integration                  | Official endpoint                              |
+| ----------------------------------------------------- | -------------------------------------- | ---------------------------------------------- |
+| Account/resource API, Workers, DNS, R2, D1, KV        | `cloudflare-api`                       | `https://mcp.cloudflare.com/mcp`               |
+| Current product docs and pricing                      | `cloudflare-docs`                      | `https://docs.mcp.cloudflare.com/mcp`          |
+| Bindings and resource discovery                       | `cloudflare-bindings`                  | `https://bindings.mcp.cloudflare.com/mcp`      |
+| Build/deploy diagnostics                              | `cloudflare-builds`                    | `https://builds.mcp.cloudflare.com/mcp`        |
+| Workers logs and metrics                              | `cloudflare-observability`             | `https://observability.mcp.cloudflare.com/mcp` |
+| Analytics and usage                                   | `cloudflare-graphql`                   | Discover installed integration                 |
+| Browser rendering                                     | `cloudflare-browser`                   | Discover installed integration                 |
+| Agents SDK documentation                              | `cloudflare-agents`                    | Discover installed integration                 |
+| Billing-token connection to the same official API MCP | `cloudflare-billing-mcp`, if installed | `https://mcp.cloudflare.com/mcp`               |
 
 Browser rendering is not automatically an authenticated Dashboard browser session.
 Bindings/builds/observability tools do not automatically expose invoice amounts.
@@ -138,11 +138,11 @@ truncate the MCP response.
 
 The following REST routes were found in the MCP's OpenAPI specification:
 
-| Operation | Method and path |
-| --- | --- |
-| List/create buckets | `GET` / `POST /accounts/{account_id}/r2/buckets` |
-| Inspect bucket | `GET /accounts/{account_id}/r2/buckets/{bucket_name}` |
-| List objects | `GET /accounts/{account_id}/r2/buckets/{bucket_name}/objects` |
+| Operation                    | Method and path                                                                               |
+| ---------------------------- | --------------------------------------------------------------------------------------------- |
+| List/create buckets          | `GET` / `POST /accounts/{account_id}/r2/buckets`                                              |
+| Inspect bucket               | `GET /accounts/{account_id}/r2/buckets/{bucket_name}`                                         |
+| List objects                 | `GET /accounts/{account_id}/r2/buckets/{bucket_name}/objects`                                 |
 | Read/write/delete one object | `GET` / `PUT` / `DELETE /accounts/{account_id}/r2/buckets/{bucket_name}/objects/{object_key}` |
 
 Use `cloudflare.request` through Executor with the existing authorized OAuth
@@ -268,9 +268,9 @@ do not assert that permissions are definitely the problem.
      billing-cycle anchor day; otherwise the API may return no usage.
    - `GET /accounts/{account_id}/subscriptions`: obtain fixed recurring prices and
      current period dates separately. These are not invoice totals.
-   The similarly named `/billable/usage` (v2) is a different, restricted API. Its
-   documented cost fields may be absent. Inspect the current specification rather
-   than assuming the newest version provides monetary values.
+     The similarly named `/billable/usage` (v2) is a different, restricted API. Its
+     documented cost fields may be absent. Inspect the current specification rather
+     than assuming the newest version provides monetary values.
 3. Aggregate Billable Usage **inside MCP Code Mode before returning the result**;
    full daily records can exceed MCP output limits. Follow the aggregation and
    reporting checklist below. If a history endpoint fails, preserve successful
