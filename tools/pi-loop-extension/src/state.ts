@@ -70,16 +70,12 @@ function validState(value: unknown): value is LoopRuntimeState {
   );
 }
 
-export function restoredPendingContinuations(state: LoopRuntimeState): readonly string[] {
-  const pending: string[] = [...state.pendingContinuations];
-  if (
-    state.runningContinuation !== undefined &&
-    state.jobs.length === 0 &&
-    !pending.includes(state.runningContinuation)
-  ) {
-    pending.push(state.runningContinuation);
+export function restoredQueuedContinuations(state: LoopRuntimeState): readonly string[] {
+  const queued: string[] = [...state.pendingContinuations];
+  if (state.runningContinuation !== undefined && !queued.includes(state.runningContinuation)) {
+    queued.push(state.runningContinuation);
   }
-  return pending;
+  return queued;
 }
 
 export function createLoopState(input: {

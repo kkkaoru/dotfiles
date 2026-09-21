@@ -183,8 +183,8 @@ it("continues a loop after the settled event has returned", () => {
   onSettled?.({}, context);
   expect(sendUserMessage).toHaveBeenCalledTimes(2);
   vi.runOnlyPendingTimers();
-  expect(sendUserMessage).toHaveBeenCalledTimes(3);
+  expect(sendUserMessage).toHaveBeenCalledTimes(2);
   onCompaction?.({ willRetry: false }, context);
   vi.runOnlyPendingTimers();
-  expect(sendUserMessage).toHaveBeenCalledTimes(4);
+  expect(sendUserMessage).toHaveBeenCalledTimes(2);
 });

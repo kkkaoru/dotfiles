@@ -46,3 +46,7 @@ export function loopListMessage(input: ListInput): string {
     ? "No loop jobs are scheduled."
     : loopListText([...input.jobs.values()], input.paused, input.now);
 }
+
+export function pausedLoopNotice(jobs: number, ready: number): string {
+  return `Loop paused: ${String(jobs)} job(s), ${String(ready)} ready. /loop resume or /loop clear.`;
+}

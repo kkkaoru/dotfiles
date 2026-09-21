@@ -1,6 +1,6 @@
 // This TypeScript file is executed with Bun.
 import { expect, it } from "vitest";
-import { loopListMessage, pauseJobs, resumeJobs } from "./job-control.ts";
+import { loopListMessage, pausedLoopNotice, pauseJobs, resumeJobs } from "./job-control.ts";
 import type { LoopJobState } from "./state.ts";
 
 const JOB: LoopJobState = {
@@ -31,5 +31,8 @@ it("formats empty and scheduled loop lists", () => {
   );
   expect(loopListMessage({ jobs: new Map([[1, JOB]]), now: 1000, paused: false })).toBe(
     "#1 in 1m: pending",
+  );
+  expect(pausedLoopNotice(1, 2)).toBe(
+    "Loop paused: 1 job(s), 2 ready. /loop resume or /loop clear.",
   );
 });

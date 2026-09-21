@@ -25,7 +25,7 @@ function persistedPausedState(
   return restored;
 }
 
-it("delivers a ready continuation after the reload lifecycle returns", () => {
+it("delivers an in-flight tick after reload when idle", () => {
   vi.useFakeTimers();
   const sendUserMessage = vi.fn<LoopHost["sendUserMessage"]>();
   const runtime = new LoopRuntime({ sendUserMessage });
@@ -38,17 +38,59 @@ it("delivers a ready continuation after the reload lifecycle returns", () => {
       jobs: [],
       nextId: 2,
       paused: false,
-      pendingContinuations: ["08-26 04:00 → 04:01 | loop=#1 | inspect\ncontinue"],
-      runningContinuation: undefined,
+      pendingContinuations: ["08-26 04:00 → 04:01 | loop=#110 | leftover\ncontinue"],
+      runningContinuation: "08-26 04:00 → 04:01 | loop=#110 | leftover\ncontinue",
     }),
     context,
   );
   expect(sendUserMessage).not.toHaveBeenCalled();
   vi.runOnlyPendingTimers();
-
   expect(sendUserMessage).toHaveBeenCalledWith(
-    "08-26 04:00 → 04:01 | loop=#1 | inspect\ncontinue",
+    "08-26 04:00 → 04:01 | loop=#110 | leftover\ncontinue",
     { deliverAs: "followUp" },
+  );
+  runtime.clear();
+});
+
+it("keeps paused leftovers visible and tells the user how to resume or clear", () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date(2026, 8, 21, 23, 53));
+  const sendUserMessage = vi.fn<LoopHost["sendUserMessage"]>();
+  const notify = vi.fn<LoopContext["ui"]["notify"]>();
+  const setWidget = vi.fn<NonNullable<LoopContext["ui"]["setWidget"]>>();
+  const runtime = new LoopRuntime({ sendUserMessage });
+  const context: LoopContext = {
+    isIdle: (): boolean => true,
+    ui: { notify, setStatus: vi.fn(), setWidget },
+  };
+  runtime.restore(
+    createLoopState({
+      jobs: [
+        {
+          id: 5,
+          nextRunAt: new Date(2026, 8, 21, 4, 20).getTime(),
+          prompt: "measure HUD",
+          reason: "HUD parse ok",
+          submittedAt: new Date(2026, 8, 21, 4, 19).getTime(),
+        },
+      ],
+      nextId: 7,
+      paused: true,
+      pendingContinuations: ["09-21 04:19 → 04:20 | loop=#5 | HUD parse ok\nkeep measuring"],
+      runningContinuation: undefined,
+    }),
+    context,
+  );
+  vi.runOnlyPendingTimers();
+  runtime.agentSettled(context);
+  expect(sendUserMessage).not.toHaveBeenCalled();
+  expect(notify).toHaveBeenCalledWith(
+    "Loop paused: 1 job(s), 1 ready. /loop resume or /loop clear.",
+    "warning",
+  );
+  expect(setWidget).toHaveBeenLastCalledWith(
+    "loop-wakeups",
+    expect.arrayContaining(["09-21 04:19 → 04:20 | loop=#5 | HUD parse ok"]),
   );
   runtime.clear();
 });

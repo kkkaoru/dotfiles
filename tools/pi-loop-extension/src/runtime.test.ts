@@ -8,6 +8,7 @@ import {
   type Scheduler,
   type WakeupInput,
 } from "./runtime.ts";
+import { ABANDONED_LOOP_NOTICE } from "./settled-tick.ts";
 import { createLoopState } from "./state.ts";
 
 interface PollerCallback {
@@ -65,7 +66,7 @@ describe("LoopRuntime commands", () => {
     runtime.command("check the build", context);
     expect(sendUserMessage).toHaveBeenCalledOnce();
     expect(sendUserMessage.mock.calls[0]?.[0]).toBe(
-      "This is a self-paced loop. Perform the task now and continue through every immediately actionable step. Do not end by merely reporting remaining work. Before ending, make exactly one terminal loop decision: call loop_wakeup when another useful later check remains, or call loop_complete only when the task is complete or blocked on user input. If neither tool is called, the loop automatically continues.\n\nTask:\ncheck the build",
+      "This is a self-paced loop. Perform the task now and continue through every immediately actionable step. Do not end by merely reporting remaining work. Before ending, make exactly one terminal loop decision: call loop_wakeup when another useful later check remains, or call loop_complete only when the task is complete or blocked on user input. If neither tool is called, the loop continues once more and then stops.\n\nTask:\ncheck the build",
     );
     expect(notify).toHaveBeenCalledWith("Started a self-paced loop.", "info");
   });
@@ -75,7 +76,7 @@ describe("LoopRuntime commands", () => {
     runtime.command("", context);
 
     expect(sendUserMessage.mock.calls[0]?.[0]).toBe(
-      "This is a self-paced loop. Perform the task now and continue through every immediately actionable step. Do not end by merely reporting remaining work. Before ending, make exactly one terminal loop decision: call loop_wakeup when another useful later check remains, or call loop_complete only when the task is complete or blocked on user input. If neither tool is called, the loop automatically continues.\n\nTask:\nContinue work already established in this conversation. Act as a steward, not an initiator: finish in-progress work, verification, or clearly authorized maintenance. Do not invent new work or perform irreversible actions without authorization. If nothing actionable remains, say so briefly and stop.",
+      "This is a self-paced loop. Perform the task now and continue through every immediately actionable step. Do not end by merely reporting remaining work. Before ending, make exactly one terminal loop decision: call loop_wakeup when another useful later check remains, or call loop_complete only when the task is complete or blocked on user input. If neither tool is called, the loop continues once more and then stops.\n\nTask:\nContinue work already established in this conversation. Act as a steward, not an initiator: finish in-progress work, verification, or clearly authorized maintenance. Do not invent new work or perform irreversible actions without authorization. If nothing actionable remains, say so briefly and stop.",
     );
   });
 
@@ -287,7 +288,7 @@ describe("LoopRuntime compaction", () => {
     recurringRuntime.clear();
   });
 
-  it("continues an unfinished tick until explicitly completed", () => {
+  it("stops a loop that settles twice without a terminal tool", () => {
     const runtime = new LoopRuntime(host, scheduler);
     runtime.command("check deployment", context);
 
@@ -295,6 +296,15 @@ describe("LoopRuntime compaction", () => {
 
     expect(sendUserMessage).toHaveBeenCalledTimes(2);
     expect(notify).toHaveBeenLastCalledWith("Continuing unfinished loop work.", "info");
+    runtime.agentSettled(context);
+    expect(sendUserMessage).toHaveBeenCalledTimes(2);
+    expect(notify).toHaveBeenLastCalledWith(ABANDONED_LOOP_NOTICE, "warning");
+  });
+
+  it("completes an unfinished tick when the model calls loop_complete after one continuation", () => {
+    const runtime = new LoopRuntime(host, scheduler);
+    runtime.command("check deployment", context);
+    runtime.agentSettled(context);
     expect(runtime.complete("deployment verified", context)).toStrictEqual({
       reason: "deployment verified",
     });
@@ -339,7 +349,7 @@ describe("LoopRuntime wakeups", () => {
     runtime.agentSettled(context);
     expect(sendUserMessage).toHaveBeenCalledWith(
       expect.stringMatching(
-        /^\d{2}-\d{2} \d{2}:\d{2} → \d{2}:\d{2} \| loop=#1 \| CI may finish\nThis is a self-paced loop\. Perform the task now and continue through every immediately actionable step\. Do not end by merely reporting remaining work\. Before ending, make exactly one terminal loop decision: call loop_wakeup when another useful later check remains, or call loop_complete only when the task is complete or blocked on user input\. If neither tool is called, the loop automatically continues\.\n\nTask:\ncheck again$/u,
+        /^\d{2}-\d{2} \d{2}:\d{2} → \d{2}:\d{2} \| loop=#1 \| CI may finish\nThis is a self-paced loop\. Perform the task now and continue through every immediately actionable step\. Do not end by merely reporting remaining work\. Before ending, make exactly one terminal loop decision: call loop_wakeup when another useful later check remains, or call loop_complete only when the task is complete or blocked on user input\. If neither tool is called, the loop continues once more and then stops\.\n\nTask:\ncheck again$/u,
       ),
       { deliverAs: "followUp" },
     );

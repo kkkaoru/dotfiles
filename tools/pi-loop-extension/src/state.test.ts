@@ -5,7 +5,7 @@ import {
   latestLoopState,
   LOOP_STATE_ENTRY_TYPE,
   persistLoopState,
-  restoredPendingContinuations,
+  restoredQueuedContinuations,
 } from "./state.ts";
 
 const EMPTY_STATE = {
@@ -42,13 +42,19 @@ it("persists and restores the latest valid session state", () => {
     ]),
   ).toEqual(state);
   const continuation = createLoopState({ ...EMPTY_STATE, runningContinuation: "continue task" });
-  expect(restoredPendingContinuations(continuation)).toEqual(["continue task"]);
+  expect(restoredQueuedContinuations(continuation)).toEqual(["continue task"]);
   expect(
-    restoredPendingContinuations({
+    restoredQueuedContinuations({
       ...continuation,
       pendingContinuations: ["continue task"],
     }),
   ).toEqual(["continue task"]);
+  expect(
+    restoredQueuedContinuations({
+      ...continuation,
+      pendingContinuations: ["other ready"],
+    }),
+  ).toEqual(["other ready", "continue task"]);
 });
 
 it("ignores unrelated and malformed session entries", () => {
@@ -73,6 +79,5 @@ it("ignores unrelated and malformed session entries", () => {
       },
     ]),
   ).toBeUndefined();
-  expect(restoredPendingContinuations(createLoopState(EMPTY_STATE))).toEqual([]);
   persistLoopState(undefined, EMPTY_STATE);
 });

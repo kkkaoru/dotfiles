@@ -7,7 +7,7 @@ const USER_MESSAGE_DELIVERY_OPTIONS: UserMessageDeliveryOptions = { deliverAs: "
 const MIN_WAKEUP_SECONDS = 60;
 const MAX_WAKEUP_SECONDS = 3600;
 export const AUTONOMOUS_PROMPT = `Continue work already established in this conversation. Act as a steward, not an initiator: finish in-progress work, verification, or clearly authorized maintenance. Do not invent new work or perform irreversible actions without authorization. If nothing actionable remains, say so briefly and stop.`;
-const SELF_PACED_GUIDANCE = `This is a self-paced loop. Perform the task now and continue through every immediately actionable step. Do not end by merely reporting remaining work. Before ending, make exactly one terminal loop decision: call loop_wakeup when another useful later check remains, or call loop_complete only when the task is complete or blocked on user input. If neither tool is called, the loop automatically continues.`;
+const SELF_PACED_GUIDANCE = `This is a self-paced loop. Perform the task now and continue through every immediately actionable step. Do not end by merely reporting remaining work. Before ending, make exactly one terminal loop decision: call loop_wakeup when another useful later check remains, or call loop_complete only when the task is complete or blocked on user input. If neither tool is called, the loop continues once more and then stops.`;
 
 export function trySendUserMessage(host: LoopHost, message: string): boolean {
   try {
@@ -25,6 +25,10 @@ export interface WakeupInput {
   readonly delaySeconds: number;
   readonly prompt: string;
   readonly reason: string;
+}
+export interface WakeupResult {
+  readonly id: number;
+  readonly scheduledInSeconds: number;
 }
 
 export function requireActiveLoop(continuation: string | undefined, toolName: string): void {

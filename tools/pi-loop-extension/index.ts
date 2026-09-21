@@ -170,7 +170,7 @@ export default function loopExtension(host: LoopExtensionHost): void {
     promptGuidelines: [
       "For an active self-paced /loop, do not end while immediately actionable work remains; continue working in the current turn.",
       "Before ending an active self-paced /loop tick, call exactly one terminal loop tool: loop_wakeup when a useful later check remains, or loop_complete only when the task is complete or blocked on user input.",
-      "Never merely report remaining work without a terminal loop tool; the extension automatically continues ticks that omit the decision.",
+      "Never merely report remaining work without a terminal loop tool; a tick without loop_wakeup or loop_complete continues once, then the loop stops.",
       "When using loop_wakeup, choose the next useful delay and preserve required state in its prompt.",
     ],
     promptSnippet: "Schedule the next useful self-paced /loop tick",

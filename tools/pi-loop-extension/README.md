@@ -31,18 +31,19 @@ check and delivery, preventing repeated `<runtime>` busy errors.
 The self-paced behavior follows Codex's agent-loop principle: a turn continues through tool calls,
 then the model explicitly chooses exactly one terminal action. `loop_wakeup` schedules a later check;
 `loop_complete` ends the loop only after completion or a user-input blocker. If a tick ends without
-either decision, `agent_settled` schedules the retained task for the next event-loop turn instead of
-silently ending with residual work. Deferring by one event-loop turn prevents re-entrant prompt
+either decision, `agent_settled` continues that tick once. A second settle without `loop_wakeup` or
+`loop_complete` stops the loop instead of replaying it forever across sessions. Deferring by one event-loop turn prevents re-entrant prompt
 dispatch when multiple settled handlers observe idle before an earlier asynchronous
 `sendUserMessage` call has activated or queued its run. Every `loop_wakeup` tick reapplies the
 self-paced decision instructions around the saved task prompt, so later turns do not depend on the
 model copying those instructions into its own wakeup prompt. A session-scoped
 five-second background poller checks wall-clock deadlines, including overdue jobs after system
-sleep. If pi compacts during an in-flight self-paced tick without retrying it, the extension retains
-that tick internally so the loop continues from the compacted context. Every schedule, pause, resume,
-fire, clear, and ready continuation writes a versioned custom session entry. On `/reload`, the newest
-entry restores job IDs, absolute deadlines, paused remaining delays, pending continuations, and the
-persistent widget. Overdue restored jobs fire immediately; paused jobs remain paused until `/loop resume`.
+sleep. If pi compacts during an in-flight self-paced tick without retrying it, the extension continues
+that tick once from the compacted context. Every schedule, pause, resume,
+fire, clear, and ready continuation writes a versioned custom session entry. On `/reload`, the newest entry restores jobs, queued follow-ups, and in-flight ticks. If the loop is
+not paused, overdue jobs fire and ready continuations are delivered. If it is paused, the widget
+stays and a warning tells you to `/loop resume` or `/loop clear`. Live ticks still continue once
+without a terminal tool, then stop.
 Pi's own retry and recurring jobs are left untouched to avoid duplicate runs. `loop_wakeup` uses
 parallel tool execution because its schedule, state and persistence updates are synchronous and it
 does not need to serialize sibling tools. Polling starts only

@@ -3,38 +3,30 @@ import type { CompleteResult, LoopContext, LoopHost } from "./contracts.ts";
 import { clearLoopDisplay, updateLoopDisplay } from "./display.ts";
 import { namedLoopFollowUp } from "./follow-up.ts";
 import {
-  AUTONOMOUS_PROMPT,
   commandPrompt,
   requireActiveLoop,
   trySendUserMessage,
   validateWakeup,
   type WakeupInput,
+  type WakeupResult,
 } from "./helpers.ts";
-import { loopListMessage, pauseJobs, resumeJobs } from "./job-control.ts";
-import { formatInterval, parseLoopCommand, type LoopCommand } from "./parser.ts";
+import { loopListMessage, pausedLoopNotice, pauseJobs, resumeJobs } from "./job-control.ts";
+import { parseLoopCommand, type LoopCommand } from "./parser.ts";
+import { startLoopCommand, type StartCommandScheduleInput } from "./start-command.ts";
 import { type Poller, type Scheduler, SYSTEM_SCHEDULER } from "./scheduler.ts";
 import { SettledDelivery } from "./settled-delivery.ts";
+import { ABANDONED_LOOP_NOTICE, settleTick } from "./settled-tick.ts";
 import {
   type LoopJobState as LoopJob,
   persistLoopState,
-  restoredPendingContinuations,
+  restoredQueuedContinuations,
   type LoopRuntimeState,
 } from "./state.ts";
 export type { LoopContext, LoopHost } from "./contracts.ts";
-export type { WakeupInput } from "./helpers.ts";
+export type { WakeupInput, WakeupResult } from "./helpers.ts";
 export type { Scheduler } from "./scheduler.ts";
 const MILLISECONDS_PER_SECOND = 1000;
 const POLL_INTERVAL_MS = 5000;
-interface ScheduleInput {
-  readonly delayMs: number;
-  readonly intervalMs?: number;
-  readonly prompt: string;
-  readonly reason: string;
-}
-export interface WakeupResult {
-  readonly id: number;
-  readonly scheduledInSeconds: number;
-}
 export class LoopRuntime {
   readonly #host: LoopHost;
   #jobs = new Map<number, LoopJob>();
@@ -44,6 +36,7 @@ export class LoopRuntime {
   #paused = false;
   #pendingContinuations: string[] = [];
   #runningContinuation: string | undefined;
+  #continuedWithoutTerminal = false;
   #poller: Poller | undefined;
   readonly #settledDelivery = new SettledDelivery();
 
@@ -70,13 +63,19 @@ export class LoopRuntime {
     );
     this.#nextId = state.nextId;
     this.#paused = state.paused;
-    this.#pendingContinuations = [...restoredPendingContinuations(state)];
-    this.#runningContinuation = state.runningContinuation;
-    if (!this.#paused) {
-      this.#poll();
-      this.#ensurePoller();
-    }
+    this.#pendingContinuations = [...restoredQueuedContinuations(state)];
+    this.#runningContinuation = undefined;
+    this.#continuedWithoutTerminal = false;
     this.#updateStatus();
+    if (this.#paused) {
+      context.ui.notify(
+        pausedLoopNotice(this.#jobs.size, this.#pendingContinuations.length),
+        "warning",
+      );
+      return;
+    }
+    this.#poll();
+    this.#ensurePoller();
     if (context.isIdle() && this.#pendingContinuations.length > 0) {
       this.deferLifecycleContinuation((): void => this.agentSettled(context));
     }
@@ -110,7 +109,13 @@ export class LoopRuntime {
       this.#resume(context);
       return;
     }
-    this.#start(command, context);
+    startLoopCommand(command, {
+      notify: (message: string, level: "info"): void => context.ui.notify(message, level),
+      now: (): number => this.#scheduler.now(),
+      schedule: (input): LoopJob => this.#schedule(input),
+      send: (prompt: string, identity: string, submittedAt: number, completedAt: number): void =>
+        this.#send(prompt, identity, submittedAt, completedAt),
+    });
   }
 
   wakeup(input: WakeupInput, context: LoopContext): WakeupResult {
@@ -118,6 +123,7 @@ export class LoopRuntime {
     this.setContext(context);
     requireActiveLoop(this.#runningContinuation, "loop_wakeup");
     this.#runningContinuation = undefined;
+    this.#continuedWithoutTerminal = false;
     const delayMs: number = input.delaySeconds * MILLISECONDS_PER_SECOND;
     const job: LoopJob = this.#schedule({
       delayMs,
@@ -135,6 +141,7 @@ export class LoopRuntime {
       throw new Error("reason must not be empty");
     }
     this.#runningContinuation = undefined;
+    this.#continuedWithoutTerminal = false;
     this.#persist();
     this.#updateStatus();
     return { reason: normalizedReason };
@@ -146,6 +153,7 @@ export class LoopRuntime {
     this.#paused = false;
     this.#pendingContinuations = [];
     this.#runningContinuation = undefined;
+    this.#continuedWithoutTerminal = false;
     this.#persist();
     this.#stopPoller();
     this.#updateStatus();
@@ -163,7 +171,6 @@ export class LoopRuntime {
       throw new Error("A new agent loop requires a non-empty task and no paused loop.");
     }
     this.setContext(context);
-    // Existing unpaused loop work is superseded instead of blocking the new agent task.
     this.clear();
     const now: number = this.#scheduler.now();
     this.#runningContinuation = namedLoopFollowUp({
@@ -184,54 +191,37 @@ export class LoopRuntime {
     if (this.#paused || !context.isIdle()) {
       return;
     }
-    if (this.#pendingContinuations.length > 0) {
-      if (trySendUserMessage(this.#host, this.#pendingContinuations.join("\n\n"))) {
-        this.#pendingContinuations = [];
-        this.#persist();
-        this.#updateStatus();
-      }
-      return;
-    }
-    if (this.#runningContinuation === undefined) {
-      return;
-    }
-    if (this.#jobs.size > 0) {
-      this.#runningContinuation = undefined;
-      this.#persist();
-      return;
-    }
-    if (!trySendUserMessage(this.#host, this.#runningContinuation)) {
-      this.#queue(this.#runningContinuation);
-      return;
-    }
-    context.ui.notify("Continuing unfinished loop work.", "info");
-    this.#persist();
-  }
-
-  #start(command: Extract<LoopCommand, { readonly kind: "start" }>, context: LoopContext): void {
-    const prompt: string = command.prompt.length === 0 ? AUTONOMOUS_PROMPT : command.prompt;
-    if (command.intervalMs === undefined) {
-      const message: string = commandPrompt(command.prompt);
-      const identity = `self-paced | ${command.prompt.length === 0 ? "continue established work" : command.prompt}`;
-      const now: number = this.#scheduler.now();
-      this.#send(message, identity, now, now);
-      context.ui.notify("Started a self-paced loop.", "info");
-      return;
-    }
-    const job: LoopJob = this.#schedule({
-      delayMs: command.intervalMs,
-      intervalMs: command.intervalMs,
-      prompt,
-      reason: `Recurring every ${formatInterval(command.intervalMs)}`,
-    });
-    this.#send(prompt, `#${String(job.id)} | ${job.reason}`, job.submittedAt, job.submittedAt);
-    context.ui.notify(
-      `Started loop #${String(job.id)} every ${formatInterval(command.intervalMs)} (session-scoped).`,
-      "info",
+    settleTick(
+      {
+        continuedWithoutTerminal: this.#continuedWithoutTerminal,
+        jobs: this.#jobs.size,
+        pending: this.#pendingContinuations,
+        running: this.#runningContinuation,
+      },
+      {
+        abandon: (): void => this.#stopAbandoned(context),
+        clearPending: (): void => {
+          this.#pendingContinuations = [];
+        },
+        clearRunning: (): void => {
+          this.#runningContinuation = undefined;
+          this.#continuedWithoutTerminal = false;
+        },
+        markContinued: (): void => {
+          this.#continuedWithoutTerminal = true;
+        },
+        notify: (message: string, level: "info" | "warning"): void => {
+          context.ui.notify(message, level);
+        },
+        persist: (): void => this.#persist(),
+        queue: (text: string): void => this.#queue(text),
+        updateStatus: (): void => this.#updateStatus(),
+      },
+      this.#host,
     );
   }
 
-  #schedule(input: ScheduleInput): LoopJob {
+  #schedule(input: StartCommandScheduleInput): LoopJob {
     const id: number = this.#nextId;
     this.#nextId += 1;
     const now: number = this.#scheduler.now();
@@ -322,8 +312,17 @@ export class LoopRuntime {
     }
   }
 
+  #stopAbandoned(context: LoopContext): void {
+    this.#runningContinuation = undefined;
+    this.#continuedWithoutTerminal = false;
+    this.#persist();
+    this.#updateStatus();
+    context.ui.notify(ABANDONED_LOOP_NOTICE, "warning");
+  }
+
   #send(prompt: string, identity: string, submittedAt: number, completedAt: number): void {
     this.#runningContinuation = namedLoopFollowUp({ completedAt, identity, prompt, submittedAt });
+    this.#continuedWithoutTerminal = false;
     this.#persist();
     if (this.#context?.isIdle() === false) {
       this.#queue(this.#runningContinuation);
