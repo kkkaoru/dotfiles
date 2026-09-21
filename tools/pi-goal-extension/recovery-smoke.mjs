@@ -27,6 +27,11 @@ const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 const overflow =
   "Codex error: Your input exceeds the context window of this model. Please adjust your input and try again.";
 const source = `ORIGINAL USER GOAL\n${"historical detail ".repeat(120_000)}\nLATEST TASK`;
+const summaryFailureSource = `ORIGINAL USER GOAL\n${"historical detail ".repeat(800)}\nLATEST TASK`;
+
+function historySource(mode) {
+  return mode === "summary-failure" ? summaryFailureSource : source;
+}
 
 function assistant(block, model) {
   return {
@@ -248,7 +253,7 @@ async function createSession(scenario) {
   // so the first request exercises the native overflow path, not proactive threshold compaction.
   session.sessionManager.appendMessage({
     role: "user",
-    content: source,
+    content: historySource(scenario.mode),
     timestamp: Date.now(),
   });
   session.sessionManager.appendMessage(
@@ -324,7 +329,7 @@ async function verify(mode) {
       assert.equal(compactions.length, 0);
       assert.match(goal(session)?.reason, /safe mode/u);
     } else {
-      assert.ok(scenario.summaryCalls > 1 && scenario.summaryCalls <= 9);
+      assert.equal(scenario.summaryCalls, 0);
       assert.equal(compactions.length, 1);
       assert.match(compactions[0].summary, /^Emergency recovery compaction:/u);
       assert.ok(JSON.stringify(session.messages).length < 100_000);
@@ -335,7 +340,7 @@ async function verify(mode) {
         (entry) =>
           entry.type === "message" &&
           entry.message.role === "user" &&
-          entry.message.content === source,
+          entry.message.content === historySource(mode),
       ),
       "Original history must remain intact",
     );

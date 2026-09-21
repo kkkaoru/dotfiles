@@ -132,6 +132,17 @@ async function completeSegment(
   throw new Error(`Bounded compaction failed: ${lastMessage}`);
 }
 
+function emptyUsage(): Usage {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+}
+
 function sourceForRequest(request: SummaryRequest, chunkSize: number): RecoverySource {
   const source: RecoverySource = selectRecoverySource(request.text, chunkSize);
   if (source.omittedCodeUnits > 0) {
@@ -140,11 +151,21 @@ function sourceForRequest(request: SummaryRequest, chunkSize: number): RecoveryS
   return source;
 }
 
+function emergencySummary(source: RecoverySource, budget: number): SummaryResult {
+  return {
+    text: `${recoveryNotice(source.omittedCodeUnits)}\n\n${boundedSummaryText(source.text, budget)}`,
+    usage: emptyUsage(),
+  };
+}
+
 export async function summarizeBounded(request: SummaryRequest): Promise<SummaryResult> {
   const budget: number = summaryInputBudget(request.contextWindow);
   const chunkSize: number = Math.floor(budget / CHUNK_BUDGET_DIVISOR / MAX_BYTES_PER_CODE_POINT);
   request.signal.throwIfAborted();
   const source: RecoverySource = sourceForRequest(request, chunkSize);
+  if (source.omittedCodeUnits > 0) {
+    return emergencySummary(source, budget);
+  }
   // Split at code points (not UTF-16 units). Grapheme clusters can be unbounded in bytes.
   // oxlint-disable-next-line typescript/no-misused-spread
   const characters: string[] = [...source.text];
@@ -154,14 +175,7 @@ export async function summarizeBounded(request: SummaryRequest): Promise<Summary
   }
   const state: SummaryState = {
     text: "",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-    },
+    usage: emptyUsage(),
   };
   for (const offset of Array.from({ length: chunks }, (_value, index) => index * chunkSize)) {
     request.signal.throwIfAborted();
@@ -179,7 +193,5 @@ export async function summarizeBounded(request: SummaryRequest): Promise<Summary
   if (state.text.trim().length === 0) {
     throw new Error("Bounded compaction returned an empty summary");
   }
-  return source.omittedCodeUnits === 0
-    ? state
-    : { text: `${recoveryNotice(source.omittedCodeUnits)}\n\n${state.text}`, usage: state.usage };
+  return state;
 }

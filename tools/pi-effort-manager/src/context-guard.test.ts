@@ -153,7 +153,7 @@ it("bounds a fitting window when the model's output exceeds the compaction reser
       preparation: {
         ...EVENT.preparation,
         tokensBefore: 400_000,
-        messagesToSummarize: [{ role: "user", content: "x".repeat(200_000), timestamp: 0 }],
+        messagesToSummarize: [{ role: "user", content: "x".repeat(50_000), timestamp: 0 }],
         settings: { enabled: true, reserveTokens: 65_536, keepRecentTokens: 12_000 },
       },
     },
@@ -182,7 +182,7 @@ it("saves a recovery summary and warns instead of cancelling histories above 128
   );
   expect(result).toHaveProperty("compaction");
   expect(result).not.toHaveProperty("cancel");
-  expect(complete).toHaveBeenCalledTimes(9);
+  expect(complete).not.toHaveBeenCalled();
   expect(notify).toHaveBeenCalledWith(
     expect.stringMatching(/^Emergency recovery compaction:/u),
     "warning",
@@ -236,12 +236,8 @@ it("passes those headers and one session ID to every summary segment", async () 
   });
 });
 
-it("saves emergency recovery when a segment hits the output token cap", async () => {
-  const complete = vi.fn().mockResolvedValue({
-    ...RESPONSE,
-    stopReason: "length",
-    content: [{ type: "text", text: "partial" }],
-  });
+it("saves emergency recovery without waiting on provider output", async () => {
+  const complete = vi.fn();
   const notify = vi.fn();
   const result = await guardedCompaction(
     {
@@ -255,13 +251,14 @@ it("saves emergency recovery when a segment hits the output token cap", async ()
   );
   expect(result).toHaveProperty("compaction");
   expect(result).not.toHaveProperty("cancel");
+  expect(complete).not.toHaveBeenCalled();
   expect(notify).toHaveBeenCalledWith(
     expect.stringMatching(/^Emergency recovery compaction:/u),
     "warning",
   );
   expect(result).toMatchObject({
     compaction: {
-      summary: expect.stringMatching(/^Emergency recovery compaction:[\s\S]*partial$/u),
+      summary: expect.stringMatching(/^Emergency recovery compaction:/u),
     },
   });
 });

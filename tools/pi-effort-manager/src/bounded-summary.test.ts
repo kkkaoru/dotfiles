@@ -95,7 +95,7 @@ it("rejects empty history before any provider call", async () => {
   expect(complete).not.toHaveBeenCalled();
 });
 
-it("recovers an xAI-sized truncated history instead of issuing tens of sequential calls", async () => {
+it("recovers an xAI-sized truncated history without provider calls", async () => {
   const complete = vi.fn().mockResolvedValue(RESPONSE);
   const result = await summarizeBounded({
     text: "x".repeat(80_000),
@@ -103,8 +103,9 @@ it("recovers an xAI-sized truncated history instead of issuing tens of sequentia
     signal: SIGNAL,
     complete,
   });
-  expect(complete).toHaveBeenCalledTimes(9);
+  expect(complete).not.toHaveBeenCalled();
   expect(result.text).toMatch(/^Emergency recovery compaction:/u);
+  expect(result.usage.totalTokens).toBe(0);
 });
 
 it("automatically recovers histories beyond 8 chunks without unbounded calls", async () => {
@@ -117,34 +118,31 @@ it("automatically recovers histories beyond 8 chunks without unbounded calls", a
     complete,
     onRecovery,
   });
-  expect(complete).toHaveBeenCalledTimes(9);
+  expect(complete).not.toHaveBeenCalled();
   expect(onRecovery).toHaveBeenCalledOnce();
-  expect(complete.mock.calls[0]?.[0]).toMatch(/ORIGINAL GOAL/u);
-  expect(complete.mock.lastCall?.[0]).toMatch(/LATEST TASK/u);
-  expect(
-    complete.mock.calls.every(
-      ([prompt]: string[]) => Buffer.byteLength(prompt ?? "", "utf8") < 12_000,
-    ),
-  ).toBe(true);
   expect(result.text).toMatch(
-    /^Emergency recovery compaction:[\s\S]*original session history is preserved[\s\S]*handoff$/u,
+    /^Emergency recovery compaction:[\s\S]*ORIGINAL GOAL[\s\S]*LATEST TASK$/u,
   );
-  expect(result.usage.totalTokens).toBe(90);
+  expect(result.usage.totalTokens).toBe(0);
 });
 
-it("recovers without a notification callback and rejects failed recovery without partial output", async () => {
-  const complete = vi.fn().mockResolvedValue(RESPONSE);
+it("recovers without a notification callback or provider call", async () => {
+  const complete = vi.fn();
   const result = await summarizeBounded({
     text: "x".repeat(129_000),
     contextWindow: 24_000,
     signal: SIGNAL,
     complete,
   });
+  expect(complete).not.toHaveBeenCalled();
   expect(result.text).toMatch(/^Emergency recovery compaction:/u);
-  complete.mockRejectedValueOnce(new Error("provider unavailable"));
+});
+
+it("rejects failed segmented recovery without partial output", async () => {
+  const complete = vi.fn().mockRejectedValueOnce(new Error("provider unavailable"));
   await expect(
     summarizeBounded({
-      text: "x".repeat(129_000),
+      text: "text",
       contextWindow: 24_000,
       signal: SIGNAL,
       complete,

@@ -26,9 +26,9 @@ the session header (`MissingSessionID`) instead of falling back. Other providers
 alone. Successful calls' usage is accumulated.
 Histories larger than the 8-segment full-summary allowance automatically enter **lossy emergency
 recovery** rather than cancelling: select the beginning (one quarter) and the newest tail (three
-quarters) of an eight-segment character budget. With the explicit gap marker, this uses at most nine
-model calls. Sequential xAI/Grok summarization of a long session otherwise stays on Auto-compacting
-for tens of provider calls with no progress. The UI warns before those calls, and the saved summary permanently records that the
+quarters) of an eight-segment character budget, then save that handoff immediately with no extra
+provider calls. Sequential xAI/Grok summarization of a long session otherwise stays on Auto-compacting
+until the request is aborted. The UI warns, and the saved summary permanently records that the
 historical middle was omitted. That warning is not a failure: compaction still saves the head/tail
 handoff so auto-compact can finish instead of cancelling and retrying the same oversized request. It must not be treated as evidence that missing work was completed;
 consult the preserved original session for missing requirements and decisions. Sampling happens
