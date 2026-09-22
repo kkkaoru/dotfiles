@@ -6,9 +6,10 @@ repeated manual prompts.
 - `start_loop` lets the agent autonomously define a self-paced loop grounded in the user's established
   task. It adopts the current turn without injecting or queuing another initial prompt, then uses
   the same `loop_wakeup`/`loop_complete` decisions and persistence as `/loop`. Starting one supersedes
-  existing unpaused loop jobs and retained ticks, so leftover work never blocks a new agent task.
-  It still refuses empty tasks and paused loops. It grants no permissions and must not bypass a
-  paused goal or safe mode.
+  existing loop jobs and retained ticks, including the leftover jobs of a paused loop, so a pause
+  never blocks a new authorized task; the discarded job count is reported. It still refuses empty
+  tasks. It grants no permissions and must not resume a paused goal in place; replacing a stopped
+  goal with a fresh agent-defined objective is the supported path for continued work.
 - `/loop <prompt>` runs immediately as a self-paced loop. The agent must finish immediately
   actionable work, schedule a useful later tick with `loop_wakeup`, or explicitly stop with
   `loop_complete` only when complete or blocked on user input.
@@ -61,7 +62,13 @@ Pi first attempts automatic compression and retry, including the effort-manager 
 and emergency recovery. Successful recovery continues the active loop automatically; no manual
 `/compact`, `continue` or resume is needed. Only failed recovery enters the paused safe mode.
 After that stop, use `/compact` to recover context, then explicitly `/loop resume`; resuming without
-resolving the failure will pause again. Successful manual compression does not resume a paused loop. `/loop pause` also suppresses already-retained continuations.
+resolving the failure will pause again. Successful manual compression does not resume a paused loop.
+A new `start_loop` supersedes such a paused loop instead of waiting for `/loop resume`, and reports
+the discarded jobs. `/loop pause` also suppresses already-retained continuations. A settled tick
+without a terminal tool call abandons the loop only when nothing owned is unfinished; while
+loop-owned detached launches (tracked through the session activity bus) or running/pending
+continuations remain, pacing re-arms for up to 10 consecutive extensions. `loop_complete` and
+`clear` reset that budget, and unrelated tmux jobs never extend a loop.
 
 ## Goal cooperation
 

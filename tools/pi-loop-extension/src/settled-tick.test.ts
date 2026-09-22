@@ -35,7 +35,13 @@ it("delivers pending work, continues once, then abandons", () => {
   const pendingActions = actions();
   const pendingHost = host();
   settleTick(
-    { continuedWithoutTerminal: false, jobs: 0, pending: ["ready"], running: "tick" },
+    {
+      continuedWithoutTerminal: false,
+      jobs: 0,
+      pending: ["ready"],
+      running: "tick",
+      unfinishedWork: false,
+    },
     pendingActions,
     pendingHost,
   );
@@ -44,7 +50,13 @@ it("delivers pending work, continues once, then abandons", () => {
 
   const continueActions = actions();
   settleTick(
-    { continuedWithoutTerminal: false, jobs: 0, pending: [], running: "tick" },
+    {
+      continuedWithoutTerminal: false,
+      jobs: 0,
+      pending: [],
+      running: "tick",
+      unfinishedWork: false,
+    },
     continueActions,
     host(),
   );
@@ -53,7 +65,13 @@ it("delivers pending work, continues once, then abandons", () => {
 
   const stopActions = actions();
   settleTick(
-    { continuedWithoutTerminal: true, jobs: 0, pending: [], running: "tick" },
+    {
+      continuedWithoutTerminal: true,
+      jobs: 0,
+      pending: [],
+      running: "tick",
+      unfinishedWork: false,
+    },
     stopActions,
     host(),
   );
@@ -64,7 +82,13 @@ it("delivers pending work, continues once, then abandons", () => {
 it("clears a running tick when jobs remain and queues a busy continuation", () => {
   const withJobs = actions();
   settleTick(
-    { continuedWithoutTerminal: false, jobs: 1, pending: [], running: "tick" },
+    {
+      continuedWithoutTerminal: false,
+      jobs: 1,
+      pending: [],
+      running: "tick",
+      unfinishedWork: false,
+    },
     withJobs,
     host(),
   );
@@ -77,9 +101,27 @@ it("clears a running tick when jobs remain and queues a busy continuation", () =
     },
   };
   settleTick(
-    { continuedWithoutTerminal: false, jobs: 0, pending: [], running: "tick" },
+    {
+      continuedWithoutTerminal: false,
+      jobs: 0,
+      pending: [],
+      running: "tick",
+      unfinishedWork: false,
+    },
     busy,
     busyHost,
   );
   expect(busy.queue).toHaveBeenCalledWith("tick");
+});
+
+it("keeps continuing while watched detached work stays unfinished", () => {
+  const watched = actions();
+  settleTick(
+    { continuedWithoutTerminal: true, jobs: 0, pending: [], running: "tick", unfinishedWork: true },
+    watched,
+    host(),
+  );
+  expect(watched.abandon).not.toHaveBeenCalled();
+  expect(watched.markContinued).toHaveBeenCalledOnce();
+  expect(watched.notify).toHaveBeenCalledWith(CONTINUED_LOOP_NOTICE, "info");
 });

@@ -324,6 +324,38 @@ describe("LoopRuntime compaction", () => {
   });
 });
 
+describe("LoopRuntime auto-extend", () => {
+  it("auto-extends a watched tick while detached work stays unfinished", () => {
+    const runtime = new LoopRuntime(host, scheduler);
+    runtime.command("check deployment", context);
+
+    runtime.agentSettled(context);
+    expect(sendUserMessage).toHaveBeenCalledTimes(2);
+    expect(notify).toHaveBeenLastCalledWith("Continuing unfinished loop work.", "info");
+
+    runtime.agentSettled(context, true);
+    runtime.agentSettled(context, true);
+    expect(sendUserMessage).toHaveBeenCalledTimes(4);
+    expect(notify).toHaveBeenLastCalledWith("Continuing unfinished loop work.", "info");
+
+    runtime.agentSettled(context);
+    expect(sendUserMessage).toHaveBeenCalledTimes(4);
+    expect(notify).toHaveBeenLastCalledWith(ABANDONED_LOOP_NOTICE, "warning");
+  });
+
+  it("stops auto-extending after the cap even when work stays unfinished", () => {
+    const runtime = new LoopRuntime(host, scheduler);
+    runtime.command("check deployment", context);
+
+    for (let settled = 0; settled < 11; settled += 1) {
+      runtime.agentSettled(context, true);
+    }
+    expect(notify).not.toHaveBeenCalledWith(ABANDONED_LOOP_NOTICE, "warning");
+    runtime.agentSettled(context, true);
+    expect(notify).toHaveBeenLastCalledWith(ABANDONED_LOOP_NOTICE, "warning");
+  });
+});
+
 describe("LoopRuntime wakeups", () => {
   it("fires an overdue one-shot after polling resumes from sleep", () => {
     const runtime = new LoopRuntime(host, scheduler);

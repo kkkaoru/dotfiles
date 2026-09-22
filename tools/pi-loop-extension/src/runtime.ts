@@ -15,7 +15,7 @@ import { parseLoopCommand, type LoopCommand } from "./parser.ts";
 import { startLoopCommand, type StartCommandScheduleInput } from "./start-command.ts";
 import { type Poller, type Scheduler, SYSTEM_SCHEDULER } from "./scheduler.ts";
 import { SettledDelivery } from "./settled-delivery.ts";
-import { ABANDONED_LOOP_NOTICE, settleTick } from "./settled-tick.ts";
+import { ABANDONED_LOOP_NOTICE, AutoExtendBudget, settleTick } from "./settled-tick.ts";
 import {
   type LoopJobState as LoopJob,
   persistLoopState,
@@ -37,6 +37,7 @@ export class LoopRuntime {
   #pendingContinuations: string[] = [];
   #runningContinuation: string | undefined;
   #continuedWithoutTerminal = false;
+  readonly #extensions = new AutoExtendBudget();
   #poller: Poller | undefined;
   readonly #settledDelivery = new SettledDelivery();
 
@@ -58,14 +59,11 @@ export class LoopRuntime {
   restore(state: LoopRuntimeState, context: LoopContext): void {
     this.#stopPoller();
     this.#context = context;
-    this.#jobs = new Map(
-      state.jobs.map((job: LoopJob): readonly [number, LoopJob] => [job.id, job]),
-    );
+    this.#jobs = new Map(state.jobs.map((job: LoopJob): [number, LoopJob] => [job.id, job]));
     this.#nextId = state.nextId;
     this.#paused = state.paused;
     this.#pendingContinuations = [...restoredQueuedContinuations(state)];
-    this.#runningContinuation = undefined;
-    this.#continuedWithoutTerminal = false;
+    this.#resetContinuation();
     this.#updateStatus();
     if (this.#paused) {
       context.ui.notify(
@@ -122,8 +120,7 @@ export class LoopRuntime {
     validateWakeup(input);
     this.setContext(context);
     requireActiveLoop(this.#runningContinuation, "loop_wakeup");
-    this.#runningContinuation = undefined;
-    this.#continuedWithoutTerminal = false;
+    this.#resetContinuation();
     const delayMs: number = input.delaySeconds * MILLISECONDS_PER_SECOND;
     const job: LoopJob = this.#schedule({
       delayMs,
@@ -140,8 +137,7 @@ export class LoopRuntime {
     if (normalizedReason.length === 0) {
       throw new Error("reason must not be empty");
     }
-    this.#runningContinuation = undefined;
-    this.#continuedWithoutTerminal = false;
+    this.#resetContinuation();
     this.#persist();
     this.#updateStatus();
     return { reason: normalizedReason };
@@ -152,8 +148,7 @@ export class LoopRuntime {
     this.#jobs.clear();
     this.#paused = false;
     this.#pendingContinuations = [];
-    this.#runningContinuation = undefined;
-    this.#continuedWithoutTerminal = false;
+    this.#resetContinuation();
     this.#persist();
     this.#stopPoller();
     this.#updateStatus();
@@ -166,12 +161,12 @@ export class LoopRuntime {
     }
   }
 
-  startFromAgent(prompt: string, context: LoopContext): void {
-    if (this.#paused || prompt.trim().length === 0) {
-      throw new Error("A new agent loop requires a non-empty task and no paused loop.");
+  startFromAgent(prompt: string, context: LoopContext): number {
+    if (prompt.trim().length === 0) {
+      throw new Error("A new agent loop requires a non-empty task.");
     }
     this.setContext(context);
-    this.clear();
+    const discarded: number = this.clear();
     const now: number = this.#scheduler.now();
     this.#runningContinuation = namedLoopFollowUp({
       completedAt: now,
@@ -180,13 +175,14 @@ export class LoopRuntime {
       prompt: commandPrompt(prompt.trim()),
     });
     this.#persist();
+    return discarded;
   }
 
   deferLifecycleContinuation(callback: () => void): void {
     this.#settledDelivery.schedule(callback);
   }
 
-  agentSettled(context: LoopContext): void {
+  agentSettled(context: LoopContext, unfinishedWork = false): void {
     this.setContext(context);
     if (this.#paused || !context.isIdle()) {
       return;
@@ -197,16 +193,14 @@ export class LoopRuntime {
         jobs: this.#jobs.size,
         pending: this.#pendingContinuations,
         running: this.#runningContinuation,
+        unfinishedWork: this.#extensions.extend(this.#continuedWithoutTerminal, unfinishedWork),
       },
       {
         abandon: (): void => this.#stopAbandoned(context),
         clearPending: (): void => {
           this.#pendingContinuations = [];
         },
-        clearRunning: (): void => {
-          this.#runningContinuation = undefined;
-          this.#continuedWithoutTerminal = false;
-        },
+        clearRunning: (): void => this.#resetContinuation(),
         markContinued: (): void => {
           this.#continuedWithoutTerminal = true;
         },
@@ -312,9 +306,13 @@ export class LoopRuntime {
     }
   }
 
-  #stopAbandoned(context: LoopContext): void {
+  #resetContinuation(): void {
     this.#runningContinuation = undefined;
     this.#continuedWithoutTerminal = false;
+  }
+
+  #stopAbandoned(context: LoopContext): void {
+    this.#resetContinuation();
     this.#persist();
     this.#updateStatus();
     context.ui.notify(ABANDONED_LOOP_NOTICE, "warning");

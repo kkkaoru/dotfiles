@@ -5,6 +5,8 @@ import loopExtension, {
   type LoopExtensionHost,
   type LoopToolDefinition,
 } from "./index.ts";
+import { announceTask, type ActivityBus } from "./src/goal-activity.ts";
+import { ABANDONED_LOOP_NOTICE } from "./src/settled-tick.ts";
 import type { LoopContext } from "./src/runtime.ts";
 
 afterEach((): void => {
@@ -187,4 +189,55 @@ it("continues a loop after the settled event has returned", () => {
   onCompaction?.({ willRetry: false }, context);
   vi.runOnlyPendingTimers();
   expect(sendUserMessage).toHaveBeenCalledTimes(2);
+});
+
+it("watches detached launches announced after session start", () => {
+  vi.useFakeTimers();
+  const emitter: EventTarget = new globalThis.EventTarget();
+  const events: ActivityBus = {
+    emit: (channel, value): void => {
+      emitter.dispatchEvent(new globalThis.CustomEvent<unknown>(channel, { detail: value }));
+    },
+    on: (channel, listener) => {
+      const handler = (event: Event): void => {
+        if (event instanceof globalThis.CustomEvent) {
+          listener(event.detail);
+        }
+      };
+      emitter.addEventListener(channel, handler);
+      return (): void => {
+        emitter.removeEventListener(channel, handler);
+      };
+    },
+  };
+  const callbacks = new Map<string, (event: unknown, context: LoopContext) => void>();
+  let command: LoopCommandDefinition | undefined;
+  const context: LoopContext = {
+    isIdle: (): boolean => true,
+    sessionManager: { getEntries: () => [], getSessionId: () => "session" },
+    ui: { notify: vi.fn(), setStatus: vi.fn() },
+  };
+  const host: LoopExtensionHost = {
+    events,
+    on: (event, handler): void => {
+      callbacks.set(event, handler);
+    },
+    registerCommand: (_name, definition): void => {
+      command = definition;
+    },
+    registerTool: (): void => undefined,
+    sendUserMessage: vi.fn(),
+  };
+
+  loopExtension(host);
+  callbacks.get("session_start")?.({}, context);
+  command?.handler("check work", context);
+  announceTask(events, { name: "job-1", sessionId: "session" });
+  vi.runOnlyPendingTimers();
+  callbacks.get("agent_settled")?.({}, context);
+  vi.runOnlyPendingTimers();
+  expect(context.ui.notify).toHaveBeenCalledWith("Continuing unfinished loop work.", "info");
+  callbacks.get("agent_settled")?.({}, context);
+  vi.runOnlyPendingTimers();
+  expect(context.ui.notify).toHaveBeenCalledWith(ABANDONED_LOOP_NOTICE, "warning");
 });

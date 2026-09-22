@@ -58,12 +58,27 @@ it("replaces existing loop work instead of refusing", () => {
   runtime.shutdown();
 });
 
-it("refuses empty and paused agent loops", () => {
+it("refuses empty tasks and supersedes a paused loop instead", async () => {
   const runtime = new LoopRuntime({ sendUserMessage: vi.fn() });
   expect(() => runtime.startFromAgent(" ", context)).toThrow("non-empty");
   runtime.startFromAgent("check", context);
+  runtime.wakeup({ delaySeconds: 60, prompt: "later check", reason: "old job" }, context);
   runtime.command("pause", context);
-  expect(() => runtime.startFromAgent("bypass", context)).toThrow("paused");
+  const tools: StartLoopToolDefinition[] = [];
+  registerAgentLoop(
+    {
+      registerTool: (tool) => {
+        tools.push(tool);
+      },
+    },
+    runtime,
+  );
+  await tools[0]?.execute("call", { prompt: "bypass the pause" }, undefined, undefined, context);
+  expect(context.ui.notify).toHaveBeenCalledWith(
+    "Superseded a paused loop (1 job(s) discarded).",
+    "warning",
+  );
+  expect(runtime.ownsContinuation()).toBe(true);
   runtime.shutdown();
 });
 

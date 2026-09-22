@@ -7,8 +7,10 @@ import {
   pauseAfterCompactionFailure,
 } from "./src/compaction-failure.ts";
 import { ActivityProvider, type ActivityBus } from "./src/goal-activity.ts";
+import { parseLoopCommand } from "./src/parser.ts";
 import { LoopRuntime, type LoopContext, type LoopHost } from "./src/runtime.ts";
 import { createLoopState, latestLoopState, type LoopRuntimeState } from "./src/state.ts";
+import { WatchedLoopTasks } from "./src/watched-tasks.ts";
 
 const wakeupSchema = Type.Object({
   delaySeconds: Type.Integer({
@@ -106,7 +108,11 @@ function willRetryAfterCompaction(event: unknown): boolean {
   );
 }
 
-function registerLifecycleHandlers(host: LoopExtensionHost, runtime: LoopRuntime): void {
+function registerLifecycleHandlers(
+  host: LoopExtensionHost,
+  runtime: LoopRuntime,
+  watched: WatchedLoopTasks,
+): void {
   const health = { failed: false };
   const activity: ActivityProvider | undefined =
     host.events === undefined
@@ -133,6 +139,7 @@ function registerLifecycleHandlers(host: LoopExtensionHost, runtime: LoopRuntime
     if (sessionId !== undefined) {
       activity?.start(sessionId);
     }
+    watched.attach(host.events, sessionId, () => runtime.ownsContinuation());
   });
   host.on("session_compact", (event: unknown, context: LoopContext): void =>
     runtime.deferLifecycleContinuation((): void =>
@@ -149,7 +156,9 @@ function registerLifecycleHandlers(host: LoopExtensionHost, runtime: LoopRuntime
     if (health.failed) {
       pauseAfterAgentFailure(runtime, context);
     }
-    runtime.deferLifecycleContinuation((): void => runtime.agentSettled(context));
+    runtime.deferLifecycleContinuation((): void =>
+      runtime.agentSettled(context, watched.unfinished(host.events)),
+    );
   });
   host.on("session_shutdown", (): void => {
     activity?.stop();
@@ -159,6 +168,7 @@ function registerLifecycleHandlers(host: LoopExtensionHost, runtime: LoopRuntime
 
 export default function loopExtension(host: LoopExtensionHost): void {
   const runtime: LoopRuntime = new LoopRuntime(host);
+  const watched = new WatchedLoopTasks();
 
   host.registerTool({
     description:
@@ -202,6 +212,7 @@ export default function loopExtension(host: LoopExtensionHost): void {
     promptSnippet: "Mark the active self-paced /loop complete or user-blocked",
     async execute(_toolCallId, params, _signal, _onUpdate, context) {
       const result = runtime.complete(params.reason, context);
+      watched.clear();
       return {
         content: [{ text: `Completed loop: ${result.reason}`, type: "text" }],
         details: result,
@@ -219,9 +230,14 @@ export default function loopExtension(host: LoopExtensionHost): void {
         ? null
         : matches.map((value: string) => ({ label: value, value }));
     },
-    handler: (args: string, context: LoopContext): void => runtime.command(args, context),
+    handler: (args: string, context: LoopContext): void => {
+      runtime.command(args, context);
+      if (parseLoopCommand(args).kind === "clear") {
+        watched.clear();
+      }
+    },
   });
 
-  registerAgentLoop(host, runtime);
-  registerLifecycleHandlers(host, runtime);
+  registerAgentLoop(host, runtime, () => watched.clear());
+  registerLifecycleHandlers(host, runtime, watched);
 }
