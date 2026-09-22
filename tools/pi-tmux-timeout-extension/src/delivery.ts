@@ -8,6 +8,9 @@ const AGENT_BUSY_ERROR = "Agent is already processing a prompt";
 const MAX_COMPLETION_IDENTITY_CHARACTERS = 160;
 const MAX_OVERDUE_BATCH_SIZE = 20;
 const SETTLED_DELIVERY_DELAY_MS = 0;
+// Deferred completions must not wait forever for agent_settled or compaction events.
+// A bounded retry flush delivers them seconds later without manual reloads or retries.
+const RETRY_FLUSH_DELAY_MS = 5000;
 type SettledDelivery = ReturnType<typeof globalThis.setTimeout>;
 const COMPLETION_DELIVERY_OPTIONS: UserMessageDeliveryOptions = { deliverAs: "followUp" };
 
@@ -127,6 +130,7 @@ export class CompletionDelivery {
   readonly #onDelivered: (completion: Completion) => void;
   #pending: Completion[] = [];
   readonly #pendingOverdue = new Map<string, TmuxLaunch>();
+  #retryDelivery: SettledDelivery | undefined;
   #settledDelivery: SettledDelivery | undefined;
 
   constructor(host: CompletionDeliveryHost, options?: CompletionDeliveryOptions) {
@@ -150,6 +154,7 @@ export class CompletionDelivery {
       this.#pendingOverdue.set(launch.completionChannel, launch),
     );
     this.#flushPending(false);
+    this.#scheduleRetryFlush();
   }
 
   injectOverdue(event: unknown): { messages: unknown[] } | undefined {
@@ -247,6 +252,7 @@ export class CompletionDelivery {
 
   clear(): void {
     this.#cancelSettledDelivery();
+    this.#cancelRetryFlush();
     this.#compacting = false;
     this.#pending = [];
     this.#pendingOverdue.clear();
@@ -297,6 +303,26 @@ export class CompletionDelivery {
     }, SETTLED_DELIVERY_DELAY_MS);
   }
 
+  #scheduleRetryFlush(): void {
+    if (this.#retryDelivery !== undefined || !this.hasPending()) {
+      return;
+    }
+    this.#retryDelivery = globalThis.setTimeout((): void => {
+      this.#retryDelivery = undefined;
+      // Unlike settled delivery, a timer tick carries no run-completion signal and only flushes while idle.
+      this.#flushPending(false);
+      this.#scheduleRetryFlush();
+    }, RETRY_FLUSH_DELAY_MS);
+  }
+
+  #cancelRetryFlush(): void {
+    if (this.#retryDelivery === undefined) {
+      return;
+    }
+    globalThis.clearTimeout(this.#retryDelivery);
+    this.#retryDelivery = undefined;
+  }
+
   #flushPending(settled: boolean): void {
     if (
       this.#compacting ||
@@ -326,6 +352,7 @@ export class CompletionDelivery {
 
   #defer(completion: Completion): void {
     this.#pending.push(completion);
+    this.#scheduleRetryFlush();
     this.#context?.ui.notify(
       completionName(completion),
       completion.exitCode === 0 ? "info" : "warning",

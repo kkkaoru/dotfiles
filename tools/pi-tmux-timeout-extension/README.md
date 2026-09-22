@@ -83,7 +83,12 @@ long-running commands continue in detached tmux sessions.
   orphaned historical tasks. Runtime restoration rejects mismatched socket names, session names,
   and completion channels. A `completion-delivered` marker prevents duplicate continuation.
 - Defers completion that arrives during session compaction, then delivers it after compaction or
-  `agent_settled`. Compaction events also reconcile tracked exit-status files immediately.
+  `agent_settled`. As a backstop for event paths that never fire, every deferred completion also arms
+  a 5-second retry flush that re-arms until the queues drain. The tick carries no run-completion
+  signal, so unlike settled delivery it only flushes while the agent is idle and leaves mid-run
+  notices to context injection. Finished jobs therefore stop blocking goal completion audits
+  without manual reloads or retries. Compaction events also reconcile tracked exit-status files
+  immediately.
 - Uses one shared temporary-directory timestamp to allow at most one cleanup scan per 24 hours across
   reloads and Pi sessions. Cleanup examines artifacts sequentially, stats `exit-status` first, reads
   content only after the seven-day age threshold, and removes one directory at a time. It never uses

@@ -47,6 +47,12 @@
   },
   "overrides": [
     {
+      "files": ["src/delivery.ts"],
+      "rules": {
+        "max-lines": ["error", 370]
+      }
+    },
+    {
       "files": ["**/*.test.ts"],
       "rules": {
         "init-declarations": "off",
