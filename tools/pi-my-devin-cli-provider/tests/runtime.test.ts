@@ -39,6 +39,7 @@ interface Scenario {
   connectError: Error | undefined;
   modes: FakeSession["modes"];
   setModeError: Error | undefined;
+  setModelError?: Error | undefined;
   stderr: string;
   turnUpdates: unknown[][];
 }
@@ -189,6 +190,9 @@ function configureAcpMock(): void {
       if (scenario.connectError) throw scenario.connectError;
       const context: FakeContext = {
         request: vi.fn(async (method: string, params: unknown) => {
+          if (method === "session/set_config_option" && scenario.setModelError) {
+            throw scenario.setModelError;
+          }
           if (method === "session/set_mode" && scenario.setModeError) {
             throw scenario.setModeError;
           }
@@ -302,6 +306,46 @@ test("creates and resolves Devin session ids for pi agent coordination", async (
   expect(resolveDevinSessionId("").startsWith("devin-pi:")).toBe(true);
   expect(resolveDevinSessionId(undefined).startsWith("devin-pi:")).toBe(true);
   expect(runtimeKey("/tmp/a", "swe-1-7", "pi-a")).toBe("/tmp/a\0swe-1-7\0pi-a");
+});
+
+test("surfaces Devin model selection failures instead of running the session default", async () => {
+  installScenario({
+    modes: undefined,
+    turnUpdates: [[]],
+    connectError: undefined,
+    setModeError: undefined,
+    setModelError: Object.assign(new Error("Resource not found"), {
+      data: { uri: "Model not found: swe-2-max. Available models: swe-1-6-slow" },
+    }),
+    stderr: "",
+  });
+  const { runDevinJob } = await import("../src/runtime.ts");
+
+  await expect(
+    runDevinJob(
+      job({ sessionId: "pi-session-model", initialPrompt: "prompt", modelId: "swe-2-max" }),
+    ),
+  ).rejects.toThrow('Devin rejected model "swe-2-max": Model not found: swe-2-max');
+  expect(state.sessions).toHaveLength(1);
+  expect(state.sessions[0]?.prompt).not.toHaveBeenCalled();
+});
+
+test("reports the raw error when Devin sends no model detail", async () => {
+  installScenario({
+    modes: undefined,
+    turnUpdates: [[]],
+    connectError: undefined,
+    setModeError: undefined,
+    setModelError: new Error("Resource not found"),
+    stderr: "",
+  });
+  const { runDevinJob } = await import("../src/runtime.ts");
+
+  await expect(
+    runDevinJob(
+      job({ sessionId: "pi-session-model-2", initialPrompt: "prompt", modelId: "swe-2-max" }),
+    ),
+  ).rejects.toThrow('Devin rejected model "swe-2-max": Error: Resource not found');
 });
 
 test("continues one Devin ACP session across turns for the same pi session id", async () => {

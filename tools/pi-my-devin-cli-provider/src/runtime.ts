@@ -159,18 +159,25 @@ function formatError(error: unknown, stderr: string): Error {
   return new Error(suffix.length > 0 ? `${detail}: ${suffix}` : detail);
 }
 
+function acpFailureDetail(error: unknown): string {
+  const uri: unknown = (error as { data?: { uri?: unknown } }).data?.uri;
+  return typeof uri === "string" ? uri : String(error);
+}
+
 async function configureSession(
   context: ClientContext,
   session: ActiveSession,
   modelId: string,
 ): Promise<void> {
-  await context
-    .request(methods.agent.session.setConfigOption, {
+  try {
+    await context.request(methods.agent.session.setConfigOption, {
       sessionId: session.sessionId,
       configId: MODEL_CONFIG_ID,
       value: modelId,
-    })
-    .catch(() => undefined);
+    });
+  } catch (error) {
+    throw new Error(`Devin rejected model "${modelId}": ${acpFailureDetail(error)}`);
+  }
   const bypass = session.modes?.availableModes.find((mode) => mode.id === BYPASS_MODE_ID);
   if (!bypass) return;
   await context
