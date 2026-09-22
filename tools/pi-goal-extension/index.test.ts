@@ -95,7 +95,7 @@ function harness(): Harness {
   };
 }
 
-it("lets the agent define a grounded goal but never replace or resume it", async () => {
+it("lets the agent define a grounded goal and replace only stopped ones", async () => {
   const h: Harness = harness();
   await h.call("session_start", {});
   await h.call("agent_start", {});
@@ -113,11 +113,19 @@ it("lets the agent define a grounded goal but never replace or resume it", async
   });
   await expect(
     h.tool("start_goal", { objective: "replacement" }),
-  ).rejects.toThrow("unfinished goal");
+  ).rejects.toThrow("Reuse the active goal");
   await h.command("pause");
-  await expect(
-    h.tool("start_goal", { objective: "bypass pause" }),
-  ).rejects.toThrow("unfinished goal");
+  expect(
+    await h.tool("start_goal", { objective: "continued work" }),
+  ).toMatchObject({
+    details: {
+      goal: {
+        status: "active",
+        objective: "continued work",
+        tokenBudget: null,
+      },
+    },
+  });
   await h.call("session_shutdown", {});
 });
 
@@ -216,7 +224,7 @@ it("supersedes only a blocked goal with a new agent-defined objective", async ()
   await h.call("session_shutdown", {});
 });
 
-it("refuses to supersede a budget-limited goal", async () => {
+it("supersedes a budget-limited goal with fresh accounting", async () => {
   const h: Harness = harness();
   await h.call("session_start", {});
   await h.command("--tokens 5 stalled task");
@@ -229,9 +237,18 @@ it("refuses to supersede a budget-limited goal", async () => {
   expect(await h.tool("get_goal", {})).toMatchObject({
     details: { goal: { status: "budget_limited" } },
   });
-  await expect(
-    h.tool("start_goal", { objective: "replacement" }),
-  ).rejects.toThrow("unfinished goal");
+  expect(
+    await h.tool("start_goal", { objective: "replacement" }),
+  ).toMatchObject({
+    details: {
+      goal: {
+        status: "active",
+        objective: "replacement",
+        tokenBudget: null,
+        tokensUsed: 0,
+      },
+    },
+  });
   await h.call("session_shutdown", {});
 });
 

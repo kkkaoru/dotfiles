@@ -56,17 +56,34 @@ it("adopts an agent-defined goal into the current run and accounts subsequent wo
   expect(runtime.state?.status).toBe("complete");
 });
 
-it("refuses agent replacement or resumption of an unfinished or paused goal", () => {
+it("refuses to replace an active goal but supersedes a stopped one", () => {
   const { runtime } = setup();
   runtime.startFromAgent("authorized work");
   expect(() => runtime.startFromAgent("replacement")).toThrow(
-    "unfinished goal",
+    "Reuse the active goal",
   );
   runtime.pause();
-  expect(() => runtime.startFromAgent("bypass pause")).toThrow(
-    "unfinished goal",
-  );
-  expect(runtime.state?.status).toBe("paused");
+  runtime.startFromAgent("continued work");
+  expect(runtime.state).toMatchObject({
+    status: "active",
+    objective: "continued work",
+    tokensUsed: 0,
+    noProgressTurns: 0,
+  });
+});
+
+it("supersedes a budget-limited goal with fresh accounting", () => {
+  const { runtime } = setup();
+  runtime.start({ objective: "capped work", tokenBudget: 1 });
+  runtime.recordTokens(10);
+  expect(runtime.state?.status).toBe("budget_limited");
+  runtime.startFromAgent("continued work");
+  expect(runtime.state).toMatchObject({
+    status: "active",
+    objective: "continued work",
+    tokenBudget: null,
+    tokensUsed: 0,
+  });
 });
 
 it("records a verified completion for a stopped goal without resuming it", () => {

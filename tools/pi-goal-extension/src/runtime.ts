@@ -101,15 +101,12 @@ export class GoalRuntime {
   }
 
   startFromAgent(objective: string): void {
-    // A blocked goal already reported its blocker to the user, so the agent may supersede it with
-    // a new objective from the same established task. Active, paused and budget-limited goals stay
-    // protected: only the user resumes those.
-    if (
-      this.#goal !== null &&
-      this.#goal.status !== "complete" &&
-      this.#goal.status !== "blocked"
-    )
-      throw new Error("Clear or edit the existing unfinished goal first.");
+    // An agent start is always grounded in the user's established task, so a stopped goal
+    // (paused, blocked or budget-limited) is replaced with a fresh objective and fresh
+    // accounting instead of deadlocking the agent. Only an active goal is protected: its
+    // continuation ticket may still be in flight, so reuse it instead of replacing it.
+    if (this.#goal !== null && this.#goal.status === "active")
+      throw new Error("Reuse the active goal instead of replacing it.");
     this.#create({ objective, tokenBudget: null });
     // Adopt the current run so its work, audits and subsequent tokens count toward the new goal.
     if (this.#inRun) this.begin();

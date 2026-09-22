@@ -27,9 +27,9 @@ Requires Pi 0.85.1 or newer. State validation uses Valibot.
   the agent can deliberately call `start_goal` when the established request benefits from durable
   completion tracking. This grants no new permissions and must not invent unrelated work.
 - `start_goal` adopts the current run without submitting a duplicate prompt and creates no token
-  budget. It refuses an active, paused or budget-limited goal. It may supersede a goal that is
-  already **blocked**, because that blocker was already reported to the user and the replacement
-  starts fresh accounting; only the user can resume stopped automation.
+  budget. It refuses only an **active** goal (reuse it instead). A stopped goal — paused, blocked
+  or budget-limited — is replaced with a fresh objective and fresh accounting, so the agent never
+  deadlocks on safe mode or a stale stop; stopped automation is never resumed in place.
   Agent-defined goals use the same persistence, evidence, accounting and stall safeguards.
 - `/goal <objective>` replaces an unfinished goal immediately, without a confirmation prompt. The
   replaced goal stays in session history and replacement resets usage; independent loops and
