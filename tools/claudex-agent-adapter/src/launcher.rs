@@ -73,6 +73,7 @@ const START_INITIAL_POLL_DELAY: Duration = Duration::from_millis(10);
 const START_MAX_POLL_DELAY: Duration = Duration::from_millis(100);
 pub(crate) const SERVICE_CONFIG_FINGERPRINT_ENV: &str = "CLAUDEX_SERVICE_CONFIG_FINGERPRINT";
 pub(crate) const RECOVERY_MANIFEST_ENV: &str = "CLAUDEX_RECOVERY_MANIFEST";
+pub(crate) const DAEMON_AUTOSTART_ENV: &str = "CLAUDEX_DAEMON_AUTOSTART";
 
 #[derive(Clone, Debug)]
 pub struct AdapterOptions {

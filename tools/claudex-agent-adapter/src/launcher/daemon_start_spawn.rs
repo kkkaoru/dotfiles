@@ -74,6 +74,9 @@ pub(super) fn spawn_adapter(request: SpawnRequest<'_>) -> Result<u32> {
         .current_dir(log_dir)
         .env_remove(crate::anthropic::SUBAGENT_HARD_TIMEOUT_ENV)
         .env_remove(crate::anthropic::LEGACY_SUBAGENT_RESPONSE_TIMEOUT_ENV)
+        // The autostart flag authorizes this CLI invocation only; the daemon
+        // must not inherit it and spawn further generations on its own.
+        .env_remove(crate::launcher::DAEMON_AUTOSTART_ENV)
         .stdin(Stdio::null())
         .stdout(Stdio::from(stdout))
         .stderr(Stdio::from(stderr))

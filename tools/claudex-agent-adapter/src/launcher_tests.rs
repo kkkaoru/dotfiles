@@ -1139,6 +1139,34 @@ impl Drop for NotifyEnvGuard {
     }
 }
 
+/// Opts one test into detached daemon spawn (`CLAUDEX_DAEMON_AUTOSTART=1`)
+/// and restores the previous value on drop. Needed by tests that drive the
+/// `ServiceState::Start` path and expect a real spawn.
+struct AutostartEnvGuard {
+    previous: Option<std::ffi::OsString>,
+}
+
+impl AutostartEnvGuard {
+    fn allow() -> Self {
+        let previous = std::env::var_os(super::DAEMON_AUTOSTART_ENV);
+        unsafe {
+            std::env::set_var(super::DAEMON_AUTOSTART_ENV, "1");
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for AutostartEnvGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.previous {
+                Some(value) => std::env::set_var(super::DAEMON_AUTOSTART_ENV, value),
+                None => std::env::remove_var(super::DAEMON_AUTOSTART_ENV),
+            }
+        }
+    }
+}
+
 fn cli_reuse_fixture(
     label: &str,
 ) -> (
@@ -1901,6 +1929,7 @@ async fn wait_idle_start_reports_when_the_new_adapter_never_becomes_ready() {
 #[cfg(unix)]
 #[tokio::test]
 async fn wait_idle_start_promotes_when_dummy_becomes_ready() {
+    let _autostart = AutostartEnvGuard::allow();
     let root = tempfile::tempdir().expect("wait-idle start ready fixture");
     let mut cfg = config();
     cfg.options.listen = unused_listen();
@@ -1918,6 +1947,7 @@ async fn wait_idle_start_promotes_when_dummy_becomes_ready() {
 #[cfg(unix)]
 #[tokio::test]
 async fn start_reports_recovery_when_publishing_live_state_fails() {
+    let _autostart = AutostartEnvGuard::allow();
     let root = tempfile::tempdir().expect("publish failure fixture");
     let mut cfg = config();
     cfg.options.listen = unused_listen();

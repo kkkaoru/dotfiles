@@ -43,6 +43,20 @@ function claudex --description 'Run Claude Code with config-driven agent backend
         command "$installer" $argv
         return $status
     end
+    # Explicit daemon control. The adapter never auto-starts a daemon: a plain
+    # `claudex` reuses a running one and otherwise points here. `daemon start`
+    # is the only path that authorizes detached spawn (via hot-swap's ensure
+    # flow, which starts an idle daemon when none is listening).
+    if test (count $argv) -ge 1; and test "$argv[1]" = daemon
+        if test (count $argv) -ge 2; and test "$argv[2]" = start
+            set -e argv[1..2]
+            set -lx CLAUDEX_DAEMON_AUTOSTART 1
+            claudex-hot-swap $argv
+            return $status
+        end
+        echo "usage: claudex daemon start" >&2
+        return 2
+    end
 
     # Keep orchestration policy in exported variables so Claude Code and its
     # routed workers receive the same controls.  Each default is overrideable

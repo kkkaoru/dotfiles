@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use super::{ServiceConfig, handover, handover::ServiceState, launcher_lock, pending_hot_swap};
 
@@ -30,6 +30,12 @@ pub(super) async fn run(config: &ServiceConfig, mode: Mode) -> Result<String> {
     let client = reqwest::Client::new();
     let state = handover::inspect_service(&client, config).await;
     apply_inspected_state(config, &client, mode, state).await
+}
+
+/// Detached spawn is only allowed on explicit user instruction. Reuse,
+/// replace, and defer flows are unaffected: they already imply a daemon.
+fn daemon_autostart_allowed() -> bool {
+    std::env::var_os(super::DAEMON_AUTOSTART_ENV).is_some_and(|value| value == "1")
 }
 
 pub(super) async fn apply_inspected_state(
@@ -72,7 +78,15 @@ pub(super) async fn apply_inspected_state(
                 ReplacePrep::Continue(manifest) => manifest,
             }
         }
-        ServiceState::Start => None,
+        ServiceState::Start => {
+            if !daemon_autostart_allowed() {
+                bail!(
+                    "no claudex daemon is listening on {}; start it explicitly with `claudex daemon start` (or set CLAUDEX_DAEMON_AUTOSTART=1 to allow automatic start)",
+                    config.base_url()
+                );
+            }
+            None
+        }
     };
     start_and_wait_for_adapter(config, client, recovery_manifest, replaced).await
 }

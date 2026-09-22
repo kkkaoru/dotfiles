@@ -314,6 +314,19 @@ async fn concurrent_ensure_commands_start_exactly_one_daemon() {
 }
 
 #[tokio::test]
+async fn ensure_without_autostart_refuses_to_spawn_a_daemon() {
+    let home = launcher_home();
+    let port = unused_port();
+    let output = ensure_command(&home, port, "20")
+        .env_remove("CLAUDEX_DAEMON_AUTOSTART")
+        .output()
+        .expect("run ensure command");
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("claudex daemon start"), "{stderr}");
+}
+
+#[tokio::test]
 async fn ensure_running_starts_reuses_and_replaces_the_daemon() {
     let home = launcher_home();
     let mut port = unused_port();
@@ -839,6 +852,7 @@ async fn ensure_running_replaces_the_renamed_legacy_daemon() {
         .env_remove("CARGO_HOME")
         .env("CLAUDEX_ADAPTER_EXECUTABLE", &current_binary)
         .env("CLAUDEX_MACOS_NOTIFY", "0")
+        .env("CLAUDEX_DAEMON_AUTOSTART", "1")
         .env("ANTHROPIC_AUTH_TOKEN", "claudex-local")
         .env(
             "CLAUDEX_CODEX_PROGRAM",
@@ -960,6 +974,7 @@ async fn ensure_running_connects_through_loopback_for_an_exposed_listener() {
             env!("CARGO_BIN_EXE_claudex-agent-adapter"),
         )
         .env("CLAUDEX_MACOS_NOTIFY", "0")
+        .env("CLAUDEX_DAEMON_AUTOSTART", "1")
         .env("ANTHROPIC_AUTH_TOKEN", "real-token")
         .env(
             "CLAUDEX_CODEX_PROGRAM",
@@ -1359,6 +1374,8 @@ fn common_command(home: &TempDir, _port: u16, _max_processes: &str) -> Command {
         // Integration ensure/hot-swap binaries are not cfg(test); without this,
         // CLI opt-in posts real macOS "差し替え完了" banners during coverage.
         .env("CLAUDEX_MACOS_NOTIFY", "0")
+        // Explicit tests remove this to assert the no-autostart refusal.
+        .env("CLAUDEX_DAEMON_AUTOSTART", "1")
         .env("ANTHROPIC_AUTH_TOKEN", "claudex-local")
         .env(
             "CLAUDEX_CODEX_PROGRAM",

@@ -155,6 +155,11 @@ claudex-agent-adapter serve --model MODEL --backend-route MODEL=BACKEND [...] [A
 claudex-agent-adapter build-id
 ```
 
+`launch`, `ensure`, and `hot-swap` reuse a running daemon but never start one
+on their own: with no listener they fail and point at `claudex daemon start`.
+Detached spawn requires explicit opt-in (`CLAUDEX_DAEMON_AUTOSTART=1`, which
+`claudex daemon start` sets for its `hot-swap`/`ensure` invocation).
+
 Backend values include `pi-gateway` (the claudex production path), plus
 `codex-app-server`, `configured-acp`, `copilot-acp`, and `grok-acp` for library
 and test routes. The preferred launcher path is `--provider-config
