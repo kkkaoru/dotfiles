@@ -4,6 +4,7 @@ import type { SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent"
 import { expect, it, vi } from "vitest";
 import contextGuard, {
   guardedCompaction,
+  piCompactionFits,
   providerSessionHeaders,
   type GuardContext,
   type GuardHost,
@@ -124,7 +125,7 @@ it("also guards oversized threshold compaction with split turn prefixes and no p
   expect(complete).toHaveBeenCalledTimes(8);
 });
 
-it("keeps Pi's single-call compaction when its summarization request fits the window", async () => {
+it("keeps Pi's single-call compaction while its summary cap can hold the history", async () => {
   const complete = vi.fn().mockResolvedValue(RESPONSE);
   const ctx: GuardContext = { model: MODEL, modelRegistry: { complete }, ui: { notify: vi.fn() } };
   const result = await guardedCompaction(
@@ -133,7 +134,7 @@ it("keeps Pi's single-call compaction when its summarization request fits the wi
       reason: "threshold",
       preparation: {
         ...EVENT.preparation,
-        tokensBefore: 400_000,
+        tokensBefore: 200_000,
         messagesToSummarize: [{ role: "user", content: "x".repeat(200_000), timestamp: 0 }],
         settings: { enabled: true, reserveTokens: 65_536, keepRecentTokens: 12_000 },
       },
@@ -159,6 +160,50 @@ it("bounds a fitting window when the model's output exceeds the compaction reser
     },
     {
       model: { ...MODEL, contextWindow: 600_000, maxTokens: 384_000 },
+      modelRegistry: { complete },
+      ui: { notify: vi.fn() },
+    },
+  );
+  expect(result).toHaveProperty("compaction");
+  expect(complete).toHaveBeenCalled();
+});
+
+it("keeps Pi's single call only while its output cap can hold the summary", () => {
+  const preparation = {
+    ...EVENT.preparation,
+    settings: { enabled: true, reserveTokens: 65_536, keepRecentTokens: 12_000 },
+  };
+  const model = { ...MODEL, contextWindow: 600_000, maxTokens: 65_536 };
+  // Pi caps the summary at 0.8 * 65_536 = 52_428 tokens, so an 88k history fits with room to spare.
+  expect(piCompactionFits({ ...preparation, tokensBefore: 100_000 }, model)).toBe(true);
+  // A 522k history needs ~10x compression past that cap, exactly how Pi's single call hits it.
+  expect(piCompactionFits({ ...preparation, tokensBefore: 534_464 }, model)).toBe(false);
+  // A model without a declared output limit gets Pi's full reserve share.
+  expect(
+    piCompactionFits({ ...preparation, tokensBefore: 100_000 }, { ...model, maxTokens: 0 }),
+  ).toBe(true);
+  // A 128k window with an 8192-token output cap cannot hold the summary of a 58k-token history:
+  // Pi's single call spends the whole cap and stops at length, failing the whole compaction.
+  const smallCap = { ...MODEL, contextWindow: 128_000, maxTokens: 8192 };
+  expect(piCompactionFits({ ...preparation, tokensBefore: 69_761 }, smallCap)).toBe(false);
+  expect(piCompactionFits({ ...preparation, tokensBefore: 40_000 }, smallCap)).toBe(true);
+});
+
+it("bounds a large-window compaction whose history outgrows Pi's summary cap", async () => {
+  const complete = vi.fn().mockResolvedValue(RESPONSE);
+  const result = await guardedCompaction(
+    {
+      ...EVENT,
+      reason: "threshold",
+      preparation: {
+        ...EVENT.preparation,
+        tokensBefore: 534_464,
+        messagesToSummarize: [{ role: "user", content: "x".repeat(60_000), timestamp: 0 }],
+        settings: { enabled: true, reserveTokens: 65_536, keepRecentTokens: 12_000 },
+      },
+    },
+    {
+      model: { ...MODEL, contextWindow: 600_000, maxTokens: 65_536 },
       modelRegistry: { complete },
       ui: { notify: vi.fn() },
     },

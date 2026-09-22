@@ -31,6 +31,15 @@ const OUTPUT_WINDOW_DIVISOR = 8;
 const PROVIDER_MAX_RETRIES = 6;
 /** Tokens Pi's own summarization prompt adds on top of the history it summarizes. */
 const SUMMARIZATION_PROMPT_TOKENS = 4096;
+/** Pi caps its summary output at this share of the compaction reserve. */
+const SUMMARY_RESERVE_SHARE = 0.8;
+/**
+ * Pi's checkpoint prompt compresses a history into roughly an eighth of its tokens at its tightest,
+ * so a history at 8x the output cap fills that cap and a length stop aborts the compaction. Deferring
+ * at half of it leaves the summary half the cap: Pi's own records never crossed a 7.5:1 ratio, and the
+ * ones on an 8192-token cap model used 86-99% of it.
+ */
+const SUMMARY_COMPRESSION_RATIO = 4;
 const OPENCODE_HOST = "opencode.ai";
 const OPENCODE_CLIENT = "pi-coding-agent";
 const OPENCODE_PROVIDERS: ReadonlySet<string> = new Set(["opencode", "opencode-go"]);
@@ -48,16 +57,25 @@ function hostOf(baseUrl: string): string | undefined {
  * is capped by the compaction reserve, so Pi handles the compaction itself whenever that request
  * fits in the context window. Deferring to it keeps a long history in a single call instead of
  * dropping the middle of it in bounded segments.
+ *
+ * That single request must also be able to hold the summary Pi's prompt asks for. Pi stops it at
+ * `min(0.8 * reserveTokens, maxTokens)` output tokens and treats a length stop as a failure
+ * ("Summarization failed: generation hit the token cap and the summary is incomplete"), which
+ * aborts the whole compaction without a fallback. A history that needs far more compression than
+ * Pi's summaries achieve is therefore handled in bounded segments instead.
  */
 export function piCompactionFits(
   preparation: SessionBeforeCompactEvent["preparation"],
   model: Pick<Model<Api>, "contextWindow" | "maxTokens">,
 ): boolean {
   const { tokensBefore, settings } = preparation;
+  const reservedShare = Math.floor(SUMMARY_RESERVE_SHARE * settings.reserveTokens);
+  const outputCap = model.maxTokens > 0 ? Math.min(reservedShare, model.maxTokens) : reservedShare;
   const outputTokens = Math.max(settings.reserveTokens, model.maxTokens);
+  const historyTokens = tokensBefore - settings.keepRecentTokens;
   return (
-    tokensBefore - settings.keepRecentTokens + outputTokens + SUMMARIZATION_PROMPT_TOKENS <=
-    model.contextWindow
+    historyTokens <= SUMMARY_COMPRESSION_RATIO * outputCap &&
+    historyTokens + outputTokens + SUMMARIZATION_PROMPT_TOKENS <= model.contextWindow
   );
 }
 

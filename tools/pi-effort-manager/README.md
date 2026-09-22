@@ -8,10 +8,15 @@ static effort controls and has no runtime dependency on the former third-party p
 The package also loads `src/context-guard.ts` as an independent safety extension. Small normal
 compactions use Pi's implementation, and so do threshold compactions whose single-call
 summarization request fits the model's declared window (`tokensBefore - keepRecentTokens` plus the
-compaction reserve and prompt, against the context window). Deferring there keeps a long history in
-one Pi call instead of dropping its middle in bounded segments. Overflow recovery and the remaining
-oversized serialized histories use sequential, bounded summary segments with the selected model and
-its existing credentials.
+compaction reserve and prompt, against the context window) and whose summary output cap
+(`min(0.8 * reserveTokens, maxTokens)`) can still hold the summary Pi's prompt asks for. Deferring
+there keeps a long history in one Pi call instead of dropping its middle in bounded segments;
+Pi aborts the whole compaction when that one call stops at its output cap. That cap is much smaller
+than the reserve on models advertising a small `maxTokens` (an 8192-token model under the global
+65,536 reserve caps its summary at 8192), so those compactions are bounded here instead. Overflow
+recovery and
+the remaining oversized serialized histories use sequential, bounded summary segments with the
+selected model and its existing credentials.
 The previous summary, split-turn prefix and user focus are included; the retained-message boundary
 and file-operation metadata are preserved. Original JSONL history is never rewritten.
 
