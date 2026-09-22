@@ -130,6 +130,19 @@ for name in agents commands hooks rules skills; do
   fi
 done
 
+# Expose shared Agent Skills to Claude Code: link every generic skill and
+# every optional domain skill from the storage directory by name. Targets are
+# relative so the checkout stays relocatable. link_path refreshes drifted
+# symlinks and never overwrites real directories (claudex-routing, custom-*,
+# separately managed copies), so reruns are safe.
+for store in skills skills-stroage; do
+  for src in "${DOTPATH}/.agents/${store}"/*/; do
+    [ -d "$src" ] || continue
+    name=$(basename "$src")
+    link_path "../../.agents/${store}/${name}" "${DOTPATH}/.claude/skills/${name}"
+  done
+done
+
 # Cursor keeps runtime state beside user skills, so merge only skills.
 if [ -L "${HOME}/.cursor" ]; then
   echo "refuse: ${HOME}/.cursor is a symlink; keep it as a real directory and merge managed files" >&2
