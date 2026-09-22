@@ -10,29 +10,6 @@ source (dirname (status -f))/path.fish
 set -g theme_display_cmd_duration no
 
 set -gx HOMEBREW_GITHUB_API_TOKEN your_token_here
-# Shared defaults for plain `claude`, `codex`, and `claudex` launches.  Keep
-# caller-provided values, while making the claudex policy available even when
-# the wrapper function is not used.
-set -q CLAUDEX_SUBAGENT_MAX_PARALLEL; and set -gx CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS "$CLAUDEX_SUBAGENT_MAX_PARALLEL"
-set -q CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS; or set -gx CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS 40
-set -q CLAUDEX_SUBAGENT_MAX_PARALLEL; or set -gx CLAUDEX_SUBAGENT_MAX_PARALLEL "$CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"
-set -q CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION; or set -gx CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION 1024
-# Long-running `/goal` sessions may legitimately require more than Claude
-# Code's default consecutive Stop-hook continuations.  Keep a finite cap so a
-# genuinely recursive hook still terminates, while avoiding the observed
-# nine-turn false stop during multi-hour claudex work.
-set -q CLAUDE_CODE_STOP_HOOK_BLOCK_CAP; or set -gx CLAUDE_CODE_STOP_HOOK_BLOCK_CAP 64
-# Multi-scope phase guidance (aligned with adapter parallel_scheduler defaults).
-# Fan-out remains content-driven: single indivisible scope still launches 1 worker.
-set -q CLAUDEX_SUBAGENT_MIN_PARALLEL; or set -gx CLAUDEX_SUBAGENT_MIN_PARALLEL 3
-set -q CLAUDEX_SUBAGENT_ACTIVE_FLOOR; or set -gx CLAUDEX_SUBAGENT_ACTIVE_FLOOR 2
-set -q CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES; or set -gx CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES 2
-set -q CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION; or set -gx CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION 1
-set -q CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS; or set -gx CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS 600
-set -q CLAUDEX_SUBAGENT_REUSE; or set -gx CLAUDEX_SUBAGENT_REUSE 1
-set -q CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT; or set -gx CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT 1
-set -q CLAUDEX_SUBAGENT_FIRST; or set -gx CLAUDEX_SUBAGENT_FIRST 1
-set -q CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS; or set -gx CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS 15
 
 # pnpm
 set -gx PNPM_HOME "/Users/kaoru/Library/pnpm"
