@@ -24,7 +24,7 @@ export function trySendUserMessage(host: LoopHost, message: string): boolean {
 export interface WakeupInput {
   readonly delaySeconds: number;
   readonly prompt: string;
-  readonly reason: string;
+  readonly reason?: string;
 }
 export interface WakeupResult {
   readonly id: number;
@@ -42,15 +42,15 @@ export function commandPrompt(prompt: string): string {
   return `${SELF_PACED_GUIDANCE}\n\nTask:\n${task}`;
 }
 
-export function validateWakeup({ delaySeconds, prompt, reason }: WakeupInput): void {
+export function validateWakeup({ delaySeconds, prompt }: WakeupInput): void {
   if (!Number.isInteger(delaySeconds)) {
     throw new TypeError("delaySeconds must be an integer");
   }
   if (delaySeconds < MIN_WAKEUP_SECONDS || delaySeconds > MAX_WAKEUP_SECONDS) {
     throw new Error("delaySeconds must be between 60 and 3,600");
   }
-  if (prompt.trim().length === 0 || reason.trim().length === 0) {
-    throw new Error("prompt and reason must not be empty");
+  if (prompt.trim().length === 0) {
+    throw new Error("prompt must not be empty");
   }
 }
 

@@ -401,15 +401,13 @@ describe("LoopRuntime wakeups", () => {
     expect(() =>
       runtime.wakeup({ delaySeconds: 3601, prompt: "next", reason: "why" }, context),
     ).toThrow("delaySeconds must be between 60 and 3,600");
-    expect(() => runtime.wakeup({ delaySeconds: 60, prompt: " ", reason: "why" }, context)).toThrow(
-      "prompt and reason must not be empty",
+    expect(() => runtime.wakeup({ delaySeconds: 60, prompt: " " }, context)).toThrow(
+      "prompt must not be empty",
     );
-    expect(() =>
-      runtime.wakeup({ delaySeconds: 60, prompt: "next", reason: " " }, context),
-    ).toThrow("prompt and reason must not be empty");
-    expect(() =>
-      runtime.wakeup({ delaySeconds: 60, prompt: "next", reason: "why" }, context),
-    ).toThrow("loop_wakeup requires an active /loop tick");
+    expect(runtime.wakeup({ delaySeconds: 60, prompt: "next" }, context)).toStrictEqual({
+      id: 1,
+      scheduledInSeconds: 60,
+    });
   });
 
   it("validates completion and accepts only one terminal decision", () => {

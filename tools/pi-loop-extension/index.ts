@@ -19,7 +19,9 @@ const wakeupSchema = Type.Object({
     minimum: 60,
   }),
   prompt: Type.String({ description: "Prompt for the next loop tick", minLength: 1 }),
-  reason: Type.String({ description: "Short reason for choosing this delay", minLength: 1 }),
+  reason: Type.Optional(
+    Type.String({ description: "Short reason for choosing this delay", minLength: 1 }),
+  ),
 }) satisfies TSchema;
 const completeSchema = Type.Object({
   reason: Type.String({

@@ -119,13 +119,12 @@ export class LoopRuntime {
   wakeup(input: WakeupInput, context: LoopContext): WakeupResult {
     validateWakeup(input);
     this.setContext(context);
-    requireActiveLoop(this.#runningContinuation, "loop_wakeup");
     this.#resetContinuation();
     const delayMs: number = input.delaySeconds * MILLISECONDS_PER_SECOND;
     const job: LoopJob = this.#schedule({
       delayMs,
       prompt: input.prompt.trim(),
-      reason: input.reason.trim(),
+      reason: input.reason?.trim() ?? input.prompt.trim().slice(0, 120),
     });
     return { id: job.id, scheduledInSeconds: input.delaySeconds };
   }
