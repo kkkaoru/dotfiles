@@ -197,7 +197,15 @@ async function nativeSummary(
     { ...event.preparation, previousSummary },
     model, undefined, undefined, event.customInstructions, event.signal,
     undefined, async (selectedModel, context, requestOptions) => {
-      const response = await modelRegistry.complete(selectedModel, context, requestOptions);
+      const sessionId = requestOptions?.sessionId ?? uuidv7();
+      const response = await modelRegistry.complete(selectedModel, context, {
+        ...requestOptions,
+        sessionId,
+        headers: {
+          ...requestOptions?.headers,
+          ...providerSessionHeaders(selectedModel, sessionId),
+        },
+      });
       const stream = createAssistantMessageEventStream();
       stream.end(response);
       return stream;

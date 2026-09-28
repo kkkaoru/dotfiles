@@ -32,9 +32,9 @@ requests and tool output, consult the preserved session JSONL (`/session`).
 Each request is limited conservatively using UTF-8 bytes (at most half the model's advertised token
 window, capped at 96,000 bytes), leaving room for framing and output. A short running summary
 carries decisions between segments. Output is capped at 8,192 tokens, uses low reasoning,
-and disables prompt caching with a fresh per-compaction session ID. Each segment also sends Pi's
-OpenCode session headers (`x-opencode-session`, `x-opencode-client`) when the model belongs to
-`opencode`/`opencode-go` or points at `opencode.ai`: Pi's provider runner adds those to its own
+and disables prompt caching with a fresh per-compaction session ID. Normal and bounded compaction
+requests send Pi's OpenCode session headers (`x-opencode-session`, `x-opencode-client`) when the
+model belongs to `opencode`/`opencode-go` or points at `opencode.ai`: Pi's provider runner adds those to its own
 requests, extension-initiated model calls bypass that runner, and OpenCode rejects a request without
 the session header (`MissingSessionID`) instead of falling back. Other providers' headers are left
 alone. Successful calls' usage is accumulated.

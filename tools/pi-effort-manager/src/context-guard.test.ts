@@ -229,7 +229,22 @@ it("retains requests with native compaction across providers using the configure
     if (route === undefined) { throw new Error("Compaction model router missing"); }
     const stream = await route(MODEL, { messages: [] });
     expect(await stream.result()).toStrictEqual(RESPONSE);
-    expect(complete).toHaveBeenCalledOnce();
+    const openCode = await route(
+      { ...MODEL, provider: "opencode-go", baseUrl: "https://opencode.ai/zen" },
+      { messages: [] },
+      { sessionId: "native-session", headers: { "x-custom": "kept" } },
+    );
+    expect(await openCode.result()).toStrictEqual(RESPONSE);
+    expect(complete.mock.calls[1]?.[2]).toMatchObject({
+      sessionId: "native-session",
+      headers: {
+        "x-custom": "kept",
+        "x-opencode-session": "native-session",
+        "x-opencode-client": "pi",
+        "User-Agent": "pi-coding-agent",
+      },
+    });
+    expect(complete).toHaveBeenCalledTimes(2);
   } finally {
     compact.mockReset();
   }
