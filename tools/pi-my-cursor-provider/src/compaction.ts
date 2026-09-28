@@ -284,7 +284,7 @@ export function registerCursorCompaction(pi: Pick<ExtensionAPI, "on">): void {
     if (!result) return undefined;
 
     const compaction: CompactionResult = {
-      summary: result.summary + retainedUserRequests(preparation),
+      summary: result.summary + retainedUserRequests(preparation, ctx.model?.contextWindow),
       firstKeptEntryId: preparation.firstKeptEntryId,
       tokensBefore: preparation.tokensBefore,
     };

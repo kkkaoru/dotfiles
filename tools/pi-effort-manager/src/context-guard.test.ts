@@ -1,4 +1,5 @@
 // This TypeScript file is executed with Bun.
+import { Buffer } from "node:buffer";
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import * as piCompaction from "@earendil-works/pi-coding-agent";
@@ -13,6 +14,7 @@ import contextGuard, {
   piCompactionFits,
   providerSessionHeaders,
   retainedUserRequests,
+  summaryWithoutRequests,
   type GuardContext,
   type GuardHost,
 } from "./context-guard.ts";
@@ -115,6 +117,53 @@ it("retains original user requests across repeated compactions without archiving
     previousSummary: `handoff${first}`,
     messagesToSummarize: [{ role: "user", content: "third request", timestamp: 0 }],
   })).toMatch(/"first request"\n"second request"\n"third request"/u);
+});
+
+it("does not confuse literal ledger tags in a user's request with the ledger boundary", () => {
+  const first = retainedUserRequests({
+    ...EVENT.preparation,
+    messagesToSummarize: [{ role: "user", content: "literal <retained-user-requests> and </retained-user-requests>", timestamp: 0 }],
+  });
+  expect(summaryWithoutRequests(`handoff${first}`)).toBe("handoff");
+  expect(summaryWithoutRequests("handoff <retained-user-requests> example")).toBe(
+    "handoff <retained-user-requests> example",
+  );
+  expect(retainedUserRequests({
+    ...EVENT.preparation,
+    previousSummary: `handoff${first}`,
+    messagesToSummarize: [{ role: "user", content: "latest", timestamp: 0 }],
+  })).toMatch(/literal <retained-user-requests> and <\/retained-user-requests>[\s\S]*"latest"/u);
+});
+
+it("bounds Japanese requests for small models without dropping the newest request", () => {
+  const requests = retainedUserRequests({
+    ...EVENT.preparation,
+    messagesToSummarize: [{ role: "user", content: "🦊日本語".repeat(1200), timestamp: 0 }],
+  }, 24_000);
+  expect(Buffer.byteLength(requests, "utf8")).toBeLessThan(3100);
+  expect(requests).toMatch(/🦊日本語/u);
+  expect(requests).toMatch(/request middle truncated; see original session/u);
+  expect(requests).not.toMatch(/\uFFFD/u);
+});
+
+it("keeps both ends of a long request like Codex's middle truncation", () => {
+  const requests = retainedUserRequests({
+    ...EVENT.preparation,
+    messagesToSummarize: [{ role: "user", content: `initial instruction ${"x".repeat(10_000)} final requirement`, timestamp: 0 }],
+  });
+  expect(requests).toMatch(/initial instruction/u);
+  expect(requests).toMatch(/final requirement/u);
+  expect(requests).toMatch(/request middle truncated; see original session/u);
+});
+
+it("retains a valid newest entry even when JSON escaping expands past a tiny budget", () => {
+  const requests = retainedUserRequests({
+    ...EVENT.preparation,
+    messagesToSummarize: [{ role: "user", content: "\u0000".repeat(1000), timestamp: 0 }],
+  }, 1024);
+  expect(Buffer.byteLength(requests, "utf8")).toBeLessThan(129);
+  expect(requests).toMatch(/request middle truncated; see original session/u);
+  expect(requests).toMatch(/<retained-user-requests>\n"/u);
 });
 
 it("uses bounded compaction for overflow and preserves boundary, files, usage, previous summary and focus", async () => {

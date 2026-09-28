@@ -20,8 +20,10 @@ selected model and its existing credentials.
 The previous summary, split-turn prefix and user focus are included; the retained-message boundary
 and file-operation metadata are preserved. Original JSONL history is never rewritten. Like Codex's
 compacted history, the handoff also retains the original user requests separately from the generated
-summary (newest first within a 20k-character budget, with individual requests clipped at 4000
-characters). Normal compaction delegates to Pi's own summarizer through the configured model
+summary (newest requests prioritized within a 20k UTF-8 byte ceiling, reduced to one eighth of
+smaller models' context windows; individual requests are clipped at 4000 bytes). Like Codex's
+truncation, long requests retain both beginning and end on Unicode code-point boundaries and mark
+the omitted middle. Normal compaction delegates to Pi's own summarizer through the configured model
 router for any provider, retaining split-turn handling, usage and file metadata; only the
 user-request ledger is appended. Bounded compaction also carries the ledger. Cursor keeps its
 specialized off-provider summarizer, which carries the same ledger when available. For full

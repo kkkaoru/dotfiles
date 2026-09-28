@@ -43,8 +43,11 @@ const SUMMARY_RESERVE_SHARE = 0.8;
 const SUMMARY_COMPRESSION_RATIO = 4;
 const REQUESTS_START = "<retained-user-requests>";
 const REQUESTS_END = "</retained-user-requests>";
+const REQUESTS_OPEN = `\n\n${REQUESTS_START}\n`;
+const REQUESTS_CLOSE = `\n${REQUESTS_END}`;
 const REQUEST_BUDGET = 20_000;
 const REQUEST_LIMIT = 4000;
+const REQUEST_TRUNCATED = "\n[request middle truncated; see original session]\n";
 const OPENCODE_HOST = "opencode.ai";
 const OPENCODE_CLIENT = "pi-coding-agent";
 const OPENCODE_PROVIDERS: ReadonlySet<string> = new Set(["opencode", "opencode-go"]);
@@ -105,33 +108,81 @@ export function providerSessionHeaders(
 }
 
 // Codex retains user messages alongside its summary; Pi's hook can only retain them in the summary.
-export function summaryWithoutRequests(summary: string | undefined): string {
-  return ((summary ?? "").split(REQUESTS_START)[0] ?? "").trimEnd();
+function ledgerStart(summary: string): number {
+  return summary.endsWith(REQUESTS_CLOSE) ? summary.lastIndexOf(REQUESTS_OPEN) : -1;
 }
 
-export function retainedUserRequests(preparation: SessionBeforeCompactEvent["preparation"]): string {
-  const previous: string = preparation.previousSummary ?? "";
-  const archived: string = previous.split(REQUESTS_START)[1]?.split(REQUESTS_END)[0] ?? "";
+export function summaryWithoutRequests(summary: string | undefined): string {
+  const text = (summary ?? "").trimEnd();
+  const start = ledgerStart(text);
+  return (start < 0 ? text : text.slice(0, start)).trimEnd();
+}
+
+function prefixWithinBytes(text: string, limit: number): string {
+  // Iteration keeps surrogate pairs intact, even at a UTF-8 byte boundary.
+  let bytes = 0;
+  let end = 0;
+  for (const character of text) {
+    const next = Buffer.byteLength(character, "utf8");
+    if (bytes + next > limit) { break; }
+    bytes += next;
+    end += character.length;
+  }
+  return text.slice(0, end);
+}
+
+function suffixWithinBytes(text: string, limit: number): string {
+  let bytes = 0;
+  let start = text.length;
+  while (start > 0) {
+    const offset = (text.codePointAt(start - 2) ?? 0) > 65_535 ? 2 : 1;
+    const next = start - offset;
+    const size = Buffer.byteLength(text.slice(next, start), "utf8");
+    if (bytes + size > limit) { break; }
+    bytes += size;
+    start = next;
+  }
+  return text.slice(start);
+}
+
+function clipRequest(text: string, limit: number): string {
+  if (Buffer.byteLength(text, "utf8") <= limit) { return text; }
+  const available = Math.max(0, limit - Buffer.byteLength(REQUEST_TRUNCATED));
+  return prefixWithinBytes(text, Math.ceil(available / 2)) + REQUEST_TRUNCATED
+    + suffixWithinBytes(text, Math.floor(available / 2));
+}
+
+export function retainedUserRequests(
+  preparation: SessionBeforeCompactEvent["preparation"],
+  contextWindow?: number,
+): string {
+  // UTF-8 bytes conservatively bound Japanese-heavy requests; leave most of small windows for work.
+  const budget = Math.min(REQUEST_BUDGET, Math.floor((contextWindow ?? REQUEST_BUDGET * 8) / 8))
+    - Buffer.byteLength(REQUESTS_OPEN + REQUESTS_CLOSE);
+  if (budget < 64) { return ""; }
+  const previous: string = (preparation.previousSummary ?? "").trimEnd();
+  const start = ledgerStart(previous);
+  const archived: string = start < 0 ? "" : previous.slice(start + REQUESTS_OPEN.length, -REQUESTS_CLOSE.length);
   const messages = [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages];
   const requests: string[] = messages.flatMap((message) => {
     if (message.role !== "user") { return []; }
     const content: string = typeof message.content === "string"
       ? message.content
       : message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
-    return [content.length > REQUEST_LIMIT
-      ? `${content.slice(0, REQUEST_LIMIT)}\n[request truncated; see original session]`
-      : content];
+    const clipped = clipRequest(content, Math.min(REQUEST_LIMIT, budget - 4));
+    const entry = JSON.stringify(clipped);
+    // Escaped control characters can expand in JSON; shrink only if the entry itself exceeds budget.
+    return [Buffer.byteLength(entry) <= budget
+      ? entry
+      : JSON.stringify(clipRequest(content, Math.floor(budget / 8)))];
   });
-  const entries: string[] = [
-    ...archived.trim().split("\n").filter(Boolean),
-    ...requests.map((text) => JSON.stringify(text)),
-  ];
+  const entries: string[] = [...archived.trim().split("\n").filter(Boolean), ...requests];
   const selected: string[] = [];
   for (const entry of entries.toReversed()) {
-    if (selected.join("\n").length + entry.length > REQUEST_BUDGET) { break; }
+    if (Buffer.byteLength([...selected, entry].join("\n")) > budget) { break; }
     selected.unshift(entry);
   }
-  return selected.length === 0 ? "" : `\n\n${REQUESTS_START}\n${selected.join("\n")}\n${REQUESTS_END}`;
+  return selected.length === 0 ? "" : `${REQUESTS_OPEN}${selected.join("\n")}${REQUESTS_CLOSE}`;
 }
 
 async function nativeSummary(
@@ -181,7 +232,7 @@ export async function guardedCompaction(
       return undefined;
     }
     const { preparation } = event;
-    const requests: string = retainedUserRequests(preparation);
+    const requests: string = retainedUserRequests(preparation, model.contextWindow);
     const previousSummary: string = summaryWithoutRequests(preparation.previousSummary);
     const text: string = summarySource(event, previousSummary);
     if (
