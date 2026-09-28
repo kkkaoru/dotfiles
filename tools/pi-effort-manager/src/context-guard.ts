@@ -245,8 +245,9 @@ export async function guardedCompaction(
     const text: string = summarySource(event, previousSummary);
     if (
       event.reason !== "overflow" &&
-      (Buffer.byteLength(text, "utf8") < summaryInputBudget(model.contextWindow) / 2 ||
-        piCompactionFits(preparation, model))
+      (piCompactionFits(preparation, model) ||
+        (model.contextWindow >= 8192 &&
+          Buffer.byteLength(text, "utf8") < summaryInputBudget(model.contextWindow) / 2))
     ) {
       const compaction = await nativeSummary({ event, ctx, requests, previousSummary });
       return compaction === undefined ? undefined : { compaction };

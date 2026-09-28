@@ -91,6 +91,30 @@ it("keeps Pi's native compaction for small histories and handles no selected mod
   }
 });
 
+it("uses native compaction for a fitting small-window model without invoking the bounded minimum", async () => {
+  const compact = vi.mocked(piCompaction.compact).mockResolvedValue({
+    summary: "handoff", firstKeptEntryId: "kept", tokensBefore: 700,
+  });
+  try {
+    const result = await guardedCompaction({
+      ...EVENT, reason: "manual",
+      preparation: {
+        ...EVENT.preparation,
+        tokensBefore: 700,
+        settings: { enabled: true, reserveTokens: 1000, keepRecentTokens: 100 },
+      },
+    }, {
+      model: { ...MODEL, contextWindow: 6000, maxTokens: 600 },
+      modelRegistry: { complete: vi.fn() },
+      ui: { notify: vi.fn() },
+    });
+    expect(result).toHaveProperty("compaction");
+    expect(compact).toHaveBeenCalledOnce();
+  } finally {
+    compact.mockReset();
+  }
+});
+
 it("leaves Cursor's specialized off-provider summarizer in control", async () => {
   const complete = vi.fn();
   expect(await guardedCompaction({ ...EVENT, reason: "manual" }, {
