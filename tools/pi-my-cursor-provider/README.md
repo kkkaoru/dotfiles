@@ -15,7 +15,7 @@ Minimal Cursor agent bridge for pi and Claudex. It preserves the existing `curso
 - Uses pi's supplied system prompt and tools without reloading ambient Cursor setting sources, avoiding duplicate rules and SDK bootstrap logs in standalone TUI use.
 - Selects Cursor GPT-5.6 Luna's 272K context variant and enables its `fast` parameter.
 - Advertises Cursor models to pi at 80% of their real context window (256k models report 204.8k; Luna's 272K variant reports 217.6K) so pi's native auto-compaction fires before requests can reach Cursor's hard limit, where Cursor returns usage-guideline blocks instead of recognizable overflow errors.
-- Compaction summaries are routed through an off-Cursor fallback chain — `ollama-cloud/kimi-k3` → `github-copilot/gemini-3.7-flash` → `commandcode/gemini-3.7-flash` — because Cursor's moderation frequently blocks pi's whole-conversation summarization payloads. Each candidate is checked for configured auth and retried down the chain on failure; when the whole chain is unavailable, pi's default compaction runs instead.
+- Compaction summaries are routed through an off-Cursor fallback chain — `ollama-cloud/kimi-k3` → `github-copilot/gemini-3.7-flash` → `commandcode/gemini-3.7-flash` — because Cursor's moderation frequently blocks pi's whole-conversation summarization payloads. Each candidate is checked for configured auth and retried down the chain on failure; when the whole chain is unavailable, pi's default compaction runs instead. Successful fallback summaries retain a bounded ledger of original user requests, just like other providers' compaction.
 
 A Cursor API key must be available through pi `/login`, `CURSOR_API_KEY`, or request-level `--api-key` resolution.
 

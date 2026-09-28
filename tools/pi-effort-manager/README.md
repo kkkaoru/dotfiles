@@ -21,8 +21,10 @@ The previous summary, split-turn prefix and user focus are included; the retaine
 and file-operation metadata are preserved. Original JSONL history is never rewritten. Like Codex's
 compacted history, the handoff also retains the original user requests separately from the generated
 summary (newest first within a 20k-character budget, with individual requests clipped at 4000
-characters). This applies to bounded compaction on all providers and normal compaction on the
-configured OpenAI Codex provider; other providers' normal Pi compaction remains unchanged. For full
+characters). Normal compaction delegates to Pi's own summarizer through the configured model
+router for any provider, retaining split-turn handling, usage and file metadata; only the
+user-request ledger is appended. Bounded compaction also carries the ledger. Cursor keeps its
+specialized off-provider summarizer, which carries the same ledger when available. For full
 requests and tool output, consult the preserved session JSONL (`/session`).
 
 Each request is limited conservatively using UTF-8 bytes (at most half the model's advertised token

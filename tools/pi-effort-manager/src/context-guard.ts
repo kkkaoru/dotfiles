@@ -1,10 +1,10 @@
 // This TypeScript file is executed with Bun.
 import { Buffer } from "node:buffer";
 import { URL } from "node:url";
-import { uuidv7, type Api, type Model, type ProviderHeaders } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, uuidv7, type Api, type Model, type ProviderHeaders } from "@earendil-works/pi-ai";
 import {
   convertToLlm,
-  generateSummaryWithUsage,
+  compact,
   serializeConversation,
   type ExtensionContext,
   type SessionBeforeCompactEvent,
@@ -18,7 +18,7 @@ export interface GuardHost {
 
 export interface GuardContext {
   readonly model: Model<Api> | undefined;
-  readonly modelRegistry: Pick<ExtensionContext["modelRegistry"], "complete"> & Partial<Pick<ExtensionContext["modelRegistry"], "getApiKeyAndHeaders">>;
+  readonly modelRegistry: Pick<ExtensionContext["modelRegistry"], "complete">;
   readonly ui: Pick<ExtensionContext["ui"], "notify">;
 }
 
@@ -105,6 +105,10 @@ export function providerSessionHeaders(
 }
 
 // Codex retains user messages alongside its summary; Pi's hook can only retain them in the summary.
+export function summaryWithoutRequests(summary: string | undefined): string {
+  return ((summary ?? "").split(REQUESTS_START)[0] ?? "").trimEnd();
+}
+
 export function retainedUserRequests(preparation: SessionBeforeCompactEvent["preparation"]): string {
   const previous: string = preparation.previousSummary ?? "";
   const archived: string = previous.split(REQUESTS_START)[1]?.split(REQUESTS_END)[0] ?? "";
@@ -130,33 +134,25 @@ export function retainedUserRequests(preparation: SessionBeforeCompactEvent["pre
   return selected.length === 0 ? "" : `\n\n${REQUESTS_START}\n${selected.join("\n")}\n${REQUESTS_END}`;
 }
 
-async function codexSummary(
-  options: { event: SessionBeforeCompactEvent; ctx: GuardContext; previousSummary: string; requests: string },
+async function nativeSummary(
+  options: { event: SessionBeforeCompactEvent; ctx: GuardContext; requests: string; previousSummary: string },
 ): Promise<CompactionResult | undefined> {
-  const { event, ctx, previousSummary, requests } = options;
-  const { model } = ctx;
-  const { getApiKeyAndHeaders: resolveAuth } = ctx.modelRegistry;
-  if (model?.provider !== "openai-codex" || requests.length === 0 || !resolveAuth) {
+  const { event, ctx, requests, previousSummary } = options;
+  const { model, modelRegistry } = ctx;
+  if (model === undefined || requests.length === 0) {
     return undefined;
   }
-  const auth = await resolveAuth.call(ctx.modelRegistry, model);
-  if (!auth.ok) { throw new Error(auth.error); }
-  const { preparation } = event;
-  const summary = await generateSummaryWithUsage(
-    [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages], model,
-    preparation.settings.reserveTokens, auth.apiKey,
-    Object.fromEntries(Object.entries(auth.headers ?? {}).filter((entry): entry is [string, string] => entry[1] !== null)),
-    event.signal, event.customInstructions, previousSummary || undefined,
+  const result = await compact(
+    { ...event.preparation, previousSummary },
+    model, undefined, undefined, event.customInstructions, event.signal,
+    undefined, async (selectedModel, context, requestOptions) => {
+      const response = await modelRegistry.complete(selectedModel, context, requestOptions);
+      const stream = createAssistantMessageEventStream();
+      stream.end(response);
+      return stream;
+    },
   );
-  return {
-    summary: summary.text + requests,
-    firstKeptEntryId: preparation.firstKeptEntryId,
-    tokensBefore: preparation.tokensBefore,
-    usage: summary.usage,
-    details: { readFiles: [...preparation.fileOps.read], modifiedFiles: [
-      ...new Set([...preparation.fileOps.written, ...preparation.fileOps.edited]),
-    ] },
-  };
+  return { ...result, summary: result.summary + requests };
 }
 
 function summarySource(event: SessionBeforeCompactEvent, previousSummary: string): string {
@@ -181,16 +177,19 @@ export async function guardedCompaction(
       return undefined;
     }
     const { model } = ctx;
+    if (model.provider === "cursor") {
+      return undefined;
+    }
     const { preparation } = event;
     const requests: string = retainedUserRequests(preparation);
-    const previousSummary: string = ((preparation.previousSummary ?? "").split(REQUESTS_START)[0] ?? "").trimEnd();
+    const previousSummary: string = summaryWithoutRequests(preparation.previousSummary);
     const text: string = summarySource(event, previousSummary);
     if (
       event.reason !== "overflow" &&
       (Buffer.byteLength(text, "utf8") < summaryInputBudget(model.contextWindow) / 2 ||
         piCompactionFits(preparation, model))
     ) {
-      const compaction = await codexSummary({ event, ctx, previousSummary, requests });
+      const compaction = await nativeSummary({ event, ctx, requests, previousSummary });
       return compaction === undefined ? undefined : { compaction };
     }
     ctx.ui.notify(

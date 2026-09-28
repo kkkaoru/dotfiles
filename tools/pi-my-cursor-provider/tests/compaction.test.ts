@@ -231,7 +231,7 @@ test("handler returns a compaction result built from the fallback chain", async 
   const event = {
     ...compactEvent([assistant("cursor")]),
     preparation: {
-      messagesToSummarize: [],
+      messagesToSummarize: [{ role: "user", content: "original request", timestamp: 0 }],
       turnPrefixMessages: [],
       isSplitTurn: false,
       firstKeptEntryId: "entry-1",
@@ -248,7 +248,8 @@ test("handler returns a compaction result built from the fallback chain", async 
 
   expect(result).toStrictEqual({
     compaction: {
-      summary: "summary text",
+      summary:
+        'summary text\n\n<retained-user-requests>\n"original request"\n</retained-user-requests>',
       firstKeptEntryId: "entry-1",
       tokensBefore: 1234,
     },

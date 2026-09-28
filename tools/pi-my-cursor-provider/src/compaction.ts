@@ -6,6 +6,10 @@ import type {
 import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
 import type { Api, Message, Model, Usage } from "@earendil-works/pi-ai";
 import { uuidv7 } from "@earendil-works/pi-ai";
+import {
+  retainedUserRequests,
+  summaryWithoutRequests,
+} from "../../pi-effort-manager/src/context-guard.ts";
 
 /**
  * Cursor reports oversized requests as usage-guideline blocks instead of
@@ -272,7 +276,7 @@ export function registerCursorCompaction(pi: Pick<ExtensionAPI, "on">): void {
 
     const result = await summarizeWithFallbackChain(
       conversationText,
-      preparation.previousSummary,
+      summaryWithoutRequests(preparation.previousSummary),
       customInstructions,
       (ctx as ExtensionContextLike).modelRegistry,
       signal,
@@ -280,7 +284,7 @@ export function registerCursorCompaction(pi: Pick<ExtensionAPI, "on">): void {
     if (!result) return undefined;
 
     const compaction: CompactionResult = {
-      summary: result.summary,
+      summary: result.summary + retainedUserRequests(preparation),
       firstKeptEntryId: preparation.firstKeptEntryId,
       tokensBefore: preparation.tokensBefore,
     };
