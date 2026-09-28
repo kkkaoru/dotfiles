@@ -199,7 +199,11 @@ export class TmuxRuntime {
     this.#waiter.track(launch);
   }
 
-  restore(launches: readonly TmuxLaunch[], nextId = 1): void {
+  restore(
+    launches: readonly TmuxLaunch[],
+    nextId = 1,
+    acknowledgedAt: Readonly<Record<string, number>> = {},
+  ): void {
     this.#nextId = Math.max(this.#nextId, nextId);
     launches.map((launch: TmuxLaunch): boolean => {
       const id: number | undefined = launchIdForNamespace(launch, this.#namespace);
@@ -208,11 +212,27 @@ export class TmuxRuntime {
       }
       this.#nextId = Math.max(this.#nextId, id + 1);
       this.#active.set(launch.completionChannel, launch);
+      const inspectedAt: number | undefined = acknowledgedAt[launch.sessionName];
+      if (inspectedAt !== undefined && inspectedAt <= Date.now()) {
+        this.#overdueReported.set(
+          launch.completionChannel,
+          inspectedAt + OVERDUE_REMINDER_INTERVAL_MILLISECONDS,
+        );
+      }
       this.#waiter.track(launch);
       return true;
     });
     this.#notifyActiveChange();
     this.reconcile();
+  }
+
+  acknowledgeOverdue(launches: readonly TmuxLaunch[], now: number): void {
+    launches.map((launch: TmuxLaunch): Map<string, number> =>
+      this.#overdueReported.set(
+        launch.completionChannel,
+        now + OVERDUE_REMINDER_INTERVAL_MILLISECONDS,
+      ),
+    );
   }
 
   reconcile(): void {

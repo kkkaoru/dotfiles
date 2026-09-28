@@ -434,6 +434,8 @@ it("delivers a pending notice once the agent settles even while it stays busy", 
 
   expect(sendUserMessage).toHaveBeenCalledOnce();
   expect(sendUserMessage.mock.calls[0]?.[0]).toMatch(/tmux overdue check-in/u);
+  expect(delivery.pendingTaskNames()).toStrictEqual([launch.sessionName]);
+  delivery.inspectedLog({ toolName: "read", isError: false, input: { path: launch.logPath } });
   expect(delivery.pendingTaskNames()).toStrictEqual([]);
 });
 

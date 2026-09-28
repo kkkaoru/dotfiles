@@ -6,6 +6,7 @@ import {
   recoverActiveTaskDisplayState,
 } from "./active-display.ts";
 import type { CompletionDeliveryContext } from "./delivery.ts";
+import { createTmuxLaunch } from "./tmux.ts";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -95,6 +96,66 @@ it("distinguishes overdue jobs from jobs still within their estimate", () => {
   ]);
 });
 
+it("acknowledges a live overdue check-in without hiding the job, restores it, then re-alerts", () => {
+  const launch = createTmuxLaunch({
+    command: "long inference",
+    estimatedDurationSeconds: 60,
+    id: 1,
+    namespace: "a".repeat(32),
+  });
+  vi.advanceTimersByTime(61_000);
+  const setWidget = vi.fn<NonNullable<CompletionDeliveryContext["ui"]["setWidget"]>>();
+  const context: CompletionDeliveryContext = {
+    isIdle: () => true,
+    ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget },
+  };
+  const display = new ActiveTaskDisplay();
+  display.setContext(context);
+  display.update([launch]);
+  expect(setWidget).toHaveBeenLastCalledWith("tmux-running-tasks", [
+    expect.stringMatching(/^⚠ overdue/u),
+  ]);
+  expect(display.acknowledge([launch], Date.now())).toStrictEqual([launch]);
+  expect(setWidget).toHaveBeenLastCalledWith("tmux-running-tasks", [
+    expect.stringMatching(/^✓ checked · running/u),
+  ]);
+  const state = display.state();
+  const restored = new ActiveTaskDisplay();
+  restored.restore(state);
+  restored.setContext(context);
+  restored.update([launch]);
+  expect(setWidget).toHaveBeenLastCalledWith("tmux-running-tasks", [
+    expect.stringMatching(/^✓ checked · running/u),
+  ]);
+  expect(restored.remind([launch])).toBe(true);
+  expect(setWidget).toHaveBeenLastCalledWith("tmux-running-tasks", [
+    expect.stringMatching(/^⚠ overdue/u),
+  ]);
+  restored.update([]);
+  expect(restored.state()).toStrictEqual({ dismissedSessionNames: [], hidden: false });
+});
+
+it("clears every acknowledged job in a simultaneous reminder batch", () => {
+  const first = createTmuxLaunch({
+    command: "first",
+    id: 1,
+    namespace: "a".repeat(32),
+    estimatedDurationSeconds: 60,
+  });
+  const second = createTmuxLaunch({
+    command: "second",
+    id: 2,
+    namespace: "a".repeat(32),
+    estimatedDurationSeconds: 60,
+  });
+  const display = new ActiveTaskDisplay();
+  display.update([first, second]);
+  vi.advanceTimersByTime(60_000);
+  expect(display.acknowledge([first, second], Date.now())).toStrictEqual([first, second]);
+  expect(display.remind([first, second])).toBe(true);
+  expect(display.state()).toStrictEqual({ dismissedSessionNames: [], hidden: false });
+});
+
 it("recovers the latest valid session display state", () => {
   const entries: readonly unknown[] = [
     null,
@@ -140,6 +201,57 @@ it("recovers the latest valid session display state", () => {
     dismissedSessionNames: ["old-task"],
     hidden: true,
   });
+});
+
+it.each([
+  null,
+  1,
+  "bad",
+  [],
+  { job: "yesterday" },
+  { job: -1 },
+  { job: 1.5 },
+  { job: Number.MAX_SAFE_INTEGER + 1 },
+])("rejects malformed saved overdue acknowledgments: %j", (acknowledgedAt) => {
+  expect(
+    recoverActiveTaskDisplayState([
+      {
+        type: "custom",
+        customType: ACTIVE_DISPLAY_ENTRY_TYPE,
+        data: { dismissedSessionNames: [], hidden: false, acknowledgedAt },
+      },
+    ]),
+  ).toStrictEqual({ dismissedSessionNames: [], hidden: false });
+});
+
+it("restores validated acknowledgments and ignores untracked or premature reads", () => {
+  const launch = createTmuxLaunch({
+    command: "inference",
+    id: 1,
+    namespace: "a".repeat(32),
+    estimatedDurationSeconds: 60,
+  });
+  const display = new ActiveTaskDisplay();
+  display.update([launch]);
+  expect(display.acknowledge([launch], Date.now())).toStrictEqual([]);
+  vi.advanceTimersByTime(61_000);
+  const other = createTmuxLaunch({ command: "other", id: 2, namespace: "a".repeat(32) });
+  expect(display.acknowledge([other], Date.now())).toStrictEqual([]);
+  expect(display.remind([launch])).toBe(false);
+  const state = {
+    dismissedSessionNames: [],
+    hidden: false,
+    acknowledgedAt: { [launch.sessionName]: Date.now() },
+  };
+  expect(
+    recoverActiveTaskDisplayState([
+      { type: "custom", customType: ACTIVE_DISPLAY_ENTRY_TYPE, data: state },
+    ]),
+  ).toStrictEqual(state);
+  display.restore(state);
+  expect(display.state()).toStrictEqual(state);
+  display.restore({ dismissedSessionNames: [], hidden: false });
+  expect(display.state()).toStrictEqual({ dismissedSessionNames: [], hidden: false });
 });
 
 it("controls and persists visible tasks independently from tracking", () => {

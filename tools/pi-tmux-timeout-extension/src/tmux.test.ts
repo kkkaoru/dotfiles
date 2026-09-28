@@ -259,6 +259,32 @@ it("repeats overdue check-ins every five minutes until tracking ends", () => {
   expect(onOverdue).toHaveBeenCalledTimes(3);
 });
 
+it("restores an inspected overdue interval without immediately re-alerting on reload", () => {
+  vi.useFakeTimers();
+  const onOverdue = vi.fn();
+  const runtime = new TmuxRuntime({
+    events: { subscribe: (): (() => void) => (): void => undefined },
+    onComplete: vi.fn(),
+    onOverdue,
+    operations: { isRunning: (): boolean => true, read: (): string => "" },
+  });
+  runtime.startSession(SESSION_ID);
+  const launch = runtime.createLaunch("long inference", { estimatedDurationSeconds: 60 });
+  vi.advanceTimersByTime(120_000);
+  runtime.restore([launch], 1, { [launch.sessionName]: Date.now() });
+  expect(onOverdue).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(299_999);
+  expect(onOverdue).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(1);
+  expect(onOverdue).toHaveBeenCalledExactlyOnceWith([launch]);
+  runtime.acknowledgeOverdue([launch], Date.now());
+  vi.advanceTimersByTime(299_999);
+  expect(onOverdue).toHaveBeenCalledOnce();
+  vi.advanceTimersByTime(1);
+  expect(onOverdue).toHaveBeenCalledTimes(2);
+  runtime.clear();
+});
+
 it("reconciles completion before an overdue check-in and recovers overdue legacy jobs", () => {
   vi.useFakeTimers();
   const onOverdue = vi.fn();

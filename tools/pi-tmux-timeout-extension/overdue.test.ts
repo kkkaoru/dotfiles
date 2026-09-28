@@ -6,7 +6,9 @@ import {
   type CompletionDeliveryContext,
   type CompletionDeliveryHost,
 } from "./src/delivery.ts";
-import { createTmuxLaunch } from "./src/tmux.ts";
+import { ACTIVE_DISPLAY_ENTRY_TYPE } from "./src/active-display.ts";
+import { TMUX_SESSION_ENTRY_TYPE } from "./src/persistence.ts";
+import { createTmuxLaunch, tmuxSessionNamespace } from "./src/tmux.ts";
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -75,6 +77,74 @@ it("delivers overdue context during an ongoing run and reconciles finished jobs 
   vi.advanceTimersByTime(300_000);
   read.mockReturnValue("0\n");
   expect(handlers.get("context")?.({ messages: [] }, context)).toBeUndefined();
+  handlers.get("session_shutdown")?.({});
+});
+
+it("restores checked overdue display and waits for the next reminder after reload", () => {
+  vi.useFakeTimers();
+  const launch = createTmuxLaunch({
+    command: "live inference",
+    estimatedDurationSeconds: 60,
+    id: 1,
+    namespace: tmuxSessionNamespace("restore-session"),
+  });
+  vi.advanceTimersByTime(120_000);
+  const entries = [
+    { type: "custom", customType: TMUX_SESSION_ENTRY_TYPE, data: launch },
+    {
+      type: "custom",
+      customType: ACTIVE_DISPLAY_ENTRY_TYPE,
+      data: {
+        dismissedSessionNames: [],
+        hidden: false,
+        acknowledgedAt: { [launch.sessionName]: Date.now() },
+      },
+    },
+  ];
+  const handlers = new Map<
+    string,
+    (event: unknown, context?: CompletionDeliveryContext) => unknown
+  >();
+  const setWidget = vi.fn<NonNullable<CompletionDeliveryContext["ui"]["setWidget"]>>();
+  const sendUserMessage = vi.fn<TmuxExtensionHost["sendUserMessage"]>();
+  tmuxTimeoutExtension(
+    {
+      exec: vi.fn(),
+      on: (name, handler) => {
+        handlers.set(name, handler);
+      },
+      registerTool: vi.fn(),
+      sendUserMessage,
+    },
+    {
+      events: { subscribe: (): (() => void) => (): void => undefined },
+      operations: { read: (): string => "", isRunning: (): boolean => true },
+      recovery: {
+        operations: {
+          exists: (filePath): boolean =>
+            filePath === launch.statusPath.replace(/\/exit-status$/u, ""),
+          readDirectory: (): readonly string[] => [],
+          readFile: (): string => "",
+          statBirthtime: (): number => 0,
+          writeFile: vi.fn(),
+        },
+      },
+    },
+  );
+  const context: CompletionDeliveryContext = {
+    isIdle: () => true,
+    sessionManager: { getEntries: () => entries, getSessionId: () => "restore-session" },
+    ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget },
+  };
+  handlers.get("session_start")?.({}, context);
+  expect(setWidget).toHaveBeenCalledWith("tmux-running-tasks", [
+    expect.stringMatching(/^✓ checked · running/u),
+  ]);
+  expect(sendUserMessage).not.toHaveBeenCalled();
+  vi.advanceTimersByTime(300_000);
+  expect(setWidget).toHaveBeenCalledWith("tmux-running-tasks", [
+    expect.stringMatching(/^⚠ overdue/u),
+  ]);
   handlers.get("session_shutdown")?.({});
 });
 

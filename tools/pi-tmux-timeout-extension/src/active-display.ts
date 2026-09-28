@@ -9,16 +9,22 @@ const MAX_TASK_IDENTITY_CHARACTERS = 160;
 export interface ActiveTaskDisplayState {
   readonly dismissedSessionNames: readonly string[];
   readonly hidden: boolean;
+  readonly acknowledgedAt?: Readonly<Record<string, number>>;
 }
 
 function taskIdentity(command: string): string {
   return command.replaceAll(/\s+/gu, " ").trim().slice(0, MAX_TASK_IDENTITY_CHARACTERS);
 }
 
-function runningTaskName(launch: TmuxLaunch): string {
+function overdueIndicator(acknowledged: boolean): string {
+  return acknowledged ? "✓ checked · running" : "⚠ overdue";
+}
+
+function runningTaskName(launch: TmuxLaunch, acknowledged: boolean): string {
   const submittedDate = new Date(launch.submittedAt);
   const estimatedCompletionDate = new Date(estimatedCompletionTime(launch));
-  const indicator: string = estimatedCompletionDate.getTime() <= Date.now() ? "⚠ overdue" : "⏳";
+  const indicator: string =
+    estimatedCompletionDate.getTime() > Date.now() ? "⏳" : overdueIndicator(acknowledged);
   const submittedAt: string = formatLocalTimestamp(submittedDate, "submitted");
   const estimatedCompletionAt: string = formatLocalTimestamp(estimatedCompletionDate, "submitted");
   return `${indicator} ${submittedAt} → ${estimatedCompletionAt} ${taskIdentity(launch.taskCommand)}`;
@@ -47,6 +53,24 @@ function stringArray(value: unknown): readonly string[] | undefined {
   return strings.length === value.length ? strings : undefined;
 }
 
+function acknowledgedState(data: unknown): Readonly<Record<string, number>> | null | undefined {
+  if (data === undefined) {
+    return undefined;
+  }
+  if (typeof data !== "object" || data === null || Array.isArray(data)) {
+    return null;
+  }
+  if (
+    !Object.values(data).every(
+      (time: unknown): boolean =>
+        typeof time === "number" && Number.isSafeInteger(time) && time >= 0,
+    )
+  ) {
+    return null;
+  }
+  return Object.fromEntries(Object.entries(data));
+}
+
 function displayState(entry: unknown): ActiveTaskDisplayState | undefined {
   const data: unknown = customDisplayData(entry);
   if (typeof data !== "object" || data === null || !("hidden" in data)) {
@@ -58,9 +82,15 @@ function displayState(entry: unknown): ActiveTaskDisplayState | undefined {
   const dismissedSessionNames: readonly string[] | undefined = stringArray(
     data.dismissedSessionNames,
   );
-  return dismissedSessionNames === undefined
-    ? undefined
-    : { dismissedSessionNames, hidden: data.hidden };
+  const acknowledged = acknowledgedState(
+    "acknowledgedAt" in data ? data.acknowledgedAt : undefined,
+  );
+  if (dismissedSessionNames === undefined || acknowledged === null) {
+    return undefined;
+  }
+  return acknowledged === undefined
+    ? { dismissedSessionNames, hidden: data.hidden }
+    : { dismissedSessionNames, hidden: data.hidden, acknowledgedAt: acknowledged };
 }
 
 export function recoverActiveTaskDisplayState(entries: readonly unknown[]): ActiveTaskDisplayState {
@@ -77,6 +107,7 @@ export function recoverActiveTaskDisplayState(entries: readonly unknown[]): Acti
 export class ActiveTaskDisplay {
   #context: CompletionDeliveryContext | undefined;
   readonly #dismissedSessionNames = new Set<string>();
+  readonly #acknowledgedAt = new Map<string, number>();
   #hidden = false;
   #launches: readonly TmuxLaunch[] = [];
 
@@ -96,7 +127,36 @@ export class ActiveTaskDisplay {
       this.#dismissedSessionNames.add(sessionName),
     );
     this.#hidden = state.hidden;
+    this.#acknowledgedAt.clear();
+    Object.entries(state.acknowledgedAt ?? {}).map(([name, time]): Map<string, number> =>
+      this.#acknowledgedAt.set(name, time),
+    );
     this.#render();
+  }
+
+  acknowledge(launches: readonly TmuxLaunch[], now: number): readonly TmuxLaunch[] {
+    const active = new Set(this.#launches.map((launch: TmuxLaunch): string => launch.sessionName));
+    const matched = launches.filter(
+      (launch: TmuxLaunch): boolean =>
+        active.has(launch.sessionName) && estimatedCompletionTime(launch) <= now,
+    );
+    matched.map((launch: TmuxLaunch): Map<string, number> =>
+      this.#acknowledgedAt.set(launch.sessionName, now),
+    );
+    if (matched.length > 0) {
+      this.#render();
+    }
+    return matched;
+  }
+
+  remind(launches: readonly TmuxLaunch[]): boolean {
+    const changed = launches
+      .map((launch: TmuxLaunch): boolean => this.#acknowledgedAt.delete(launch.sessionName))
+      .includes(true);
+    if (changed) {
+      this.#render();
+    }
+    return changed;
   }
 
   dismissActive(): number {
@@ -120,9 +180,18 @@ export class ActiveTaskDisplay {
   }
 
   state(): ActiveTaskDisplayState {
+    const acknowledgedAt = Object.fromEntries(
+      this.#launches
+        .filter((launch: TmuxLaunch): boolean => this.#acknowledgedAt.has(launch.sessionName))
+        .map((launch: TmuxLaunch): readonly [string, number] => [
+          launch.sessionName,
+          this.#acknowledgedAt.get(launch.sessionName) ?? 0,
+        ]),
+    );
     return {
       dismissedSessionNames: [...this.#dismissedSessionNames],
       hidden: this.#hidden,
+      ...(Object.keys(acknowledgedAt).length === 0 ? {} : { acknowledgedAt }),
     };
   }
 
@@ -156,7 +225,9 @@ export class ActiveTaskDisplay {
       "tmux-running-tasks",
       count === 0
         ? undefined
-        : visible.map((launch: TmuxLaunch): string => runningTaskName(launch)),
+        : visible.map((launch: TmuxLaunch): string =>
+            runningTaskName(launch, this.#acknowledgedAt.has(launch.sessionName)),
+          ),
     );
   }
 }

@@ -4,7 +4,8 @@ import type { Static } from "typebox";
 import { registerTmuxTool } from "./src/register-tool.ts";
 import type { tmuxExecSchema } from "./src/tool-schema.ts";
 import { ArtifactCleaner, type ArtifactCleanerOptions } from "./src/cleanup.ts";
-import { ActiveTaskDisplay, recoverActiveTaskDisplayState } from "./src/active-display.ts";
+import { ActiveTaskDisplay } from "./src/active-display.ts";
+import { inspectOverdue, remindOverdue, restoreOverdue } from "./src/overdue-display.ts";
 import {
   CompletionDelivery,
   type CompletionDeliveryContext,
@@ -14,7 +15,6 @@ import { type ActiveDisplayCommandHost, registerDisplayCommand } from "./src/dis
 import {
   markCompletionDelivered,
   persistTmuxLaunch,
-  recoverSessionTmuxLaunches,
   type RecoveryOptions,
 } from "./src/persistence.ts";
 import type { Completion } from "./src/waiter.ts";
@@ -204,7 +204,12 @@ function registerLifecycleHandlers(input: {
   input.host.on("tool_call", (event: unknown): void => input.rewriter.toolCall(event));
   input.host.on("tool_result", (event: unknown): void => {
     input.rewriter.toolResult(event);
-    input.delivery.inspectedLog(event);
+    inspectOverdue(event, {
+      display: input.activeDisplay,
+      delivery: input.delivery,
+      runtime: input.runtime,
+      persist: input.host.appendEntry,
+    });
   });
   input.host.on("session_start", (_event: unknown, context?: CompletionDeliveryContext): void => {
     if (context === undefined) {
@@ -216,19 +221,14 @@ function registerLifecycleHandlers(input: {
     }
     input.activityState.sessionId = sessionManager.getSessionId();
     input.activity?.start(input.activityState.sessionId);
-    input.activeDisplay.restore(recoverActiveTaskDisplayState(sessionManager.getEntries()));
-    input.activeDisplay.setContext(context);
-    input.delivery.setContext(context);
-    input.delivery.beforeCompaction();
-    const sessionNamespace = input.runtime.startSession(sessionManager.getSessionId());
-    input.runtime.restore(
-      recoverSessionTmuxLaunches(
-        sessionManager.getEntries(),
-        sessionNamespace,
-        input.recovery === false ? undefined : input.recovery?.operations,
-      ),
-    );
-    input.delivery.deferAfterCompaction(context);
+    restoreOverdue({
+      context,
+      sessionManager,
+      display: input.activeDisplay,
+      delivery: input.delivery,
+      runtime: input.runtime,
+      recovery: input.recovery,
+    });
   });
   input.host.on("agent_start", (_event: unknown, context?: CompletionDeliveryContext): void => {
     if (context !== undefined) {
@@ -302,7 +302,13 @@ export default function tmuxTimeoutExtension(
       activeDisplay.update(launches);
     },
     onComplete: (completion: Completion): void => delivery.complete(completion),
-    onOverdue: (launches: readonly TmuxLaunch[]): void => delivery.overdue(launches),
+    onOverdue: (launches: readonly TmuxLaunch[]): void =>
+      remindOverdue(launches, {
+        display: activeDisplay,
+        delivery,
+        runtime,
+        persist: host.appendEntry,
+      }),
     onTrack: (launch: TmuxLaunch): void => {
       persistTmuxLaunch(host.appendEntry, launch);
       if (host.events !== undefined && activityState.sessionId !== undefined) {

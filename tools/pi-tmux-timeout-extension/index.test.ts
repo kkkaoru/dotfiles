@@ -64,7 +64,15 @@ it("routes overdue runtime check-ins through the extension lifecycle", async () 
   const tools: TmuxToolDefinition[] = [];
   const handlers = new Map<string, (event: unknown, context?: CompletionDeliveryContext) => void>();
   const sendUserMessage = vi.fn<TmuxExtensionHost["sendUserMessage"]>();
+  const appendEntry = vi.fn<NonNullable<TmuxExtensionHost["appendEntry"]>>();
+  const setWidget = vi.fn<NonNullable<CompletionDeliveryContext["ui"]["setWidget"]>>();
+  const context: CompletionDeliveryContext = {
+    isIdle: () => true,
+    sessionManager: { getEntries: () => [], getSessionId: () => "test-session" },
+    ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget },
+  };
   const host: TmuxExtensionHost = {
+    appendEntry,
     exec: vi.fn<TmuxExtensionHost["exec"]>().mockResolvedValue({ code: 0, stdout: "", stderr: "" }),
     on: (name, handler) => {
       handlers.set(name, handler);
@@ -79,7 +87,8 @@ it("routes overdue runtime check-ins through the extension lifecycle", async () 
     events: { subscribe: (): (() => void) => (): void => undefined },
     operations: { read: () => "", isRunning: () => true },
   });
-  await tools[0]?.execute(
+  handlers.get("session_start")?.({}, context);
+  const launch = await tools[0]?.execute(
     "overdue",
     { command: "wrangler tail", estimatedDurationSeconds: 60 },
     undefined,
@@ -89,9 +98,24 @@ it("routes overdue runtime check-ins through the extension lifecycle", async () 
     expect.stringMatching(/^tmux overdue check-in/u),
     { deliverAs: "followUp" },
   );
+  handlers.get("tool_result")?.({
+    toolName: "read",
+    isError: false,
+    input: { path: launch?.details.logPath },
+  });
+  expect(setWidget).toHaveBeenCalledWith("tmux-running-tasks", [
+    expect.stringMatching(/^✓ checked · running/u),
+  ]);
+  expect(appendEntry).toHaveBeenLastCalledWith(ACTIVE_DISPLAY_ENTRY_TYPE, {
+    dismissedSessionNames: [],
+    hidden: false,
+    acknowledgedAt: { [launch?.details.sessionName ?? "missing"]: Date.now() },
+  });
+  vi.advanceTimersByTime(300_000);
+  expect(setWidget).toHaveBeenCalledWith("tmux-running-tasks", [
+    expect.stringMatching(/^⚠ overdue/u),
+  ]);
   handlers.get("session_shutdown")?.({});
-  vi.advanceTimersByTime(60_000);
-  expect(sendUserMessage).toHaveBeenCalledOnce();
 });
 
 it("controls session-scoped task display commands", async () => {

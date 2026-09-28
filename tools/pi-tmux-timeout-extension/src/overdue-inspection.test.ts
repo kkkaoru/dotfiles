@@ -61,7 +61,45 @@ it("still wakes an idle agent after a context notice was ignored or its provider
   );
   delivery.agentSettled({ ...context, isIdle: () => true });
   expect(sendUserMessage).toHaveBeenCalledOnce();
+  expect(delivery.hasPending()).toBe(true);
+  delivery.inspectedLog({
+    toolName: "read",
+    isError: false,
+    input: { path: "/unrelated/output.log" },
+  });
+  expect(delivery.hasPending()).toBe(true);
+  delivery.inspectedLog({
+    toolName: "read",
+    isError: false,
+    input: { path: "/tmp/does-not-exist" },
+  });
+});
+
+it("keeps delivered overdue visible to later model requests until log inspection and re-alerts on the next interval", () => {
+  vi.useFakeTimers();
+  const sendUserMessage = vi.fn();
+  const delivery = new CompletionDelivery({ sendUserMessage });
+  const launch = createTmuxLaunch({ command: "long job", id: 1, namespace: "a".repeat(32) });
+  const context: CompletionDeliveryContext = {
+    isIdle: () => true,
+    ui: { notify: vi.fn(), setStatus: vi.fn() },
+  };
+  delivery.setContext(context);
+  delivery.overdue([launch]);
+  expect(sendUserMessage).toHaveBeenCalledOnce();
+  expect(delivery.pendingTaskNames()).toStrictEqual([launch.sessionName]);
+  expect(delivery.injectOverdue({ messages: [] })?.messages).toStrictEqual([
+    expect.objectContaining({ content: expect.stringMatching(/task: long job/u) }),
+  ]);
+  delivery.agentSettled(context);
+  vi.advanceTimersByTime(5000);
+  expect(sendUserMessage).toHaveBeenCalledOnce();
+  delivery.overdue([launch]);
+  expect(sendUserMessage).toHaveBeenCalledTimes(2);
+  delivery.inspectedLog({ toolName: "read", isError: false, input: { path: launch.logPath } });
   expect(delivery.hasPending()).toBe(false);
+  delivery.clear();
+  vi.useRealTimers();
 });
 
 it("rotates the twenty-first job into the next request without dropping earlier notices", () => {

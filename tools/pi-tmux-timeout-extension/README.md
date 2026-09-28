@@ -32,16 +32,24 @@ long-running commands continue in detached tmux sessions.
   session and exit-status file are gone, marks them as `orphaned`, and prevents them from remaining in
   the widget indefinitely.
 - Reconciliation also detects live jobs past their estimate, changes their row to `⚠ overdue`, and
-  wakes Pi for a progress check without pretending that the command finished. Check-ins arrive within
-  one minute of the estimate and repeat every five minutes while the job remains active. Reload/resume
+  wakes Pi for a progress check without pretending that the command finished. A successful `read`
+  of that exact live job's log marks the current check-in `✓ checked · running`: the task stays
+  visible and tracked, but no longer shows an unhandled warning; it does not certify process health
+  or completion. This acknowledgment is persisted
+  across `/reload` and delays the next overdue reminder until five minutes after inspection.
+  A new reminder restores `⚠ overdue` until inspected again; completion removes the row. Reload
+  alone never acknowledges work or stops a process. Check-ins arrive within
+  one minute of the estimate and repeat about every five minutes while the job remains active. Reload/resume
   immediately checks overdue restored jobs, including legacy jobs without an estimate (two-minute
   fallback). While Pi is busy, pending check-ins are injected into the next model call via the `context`
   event instead of waiting for the entire run to settle. This does not abort a streaming response or
   running tool. Idle sessions still receive follow-up wakeups; compaction defers injection until safe.
-  Context injection alone does not acknowledge a check-in: busy calls retain and re-inject uninspected
-  notices until a successful `read` of that job's exact `logPath` (a leading `@` is accepted). Failed
-  reads, status-only reads and unrelated tools do not acknowledge it. The acknowledgment only covers
-  this check-in; the live job still receives the next five-minute reminder. If the agent settles
+  Context injection and follow-up delivery alone do not acknowledge a check-in: uninspected
+  notices remain available to later model calls until a successful `read` of that job's exact
+  `logPath` (a leading `@` is accepted). Failed reads, status-only reads and unrelated tools do
+  not acknowledge it. A delivered notice is not re-sent every retry tick; the next five-minute
+  overdue reconciliation sends a fresh follow-up if the live job remains overdue. The acknowledgment
+  only covers this check-in; the live job still receives the next reminder. If the agent settles
   without inspecting, the pending notice is delivered once as a normal persistent follow-up instead
   of being silently lost. Receiving that follow-up does not prove the model acted on it.
   Repeated pending notices are deduplicated, and reconciliation before context injection removes jobs
