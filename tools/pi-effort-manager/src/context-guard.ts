@@ -4,6 +4,7 @@ import { URL } from "node:url";
 import { uuidv7, type Api, type Model, type ProviderHeaders } from "@earendil-works/pi-ai";
 import {
   convertToLlm,
+  generateSummaryWithUsage,
   serializeConversation,
   type ExtensionContext,
   type SessionBeforeCompactEvent,
@@ -16,8 +17,8 @@ export interface GuardHost {
 }
 
 export interface GuardContext {
-  readonly model: ExtensionContext["model"];
-  readonly modelRegistry: Pick<ExtensionContext["modelRegistry"], "complete">;
+  readonly model: Model<Api> | undefined;
+  readonly modelRegistry: Pick<ExtensionContext["modelRegistry"], "complete"> & Partial<Pick<ExtensionContext["modelRegistry"], "getApiKeyAndHeaders">>;
   readonly ui: Pick<ExtensionContext["ui"], "notify">;
 }
 
@@ -40,6 +41,10 @@ const SUMMARY_RESERVE_SHARE = 0.8;
  * ones on an 8192-token cap model used 86-99% of it.
  */
 const SUMMARY_COMPRESSION_RATIO = 4;
+const REQUESTS_START = "<retained-user-requests>";
+const REQUESTS_END = "</retained-user-requests>";
+const REQUEST_BUDGET = 20_000;
+const REQUEST_LIMIT = 4000;
 const OPENCODE_HOST = "opencode.ai";
 const OPENCODE_CLIENT = "pi-coding-agent";
 const OPENCODE_PROVIDERS: ReadonlySet<string> = new Set(["opencode", "opencode-go"]);
@@ -99,6 +104,74 @@ export function providerSessionHeaders(
   };
 }
 
+// Codex retains user messages alongside its summary; Pi's hook can only retain them in the summary.
+export function retainedUserRequests(preparation: SessionBeforeCompactEvent["preparation"]): string {
+  const previous: string = preparation.previousSummary ?? "";
+  const archived: string = previous.split(REQUESTS_START)[1]?.split(REQUESTS_END)[0] ?? "";
+  const messages = [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages];
+  const requests: string[] = messages.flatMap((message) => {
+    if (message.role !== "user") { return []; }
+    const content: string = typeof message.content === "string"
+      ? message.content
+      : message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+    return [content.length > REQUEST_LIMIT
+      ? `${content.slice(0, REQUEST_LIMIT)}\n[request truncated; see original session]`
+      : content];
+  });
+  const entries: string[] = [
+    ...archived.trim().split("\n").filter(Boolean),
+    ...requests.map((text) => JSON.stringify(text)),
+  ];
+  const selected: string[] = [];
+  for (const entry of entries.toReversed()) {
+    if (selected.join("\n").length + entry.length > REQUEST_BUDGET) { break; }
+    selected.unshift(entry);
+  }
+  return selected.length === 0 ? "" : `\n\n${REQUESTS_START}\n${selected.join("\n")}\n${REQUESTS_END}`;
+}
+
+async function codexSummary(
+  options: { event: SessionBeforeCompactEvent; ctx: GuardContext; previousSummary: string; requests: string },
+): Promise<CompactionResult | undefined> {
+  const { event, ctx, previousSummary, requests } = options;
+  const { model } = ctx;
+  const { getApiKeyAndHeaders: resolveAuth } = ctx.modelRegistry;
+  if (model?.provider !== "openai-codex" || requests.length === 0 || !resolveAuth) {
+    return undefined;
+  }
+  const auth = await resolveAuth.call(ctx.modelRegistry, model);
+  if (!auth.ok) { throw new Error(auth.error); }
+  const { preparation } = event;
+  const summary = await generateSummaryWithUsage(
+    [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages], model,
+    preparation.settings.reserveTokens, auth.apiKey,
+    Object.fromEntries(Object.entries(auth.headers ?? {}).filter((entry): entry is [string, string] => entry[1] !== null)),
+    event.signal, event.customInstructions, previousSummary || undefined,
+  );
+  return {
+    summary: summary.text + requests,
+    firstKeptEntryId: preparation.firstKeptEntryId,
+    tokensBefore: preparation.tokensBefore,
+    usage: summary.usage,
+    details: { readFiles: [...preparation.fileOps.read], modifiedFiles: [
+      ...new Set([...preparation.fileOps.written, ...preparation.fileOps.edited]),
+    ] },
+  };
+}
+
+function summarySource(event: SessionBeforeCompactEvent, previousSummary: string): string {
+  const { preparation } = event;
+  return [
+    previousSummary,
+    serializeConversation(convertToLlm([
+      ...preparation.messagesToSummarize, ...preparation.turnPrefixMessages,
+    ])),
+    event.customInstructions === undefined
+      ? ""
+      : `Summary focus requested by user: ${event.customInstructions}`,
+  ].join("\n\n");
+}
+
 export async function guardedCompaction(
   event: SessionBeforeCompactEvent,
   ctx: GuardContext,
@@ -109,21 +182,16 @@ export async function guardedCompaction(
     }
     const { model } = ctx;
     const { preparation } = event;
-    const text: string = [
-      preparation.previousSummary ?? "",
-      serializeConversation(
-        convertToLlm([...preparation.messagesToSummarize, ...preparation.turnPrefixMessages]),
-      ),
-      event.customInstructions === undefined
-        ? ""
-        : `Summary focus requested by user: ${event.customInstructions}`,
-    ].join("\n\n");
+    const requests: string = retainedUserRequests(preparation);
+    const previousSummary: string = ((preparation.previousSummary ?? "").split(REQUESTS_START)[0] ?? "").trimEnd();
+    const text: string = summarySource(event, previousSummary);
     if (
       event.reason !== "overflow" &&
       (Buffer.byteLength(text, "utf8") < summaryInputBudget(model.contextWindow) / 2 ||
         piCompactionFits(preparation, model))
     ) {
-      return undefined;
+      const compaction = await codexSummary({ event, ctx, previousSummary, requests });
+      return compaction === undefined ? undefined : { compaction };
     }
     ctx.ui.notify(
       "Compacting oversized history in bounded segments. Original history is preserved.",
@@ -160,7 +228,7 @@ export async function guardedCompaction(
     });
     return {
       compaction: {
-        summary: result.text,
+        summary: result.text + requests,
         firstKeptEntryId: preparation.firstKeptEntryId,
         tokensBefore: preparation.tokensBefore,
         usage: result.usage,

@@ -1,11 +1,18 @@
 // This TypeScript file is executed with Bun.
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
 import type { SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
+import * as piCompaction from "@earendil-works/pi-coding-agent";
 import { expect, it, vi } from "vitest";
+
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
+  ...(await importOriginal<typeof piCompaction>()),
+  generateSummaryWithUsage: vi.fn(),
+}));
 import contextGuard, {
   guardedCompaction,
   piCompactionFits,
   providerSessionHeaders,
+  retainedUserRequests,
   type GuardContext,
   type GuardHost,
 } from "./context-guard.ts";
@@ -74,6 +81,24 @@ it("keeps Pi's small normal compactions and handles no selected model", async ()
   expect(complete).not.toHaveBeenCalled();
 });
 
+it("retains original user requests across repeated compactions without archiving tool output", () => {
+  const first = retainedUserRequests({
+    ...EVENT.preparation,
+    messagesToSummarize: [
+      { role: "user", content: "first request", timestamp: 0 },
+      { role: "toolResult", toolCallId: "id", toolName: "bash", content: [{ type: "text", text: "massive tool output" }], isError: false, timestamp: 0 },
+      { role: "user", content: "second request", timestamp: 0 },
+    ],
+  });
+  expect(first).toMatch(/"first request"\n"second request"/u);
+  expect(first).not.toMatch(/massive tool output/u);
+  expect(retainedUserRequests({
+    ...EVENT.preparation,
+    previousSummary: `handoff${first}`,
+    messagesToSummarize: [{ role: "user", content: "third request", timestamp: 0 }],
+  })).toMatch(/"first request"\n"second request"\n"third request"/u);
+});
+
 it("uses bounded compaction for overflow and preserves boundary, files, usage, previous summary and focus", async () => {
   const complete = vi
     .fn<(model: unknown, context: unknown, options?: unknown) => Promise<AssistantMessage>>()
@@ -89,7 +114,7 @@ it("uses bounded compaction for overflow and preserves boundary, files, usage, p
   );
   expect(result).toMatchObject({
     compaction: {
-      summary: "summary",
+      summary: expect.stringMatching(/summary[\s\S]*"historical request"/u),
       firstKeptEntryId: "kept",
       tokensBefore: 100_000,
       usage: { totalTokens: 2 },
@@ -105,6 +130,28 @@ it("uses bounded compaction for overflow and preserves boundary, files, usage, p
     reasoning: "low",
     maxRetries: 6,
   });
+});
+
+it("preserves requests with Pi's native summary for the configured Codex provider", async () => {
+  const summary = vi.mocked(piCompaction.generateSummaryWithUsage).mockResolvedValue({ text: "handoff", usage: RESPONSE.usage });
+  try {
+    const result = await guardedCompaction({ ...EVENT, reason: "manual" }, {
+      model: { ...MODEL, provider: "openai-codex" },
+      modelRegistry: {
+        complete: vi.fn(),
+        getApiKeyAndHeaders: vi.fn().mockResolvedValue({ ok: true, apiKey: "test" }),
+      },
+      ui: { notify: vi.fn() },
+    });
+    expect(result).toMatchObject({ compaction: {
+      summary: expect.stringMatching(/handoff[\s\S]*"historical request"/u),
+      firstKeptEntryId: "kept",
+      details: { readFiles: ["read.ts"], modifiedFiles: ["write.ts", "edit.ts"] },
+    } });
+    expect(summary).toHaveBeenCalledOnce();
+  } finally {
+    summary.mockReset();
+  }
 });
 
 it("also guards oversized threshold compaction with split turn prefixes and no previous summary", async () => {

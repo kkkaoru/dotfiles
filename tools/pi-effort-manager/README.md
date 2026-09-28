@@ -18,7 +18,12 @@ recovery and
 the remaining oversized serialized histories use sequential, bounded summary segments with the
 selected model and its existing credentials.
 The previous summary, split-turn prefix and user focus are included; the retained-message boundary
-and file-operation metadata are preserved. Original JSONL history is never rewritten.
+and file-operation metadata are preserved. Original JSONL history is never rewritten. Like Codex's
+compacted history, the handoff also retains the original user requests separately from the generated
+summary (newest first within a 20k-character budget, with individual requests clipped at 4000
+characters). This applies to bounded compaction on all providers and normal compaction on the
+configured OpenAI Codex provider; other providers' normal Pi compaction remains unchanged. For full
+requests and tool output, consult the preserved session JSONL (`/session`).
 
 Each request is limited conservatively using UTF-8 bytes (at most half the model's advertised token
 window, capped at 96,000 bytes), leaving room for framing and output. A short running summary
