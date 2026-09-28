@@ -256,14 +256,17 @@ export function isCursorModelActive(
   activeModel: Model<Api> | undefined,
 ): boolean {
   if (activeModel) return activeModel.provider === CURSOR_PROVIDER;
-  // No active model (e.g. scripted compaction): fall back to inspecting the
-  // summarized messages' originating providers.
-  const sawOtherProvider = event.preparation.messagesToSummarize.some((message) => {
-    if (message.role !== "assistant") return false;
+  // Without a selected model, do not claim sessions with no evidence of Cursor.
+  const messages = [
+    ...event.preparation.messagesToSummarize,
+    ...event.preparation.turnPrefixMessages,
+  ];
+  const providers = messages.flatMap((message) => {
+    if (message.role !== "assistant") return [];
     const provider = (message as unknown as { provider?: string }).provider;
-    return typeof provider === "string" && provider !== CURSOR_PROVIDER;
+    return typeof provider === "string" ? [provider] : [];
   });
-  return !sawOtherProvider;
+  return providers.length > 0 && providers.every((provider) => provider === CURSOR_PROVIDER);
 }
 
 export function registerCursorCompaction(pi: Pick<ExtensionAPI, "on">): void {

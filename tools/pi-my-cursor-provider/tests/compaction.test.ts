@@ -215,7 +215,23 @@ test("activates only for cursor conversations", () => {
   expect(isCursorModelActive(compactEvent([assistant("cursor")]), undefined)).toBe(true);
   expect(isCursorModelActive(compactEvent([assistant("cursor")]), OTHER)).toBe(false);
   expect(isCursorModelActive(compactEvent([]), OTHER)).toBe(false);
+  expect(isCursorModelActive(compactEvent([]), undefined)).toBe(false);
   expect(isCursorModelActive(compactEvent([assistant("openai")]), undefined)).toBe(false);
+  expect(
+    isCursorModelActive(compactEvent([assistant("cursor"), assistant("openai")]), undefined),
+  ).toBe(false);
+  expect(
+    isCursorModelActive(
+      {
+        ...compactEvent([]),
+        preparation: {
+          ...compactEvent([]).preparation,
+          turnPrefixMessages: compactEvent([assistant("cursor")]).preparation.messagesToSummarize,
+        },
+      },
+      undefined,
+    ),
+  ).toBe(true);
 });
 
 test("handler returns a compaction result built from the fallback chain", async () => {
