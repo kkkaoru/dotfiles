@@ -51,6 +51,15 @@ catalogs are loaded. `get_goal` can return null. Blockers and waits require an a
 verified completion audit is also accepted for a stopped goal, because closing it is bookkeeping
 rather than resumption.
 
+Model-facing `get_goal`, `start_goal` and per-run guidance omit the internal `tasks` array and
+report only `trackedTaskCount`. This is the cumulative number of owned tmux launches, **not** a
+work plan, live-job count or completion evidence. The objective, constraints, status, usage,
+blocker and wait remain intact. Full ownership stays in custom session entries and tool-result
+`details` for restoration and completion safety; it is not copied into model-facing content.
+This also bounds newly generated guidance for old goals with hundreds of saved task IDs, without
+pruning ownership or changing loop/tmux pacing. Existing transcript text is not rewritten:
+`/reload` applies the fix to future output; `/compact` can summarize already emitted large results.
+
 `update_goal` accepts a verified completion audit or a stable blocker reason. A completion audit is
 recorded even when the goal stopped (manual pause, provider error, safe mode or exhausted budget)
 and never resumes pacing; a blocker report still requires an active goal. The same
@@ -71,6 +80,24 @@ stopped goal; successful manual compaction never overrides a manual pause or saf
 
 `goal_wait` schedules a justified recheck in 60–3,600 seconds. Prefer existing loop pacing
 or live tmux completion notifications; do not create duplicate timers for the same wait.
+
+## Instruction design: guidance and enforcement
+
+The extension supplies qualitative authoring guidance through `start_goal.promptGuidelines`,
+so a second globally loaded skill does not duplicate the same instructions:
+
+- **Goal:** outcomes, verifiable acceptance criteria, constraints and non-goals. Preserve explicit
+  prohibitions and approval boundaries; keep logs/transcripts in referenced artifacts.
+- **Loop:** the next useful observation, evidence to inspect, and completion/blocker conditions.
+  Reference the goal rather than copying its JSON. Prefer tmux notifications and report changed evidence.
+
+These are model instructions, not a semantic validator or a guarantee of optimal behavior.
+Mechanical enforcement remains separate: shared `goalContext` serialization excludes ownership
+arrays from tool content and injected guidance; full internal ownership still blocks premature
+completion; session-scoped loop/tmux activity prevents competing goal wakeups. No objective text
+is automatically truncated or rewritten, and no new approval or production permission is granted.
+Regression tests cover a 512-task legacy goal, bounded output, preserved constraints and ownership
+checks. Old transcript content still needs normal compaction if it already occupies context.
 
 ## Loop and tmux cooperation
 

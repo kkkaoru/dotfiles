@@ -6,6 +6,7 @@ import type {
 import { Type } from "typebox";
 import { GOAL_USAGE, parseGoalCommand } from "./src/parser.ts";
 import {
+  goalContext,
   goalGuidance,
   goalSummary,
   runError,
@@ -139,6 +140,8 @@ function registerTools(pi: GoalExtensionHost, state: BridgeState): void {
       "Use start_goal autonomously when the user's established task benefits from durable completion tracking across turns or compaction. Do not invent unrelated objectives or permissions.",
       "Inspect get_goal first; reuse an active goal. A stopped goal (paused, blocked or budget-limited) never blocks new work: start_goal replaces it with a fresh objective from the user's established task. A loop the user paused never blocks new work, because start_loop supersedes it. Do not invent unrelated objectives or permissions.",
       "After start_goal, continue work in the current turn, verify completion with update_goal, and prefer existing loop/tmux pacing over duplicate wakeups.",
+      "Write the goal as outcomes, verifiable completion criteria, and explicit constraints/non-goals. Preserve the user's prohibitions and approval boundaries; do not paste transcripts, task IDs or execution logs into the objective. Keep detailed evidence in artifacts and reference their paths.",
+      "Keep goal and loop instructions complementary: the goal defines success; a loop wakeup states the next useful observation, evidence to inspect and completion/blocker conditions. Reference the current goal instead of copying its state or task history. Use live tmux notifications rather than model polling, and report changed evidence instead of repeating unchanged status.",
     ],
     async execute(_id, params) {
       const runtime: GoalRuntime = requireRuntime(state);
@@ -153,13 +156,13 @@ function registerTools(pi: GoalExtensionHost, state: BridgeState): void {
     name: "get_goal",
     label: "Get Goal",
     description:
-      "Read the current session goal and its usage. Does not create a goal.",
+      "Read the current session goal and its usage. Internal tmux ownership history is summarized as trackedTaskCount, not a work plan or live-job count. Does not create a goal.",
     executionMode: "parallel",
     parameters: Type.Object({}),
     async execute() {
       const goal = requireRuntime(state).state;
       return {
-        content: [{ type: "text", text: JSON.stringify(goal) }],
+        content: [{ type: "text", text: goalContext(goal) }],
         details: { goal },
       };
     },

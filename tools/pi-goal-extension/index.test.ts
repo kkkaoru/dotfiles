@@ -2,6 +2,8 @@
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import goalExtension, { type GoalExtensionHost } from "./index.ts";
+import { ActivityProvider } from "./src/activity.ts";
+import { createGoal, GOAL_ENTRY, type GoalState } from "./src/state.ts";
 
 interface Harness {
   readonly pi: ReturnType<typeof fakePi>;
@@ -43,7 +45,10 @@ function fakePi() {
 }
 function fakeContext() {
   return {
-    sessionManager: { getSessionId: () => "session", getBranch: () => [] },
+    sessionManager: {
+      getSessionId: () => "session",
+      getBranch: (): readonly unknown[] => [],
+    },
     hasUI: true,
     isIdle: vi.fn(() => true),
     hasPendingMessages: vi.fn(() => false),
@@ -95,6 +100,29 @@ function harness(): Harness {
   };
 }
 
+it("registers concise goal/loop authoring guidance without a duplicate skill", () => {
+  const h: Harness = harness();
+  const definition: unknown = h.pi.registerTool.mock.calls.find(
+    (call) => field(call[0], "name") === "start_goal",
+  )?.[0];
+  expect(field(definition, "promptGuidelines")).toStrictEqual(
+    expect.arrayContaining([
+      expect.stringMatching(
+        /outcomes, verifiable completion criteria, and explicit constraints\/non-goals/u,
+      ),
+      expect.stringMatching(
+        /Preserve the user's prohibitions and approval boundaries/u,
+      ),
+      expect.stringMatching(
+        /goal defines success; a loop wakeup states the next useful observation/u,
+      ),
+      expect.stringMatching(
+        /Use live tmux notifications rather than model polling/u,
+      ),
+    ]),
+  );
+});
+
 it("lets the agent define a grounded goal and replace only stopped ones", async () => {
   const h: Harness = harness();
   await h.call("session_start", {});
@@ -126,6 +154,60 @@ it("lets the agent define a grounded goal and replace only stopped ones", async 
       },
     },
   });
+  await h.call("session_shutdown", {});
+});
+
+it("summarizes restored ownership in tools and prompts without weakening completion checks", async () => {
+  const h: Harness = harness();
+  const goal: GoalState = {
+    ...createGoal({
+      id: "legacy",
+      sessionId: "session",
+      objective: "Verify parity; no unverified switch or NAR 9/25 replay",
+      tokenBudget: null,
+      now: 0,
+    }),
+    tasks: Array.from(
+      { length: 512 },
+      (_, index) => `pi-tmux-session-${index}`,
+    ),
+  };
+  vi.spyOn(h.context.sessionManager, "getBranch").mockReturnValueOnce([
+    { type: "custom", customType: GOAL_ENTRY, data: goal },
+  ]);
+  await h.call("session_start", {});
+  const result: unknown = await h.tool("get_goal", {});
+  expect(JSON.stringify(field(result, "content"))).not.toMatch(
+    /pi-tmux|\\"tasks\\"/u,
+  );
+  expect(JSON.stringify(field(result, "content"))).toMatch(
+    /trackedTaskCount\\":512/u,
+  );
+  expect(field(field(result, "details"), "goal")).toStrictEqual(goal);
+  const prompt: unknown = await h.call("before_agent_start", {
+    systemPrompt: "base",
+  });
+  expect(field(prompt, "systemPrompt")).not.toMatch(/pi-tmux|"tasks"/u);
+  expect(field(prompt, "systemPrompt")).toMatch(
+    /no unverified switch or NAR 9\/25 replay/u,
+  );
+  const activity: ActivityProvider = new ActivityProvider(h.pi.events, () => ({
+    source: "tmux",
+    ownsContinuation: false,
+    pendingDelivery: true,
+    pendingTasks: ["pi-tmux-session-511"],
+    tasks: [],
+  }));
+  activity.start("session");
+  await expect(
+    h.tool("update_goal", { status: "complete", reason: "Verified" }),
+  ).rejects.toThrow(
+    "Inspect owned tmux tasks before claiming goal completion: pi-tmux-session-511",
+  );
+  activity.stop();
+  await expect(
+    h.tool("update_goal", { status: "complete", reason: "Verified" }),
+  ).rejects.toThrow("Owned task monitoring is unavailable");
   await h.call("session_shutdown", {});
 });
 
