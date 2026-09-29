@@ -203,6 +203,8 @@ tmp
 
 # Local runtime binaries and state; never commit credentials or machine-local data.
 .local/
+/.devin-diag.txt
+/tools/pi-my-devin-cli-provider/probe.ts
 tools/claudex-agent-adapter/grok-acp-mock.jsonl
 .codex/thread-writer-locks/
 .codex/queue_*
