@@ -120,13 +120,19 @@ async function completeSegment(
   while (attempt < TRANSIENT_ATTEMPTS) {
     signal.throwIfAborted();
     // Sequential retries; parallel would issue duplicate provider calls for one segment.
-    // oxlint-disable-next-line no-await-in-loop
-    const response: AssistantMessage = await complete(prompt);
-    const message: string = response.errorMessage ?? response.stopReason;
-    if (response.stopReason !== "error" || !TRANSIENT_FAILURE.test(message)) {
-      return response;
+    try {
+      // oxlint-disable-next-line no-await-in-loop
+      const response: AssistantMessage = await complete(prompt);
+      const message: string = response.errorMessage ?? response.stopReason;
+      if (response.stopReason !== "error" || !TRANSIENT_FAILURE.test(message)) {
+        return response;
+      }
+      lastMessage = message;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!TRANSIENT_FAILURE.test(message)) { throw error; }
+      lastMessage = message;
     }
-    lastMessage = message;
     attempt += 1;
   }
   throw new Error(`Bounded compaction failed: ${lastMessage}`);

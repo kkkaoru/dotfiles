@@ -198,6 +198,14 @@ it("retries connection drops then keeps the recovered segment", async () => {
   expect(result.text).toBe("handoff");
 });
 
+it("retries a transient rejected request instead of cancelling compaction", async () => {
+  const complete = vi.fn().mockRejectedValueOnce(new Error("Connection error."))
+    .mockResolvedValueOnce(RESPONSE);
+  const result = await summarizeBounded({ text: "text", contextWindow: 24_000, signal: SIGNAL, complete });
+  expect(result.text).toBe("handoff");
+  expect(complete).toHaveBeenCalledTimes(2);
+});
+
 it("gives up after repeated connection errors", async () => {
   const complete = vi.fn().mockResolvedValue({
     ...RESPONSE,
