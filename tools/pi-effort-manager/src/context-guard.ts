@@ -274,7 +274,7 @@ export async function guardedCompaction(
             signal: event.signal,
             maxTokens: Math.min(
               MAX_OUTPUT_TOKENS,
-              model.maxTokens,
+              model.maxTokens > 0 ? model.maxTokens : MAX_OUTPUT_TOKENS,
               Math.floor(model.contextWindow / OUTPUT_WINDOW_DIVISOR),
             ),
             reasoning: "low",

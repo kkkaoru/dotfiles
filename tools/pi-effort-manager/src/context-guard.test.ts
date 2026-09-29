@@ -384,6 +384,12 @@ it("bounds a large-window compaction whose history outgrows Pi's summary cap", a
   expect(complete).toHaveBeenCalled();
 });
 
+it("uses a positive bounded output cap when model metadata leaves maxTokens unspecified", async () => {
+  const complete = vi.fn().mockResolvedValue(RESPONSE);
+  await guardedCompaction(EVENT, { model: { ...MODEL, maxTokens: 0 }, modelRegistry: { complete }, ui: { notify: vi.fn() } });
+  expect(complete.mock.calls[0]?.[2]).toMatchObject({ maxTokens: 3000 });
+});
+
 it("saves a recovery summary and warns instead of cancelling histories above 128 chunks", async () => {
   const complete = vi.fn().mockResolvedValue(RESPONSE);
   const notify = vi.fn();
