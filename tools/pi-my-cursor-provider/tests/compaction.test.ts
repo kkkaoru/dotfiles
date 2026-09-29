@@ -101,6 +101,27 @@ test("falls back down the chain when a provider fails or returns empty", async (
   expect(complete).toHaveBeenCalledTimes(3);
 });
 
+test("rejects truncated handoffs and falls back instead of saving partial context", async () => {
+  const complete = vi
+    .fn()
+    .mockResolvedValueOnce({ content: [{ type: "text", text: "partial" }], stopReason: "length" })
+    .mockResolvedValueOnce({ content: [{ type: "text", text: "complete" }], stopReason: "stop" });
+  await expect(
+    summarizeWithFallbackChain(
+      "conversation",
+      undefined,
+      undefined,
+      registry([KIMI, COPILOT_GEMINI], { complete }),
+      undefined,
+    ),
+  ).resolves.toStrictEqual({
+    summary: "complete",
+    provider: "github-copilot",
+    modelId: "gemini-3.7-flash",
+  });
+  expect(complete).toHaveBeenCalledTimes(2);
+});
+
 test("returns undefined when the whole chain fails or nothing is available", async () => {
   const complete = vi.fn().mockRejectedValue(new Error("down"));
   await expect(

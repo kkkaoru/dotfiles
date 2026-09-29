@@ -119,14 +119,16 @@ export interface ResolvedSummaryModel {
   readonly modelId: string;
 }
 
+interface SummaryResponse {
+  readonly content: unknown[];
+  readonly usage?: Usage;
+  readonly stopReason?: string;
+}
+
 interface ModelRegistryLike {
   find(provider: string, modelId: string): Model<Api> | undefined;
   hasConfiguredAuth(model: Model<Api>): boolean;
-  complete(
-    model: Model<Api>,
-    context: unknown,
-    options?: unknown,
-  ): Promise<{ content: unknown[]; usage?: Usage }>;
+  complete(model: Model<Api>, context: unknown, options?: unknown): Promise<SummaryResponse>;
 }
 
 interface ExtensionContextLike {
@@ -237,6 +239,9 @@ export function summarizeWithFallbackChain(
         signal,
       );
       if (signal?.aborted) return undefined;
+      if (response.stopReason !== undefined && response.stopReason !== "stop") {
+        return attempt(index + 1);
+      }
       const summary = textOfContent(response.content).trim();
       if (!summary) {
         return attempt(index + 1);
