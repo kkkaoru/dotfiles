@@ -22,6 +22,7 @@ public struct SleepControlSettingsView: View {
     .formStyle(.grouped)
     .padding(Self.contentPadding)
     .frame(width: Self.contentWidth)
+    .onReceive(settings.$shortcut.dropFirst(), perform: onShortcutChange)
   }
 
   private var automaticControlsSection: some View {
@@ -29,13 +30,13 @@ public struct SleepControlSettingsView: View {
       settingToggle(
         strings.lidDisplaySleep,
         description: strings.lidDisplaySleepDescription,
-        isOn: lidDisplaySleepEnabled
+        isOn: $settings.isLidDisplaySleepEnabled
       )
       .accessibilityIdentifier("lid-display-sleep-toggle")
       settingToggle(
         strings.capsLockLight,
         description: strings.capsLockLightDescription,
-        isOn: capsLockLightEnabled
+        isOn: $settings.isCapsLockLightEnabled
       )
       .accessibilityIdentifier("caps-lock-light-toggle")
     }
@@ -50,13 +51,13 @@ public struct SleepControlSettingsView: View {
 
   private var shortcutPickers: some View {
     Group {
-      Picker(strings.modifiers, selection: modifiers) {
+      Picker(strings.modifiers, selection: $settings.shortcut.modifiers) {
         ForEach(ShortcutModifiers.allCases) { modifiers in
           Text(modifiers.displayName).tag(modifiers)
         }
       }
       .accessibilityIdentifier("shortcut-modifiers-picker")
-      Picker(strings.key, selection: key) {
+      Picker(strings.key, selection: $settings.shortcut.key) {
         ForEach(ShortcutKey.allCases) { key in
           Text(key.displayName).tag(key)
         }
@@ -75,34 +76,6 @@ public struct SleepControlSettingsView: View {
     Text(strings.description)
       .font(.caption)
       .foregroundStyle(.secondary)
-  }
-
-  private var lidDisplaySleepEnabled: Binding<Bool> {
-    Binding(
-      get: { settings.isLidDisplaySleepEnabled },
-      set: { settings.isLidDisplaySleepEnabled = $0 }
-    )
-  }
-
-  private var capsLockLightEnabled: Binding<Bool> {
-    Binding(
-      get: { settings.isCapsLockLightEnabled },
-      set: { settings.isCapsLockLightEnabled = $0 }
-    )
-  }
-
-  private var modifiers: Binding<ShortcutModifiers> {
-    Binding(
-      get: { settings.shortcut.modifiers },
-      set: { updateShortcut(modifiers: $0, key: settings.shortcut.key) }
-    )
-  }
-
-  private var key: Binding<ShortcutKey> {
-    Binding(
-      get: { settings.shortcut.key },
-      set: { updateShortcut(modifiers: settings.shortcut.modifiers, key: $0) }
-    )
   }
 
   /// Creates the unified settings form and shortcut registration callback.
@@ -131,12 +104,6 @@ public struct SleepControlSettingsView: View {
           .foregroundStyle(.secondary)
       }
     }
-  }
-
-  private func updateShortcut(modifiers: ShortcutModifiers, key: ShortcutKey) {
-    let shortcut = SleepToggleShortcut(modifiers: modifiers, key: key)
-    settings.shortcut = shortcut
-    onShortcutChange(shortcut)
   }
 }
 

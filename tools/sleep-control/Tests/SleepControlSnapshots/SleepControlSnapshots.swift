@@ -22,6 +22,7 @@ internal enum SleepControlSnapshots {
     }
 
     try testMenuTitles()
+    try testSettingsObservation()
 
     let resources = URL(
       filePath: CommandLine.arguments[resourcesArgumentIndex],

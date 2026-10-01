@@ -6,6 +6,7 @@ internal enum SnapshotError: LocalizedError {
   case menuTitleRegression
   case missingLocalization(String)
   case renderFailed
+  case settingsObservationFailed
 
   internal var errorDescription: String? {
     switch self {
@@ -23,6 +24,9 @@ internal enum SnapshotError: LocalizedError {
 
     case .renderFailed:
       "The SwiftUI view did not produce a bitmap."
+
+    case .settingsObservationFailed:
+      "Settings did not deliver exactly one callback for the shortcut change."
     }
   }
 }
