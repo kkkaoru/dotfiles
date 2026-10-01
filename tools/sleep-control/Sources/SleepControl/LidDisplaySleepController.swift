@@ -19,6 +19,7 @@ internal final class LidDisplaySleepController {
       .fromOpaque(context)
       .takeUnretainedValue()
     controller.apply(lidIsClosed: isClosed)
+    NotificationCenter.default.post(name: BatterySleepEvents.lidChanged, object: nil)
   }
 
   private var state = LidDisplaySleepState()

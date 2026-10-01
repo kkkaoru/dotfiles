@@ -9,7 +9,9 @@ internal struct SleepControlApp: App {
   @StateObject private var model: SleepSettingsModel
   @StateObject private var shortcutSettings: ShortcutSettingsStore
   @StateObject private var hotKeyController: GlobalHotKeyController
+  @StateObject private var batterySleepController: BatterySleepController
   private let menuTitleWorkaround = MenuTitleWorkaround()
+  private let batterySleepEvents = BatterySleepEvents()
   private let capsLockLightController: CapsLockIndicatorController
   private let lidDisplaySleepController: LidDisplaySleepController
 
@@ -39,7 +41,8 @@ internal struct SleepControlApp: App {
       SleepControlSettingsView(
         settings: shortcutSettings,
         isRegistered: hotKeyController.isRegistered,
-        onShortcutChange: hotKeyController.register
+        onShortcutChange: hotKeyController.register,
+        batterySleepError: batterySleepController.errorMessage
       )
     }
   }
@@ -50,6 +53,11 @@ internal struct SleepControlApp: App {
 
   private var menuBarLabel: some View {
     MenuBarStatusIcon(model: model)
+      .task {
+        let events = batterySleepEvents.start(settings: shortcutSettings)
+        defer { batterySleepEvents.stop() }
+        await batterySleepController.monitor(events: events)
+      }
       .onAppear(perform: applyRuntimeSettings)
       .onReceive(model.$isSleepDisabled) { sleepDisabled in
         applySleepState(sleepDisabled)
@@ -64,6 +72,7 @@ internal struct SleepControlApp: App {
         lidDisplaySleepController.setEnabled(enabled)
       }
       .onReceive(terminationNotifications) { _ in
+        batterySleepEvents.stop()
         capsLockLightController.restoreSystemCapsLockState()
         capsLockLightController.stop()
       }
@@ -78,6 +87,13 @@ internal struct SleepControlApp: App {
     _model = StateObject(wrappedValue: initialModel)
     _shortcutSettings = StateObject(wrappedValue: initialSettings)
     _hotKeyController = StateObject(wrappedValue: initialHotKey)
+    _batterySleepController = StateObject(
+      wrappedValue: BatterySleepController(
+        settings: initialSettings,
+        client: SystemBatterySleepClient(),
+        didEnableSleep: initialModel.refresh
+      )
+    )
     capsLockLightController = CapsLockIndicatorController()
     lidDisplaySleepController = LidDisplaySleepController()
     initialModel.refresh()

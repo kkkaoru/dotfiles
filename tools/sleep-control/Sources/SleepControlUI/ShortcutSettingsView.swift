@@ -12,11 +12,15 @@ public struct SleepControlSettingsView: View {
   private let isRegistered: Bool
   private let strings: SleepControlSettingsStrings
   private let onShortcutChange: @MainActor (SleepToggleShortcut) -> Void
+  private let batterySleepError: String?
 
   /// Builds one settings form for display behavior, the indicator LED, and shortcut.
   public var body: some View {
     Form {
       automaticControlsSection
+      BatterySleepSettingsView(
+        settings: settings, strings: strings, errorMessage: batterySleepError
+      )
       shortcutSection
     }
     .formStyle(.grouped)
@@ -83,12 +87,14 @@ public struct SleepControlSettingsView: View {
     settings: SleepControlSettingsStore,
     isRegistered: Bool,
     strings: SleepControlSettingsStrings = SleepControlSettingsStrings(),
-    onShortcutChange: @escaping @MainActor (SleepToggleShortcut) -> Void
+    onShortcutChange: @escaping @MainActor (SleepToggleShortcut) -> Void,
+    batterySleepError: String? = nil
   ) {
     self.settings = settings
     self.isRegistered = isRegistered
     self.strings = strings
     self.onShortcutChange = onShortcutChange
+    self.batterySleepError = batterySleepError
   }
 
   private func settingToggle(

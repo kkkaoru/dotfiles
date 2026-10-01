@@ -13,6 +13,9 @@ public final class ShortcutSettingsStore: ObservableObject {
   /// Preference controlling the Caps Lock sleep-status indicator.
   public static let capsLockLightEnabledDefaultsKey = "capsLockLightEnabled"
 
+  private static let batterySleepEnabledKey = "batterySleep.enabled"
+  private static let batterySleepThresholdKey = "batterySleep.threshold"
+
   private static let legacyCapsLockLightDefaultsKey = "behavior.capsLockLight"
   private static let legacyLidDisplaySleepDefaultsKey = "behavior.lidCloseDisplaySleep"
   private static let keyDefaultsKey = "sleepToggleShortcut.key"
@@ -35,6 +38,14 @@ public final class ShortcutSettingsStore: ObservableObject {
         isCapsLockLightEnabled,
         forKey: Self.capsLockLightEnabledDefaultsKey
       )
+    }
+  }
+
+  /// Automatic system sleep while the lid is closed and the battery is low.
+  @Published public var batterySleep: BatterySleepSettings {
+    didSet {
+      defaults.set(batterySleep.isEnabled, forKey: Self.batterySleepEnabledKey)
+      defaults.set(String(batterySleep.threshold.rawValue), forKey: Self.batterySleepThresholdKey)
     }
   }
 
@@ -70,6 +81,13 @@ public final class ShortcutSettingsStore: ObservableObject {
   /// Loads persisted settings, falling back to enabled controls and the default shortcut.
   public init(defaults: UserDefaults) {
     self.defaults = defaults
+    var initialBatterySleep = BatterySleepSettings()
+    initialBatterySleep.isEnabled =
+      defaults.object(forKey: Self.batterySleepEnabledKey) as? Bool ?? true
+    initialBatterySleep.threshold =
+      (defaults.object(forKey: Self.batterySleepThresholdKey) as? String)
+      .flatMap(Int.init).flatMap(BatterySleepThreshold.init(rawValue:)) ?? .percent50
+    batterySleep = initialBatterySleep
     isLidDisplaySleepEnabled = Self.storedBoolean(
       in: defaults,
       key: Self.lidDisplaySleepEnabledDefaultsKey,

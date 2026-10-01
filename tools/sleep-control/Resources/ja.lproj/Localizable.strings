@@ -17,6 +17,10 @@
 "settings.lid_close_display_sleep.description" = "MacBookの画面を閉じるとすべてのディスプレイを消灯し、開くと復帰させます。";
 "settings.caps_lock_light" = "Caps Lockライトをスリープ無効のインジケータにする";
 "settings.caps_lock_light.description" = "Macのスリープが無効な間だけ内蔵キーボードのCaps Lockライトを点灯します。Caps Lock自体は有効にしません。入力監視の許可が必要です。";
+"settings.battery_sleep" = "バッテリー残量による自動スリープ";
+"settings.battery_sleep.enabled" = "画面を閉じている時、残量が少なくなったらスリープする";
+"settings.battery_sleep.threshold" = "スリープする残量（以下）";
+"settings.battery_sleep.description" = "バッテリーや画面の開閉状態の変化時に確認し、画面が閉じていて残量が指定値以下なら、Macのスリープを有効にして本体をスリープさせます。電源接続中も対象です。復帰後もスリープは有効のままです。";
 "settings.shortcut" = "キーボードショートカット";
 "settings.modifiers" = "修飾キー";
 "settings.key" = "キー";

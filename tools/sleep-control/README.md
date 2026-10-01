@@ -24,6 +24,23 @@ inverse `pmset` `disablesleep` value. Settings contains independent switches
 for lid-close display sleep and the Caps Lock indicator, plus the global
 shortcut picker.
 
+### Low-battery sleep while the lid is closed
+
+Settings has an independent **Low Battery Sleep** switch and a **0–90% slider in
+10% steps**. Both are saved across launches; first use defaults to **enabled at
+50%**. Zero means a real 0% cutoff, not disabled (use the switch to disable).
+The app checks on native battery and lid notifications, launch, wake and settings
+changes, including on AC power. There is no polling timer; notification bursts
+coalesce into at most one pending check, processed serially. With the lid closed and charge at or below the cutoff, it
+first enables system sleep using the existing authorization, rechecks the current
+sensors and preferences, then requests `pmset sleepnow`. System sleep remains
+enabled after wake; the previous sleep-disabled setting is not restored.
+
+Missing/invalid sensors never trigger sleep. Errors are shown in Settings and
+retried on the next event. No new sudoers permissions or Input Monitoring access
+are needed for this feature. Automated tests use fake sleep commands; the system
+smoke check only reads sensors and never sleeps the host.
+
 macOS requires **Input Monitoring** permission for the Caps Lock hardware LED.
 If the permission prompt was previously denied, add **Sleep Control** in
 System Settings → Privacy & Security → Input Monitoring, then restart the app.
@@ -59,10 +76,12 @@ command or `pmset` argument is permitted by this rule.
 `make install` copies `Sleep Control.app` to `~/Applications` and opens it.
 The app itself has no third-party or runtime package dependencies.
 Verification includes strict formatting, all applicable SwiftLint opt-in rules,
-40 dependency-free unit tests, a 95% core line-coverage gate, English and
+50 dependency-free unit tests, menu-title regression checks, read-only system
+power checks, a 95% core line-coverage gate, and 95% per-file line/function gates
+for battery sleep and the menu workaround, plus English and
 Japanese UI snapshot rendering, strict concurrency, and ad-hoc code-signature
 validation during bundle creation. Verification compares fresh renders with the
-ten checked-in window, popover, and settings images under `Snapshots/`. Run `make snapshots` to
+twelve checked-in window, popover, and settings images under `Snapshots/`. Run `make snapshots` to
 intentionally update those baselines.
 
 To remove it:

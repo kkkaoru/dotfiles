@@ -17,8 +17,10 @@ extension SleepControlSnapshots {
     settings.shortcut.key = .letterA
     let expected = SleepToggleShortcut(modifiers: .controlOption, key: .letterA)
     guard observed == [expected] else { throw SnapshotError.settingsObservationFailed }
+    settings.batterySleep.isEnabled = false
+    guard observed == [expected] else { throw SnapshotError.settingsObservationFailed }
     withExtendedLifetime(host) {
-      // Keep the subscription alive until the shortcut change has been observed.
+      // Keep the subscription alive until both changes have been observed.
     }
   }
 }

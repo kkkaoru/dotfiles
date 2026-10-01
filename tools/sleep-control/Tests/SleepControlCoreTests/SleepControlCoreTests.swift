@@ -12,13 +12,14 @@ internal enum SleepControlCoreTests {
   }
   // swiftlint:enable discouraged_default_parameter
 
-  internal static func main() {
+  internal static func main() async throws {
     runParserTests()
     runModelTests()
     runSettingsTests()
     runShortcutTests()
     runBehaviorSpecTests()
-    print("Swift tests: 40 passed")
+    try await runBatterySleepTests()
+    print("Swift tests: 50 passed")
   }
 
   private static func runParserTests() {

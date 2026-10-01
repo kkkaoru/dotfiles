@@ -9,7 +9,7 @@ internal enum SleepControlSnapshots {
   private static let expectedArgumentCount = 3
   private static let resourcesArgumentIndex = 1
   private static let outputArgumentIndex = 2
-  private static let expectedSnapshotCount = 10
+  private static let expectedSnapshotCount = 12
   private static let languages = ["en", "ja"]
   private static let states = [
     (name: "sleep-enabled", value: false),
@@ -69,6 +69,7 @@ internal enum SleepControlSnapshots {
       )
     }
     try renderSettings(language: language, bundle: bundle, output: output)
+    try renderBatterySleepError(language: language, bundle: bundle, output: output)
   }
 
   private static func renderSleepState(
@@ -90,6 +91,7 @@ internal enum SleepControlSnapshots {
   private static func renderSettings(language: String, bundle: Bundle, output: URL) throws {
     let settings = ShortcutSettingsStore(defaults: UserDefaults())
     settings.shortcut = .defaultValue
+    settings.batterySleep = BatterySleepSettings()
     let view = SleepControlSettingsView(
       settings: settings,
       isRegistered: true,

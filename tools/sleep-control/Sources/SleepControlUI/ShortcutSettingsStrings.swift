@@ -12,6 +12,14 @@ public struct SleepControlSettingsStrings: Sendable {
   public let capsLockLight: String
   /// Explanation of the Caps Lock light setting.
   public let capsLockLightDescription: String
+  /// Heading for automatic low-battery sleep.
+  public let batterySleep: String
+  /// Label of the independent automatic-sleep toggle.
+  public let batterySleepEnabled: String
+  /// Label of the inclusive battery cutoff.
+  public let batterySleepThreshold: String
+  /// Explanation of the automatic-sleep behavior.
+  public let batterySleepDescription: String
   /// Heading for shortcut controls.
   public let shortcut: String
   /// Label for the modifier picker.
@@ -38,6 +46,10 @@ public struct SleepControlSettingsStrings: Sendable {
       "settings.caps_lock_light.description",
       in: bundle
     )
+    batterySleep = Self.localized("settings.battery_sleep", in: bundle)
+    batterySleepEnabled = Self.localized("settings.battery_sleep.enabled", in: bundle)
+    batterySleepThreshold = Self.localized("settings.battery_sleep.threshold", in: bundle)
+    batterySleepDescription = Self.localized("settings.battery_sleep.description", in: bundle)
     shortcut = Self.localized("settings.shortcut", in: bundle)
     modifiers = Self.localized("settings.modifiers", in: bundle)
     key = Self.localized("settings.key", in: bundle)
