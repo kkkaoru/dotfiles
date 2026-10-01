@@ -9,6 +9,7 @@ internal struct SleepControlApp: App {
   @StateObject private var model: SleepSettingsModel
   @StateObject private var shortcutSettings: ShortcutSettingsStore
   @StateObject private var hotKeyController: GlobalHotKeyController
+  private let menuTitleWorkaround = MenuTitleWorkaround()
   private let capsLockLightController: CapsLockIndicatorController
   private let lidDisplaySleepController: LidDisplaySleepController
 

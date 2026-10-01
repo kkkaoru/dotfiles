@@ -3,6 +3,7 @@ import Foundation
 internal enum SnapshotError: LocalizedError {
   case encodingFailed
   case invalidArguments
+  case menuTitleRegression
   case missingLocalization(String)
   case renderFailed
 
@@ -13,6 +14,9 @@ internal enum SnapshotError: LocalizedError {
 
     case .invalidArguments:
       "Expected resource and output directory arguments."
+
+    case .menuTitleRegression:
+      "Menu title normalization changed menu behavior."
 
     case let .missingLocalization(language):
       "Missing localization bundle: \(language)"

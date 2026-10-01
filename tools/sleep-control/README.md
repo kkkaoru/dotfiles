@@ -31,8 +31,12 @@ System Settings → Privacy & Security → Input Monitoring, then restart the ap
 While running, the app remains available in the macOS menu bar. Its menu-bar
 symbol changes between the moon and sun with the current setting. Clicking it
 opens a compact popover rather than an AppKit-tracked menu, avoiding the stale
-menu-item crash that macOS 26 can trigger after sleep or a display cycle. The
-global sleep toggle defaults to `⌃⌥S`; open **Settings…** from the popover to
+menu-item crash that macOS 26 can trigger after sleep or a display cycle.
+Standard app menus and settings pickers also normalize their titles to Cocoa
+string storage: on macOS 26.5.1, describing a Swift-backed Japanese `NSMenuItem`
+can trap in `String.UTF16View` while highlighting or opening Settings. Menu title
+regression checks exercise this exact description path, including title updates.
+The global sleep toggle defaults to `⌃⌥S`; open **Settings…** from the popover to
 choose another modifier combination and letter key. The Carbon hot-key API is
 built into macOS and does not require Accessibility permission or polling.
 

@@ -21,6 +21,8 @@ internal enum SleepControlSnapshots {
       throw SnapshotError.invalidArguments
     }
 
+    try testMenuTitles()
+
     let resources = URL(
       filePath: CommandLine.arguments[resourcesArgumentIndex],
       directoryHint: .isDirectory
