@@ -7,9 +7,9 @@
     "allow": [],
     "deny": [
       "Bash(terraform apply:*)",
-      "Bash(* terraform apply:*)",
-      "Bash(terraform -chdir=* apply:*)",
-      "Bash(* terraform -chdir=* apply:*)"
+      "Bash(* terraform apply*)",
+      "Bash(terraform -chdir=* apply*)",
+      "Bash(* terraform -chdir=* apply*)"
     ]
   },
   "model": "opus[1m]",
