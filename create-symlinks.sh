@@ -112,6 +112,24 @@ fi
 cp "${DOTPATH}/.config/serena/serena_config.yml" \
   "${HOME}/.serena/serena_config.yml"
 
+# Expose generic Agent Skills to Claude Code by name. Like ~/.agents, optional
+# domain skills in skills-stroage are not globally loaded; select them per
+# project with project-skills. Targets are relative so the checkout stays
+# relocatable. link_path refreshes drifted symlinks and never overwrites real
+# directories (separately managed copies).
+for src in "${DOTPATH}/.agents/skills"/*/; do
+  [ -d "$src" ] || continue
+  name=$(basename "$src")
+  link_path "../../.agents/skills/${name}" "${DOTPATH}/.claude/skills/${name}"
+done
+# Remove links from the former policy that exposed every stored domain skill.
+for dest in "${DOTPATH}/.claude/skills"/*; do
+  [ -L "$dest" ] || continue
+  case "$(readlink "$dest")" in
+    ../../.agents/skills-stroage/*) rm -v "$dest" ;;
+  esac
+done
+
 # Claude Code keeps history, sessions, plugins, and caches under ~/.claude.
 # Link only repository-managed definitions so those runtime paths remain local.
 if [ -L "${HOME}/.claude" ]; then
@@ -128,19 +146,6 @@ for name in agents commands hooks rules skills; do
   if [ -d "${DOTPATH}/.claude/${name}" ]; then
     link_tree "${DOTPATH}/.claude/${name}" "${HOME}/.claude/${name}"
   fi
-done
-
-# Expose shared Agent Skills to Claude Code: link every generic skill and
-# every optional domain skill from the storage directory by name. Targets are
-# relative so the checkout stays relocatable. link_path refreshes drifted
-# symlinks and never overwrites real directories (claudex-routing, custom-*,
-# separately managed copies), so reruns are safe.
-for store in skills skills-stroage; do
-  for src in "${DOTPATH}/.agents/${store}"/*/; do
-    [ -d "$src" ] || continue
-    name=$(basename "$src")
-    link_path "../../.agents/${store}/${name}" "${DOTPATH}/.claude/skills/${name}"
-  done
 done
 
 # Cursor keeps runtime state beside user skills, so merge only skills.

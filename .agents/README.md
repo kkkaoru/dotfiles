@@ -10,6 +10,8 @@ references, scripts, and `.skill-lock.json` are managed here.
 - `skills-stroage/`: 40 optional Cloudflare, MotherDuck, GPUI, Apple and
   web-performance skills. The spelling `stroage` is intentional. This is not an
   automatic global discovery root. Do not symlink all its entries back into `skills/`.
+  The same applies to Claude Code: `create-symlinks.sh` links only `skills/` entries
+  into `.claude/skills/` (and so `~/.claude/skills/`), never storage entries.
 - A target project's `.agents/skills/`: hard links to only its selected skills. The
   project and this storage tree share one inode per file, so a storage edit reaches
   every linked project immediately and nothing needs reinstalling. `manage.sh status`
