@@ -177,8 +177,8 @@ class SelectionTests(unittest.TestCase):
         self.assertNotIn(("cargo", "test-all"), commands)
         self.assertEqual(sum(command == ("make", "lint") for command in commands), 2)
         self.assertTrue(any(command[0] == "bun" for command in commands))
-        self.assertEqual(sum(command[0] == "uv" for command in commands), 2)
-        self.assertEqual(sum(command[0] == "uvx" for command in commands), 2)
+        self.assertEqual(sum(command[0] == "uv" for command in commands), 1)
+        self.assertEqual(sum(command[0] == "uvx" for command in commands), 1)
 
     def test_push_adds_tests_and_coverage(self) -> None:
         selected = quality.checks(

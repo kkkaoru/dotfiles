@@ -231,7 +231,6 @@ def checks(root: Path, event: str, paths: set[str]) -> list[Check]:
     hook_changed = touches(paths, "tools/git-hooks/") or bool(
         paths & {".gitconfig", ".gitignore", "create-symlinks.sh"}
     )
-    routing_changed = touches(paths, ".claude/", ".config/claudex/")
     adapter_changed = touches(paths, "tools/claudex-agent-adapter/")
     if hook_changed:
         selected.extend(
@@ -249,27 +248,6 @@ def checks(root: Path, event: str, paths: set[str]) -> list[Check]:
                     ),
                 ),
                 Check("tools/git-hooks", ("uv", "run", "tests/run_coverage.py")),
-            )
-        )
-    if routing_changed:
-        selected.extend(
-            (
-                Check(
-                    ".claude/skills/claudex-routing",
-                    (
-                        "uvx",
-                        "--from",
-                        "ruff==0.12.12",
-                        "ruff",
-                        "check",
-                        "scripts",
-                        "tests",
-                    ),
-                ),
-                Check(
-                    ".claude/skills/claudex-routing",
-                    ("uv", "run", "tests/run_coverage.py"),
-                ),
             )
         )
     if adapter_changed:

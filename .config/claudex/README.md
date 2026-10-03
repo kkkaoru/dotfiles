@@ -376,7 +376,6 @@ local symlinkを生成します。これらのリンクはgit追跡せず、clon
 - `~/.config/claudex` → `.config/claudex`
 - `~/.config/fish/functions/claudex.fish` → repositoryのfish function
 - `~/.claude/agents/` 配下の全定義
-- `~/.claude/skills/claudex-routing`
 - `~/.claude/CLAUDE.md`（共通のSubAgent・orchestration方針）
 - `~/.claude/settings.json`
 
@@ -1223,7 +1222,6 @@ ls -l "$HOME/.config/claudex/providers.json"
 
 ```sh
 ls -l "$HOME/.claude/agents/claudex-orchestrator.md"
-ls -ld "$HOME/.claude/skills/claudex-routing"
 ./create-symlinks.sh
 ```
 
