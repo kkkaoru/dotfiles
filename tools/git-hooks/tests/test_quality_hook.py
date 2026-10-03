@@ -92,6 +92,26 @@ class PathTests(GitFixture):
         self.assertEqual(quality.pre_push_base(self.root, quality.ZERO_OID), base)
         self.assertEqual(quality.pre_push_paths(self.root, new_branch), {"feature.txt"})
 
+    def test_new_push_falls_back_to_empty_tree_without_origin_branches(self) -> None:
+        self.write_commit("base.txt", "base\n")
+        subprocess.run(
+            ("git", "remote", "add", "origin", str(self.root)),
+            cwd=self.root,
+            check=True,
+        )
+        self.assertEqual(
+            quality.pre_push_base(self.root, quality.ZERO_OID),
+            quality.empty_tree(self.root),
+        )
+
+    def test_new_push_falls_back_to_empty_tree_when_remotes_are_unreadable(self) -> None:
+        self.write_commit("base.txt", "base\n")
+        empty = quality.empty_tree(self.root)
+        failure = subprocess.CalledProcessError(1, ("git", "remote"))
+        with mock.patch.object(quality, "git", side_effect=failure):
+            with mock.patch.object(quality, "empty_tree", return_value=empty):
+                self.assertEqual(quality.pre_push_base(self.root, quality.ZERO_OID), empty)
+
     def test_ignores_deletions_and_malformed_push_lines(self) -> None:
         stream = io.StringIO(
             f"refs/heads/x {quality.ZERO_OID} refs/heads/x {'1' * 40}\nmalformed\n"
@@ -225,8 +245,17 @@ class SelectionTests(unittest.TestCase):
 
     @mock.patch.object(quality.subprocess, "run")
     def test_runs_commands_in_their_directories(self, run: mock.Mock) -> None:
-        quality.run_checks(Path("/repo"), [quality.Check("sub", ("tool", "check"))])
-        run.assert_called_once_with(("tool", "check"), cwd=Path("/repo/sub"), check=True)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "sub").mkdir()
+            quality.run_checks(root, [quality.Check("sub", ("tool", "check"))])
+        run.assert_called_once_with(("tool", "check"), cwd=root / "sub", check=True)
+
+    @mock.patch.object(quality.subprocess, "run")
+    def test_skips_checks_for_missing_directories(self, run: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            quality.run_checks(Path(directory), [quality.Check("gone", ("tool", "check"))])
+        run.assert_not_called()
 
 
 class ToolchainTests(unittest.TestCase):
@@ -291,27 +320,35 @@ class RustfmtGateTests(unittest.TestCase):
 
 
 class RunChecksFilteringTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name).resolve()
+        (self.root / "crate").mkdir()
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
     def make_check(self) -> quality.Check:
         return quality.Check(
             "crate",
             ("rustfmt", "x"),
-            frozenset({Path("/repo/crate/touched.rs").resolve()}),
+            frozenset({self.root / "crate/touched.rs"}),
         )
 
     def test_ignores_diffs_reported_for_files_nobody_touched(self) -> None:
         completed = subprocess.CompletedProcess(
-            ("rustfmt", "x"), 1, stdout="/repo/crate/other.rs\n", stderr=""
+            ("rustfmt", "x"), 1, stdout=f"{self.root}/crate/other.rs\n", stderr=""
         )
         with mock.patch.object(quality.subprocess, "run", return_value=completed):
-            quality.run_checks(Path("/repo"), [self.make_check()])
+            quality.run_checks(self.root, [self.make_check()])
 
     def test_fails_when_a_touched_file_has_a_diff(self) -> None:
         completed = subprocess.CompletedProcess(
-            ("rustfmt", "x"), 1, stdout="/repo/crate/touched.rs\n", stderr=""
+            ("rustfmt", "x"), 1, stdout=f"{self.root}/crate/touched.rs\n", stderr=""
         )
         with mock.patch.object(quality.subprocess, "run", return_value=completed):
             with self.assertRaises(subprocess.CalledProcessError):
-                quality.run_checks(Path("/repo"), [self.make_check()])
+                quality.run_checks(self.root, [self.make_check()])
 
     def test_fails_on_a_genuine_parse_error_even_without_a_files_with_diff_match(self) -> None:
         completed = subprocess.CompletedProcess(
@@ -319,12 +356,12 @@ class RunChecksFilteringTests(unittest.TestCase):
         )
         with mock.patch.object(quality.subprocess, "run", return_value=completed):
             with self.assertRaises(subprocess.CalledProcessError):
-                quality.run_checks(Path("/repo"), [self.make_check()])
+                quality.run_checks(self.root, [self.make_check()])
 
     def test_passes_cleanly_when_nothing_needs_reformatting(self) -> None:
         completed = subprocess.CompletedProcess(("rustfmt", "x"), 0, stdout="", stderr="")
         with mock.patch.object(quality.subprocess, "run", return_value=completed):
-            quality.run_checks(Path("/repo"), [self.make_check()])
+            quality.run_checks(self.root, [self.make_check()])
 
 
 class MainTests(unittest.TestCase):
