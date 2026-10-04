@@ -112,6 +112,15 @@ class PathTests(GitFixture):
             with mock.patch.object(quality, "empty_tree", return_value=empty):
                 self.assertEqual(quality.pre_push_base(self.root, quality.ZERO_OID), empty)
 
+    def test_push_behind_remote_uses_fallback_base_for_unknown_tip(self) -> None:
+        head = self.write_commit("local.txt", "local\n")
+        unknown = "1" * len(head)
+        self.assertEqual(
+            quality.pre_push_base(self.root, unknown), quality.empty_tree(self.root)
+        )
+        stream = io.StringIO(f"refs/heads/main {head} refs/heads/main {unknown}\n")
+        self.assertEqual(quality.pre_push_paths(self.root, stream), {"local.txt"})
+
     def test_ignores_deletions_and_malformed_push_lines(self) -> None:
         stream = io.StringIO(
             f"refs/heads/x {quality.ZERO_OID} refs/heads/x {'1' * 40}\nmalformed\n"

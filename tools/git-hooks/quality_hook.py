@@ -75,6 +75,15 @@ def is_zero_oid(value: str) -> bool:
     return bool(value) and not value.strip("0")
 
 
+def has_commit(root: Path, oid: str) -> bool:
+    """Report whether a pushed ref's remote tip exists in the local object store."""
+    try:
+        git(root, "cat-file", "-e", f"{oid}^{{commit}}")
+    except subprocess.CalledProcessError:
+        return False
+    return True
+
+
 def pre_push_base(root: Path, old: str) -> str:
     """Prefer origin/master over the empty tree for new refs when origin exists.
 
@@ -82,8 +91,10 @@ def pre_push_base(root: Path, old: str) -> str:
     on the entire history, which fails on pre-existing vendored trailing
     whitespace (e.g. ``.codex/skills``). Only consult remotes configured in
     *this* repository so isolated fixture repos still use the empty tree.
+    A remote tip missing locally (remote ahead or force-pushed) uses the same
+    fallback, so Git itself can reject the push with its fetch-first message.
     """
-    if not is_zero_oid(old):
+    if not is_zero_oid(old) and has_commit(root, old):
         return old
     try:
         remotes = git(root, "remote").splitlines()
