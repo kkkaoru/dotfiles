@@ -166,7 +166,7 @@ struct ToolSpec: Sendable {
       .init(
         name: "compressor_submit",
         description:
-          "Submit one local source with a trusted .cmprstng or Apple .setting preset through the official CLI. Optional range selects a bounded source interval. Creates a private unique output subdirectory. Return is submission evidence, NOT completion; never blindly retry.",
+          "Submit one local source with a trusted .cmprstng, .compressorsetting or Apple .setting preset through the official CLI. Optional range selects a bounded source interval. Creates a private unique output subdirectory. Return is submission evidence, NOT completion; never blindly retry.",
         properties: [
           "sourcePath": string(), "presetPath": string(), "outputDirectory": string(),
           "outputName": string(maximum: 180), "batchName": string(maximum: 200),

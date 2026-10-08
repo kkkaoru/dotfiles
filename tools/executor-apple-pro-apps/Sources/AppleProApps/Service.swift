@@ -360,7 +360,8 @@ actor NativeService {
       }
       let input = try decode(Input.self, args)
       let source = try Files.existing(input.sourcePath)
-      let preset = try Files.existing(input.presetPath, extensions: ["cmprstng", "setting"])
+      let preset = try Files.existing(
+        input.presetPath, extensions: ["cmprstng", "setting", "compressorsetting"])
       let binary = try await interfaces.compressor(input.bundleID)
       let output = try Compressor.reserveOutput(
         directory: input.outputDirectory, name: input.outputName)

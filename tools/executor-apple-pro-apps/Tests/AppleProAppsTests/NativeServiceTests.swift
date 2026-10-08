@@ -89,7 +89,7 @@ struct NativeServiceTests {
     }
   }
 
-  @Test(arguments: ["cmprstng", "setting"])
+  @Test(arguments: ["cmprstng", "setting", "compressorsetting"])
   func boundedSubmissionSupportsTrustedCustomAndApplePresets(_ suffix: String) async throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
       "compressor-range-\(UUID().uuidString)")
