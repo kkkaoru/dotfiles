@@ -5,9 +5,21 @@ description: Use for cross-agent messaging (agmsg), prior agent history (ctx), M
 
 # Executor: skills and tools on demand
 
-Use the existing `bash`/`tmux_exec` tools. The `executor` CLI uses Executor Desktop's
-shared local catalog and starts its daemon on demand. Do not start a second
-`pi-executor` sidecar or load all integration schemas into pi.
+In Pi, use native MCP via the `executor` server configured in `~/.pi/agent/mcp.json`.
+Use Pi's `codemode` discovery (`searchTools`, then `describeTool`) to inspect the
+Executor MCP entrypoint and its schema. Through that entrypoint, discover the exact
+integration tool and schema before calling it. Do not guess the bridge arguments or
+confuse Pi's outer codemode with Executor's inner execution API. Keep results bounded.
+
+The bridge runs the existing `executor mcp` CLI against Executor Desktop's shared
+catalog; credentials and approval policies remain in Executor. Browser approval is
+required when requested: stop and show the URL, never approve on the user's behalf.
+Check returned tool errors and paused executions, not just transport success.
+Use `/mcp` to inspect/reconnect the bridge and `/reload` after configuration changes.
+
+The CLI recipes below remain supported for other agents, administration and fallback
+when native MCP is unavailable. Use `bash`/`tmux_exec` for those commands and say when
+using fallback. Do not start a second `pi-executor` sidecar or load every schema.
 
 ## Load domain guidance first
 
@@ -87,7 +99,7 @@ costs: skill availability and OAuth login do not authorize those operations.
 
 ## Agent messaging and history
 
-Use Executor for **model-initiated** agmsg and ctx operations, not direct shell scripts or
+Use Executor (via native MCP in Pi) for **model-initiated** agmsg and ctx operations, not direct shell scripts or
 Pi's old `agmsg` tool. First read the corresponding skill through `local-skills`.
 The router extension disables only the direct model tool; Pi's existing agmsg extension
 still owns automatic incoming delivery and the user's `/agmsg` setup commands.

@@ -3,8 +3,8 @@
 ## 構成
 
 ```text
-pi（既存 bash / tmux_exec + 案内 Skill 1件）
-  └─ scripts/executor → Executor Desktop 同梱 CLI
+pi（native MCP / codemode + 案内 Skill 1件）
+  └─ ~/.local/bin/executor mcp --elicitation-mode browser → Executor Desktop
        ├─ local-skills：既存 Skills の検索・本文・参照資料取得（読み取り専用）
        ├─ agmsg：公式スクリプト経由の明示的なメッセージ操作
        ├─ ctx：公式 `ctx mcp serve` によるローカル履歴検索
@@ -15,8 +15,10 @@ pi（既存 bash / tmux_exec + 案内 Skill 1件）
 ```
 
 pi-executor 拡張や別バージョンの Executor はインストールしません。
-pi のネイティブ MCP 接続ではなく、既存の bash から Executor を利用します。
-MCP の接続・ツール索引・資格情報・承認ポリシーは Executor に集約します。
+`.pi/agent/mcp.json` で pi のネイティブ MCP クライアントを Executor に接続します。
+各サービスへの接続・ツール索引・資格情報・承認ポリシーは引き続き Executor に集約します。
+以下の CLI 手順は管理操作・他クライアント・フォールバック用です。
+変更後は `/reload` または新規セッションで反映し、`pi mcp list` で接続を確認してください。
 Skills をクラウドへアップロードする構成ではありません。
 
 ## 認証・ポリシーまで共有する場合

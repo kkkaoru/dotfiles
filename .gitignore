@@ -80,6 +80,7 @@ coverage_out/
 !.pi/agent/
 !.pi/agent/models.json
 !.pi/agent/settings.json
+!.pi/agent/mcp.json
 !.pi/agent/ollama-cloud.json
 !.pi/agent/themes/
 !.pi/agent/themes/**

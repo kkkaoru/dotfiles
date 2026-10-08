@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "executor": {
+      "command": "~/.local/bin/executor",
+      "args": ["mcp", "--elicitation-mode", "browser"],
+      "exposure": "codemode",
+      "description": "Executor Desktop shared integrations, local skills, ctx history, Cloudflare, MotherDuck, browser and Apple Pro apps. Discover schemas before calling tools; preserve browser approvals."
+    }
+  }
+}

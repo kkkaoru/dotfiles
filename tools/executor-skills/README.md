@@ -3,6 +3,15 @@
 Read-only MCP integration for installed Agent Skills. Executor indexes three
 tools, not every skill description. Pi keeps one routing skill in its prompt.
 
+Pi connects through its native MCP client using `.pi/agent/mcp.json` →
+`~/.local/bin/executor mcp --elicitation-mode browser`. This uses the existing
+Executor Desktop catalog, credentials and approval policies; no second runtime,
+registration migration or OAuth token copying is needed. Tools use Pi's default
+codemode exposure: discover the bridge schema, then discover the integration schema.
+The CLI instructions below remain available for other clients and administration.
+Run `pi mcp list` to verify connectivity and `/reload` (or start a new session) to
+activate the config and updated router. Other clients' `.mcp.json` is unchanged.
+
 Implementation plan:
 1. Discover explicitly configured, local skill roots; deduplicate by ID.
 2. Search bounded name/description metadata; load instructions only on request.

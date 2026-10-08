@@ -55,9 +55,13 @@ Do not install a duplicate Executor runtime or `pi-executor` sidecar.
   registrations require an explicit setup update. History remains routed on demand.
   Do not globally exclude domain names: that would hide selected project copies too.
 - Skill text is guidance, not executable functionality or authorization. Discover the actual
-  service tool, describe its schema, then call it through Executor. Keep results bounded.
-- `.mcp.json` currently defines Context7 and Chrome DevTools stdio servers. Cloudflare and
-  MotherDuck remote registrations are defined in `tools/executor-skills/integrations.json`.
+  service tool, describe its schema, then call it through Executor. In pi, use the native MCP
+  `executor` server via codemode; the CLI remains available for administration and fallback.
+  Keep results bounded.
+- `.pi/agent/mcp.json` connects pi's native MCP client to `executor mcp` with browser approvals.
+  Executor retains its catalog, credentials and policies; no duplicate registrations or OAuth
+  token copies are needed. `.mcp.json` remains the other clients' Context7/Chrome DevTools config.
+  Cloudflare and MotherDuck registrations are defined in `tools/executor-skills/integrations.json`.
   The setup script also registers `local-skills`, `agmsg`, and the official `ctx mcp serve`.
 - Model-initiated ctx searches go through Executor. The agmsg skill and pi extension were
   removed from this repository; an Executor `agmsg` MCP registration and any remaining agmsg
