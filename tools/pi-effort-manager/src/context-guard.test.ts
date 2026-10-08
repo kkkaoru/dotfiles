@@ -1,6 +1,6 @@
 // This TypeScript file is executed with Bun.
 import { Buffer } from "node:buffer";
-import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
+import { normalizeContext, type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
 import type { SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import * as piCompaction from "@earendil-works/pi-coding-agent";
 import { expect, it, vi } from "vitest";
@@ -251,11 +251,11 @@ it("retains requests with native compaction across providers using the configure
     const route = compact.mock.calls[0]?.[7];
     expect(route).toBeTypeOf("function");
     if (route === undefined) { throw new Error("Compaction model router missing"); }
-    const stream = await route(MODEL, { messages: [] });
+    const stream = await route(MODEL, normalizeContext({ messages: [] }));
     expect(await stream.result()).toStrictEqual(RESPONSE);
     const openCode = await route(
       { ...MODEL, provider: "opencode-go", baseUrl: "https://opencode.ai/zen" },
-      { messages: [] },
+      normalizeContext({ messages: [] }),
       { sessionId: "native-session", headers: { "x-custom": "kept" } },
     );
     expect(await openCode.result()).toStrictEqual(RESPONSE);

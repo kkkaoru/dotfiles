@@ -2,6 +2,8 @@
 
 Repository-owned Pi package for dynamic reasoning-effort management. It extends Pi's standard
 static effort controls and has no runtime dependency on the former third-party package.
+The SDK compatibility baseline is Pi 1.0.4; local dependencies and peer requirements are aligned
+with its normalized transcript APIs. Run `bun install` here and reload/restart Pi after updating.
 
 ## Bounded compaction guard
 
