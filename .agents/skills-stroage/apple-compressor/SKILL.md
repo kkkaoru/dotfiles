@@ -33,6 +33,9 @@ the installed, explicitly selected Compressor executable. This Mac's default is
    Start is bounded to 0–86399 seconds; duration to 1–600 seconds. These become
    source `-in`/`-out` timecodes before the output target; frame rounding belongs
    to Compressor. Verify the exported duration, do not assume trimming succeeded.
+   On this host a CLI job once stayed at 0% `Processing` until the Compressor app
+   was running. Run `app_launch` (`activate: false`) for the selected edition before
+   submitting; on a stall, check the app is running instead of resubmitting.
 4. Save the returned native submission result and exact job/batch ID. Exit zero
    is **not** encode completion. The response reports `completionVerified: false`.
    If submission fails/times out, retain its reserved output path and investigate
