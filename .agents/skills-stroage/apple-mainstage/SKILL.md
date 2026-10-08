@@ -1,6 +1,6 @@
 ---
 name: apple-mainstage
-description: Operate MainStage through Executor using native concert/patch opening and explicitly routed CoreMIDI controls first. Covers patches, sets, assignments, layouts and safe live-performance boundaries; Peekaboo is UI-only fallback.
+description: Operate MainStage through Executor using native concert/patch opening and explicitly routed CoreMIDI controls first. Covers patches, sets, assignments, layouts and safe live-performance boundaries; native background `ui_*` tools before an auxiliary Peekaboo fallback.
 ---
 
 # MainStage — explicit MIDI mappings first
@@ -44,7 +44,9 @@ Loading/assigning prepared media still requires an explicitly scoped app workflo
 
 ## UI-only authoring fallback
 
-Use `apple-pro-apps-ui` only for an identified native gap, following shared rules.
+Use the native background `ui_*` tools first for windows, menus, buttons and values.
+Use `apple-pro-apps-ui` (Peekaboo) only for an explained remaining gap, following
+shared rules.
 MainStage modes have different meanings:
 
 - **Layout:** arrange screen controls and assign hardware inputs.
