@@ -118,6 +118,7 @@ public struct EditPlan: Codable, Sendable {
     }
     try validate(recipe.video?.captions ?? [], duration: cursor)
     try validateMaskTimes(recipe.video?.masks ?? [], duration: cursor)
+    try validateSinglePass(recipe, duration: cursor)
     return EditPlan(spans: spans, durationSeconds: cursor, audioOnly: recipe.video == nil)
   }
 

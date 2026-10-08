@@ -238,11 +238,17 @@ public struct EditVideoSettings: Codable, Sendable {
   public let captions: [EditCaption]?
   public let masks: [EditMask]?
   public let captionStyle: EditCaptionStyle?
+  /// Per-cue positioned captions with a libass-compatible appearance (single pass only).
+  public let styledCaptions: [EditStyledCaption]?
+  public let captionAppearance: EditCaptionAppearance?
+  /// Presence selects the single-pass, video-only reader/writer render.
+  public let encoding: EditEncoding?
 
   public init(
     width: Int, height: Int, frameRate: Int, resizeMode: ResizeMode, color: EditColor? = nil,
     titles: [EditTitle]? = nil, captions: [EditCaption]? = nil, masks: [EditMask]? = nil,
-    captionStyle: EditCaptionStyle? = nil
+    captionStyle: EditCaptionStyle? = nil, styledCaptions: [EditStyledCaption]? = nil,
+    captionAppearance: EditCaptionAppearance? = nil, encoding: EditEncoding? = nil
   ) {
     self.width = width
     self.height = height
@@ -253,5 +259,8 @@ public struct EditVideoSettings: Codable, Sendable {
     self.captions = captions
     self.masks = masks
     self.captionStyle = captionStyle
+    self.styledCaptions = styledCaptions
+    self.captionAppearance = captionAppearance
+    self.encoding = encoding
   }
 }

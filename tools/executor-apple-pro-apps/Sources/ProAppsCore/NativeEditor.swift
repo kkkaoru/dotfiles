@@ -11,6 +11,10 @@ public struct EditRenderResult: Codable, Sendable {
   public let actualDurationSeconds: Double
   public let videoTrackCount: Int
   public let audioTrackCount: Int
+  /// Frames written by the single-pass render (absent for the export-session path).
+  public let frameCount: Int?
+  /// Editable FCPXML written next to every video render.
+  public let fcpxml: FCPXMLExport?
 }
 
 /// One operation owns its mutable AVFoundation graph. Run through the existing
@@ -27,13 +31,13 @@ public actor NativeEditor {
     let instruction: AVMutableVideoCompositionLayerInstruction
   }
 
-  private struct TimedOverlay: Sendable {
+  struct TimedOverlay: Sendable {
     let image: CIImage
     let startSeconds: Double
     let endSeconds: Double
   }
 
-  private struct Prepared {
+  struct Prepared {
     let composition: AVMutableComposition
     let instructions: [AVVideoCompositionInstructionProtocol]
     let audioParameters: [AVAudioMixInputParameters]
@@ -62,31 +66,21 @@ public actor NativeEditor {
         Cleanup.perform { try FileManager.default.removeItem(at: temporary) }
       }
     }
-    let preset = plan.audioOnly ? AVAssetExportPresetAppleM4A : AVAssetExportPresetHighestQuality
-    guard let session = AVAssetExportSession(asset: prepared.composition, presetName: preset) else {
-      throw ProAppsError.unavailable("Cannot create native export session")
-    }
-    if let settings = recipe.video {
-      let composition = AVMutableVideoComposition()
-      composition.renderSize = CGSize(width: settings.width, height: settings.height)
-      composition.frameDuration = CMTime(value: 1, timescale: Int32(settings.frameRate))
-      composition.instructions = prepared.instructions
-      session.videoComposition = composition
-    }
-    let mix = AVMutableAudioMix()
-    mix.inputParameters = prepared.audioParameters
-    session.audioMix = mix
-    session.audioTimePitchAlgorithm = .spectral
-    session.timeRange = CMTimeRange(start: .zero, duration: time(plan.durationSeconds))
-    try await session.export(to: staging, as: plan.audioOnly ? .m4a : .mp4)
-    try Task.checkCancellation()
     var finalStaging = staging
-    if let video = recipe.video,
-      video.color != nil || !(video.titles ?? []).isEmpty || !(video.captions ?? []).isEmpty
-        || !(video.masks ?? []).isEmpty
-    {
-      try await applyEffects(video, source: staging, destination: graded)
-      finalStaging = graded
+    var frameCount: Int?
+    if let video = recipe.video, let encoding = video.encoding {
+      frameCount = try await renderSinglePass(
+        prepared, video: video, encoding: encoding, duration: plan.durationSeconds, to: staging)
+    } else {
+      try await exportSession(prepared, recipe: recipe, plan: plan, to: staging)
+      try Task.checkCancellation()
+      if let video = recipe.video,
+        video.color != nil || !(video.titles ?? []).isEmpty || !(video.captions ?? []).isEmpty
+          || !(video.masks ?? []).isEmpty
+      {
+        try await applyEffects(video, source: staging, destination: graded)
+        finalStaging = graded
+      }
     }
     try Task.checkCancellation()
     let completed = AVURLAsset(url: finalStaging)
@@ -114,16 +108,46 @@ public actor NativeEditor {
     // Hard-link publication fails if any destination appeared in the meantime.
     // Native media stays inside this operation's private 0700 directory.
     try FileManager.default.linkItem(at: finalStaging, to: output)
+    let fcpxml = try await exportTimeline(
+      recipe, plan: plan, directory: output.deletingLastPathComponent(),
+      name: URL(fileURLWithPath: name).deletingPathExtension().lastPathComponent)
     return EditRenderResult(
       outputPath: output.path, projectPath: project.path,
       expectedDurationSeconds: plan.durationSeconds,
       actualDurationSeconds: duration, videoTrackCount: videoTracks.count,
-      audioTrackCount: audioTracks.count)
+      audioTrackCount: audioTracks.count, frameCount: frameCount, fcpxml: fcpxml)
   }
 
-  private func applyEffects(_ settings: EditVideoSettings, source: URL, destination: URL)
-    async throws
+  private func exportSession(
+    _ prepared: Prepared, recipe: EditRecipe, plan: EditPlan, to staging: URL
+  ) async throws {
+    let preset = plan.audioOnly ? AVAssetExportPresetAppleM4A : AVAssetExportPresetHighestQuality
+    guard let session = AVAssetExportSession(asset: prepared.composition, presetName: preset) else {
+      throw ProAppsError.unavailable("Cannot create native export session")
+    }
+    if let settings = recipe.video {
+      session.videoComposition = videoComposition(prepared, settings: settings)
+    }
+    let mix = AVMutableAudioMix()
+    mix.inputParameters = prepared.audioParameters
+    session.audioMix = mix
+    session.audioTimePitchAlgorithm = .spectral
+    session.timeRange = CMTimeRange(start: .zero, duration: time(plan.durationSeconds))
+    try await session.export(to: staging, as: plan.audioOnly ? .m4a : .mp4)
+  }
+
+  func videoComposition(_ prepared: Prepared, settings: EditVideoSettings)
+    -> AVMutableVideoComposition
   {
+    let composition = AVMutableVideoComposition()
+    composition.renderSize = CGSize(width: settings.width, height: settings.height)
+    composition.frameDuration = CMTime(value: 1, timescale: Int32(settings.frameRate))
+    composition.instructions = prepared.instructions
+    return composition
+  }
+
+  /// Static titles and timed captions, pre-rendered once within the pixel budget.
+  func overlays(_ settings: EditVideoSettings) async throws -> [TimedOverlay] {
     try Task.checkCancellation()
     var preparedTitles: [TimedOverlay] = []
     var pixels = 0
@@ -151,46 +175,59 @@ public actor NativeEditor {
         TimedOverlay(
           image: image, startSeconds: caption.startSeconds, endSeconds: caption.endSeconds))
     }
-    let overlays = preparedTitles
+    return preparedTitles
+  }
+
+  /// Color, timed masks, then pre-rendered overlays at one output time. Shared by the
+  /// export-session effects pass and the single-pass writer, so both look the same.
+  static func composite(
+    _ source: CIImage, settings: EditVideoSettings, seconds: Double, overlays: [TimedOverlay]
+  ) throws -> CIImage {
+    // Color controls have an explicit SDR domain. Decoded YUV conversion can
+    // overshoot 1 in extended working RGB, otherwise brightness -1 leaves colored
+    // residuals instead of reaching the defined black bound.
+    var image = source
+    if let color = settings.color {
+      let normalized = CIFilter.colorClamp()
+      normalized.inputImage = image
+      normalized.minComponents = CIVector(x: 0, y: 0, z: 0, w: 0)
+      normalized.maxComponents = CIVector(x: 1, y: 1, z: 1, w: 1)
+      let filter = CIFilter.colorControls()
+      filter.inputImage = normalized.outputImage
+      filter.brightness = Float(color.brightness)
+      filter.contrast = Float(color.contrast)
+      filter.saturation = Float(color.saturation)
+      guard let adjusted = filter.outputImage else {
+        throw ProAppsError.unavailable("Color filter produced no image")
+      }
+      image = adjusted
+    }
+    image = try MaskRenderer.apply(
+      settings.masks ?? [], to: image, at: seconds, canvasHeight: settings.height)
+    for overlay in overlays where seconds >= overlay.startSeconds && seconds < overlay.endSeconds {
+      image = overlay.image.composited(over: image)
+    }
+    return image.cropped(to: source.extent)
+  }
+
+  private func applyEffects(_ settings: EditVideoSettings, source: URL, destination: URL)
+    async throws
+  {
+    let overlays = try await overlays(settings)
     let asset = AVURLAsset(url: source)
     let composition = try await AVMutableVideoComposition.videoComposition(
       with: asset,
       applyingCIFiltersWithHandler: { request in
         // Each callback owns its mutable filter; only the Sendable settings cross
         // into AVFoundation's callback. The rendered extent remains bounded.
-        // Color controls have an explicit SDR domain. Decoded YUV conversion
-        // can overshoot 1 in extended working RGB, otherwise brightness -1
-        // leaves colored residuals instead of reaching the defined black bound.
-        var image = request.sourceImage
-        if let color = settings.color {
-          let normalized = CIFilter.colorClamp()
-          normalized.inputImage = image
-          normalized.minComponents = CIVector(x: 0, y: 0, z: 0, w: 0)
-          normalized.maxComponents = CIVector(x: 1, y: 1, z: 1, w: 1)
-          let filter = CIFilter.colorControls()
-          filter.inputImage = normalized.outputImage
-          filter.brightness = Float(color.brightness)
-          filter.contrast = Float(color.contrast)
-          filter.saturation = Float(color.saturation)
-          guard let adjusted = filter.outputImage else {
-            request.finish(with: ProAppsError.unavailable("Color filter produced no image"))
-            return
-          }
-          image = adjusted
-        }
-        let seconds = request.compositionTime.seconds
         do {
-          image = try MaskRenderer.apply(
-            settings.masks ?? [], to: image, at: seconds, canvasHeight: settings.height)
+          let image = try Self.composite(
+            request.sourceImage, settings: settings, seconds: request.compositionTime.seconds,
+            overlays: overlays)
+          request.finish(with: image, context: nil)
         } catch {
           request.finish(with: error)
-          return
         }
-        for overlay in overlays
-        where seconds >= overlay.startSeconds && seconds < overlay.endSeconds {
-          image = overlay.image.composited(over: image)
-        }
-        request.finish(with: image.cropped(to: request.sourceImage.extent), context: nil)
       })
     // Preserve the recipe's cadence rather than inheriting source sample timing
     // after rate changes. Apple's mutable CI composition explicitly supports this.
@@ -207,7 +244,7 @@ public actor NativeEditor {
     try await session.export(to: destination, as: .mp4)
   }
 
-  private func prepare(_ recipe: EditRecipe, plan: EditPlan) async throws -> Prepared {
+  func prepare(_ recipe: EditRecipe, plan: EditPlan) async throws -> Prepared {
     let composition = AVMutableComposition()
     var videoLayers: [VideoLayer] = []
     var audioParameters: [AVAudioMixInputParameters] = []
@@ -389,7 +426,7 @@ public actor NativeEditor {
     return parameters
   }
 
-  private func time(_ seconds: Double) -> CMTime {
+  func time(_ seconds: Double) -> CMTime {
     CMTime(seconds: seconds, preferredTimescale: EditPlan.timeScale)
   }
 }
