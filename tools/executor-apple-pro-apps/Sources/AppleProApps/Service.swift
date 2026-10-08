@@ -60,12 +60,26 @@ struct NativeInterfaces: Sendable {
   var osc: @Sendable (Int, String, Double) throws -> Void = {
     try OSC.send(port: $0, path: $1, value: $2)
   }
+  var ui: @Sendable (UIRequest, Duration) async throws -> UIResponse = { request, timeout in
+    guard let binary = Bundle.main.executableURL else {
+      throw ProAppsError.unavailable("Cannot locate the UI automation executable")
+    }
+    let encoded = String(decoding: try JSONEncoder().encode(request), as: UTF8.self)
+    let result = try await Runner.run(binary, ["ui-native", encoded], timeout: timeout)
+    guard result.status == 0 else { throw ProAppsError.commandFailed(result.status) }
+    let outcome = try JSONDecoder().decode(UIChildOutcome.self, from: Data(result.stdout.utf8))
+    if let error = outcome.rethrown() { throw error }
+    guard let response = outcome.response else {
+      throw ProAppsError.unavailable("UI child returned no result")
+    }
+    return response
+  }
 }
 
 actor NativeService {
   nonisolated private let executor = DispatchSerialQueue(label: "apple-pro-apps.native")
   nonisolated var unownedExecutor: UnownedSerialExecutor { executor.asUnownedSerialExecutor() }
-  private let interfaces: NativeInterfaces
+  let interfaces: NativeInterfaces
   private var callsInFlight = 0
   private var mutationInFlight = false
 
@@ -187,7 +201,8 @@ actor NativeService {
             "Concert/patch open and CoreMIDI mapped controls. No documented native OSC or full concert editing API."
           ),
         ]),
-        "guiAutomation": .bool(false), "allOperationsGuaranteed": .bool(false),
+        "guiAutomation": .bool(false), "backgroundAccessibility": .bool(true),
+        "allOperationsGuaranteed": .bool(false),
       ])
     case "media_verify_video", "audio_measure", "video_frame_measure", "audio_transcribe",
       "audio_reference_analyze", "audio_sound_activity", "audio_separate_vocals",
@@ -197,6 +212,8 @@ actor NativeService {
     case "media_edit_plan", "media_edit", "media_project_read", "speech_cut_plan",
       "caption_cut_plan", "media_edit_batch":
       return try await editing(name, args, render: interfaces.editMedia)
+    case let name where ToolSpec.uiNames.contains(name):
+      return try await uiTool(name, args)
     case "media_inspect":
       struct Input: Decodable { let path: String }
       let input = try decode(Input.self, args)

@@ -14,9 +14,20 @@ struct ProgramRuntime: Sendable {
   var editMedia: @Sendable (String) async throws -> String = { path in
     try await NativeService().renderLocalFile(path)
   }
+  var uiNative: @Sendable (String) async throws -> String = { request in
+    try await ProgramRuntime.runLiveUI(request)
+  }
   var inspectMedia: @Sendable (String) async throws -> String = { path in
     let summary = try await MediaProbe().inspect(path: path)
     return String(decoding: try JSONEncoder().encode(summary), as: UTF8.self)
+  }
+}
+
+extension ProgramRuntime {
+  /// One child process handles one request so Accessibility handles, input-source
+  /// state and capture sessions never outlive it.
+  @MainActor static func runLiveUI(_ request: String) async throws -> String {
+    try await UIAutomation(backend: LiveUIBackend()).runEncoded(request)
   }
 }
 
@@ -36,6 +47,8 @@ struct Program {
       return try await runtime.measureMedia(name, path)
     case .editMedia(let path):
       return try await runtime.editMedia(path)
+    case .uiNative(let request):
+      return try await runtime.uiNative(request)
     case .ui(let configuration):
       try configuration.validate(requireUI: true)
       try runtime.ui(configuration)

@@ -6,8 +6,8 @@ import Testing
 
 struct ServiceTests {
   @Test func catalogIsClosedAndUsesHonestAnnotations() throws {
-    #expect(ToolSpec.all.count == 36)
-    #expect(Set(ToolSpec.all.map(\.name)).count == 36)
+    #expect(ToolSpec.all.count == 48)
+    #expect(Set(ToolSpec.all.map(\.name)).count == 48)
     #expect(!ToolSpec.all.contains { $0.name == "shell" || $0.name == "agent" })
   }
 
@@ -53,6 +53,7 @@ struct ServiceTests {
       "audio_reference_analyze", "audio_sound_activity",
       "speech_cut_plan", "caption_cut_plan",
       "fcpxml_validate",
+      "ui_windows", "ui_inspect", "ui_menu_list", "ui_wait", "input_source_status",
     ]
     #expect(spec.tool.inputSchema.objectValue?["additionalProperties"] == .bool(false))
     #expect(spec.tool.annotations.readOnlyHint == readOnlyNames.contains(name))

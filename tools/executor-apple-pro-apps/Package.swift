@@ -17,6 +17,8 @@ let package = Package(
       name: "AppleProApps",
       dependencies: ["ProAppsCore", .product(name: "MCP", package: "swift-sdk")]
     ),
+    // Synthetic accessibility fixture used only by native UI backend tests.
+    .executableTarget(name: "apple-pro-apps-ui-fixture", path: "Tests/UIFixture"),
     .testTarget(name: "ProAppsCoreTests", dependencies: ["ProAppsCore"]),
     .testTarget(
       name: "ProAppsNativeTests", dependencies: ["ProAppsCore"], resources: [.copy("Fixtures")]),

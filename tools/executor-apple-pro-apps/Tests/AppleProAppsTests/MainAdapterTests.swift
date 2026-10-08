@@ -5,6 +5,7 @@ import Testing
 struct MainAdapterTests {
   @Test(arguments: [
     "capabilities", "serve", "invalid", "setup", "ui-exec-failure", "inspect-media", "edit-media",
+    "ui-native",
   ])
   func processAdaptersAreBoundedAndKeepStdioClean(_ mode: String) async throws {
     let package = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -46,6 +47,7 @@ struct MainAdapterTests {
       arguments = [
         mode, package.appendingPathComponent("Tests/ProAppsNativeTests/Fixtures/black.mp4").path,
       ]
+    case "ui-native": arguments = [mode, #"{"operation":"inputSourceStatus"}"#]
     case "invalid": arguments = []
     case "setup": arguments = ["setup", "--repo", directory.path]
     case "ui-exec-failure":
@@ -60,7 +62,7 @@ struct MainAdapterTests {
     #expect(
       result.status
         == ((mode == "serve" || mode == "capabilities" || mode == "inspect-media"
-          || mode == "edit-media") ? 0 : 1))
+          || mode == "edit-media" || mode == "ui-native") ? 0 : 1))
     if mode == "edit-media" {
       let summary = try JSONDecoder().decode(EditRenderResult.self, from: Data(result.stdout.utf8))
       #expect(summary.videoTrackCount == 1)
@@ -76,6 +78,10 @@ struct MainAdapterTests {
       #expect(summary.firstFrameDecoded)
       #expect(summary.width == 16)
       #expect(summary.height == 16)
+    } else if mode == "ui-native" {
+      let outcome = try JSONDecoder().decode(UIChildOutcome.self, from: Data(result.stdout.utf8))
+      #expect(outcome.error == nil)
+      #expect(outcome.response?.inputSource?.id.isEmpty == false)
     } else if mode == "capabilities" {
       let decoded = try JSONDecoder().decode([InstalledApp].self, from: Data(result.stdout.utf8))
       #expect(decoded.count <= 10)

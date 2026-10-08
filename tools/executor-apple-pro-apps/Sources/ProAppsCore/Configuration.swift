@@ -1,11 +1,15 @@
 import Foundation
 
 public enum Command: Sendable, Equatable {
+  /// Upper bound for one encoded native UI request passed as a child argument.
+  public static let maximumUIRequestBytes = 65536
+
   case serve
   case capabilities
   case inspectMedia(String)
   case editMedia(String)
   case measureMedia(String, String)
+  case uiNative(String)
   case setup(Configuration)
   case ui(Configuration)
 
@@ -15,6 +19,14 @@ public enum Command: Sendable, Equatable {
       throw ProAppsError.invalid("Use serve, capabilities, setup or serve-ui")
     }
     let name = remaining.removeFirst()
+    if name == "ui-native" {
+      guard remaining.count == 1, let request = remaining.first,
+        request.utf8.count <= Self.maximumUIRequestBytes
+      else {
+        throw ProAppsError.invalid("ui-native requires exactly one bounded JSON request")
+      }
+      return .uiNative(request)
+    }
     if name == "measure-media" {
       guard remaining.count == 2 else {
         throw ProAppsError.invalid("measure-media requires an operation and a local JSON path")

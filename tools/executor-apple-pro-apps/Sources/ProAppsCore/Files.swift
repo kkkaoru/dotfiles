@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-public enum ProAppsError: Error, Sendable, CustomStringConvertible {
+public enum ProAppsError: Error, Equatable, Sendable, CustomStringConvertible {
   case invalid(String)
   case unavailable(String)
   case commandFailed(Int32)
