@@ -57,6 +57,9 @@ public enum FCPXMLTimeline {
   /// A reason the recipe cannot be represented faithfully, or nil.
   public static func unsupported(_ recipe: EditRecipe) -> String? {
     if recipe.video == nil { return "Audio-only renders have no FCPXML timeline" }
+    if recipe.video?.foregroundVideoPath != nil {
+      return "Foreground video is not exported to FCPXML"
+    }
     if recipe.clips.contains(where: { $0.selection.rate != 1 }) {
       return "Retimed clips are not exported to FCPXML"
     }

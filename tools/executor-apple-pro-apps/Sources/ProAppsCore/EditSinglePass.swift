@@ -107,6 +107,12 @@ extension EditPlan {
   static func validateSinglePass(_ recipe: EditRecipe, duration: Double) throws {
     guard let video = recipe.video else { return }
     let captions = video.styledCaptions ?? []
+    if let path = video.foregroundVideoPath {
+      _ = try Files.absolute(path)
+      guard video.encoding != nil else {
+        throw ProAppsError.invalid("foregroundVideoPath requires video.encoding")
+      }
+    }
     guard let encoding = video.encoding else {
       guard captions.isEmpty, video.captionAppearance == nil else {
         throw ProAppsError.invalid("styledCaptions require video.encoding (single-pass render)")

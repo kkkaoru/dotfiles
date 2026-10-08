@@ -16,6 +16,8 @@ extension NativeEditor {
     try Task.checkCancellation()
     let expectedFrames = Int((duration * Double(video.frameRate)).rounded())
     let overlays = try await overlays(video)
+    let foreground = try await prepareForeground(video, frames: expectedFrames)
+    defer { foreground?.cancel() }
     // A mutable composition's tracks are in memory; no asynchronous load is needed.
     let tracks = prepared.composition.tracks(withMediaType: .video)
     let reader = try AVAssetReader(asset: prepared.composition)
@@ -101,6 +103,9 @@ extension NativeEditor {
             image = caption.composited(over: image)
           }
         }
+        if let foreground {
+          image = try foreground.image(at: slot).composited(over: image)
+        }
         let pool = try Self.required(
           adaptor.pixelBufferPool, "The encoder provided no pixel buffer pool")
         var allocated: CVPixelBuffer?
@@ -118,6 +123,7 @@ extension NativeEditor {
           "The native encoder rejected a frame")
         frames += 1
       }
+      try foreground?.finish()
       while pending != nil { pending = output.copyNextSampleBuffer() }
       try Self.require(
         reader.status == .completed, "Reading the composed video did not complete")

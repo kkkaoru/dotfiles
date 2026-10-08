@@ -243,12 +243,16 @@ public struct EditVideoSettings: Codable, Sendable {
   public let captionAppearance: EditCaptionAppearance?
   /// Presence selects the single-pass, video-only reader/writer render.
   public let encoding: EditEncoding?
+  /// Full-canvas, exact-clock video composited last, after masks and text. Single pass only.
+  /// Source alpha is honored; opaque pixels cover the processed base. Audio is ignored.
+  public let foregroundVideoPath: String?
 
   public init(
     width: Int, height: Int, frameRate: Int, resizeMode: ResizeMode, color: EditColor? = nil,
     titles: [EditTitle]? = nil, captions: [EditCaption]? = nil, masks: [EditMask]? = nil,
     captionStyle: EditCaptionStyle? = nil, styledCaptions: [EditStyledCaption]? = nil,
-    captionAppearance: EditCaptionAppearance? = nil, encoding: EditEncoding? = nil
+    captionAppearance: EditCaptionAppearance? = nil, encoding: EditEncoding? = nil,
+    foregroundVideoPath: String? = nil
   ) {
     self.width = width
     self.height = height
@@ -262,5 +266,6 @@ public struct EditVideoSettings: Codable, Sendable {
     self.styledCaptions = styledCaptions
     self.captionAppearance = captionAppearance
     self.encoding = encoding
+    self.foregroundVideoPath = foregroundVideoPath
   }
 }
