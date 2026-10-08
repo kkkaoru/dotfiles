@@ -1,6 +1,6 @@
 ---
 name: apple-pro-apps
-description: Operate Motion, Compressor, Final Cut Pro, Logic Pro and MainStage through Executor. Prefer the custom Swift native MCP (CLI, XML interchange, LaunchServices, CoreMIDI, OSC); use the separate Peekaboo MCP only for otherwise unavailable UI operations.
+description: Operate Motion, Compressor, Final Cut Pro, Logic Pro and MainStage through Executor. Prefer the custom Swift native MCP (CLI, XML interchange, LaunchServices, CoreMIDI, OSC, background Accessibility UI); use the separate Peekaboo MCP only as a last-resort auxiliary.
 ---
 
 # Apple Pro Apps — machine integration first
@@ -43,6 +43,8 @@ passing unit tests as an exception to application-specific verification.
 | Need | Native MCP tools | Boundary |
 |---|---|---|
 | Edit video/audio offline | `media_edit_plan`, `media_edit`, `media_project_read` | Trim/reorder/speed, geometry, gain/fades/mix, MP4/M4A and reusable JSON; not live editor control |
+| Cut + blur + positioned captions + encode in ONE pass | `media_edit` with `video.encoding`, `styledCaptions`, `captionAppearance` | Video-only (like `ffmpeg -an`); exact frame count; hardware H.264/HEVC, BT.709, fast start |
+| Render several parts at once | `media_edit_batch` | 1–32 requests, concurrency 1–4 (default 3); per-item results, no automatic retry |
 | Prepare an approved Speech locale for this app | `speech_locale_reserve` | Persistent mutation, macOS 26+; no download/release/eviction. Require user approval and `readyForTranscription:true` |
 | Transcribe a local audio file | `audio_transcribe` | ≤60s, prepared locale; read-only, on-device, approximate phrases, unreviewed; no implicit reservation/download/cloud fallback |
 | Decode output fully with a bounded budget | `media_verify_video` | Defaults to 30s/1800 frames; explicit maximumDurationSeconds ≤120 and maximumFrames ≤7200; audio is separate |
@@ -59,8 +61,29 @@ passing unit tests as an exception to application-specific verification.
 | Create musical note arrangement | `midi_file_create` | Standard type-0 MIDI file; no playback; import into Logic separately |
 | Assigned live controls/patch changes | `midi_destinations`, `midi_send` | Exact destination ID AND name; CC/program/pitch bend only; routing must already be verified |
 | Logic OSC assignment | `osc_send` | Exact path and explicit loopback UDP port; no receiver acknowledgment |
+| Observe windows, dialogs, sheets and UI trees | `ui_windows`, `ui_inspect`, `ui_menu_list` | Background Accessibility; bounded trees with child-index paths; no activation |
+| Press, select, set text, run menu items | `ui_perform`, `ui_set_value`, `ui_menu_select` | Exactly one located element; read back; text is written as AXValue, so input methods do not matter |
+| Wait for UI state | `ui_wait` | Polls ≤30s; use instead of sleeping in Executor code (`setTimeout` is undefined there) |
+| Capture one window | `ui_capture` | ScreenCaptureKit, background/occluded windows, NEW private PNG; needs Screen Recording |
+| Live Final Cut Pro timeline: read, select, open project, move/seek playhead, blade/delete, Share export | `fcp_timeline_read`, `fcp_timeline_select`, `fcp_project_open`, `fcp_playhead_move`, `fcp_playhead_seek`, `fcp_timeline_edit`, `fcp_export` | Background except `fcp_export`; frame-exact seek without keyboard; no undo; see `apple-final-cut-pro` |
+| Final Cut Pro effects, inspector parameters, keyframes, FCPXML export, library close | `fcp_effect_catalog`, `fcp_effect_parameters`, `fcp_inspector_read`, `fcp_inspector_set`, `fcp_effects_paste`, `fcp_xml_export`, `fcp_library_close` | Pass `project` to timeline tools (guard); merge paste by default, overwrites the clipboard; open/paste/export/close briefly activate FCP |
+| Launch / quit an exact edition | `app_launch`, `app_quit` | Background launch by default; force quit needs `discardUnsavedChanges: true` |
+| Keyboard input source | `input_source_status`, `input_source_select` | Global user state; always restore `previousInputSource` |
 
 Offline editing creates a private new output directory and `edit-request.json`.
+Every video render also writes `<outputName>.fcpxml` beside the media (clips on the
+spine, captions/titles as Basic Title connected clips, masks as markers) and
+DTD-validates it against the installed Final Cut Pro; check `render.fcpxml`
+(`written`, `validDTD`, `unrepresented`, `reason`). Keep this FCPXML even in fully
+automatic runs; retimed/transition/crop/layered recipes report a reason instead.
+
+Single-pass rendering (`video.encoding`) replaces FFmpeg part renders: masks, color,
+titles and `styledCaptions` are composited per frame and encoded once. Variable
+frame-rate sources are filled to the output cadence like FFmpeg's `fps` filter.
+For libass parity take caption text, times and `\pos` from the burned ASS (it
+re-balances line breaks), drop zero-length events, use the font's exact PostScript
+name (for example `HiraginoSans-W6`) and `assFontSize` equal to the ASS size.
+Clip spans must already be trimmed to the planned frame count.
 Use absolute paths beneath `~/Movies/Apple-Pro-Apps-Verification/` for viewing tests.
 Ranges are source seconds; fades and additional-audio offsets are output seconds.
 Optional `video.color` controls brightness/contrast/saturation via an extra native
@@ -107,6 +130,31 @@ that ID; a dispatch/exit-zero response is not completion. Never retry a failed o
 timed-out submission blindly: it may already have created a job. Cancellation
 must target only the explicitly authorized ID, never all jobs or the service.
 
+## Native background UI — before Peekaboo
+
+Order of preference: internal channels (CLI, files, Open Document, MIDI/OSC) →
+native `ui_*` Accessibility tools → Peekaboo only for a remaining, explained gap.
+
+- The `ui_*` tools never activate an app or synthesize keyboard/pointer input.
+  Check `focus.frontmostChanged` in every result; report it if true.
+  The exceptions are the Final Cut Pro operations that need an active app:
+  `fcp_export`, `fcp_xml_export` (with `allowForeground: true`), `fcp_project_open`,
+  the paste step of `fcp_effects_paste` and `fcp_library_close` (user-approved
+  2026-10-08). They restore the previous frontmost app, also on failure.
+- Locate elements with `ui_inspect` first. Prefer `identifier`/`role`/`title` or
+  `containsText` (for table rows) over raw paths; ambiguity is an error, use `index`.
+  UI titles are localized (for example 選択, ライブラリを開く); read them, never assume.
+- Put text into fields with `ui_set_value` (`attribute: value`), not typing.
+  Synthetic typing under a Japanese input method turns `/` into `・`.
+- After `app_open_document` or a menu item, call `ui_wait` for the expected window
+  in a separate Executor call. Never place a dispatching call and polling code that
+  can throw in one `execute`: a later throw hides that the dispatch already happened.
+- `dispatched: true` is not success. Confirm the resulting state (window gone,
+  file created, project listed) before reporting completion.
+- Keyboard-only steps (for example a Save panel's Go to Folder sheet) cannot run in
+  the background. Prefer a design that avoids them; if unavoidable, explain the gap,
+  serialize with the user and restore any input source you changed.
+
 ## Installed editions — verify on every Mac
 
 | App selector | Creator Studio bundle ID | Standalone bundle ID |
@@ -133,7 +181,13 @@ Do not broaden unsafe/private API use or make unsupported headless claims just
 to avoid UI. Motion project editing, Motion rendering and AVFoundation rendering
 remain distinct capabilities and need separate evidence.
 
-## Peekaboo fallback — only after identifying the native gap
+## Peekaboo fallback — auxiliary, only after the native `ui_*` tools
+
+Peekaboo is auxiliary. Its errors can be false negatives (an action reported as
+failed may have happened) and false positives; always observe state before any
+retry. Once a Save panel's Go to Folder sheet is open, Peekaboo cannot target that
+app (the sheet has no matching accessibility window); close or cancel it with the
+native `ui_perform` (`CloseButton`, `CancelButton`) instead of force quitting.
 
 Explain which requested operation has no suitable native method. Discover tools
 in namespace **`apple-pro-apps-ui`**, not the primary namespace. This runs the
