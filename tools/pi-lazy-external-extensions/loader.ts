@@ -22,7 +22,6 @@ interface SettingsFile {
   defaultProvider?: unknown;
 }
 
-const DEFAULT_DELAY_MS = 250;
 const AGENT_DIR = process.env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".pi", "agent");
 const BUN_INSTALL = process.env.BUN_INSTALL?.trim() || join(homedir(), ".bun");
 const HOST_NODE_MODULES = join(BUN_INSTALL, "install", "global", "node_modules");
@@ -126,9 +125,7 @@ export function deferExternalExtension(
 
   if (eagerProvider !== undefined && providerWasSelected(eagerProvider)) return load();
 
-  const delay = Number(process.env.PI_LAZY_EXTENSION_DELAY_MS ?? DEFAULT_DELAY_MS);
-  const timer = setTimeout(() => {
-    void load();
-  }, Number.isFinite(delay) && delay >= 0 ? delay : DEFAULT_DELAY_MS);
-  timer.unref?.();
+  // These provider factories have no session_start hooks of their own. Await them at
+  // the session boundary, not from an unowned factory timer after native discovery.
+  pi.on("session_start", async () => load());
 }

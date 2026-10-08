@@ -36,6 +36,7 @@
     "./packages/pi-my-devin-cli-provider",
     "./packages/pi-claudex-provider",
     "./packages/pi-lazy-external-extensions",
+    "npm:pi-web-access@0.37.0",
     "./packages/executor-skills",
     "npm:@ogulcancelik/pi-herdr",
     "git:github.com/DietrichGebert/ponytail"

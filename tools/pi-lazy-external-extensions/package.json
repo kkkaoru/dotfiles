@@ -3,11 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "scripts": { "smoke": "bun smoke.mjs" },
   "pi": {
     "extensions": [
       "./commandcode.ts",
-      "./antigravity.ts",
-      "./web-access.ts"
+      "./antigravity.ts"
     ]
   }
 }
