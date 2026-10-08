@@ -22,11 +22,12 @@ interface ErrorState {
 }
 
 interface RuntimeJob {
+  systemPrompt?: string;
   continuationPrompt: string;
   cwd: string;
   initialPrompt: string;
   modelId: string;
-  onUpdate: (update: SessionUpdate) => void;
+  onUpdate: (update: SessionUpdate) => void | Promise<void>;
   sessionId: string;
   signal: AbortSignal | undefined;
 }
@@ -46,6 +47,7 @@ interface RuntimeHandles {
 }
 
 interface SharedRuntime {
+  systemPrompt: string | undefined;
   activeJobs: number;
   acpSession: ActiveSession | undefined;
   child: ChildProcessWithoutNullStreams;
@@ -190,11 +192,11 @@ async function configureSession(
 
 async function consumeUpdates(
   session: ActiveSession,
-  onUpdate: (update: SessionUpdate) => void,
+  onUpdate: (update: SessionUpdate) => void | Promise<void>,
 ): Promise<void> {
   const message: ActiveSessionMessage = await session.nextUpdate();
   if (message.kind === "stop") return;
-  onUpdate(message.update);
+  await onUpdate(message.update);
   return consumeUpdates(session, onUpdate);
 }
 
@@ -221,13 +223,17 @@ async function runJob(
       ? job.signal.reason
       : new Error("Devin ACP request aborted");
   }
-  if (transcriptIncludesCompaction(job.initialPrompt)) {
+  if (
+    transcriptIncludesCompaction(job.initialPrompt) ||
+    runtime.systemPrompt !== job.systemPrompt
+  ) {
     closeAcpSession(runtime);
   }
   if (!runtime.acpSession) {
     runtime.acpSession = await context.buildSession({ cwd: job.cwd, mcpServers: [] }).start();
     await configureSession(context, runtime.acpSession, job.modelId);
   }
+  runtime.systemPrompt = job.systemPrompt;
   const session = runtime.acpSession;
   const promptText: string = runtime.turnCount === 0 ? job.initialPrompt : job.continuationPrompt;
   runtime.turnCount += 1;
@@ -339,6 +345,7 @@ function startSharedRuntime(key: string): SharedRuntime {
     ready: deferred.promise,
     stop,
     turnCount: 0,
+    systemPrompt: undefined,
   };
   const stream = ndJsonStream(Writable.toWeb(child.stdin), stdoutByteStream(child.stdout));
   void client({ name: CLIENT_NAME })

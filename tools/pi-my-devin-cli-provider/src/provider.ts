@@ -8,12 +8,14 @@ import type {
   ToolCallContent,
   ToolCallUpdate,
 } from "@agentclientprotocol/sdk";
-import type {
-  Api,
-  AssistantMessageEventStream,
-  Context,
-  Model,
-  SimpleStreamOptions,
+import {
+  getCurrentSystemPrompt,
+  normalizeContext,
+  type Api,
+  type AssistantMessageEventStream,
+  type Context,
+  type Model,
+  type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { buildContinuationPrompt, buildDevinTranscript } from "./context.ts";
 import { createDevinOutput, type DevinOutput } from "./stream-output.ts";
@@ -24,6 +26,7 @@ interface ActiveState {
 }
 
 interface RunRequest {
+  onProviderStreamEvent: SimpleStreamOptions["onProviderStreamEvent"];
   context: Context;
   model: Model<Api>;
   output: DevinOutput;
@@ -360,13 +363,17 @@ async function runAcpRequest(request: RunRequest): Promise<void> {
   try {
     const toolCalls = new Map<string, ToolCallState>();
     await runDevinJob({
+      systemPrompt: getCurrentSystemPrompt(normalizeContext(request.context).messages),
       continuationPrompt: buildContinuationPrompt(request.context),
       cwd: process.cwd(),
       initialPrompt: buildDevinTranscript(request.context),
       modelId: request.model.id,
       sessionId: request.sessionId,
       signal: request.signal,
-      onUpdate: (update) => handleUpdate({ update, output: request.output, toolCalls }),
+      onUpdate: async (update) => {
+        await request.onProviderStreamEvent?.(update, request.model);
+        handleUpdate({ update, output: request.output, toolCalls });
+      },
     });
     request.output.finish();
   } finally {
@@ -382,11 +389,16 @@ export function streamDevin(
   const [model, context, options] = parameters;
   const output: DevinOutput = createDevinOutput(model);
   const sessionId: string = resolveDevinSessionId(options?.sessionId);
-  void runAcpRequest({ model, context, output, sessionId, signal: options?.signal }).catch(
-    (error: unknown) => {
-      output.fail(error, options?.signal?.aborted === true);
-    },
-  );
+  void runAcpRequest({
+    model,
+    context,
+    output,
+    sessionId,
+    signal: options?.signal,
+    onProviderStreamEvent: options?.onProviderStreamEvent,
+  }).catch((error: unknown) => {
+    output.fail(error, options?.signal?.aborted === true);
+  });
   return output.stream;
 }
 

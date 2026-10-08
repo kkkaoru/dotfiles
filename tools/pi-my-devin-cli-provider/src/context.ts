@@ -1,5 +1,10 @@
 // This file runs with Bun.
-import type { Context, Message } from "@earendil-works/pi-ai";
+import {
+  getCurrentSystemPrompt,
+  normalizeContext,
+  type Context,
+  type Message,
+} from "@earendil-works/pi-ai";
 
 /**
  * Matches pi-coding-agent's COMPACTION_SUMMARY_PREFIX so a compacted context
@@ -24,7 +29,7 @@ function contentText(content: Message["content"]): string {
     .join("\n");
 }
 
-function formatMessage(message: Message): string {
+function formatMessage(message: Exclude<Message, { role: "system" }>): string {
   if (message.role === "user") return `USER:\n${contentText(message.content)}`;
   if (message.role === "assistant") return `ASSISTANT:\n${contentText(message.content)}`;
   const status: string = message.isError ? "error" : "success";
@@ -32,8 +37,12 @@ function formatMessage(message: Message): string {
 }
 
 export function buildDevinTranscript(context: Context): string {
-  const sections: string[] = context.messages.map(formatMessage);
-  if (context.systemPrompt) sections.unshift(`SYSTEM INSTRUCTIONS:\n${context.systemPrompt}`);
+  const transcript = normalizeContext(context);
+  const sections: string[] = transcript.messages
+    .filter((message) => message.role !== "system")
+    .map(formatMessage);
+  const systemPrompt = getCurrentSystemPrompt(transcript.messages);
+  if (systemPrompt) sections.unshift(`SYSTEM INSTRUCTIONS:\n${systemPrompt}`);
   sections.push("Continue from the transcript above. Follow the latest user request.");
   return sections.join(SECTION_SEPARATOR);
 }

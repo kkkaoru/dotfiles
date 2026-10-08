@@ -45,7 +45,7 @@ test("provides the required stable fallback catalog with safety margins", async 
     "glm-5-2",
     "kimi-k3-high",
   ]);
-  expect(FALLBACK_DEVIN_MODELS[1]?.contextWindow).toBe(209_600);
+  expect(FALLBACK_DEVIN_MODELS[1]).toMatchObject({ contextWindow: 209_600 });
 });
 
 test("parses family variants, prices, defaults, and invalid entries", async () => {

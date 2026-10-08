@@ -6,7 +6,7 @@ A pi custom provider that runs the authenticated Devin CLI as a local ACP agent.
 
 - `devin` must be available on `PATH`.
 - Authenticate the CLI with `devin auth`.
-- Bun and pi 0.84.2 must be installed.
+- Bun and pi 1.0.4 must be installed.
 
 ## Install and use
 
@@ -24,7 +24,7 @@ The dotfiles `create-symlinks.sh` script also links this package under `.pi/agen
 - Reuse unit is `(cwd, model, sessionId)`.
 - `options.sessionId` from pi (each Agent / subagent) binds a continuing Devin ACP session. When omitted, the provider mints `devin-pi:<uuid>` via `createDevinSessionId()`.
 - **First turn / post-compact:** open (or reopen) an ACP session and send the full pi transcript.
-- **Later turns:** reuse the same ACP session and send only the latest user text.
+- **Later turns:** reuse the same ACP session and send only the latest user text. Native Pi system-message/section updates are replayed using Pi's transcript helpers; changed current instructions start a fresh ACP session with the full transcript rather than silently retaining stale instructions.
 - When the transcript contains a pi compaction summary, the ACP session is deleted and the next prompt uses the full compacted transcript on a fresh session.
 - `session_before_compact` / `session_compact` also invalidate the pooled Devin runtime for the active pi session so post-compact turns cannot append onto pre-compact Devin history.
 - Concurrent subagents A and B with different `sessionId` values keep separate live ACP processes and Devin sessions, even when cwd and model match.
@@ -33,6 +33,7 @@ The dotfiles `create-symlinks.sh` script also links this package under `.pi/agen
 - Compaction summarization uses pi's default path with a fresh `sessionId` (same as stock pi); this package does not redirect summarization to another vendor.
 - Sets the selected model with `session/set_config_option` and prefers ACP mode `bypass` when Devin advertises it.
 - A fixed non-secret provider marker satisfies pi's custom-provider registration; Devin CLI authentication remains the only authentication used.
+- Pi's `onProviderStreamEvent` hook receives each parsed ACP update and is awaited before normalization. ACP does not expose raw HTTP payloads or response headers; those hooks are not fabricated.
 - Text and thinking chunks stream back to pi. Devin tool calls stay inside Devin and are not emitted as pi tool calls.
 - Permission requests automatically choose `allow_always`, then `allow_once`, then the first available option. The child also receives `DEVIN_PERMISSION_MODE=dangerous`.
 - Abort sends `session/cancel` for the active session only; other pooled sessions are left alone.

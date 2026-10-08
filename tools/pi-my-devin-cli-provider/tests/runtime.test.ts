@@ -441,6 +441,41 @@ test("opens a fresh Devin ACP session with the full transcript after compaction"
   expect(state.sessions[1]?.prompt).toHaveBeenCalledWith(compacted);
 });
 
+test("restarts ACP with the full transcript when native system instructions change", async () => {
+  installScenario({
+    modes: undefined,
+    turnUpdates: [[], [], []],
+    connectError: undefined,
+    setModeError: undefined,
+    stderr: "",
+  });
+  const { runDevinJob } = await import("../src/runtime.ts");
+  await runDevinJob({
+    ...job({ sessionId: "system-update", initialPrompt: "old full" }),
+    systemPrompt: "old",
+  });
+  await runDevinJob({
+    ...job({
+      sessionId: "system-update",
+      initialPrompt: "new full",
+      continuationPrompt: "user only",
+    }),
+    systemPrompt: "new",
+  });
+  await runDevinJob({
+    ...job({
+      sessionId: "system-update",
+      initialPrompt: "unchanged full",
+      continuationPrompt: "continue",
+    }),
+    systemPrompt: "new",
+  });
+  expect(mocks.spawn).toHaveBeenCalledOnce();
+  expect(state.sessions).toHaveLength(2);
+  expect(state.sessions[1]?.prompt).toHaveBeenNthCalledWith(1, "new full");
+  expect(state.sessions[1]?.prompt).toHaveBeenNthCalledWith(2, "continue");
+});
+
 test("invalidates pooled runtimes for a pi session id", async () => {
   installScenario({
     modes: undefined,

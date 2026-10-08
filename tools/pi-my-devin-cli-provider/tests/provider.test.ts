@@ -14,7 +14,7 @@ interface RuntimeJob {
   cwd: string;
   initialPrompt: string;
   modelId: string;
-  onUpdate: (update: SessionUpdate) => void;
+  onUpdate: (update: SessionUpdate) => void | Promise<void>;
   sessionId: string;
   signal: AbortSignal | undefined;
 }
@@ -81,19 +81,40 @@ test("re-exports permission selection from the runtime helper", async () => {
   expect(mocks.selectPermission).toHaveBeenCalledTimes(1);
 });
 
+test("awaits provider event instrumentation before consuming ACP updates", async () => {
+  const seen: string[] = [];
+  const onProviderStreamEvent = vi.fn(async () => {
+    await Promise.resolve();
+    seen.push("observed");
+  });
+  mocks.runDevinJob.mockImplementation(async (job) => {
+    await job.onUpdate({
+      sessionUpdate: "agent_message_chunk",
+      content: { type: "text", text: "hello" },
+    });
+    expect(seen).toStrictEqual(["observed"]);
+  });
+  const { streamDevin } = await import("../src/provider.ts");
+  await collect(streamDevin(MODEL, CONTEXT, { onProviderStreamEvent }));
+  expect(onProviderStreamEvent).toHaveBeenCalledWith(
+    { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hello" } },
+    expect.objectContaining({ provider: "devin", id: "swe-1-7" }),
+  );
+});
+
 test("streams message and thought updates from a reused ACP job", async () => {
   mocks.runDevinJob.mockImplementation(async (job) => {
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "agent_thought_chunk",
       content: { type: "text", text: "think" },
     });
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call",
       toolCallId: "tool",
       title: "Read",
       status: "in_progress",
     });
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text: "hello" },
     });
@@ -126,7 +147,7 @@ test("streams message and thought updates from a reused ACP job", async () => {
 
 test("renders a completed tool_call diff as a text block", async () => {
   mocks.runDevinJob.mockImplementation(async (job) => {
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call",
       toolCallId: "edit-1",
       title: "Edit x",
@@ -158,14 +179,14 @@ test("renders a completed tool_call diff as a text block", async () => {
 
 test("renders a completed tool_call_update diff after an in_progress start", async () => {
   mocks.runDevinJob.mockImplementation(async (job) => {
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call",
       toolCallId: "edit-2",
       title: "Edit y",
       kind: "edit",
       status: "in_progress",
     });
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "edit-2",
       title: "Edit y",
@@ -197,7 +218,7 @@ test("renders a completed tool_call_update diff after an in_progress start", asy
 
 test("renders text content from a completed tool call", async () => {
   mocks.runDevinJob.mockImplementation(async (job) => {
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "read-1",
       title: "Read README",
@@ -229,7 +250,7 @@ test("renders text content from a completed tool call", async () => {
 
 test("renders a new file diff when oldText is null", async () => {
   mocks.runDevinJob.mockImplementation(async (job) => {
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call",
       toolCallId: "write-1",
       title: "Create z",
@@ -261,7 +282,7 @@ test("renders a new file diff when oldText is null", async () => {
 
 test("renders a deleted file diff when newText is empty", async () => {
   mocks.runDevinJob.mockImplementation(async (job) => {
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call",
       toolCallId: "delete-1",
       title: "Delete w",
@@ -293,7 +314,7 @@ test("renders a deleted file diff when newText is empty", async () => {
 
 test("uses the tool kind as the header when a completed tool call has no title", async () => {
   mocks.runDevinJob.mockImplementation(async (job) => {
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "other-1",
       kind: "other",
@@ -324,7 +345,7 @@ test("uses the tool kind as the header when a completed tool call has no title",
 
 test("renders completed tool calls with terminal content", async () => {
   mocks.runDevinJob.mockImplementation(async (job) => {
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "terminal-1",
       title: "Run server",
@@ -356,7 +377,7 @@ test("renders completed tool calls with terminal content", async () => {
 
 test("renders Devin command snapshots, output, and terminal exit metadata", async () => {
   mocks.runDevinJob.mockImplementation(async (job) => {
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call",
       toolCallId: "functions.exec:0",
       title: "Ran command",
@@ -378,19 +399,19 @@ test("renders Devin command snapshots, output, and terminal exit metadata", asyn
       rawInput: { command: "printf 'OUT\\n'", workdir: "/tmp/workspace" },
       _meta: { "cognition.ai/inferenceToolName": "exec" },
     });
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "functions.exec:0",
       status: "in_progress",
       _meta: { "cognition.ai/cwd": "/tmp/workspace" },
     });
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "functions.exec:0",
       status: "in_progress",
       content: [{ type: "content", content: { type: "text", text: "OUT" } }],
     });
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "functions.exec:0",
       status: "in_progress",
@@ -399,7 +420,7 @@ test("renders Devin command snapshots, output, and terminal exit metadata", asyn
         terminal_exit: { terminal_id: "terminal-1", exit_code: 0, signal: null },
       },
     });
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "functions.exec:0",
       status: "completed",
@@ -432,7 +453,7 @@ test("renders Devin command snapshots, output, and terminal exit metadata", asyn
 
 test("renders failed command output and exit status", async () => {
   mocks.runDevinJob.mockImplementation(async (job) => {
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call",
       toolCallId: "failed-command",
       title: "Run failing command",
@@ -440,7 +461,7 @@ test("renders failed command output and exit status", async () => {
       status: "pending",
       rawInput: { command: "false" },
     });
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "failed-command",
       status: "failed",
@@ -465,7 +486,7 @@ test("renders failed command output and exit status", async () => {
 
 test("retains Devin edit diffs across status-only updates", async () => {
   mocks.runDevinJob.mockImplementation(async (job) => {
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call",
       toolCallId: "functions.write:0",
       title: "Wrote probe.txt",
@@ -473,12 +494,12 @@ test("retains Devin edit diffs across status-only updates", async () => {
       content: [{ type: "diff", path: "/tmp/probe.txt", newText: "PROBE\n" }],
       rawInput: { file_path: "/tmp/probe.txt", content: "PROBE\n" },
     });
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "functions.write:0",
       status: "in_progress",
     });
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "functions.write:0",
       status: "completed",
@@ -502,7 +523,7 @@ test("retains Devin edit diffs across status-only updates", async () => {
 
 test("formats ACP resource and media content with a raw input fallback", async () => {
   mocks.runDevinJob.mockImplementation(async (job) => {
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "inspect-1",
       title: "Inspect resources",
@@ -562,7 +583,7 @@ test("formats ACP resource and media content with a raw input fallback", async (
 
 test("renders a non-structured raw output value", async () => {
   mocks.runDevinJob.mockImplementation(async (job) => {
-    job.onUpdate({
+    await job.onUpdate({
       sessionUpdate: "tool_call_update",
       toolCallId: "raw-1",
       title: "Return raw output",

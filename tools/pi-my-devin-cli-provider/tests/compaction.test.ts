@@ -18,6 +18,7 @@ test("registers session compaction hooks that invalidate Devin sessions", async 
     on(event, handler) {
       events.push(event);
       runners.push((evt, ctx) => Reflect.apply(handler, undefined, [evt, ctx]));
+      return () => events.splice(events.indexOf(event), 1);
     },
   });
 
