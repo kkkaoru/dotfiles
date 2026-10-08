@@ -1,9 +1,11 @@
-import type {
-  Api,
-  AssistantMessageEvent,
-  Model,
-  ProviderHeaders,
-  SimpleStreamOptions,
+// This file runs with Bun.
+import {
+  normalizeContext,
+  type Api,
+  type AssistantMessageEvent,
+  type Model,
+  type ProviderHeaders,
+  type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { toPiContext } from "./context-converter.ts";
@@ -164,7 +166,7 @@ export async function streamDirectModel(input: DirectStreamInput): Promise<void>
     throw new GatewayError(`Pi provider authentication failed: ${auth.error}`, request.id);
   }
   const resolvedModel = auth.baseUrl === undefined ? model : { ...model, baseUrl: auth.baseUrl };
-  const context = toPiContext(request, resolvedModel);
+  const context = normalizeContext(toPiContext(request, resolvedModel));
   const options = buildOptions(request, signal, auth);
   const state: StreamReadState = { terminal: false };
   const stream = abortableEvents(

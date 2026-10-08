@@ -1,3 +1,5 @@
+// This file runs with Bun.
+import { isJsonObject } from "./json-value.ts";
 import { CLAUDEX_BACKGROUND_BASH_GUIDANCE } from "@kkkaoru/pi-tmux-timeout-extension/policy";
 import type {
   Api,
@@ -166,6 +168,12 @@ function parseAssistantBlock(
   const id = requiredText(block, "id", state.requestId);
   const name = requiredText(block, "name", state.requestId);
   const input = requiredRecord(block["input"], `tool input ${id}`, state.requestId);
+  if (!isJsonObject(input)) {
+    throw new GatewayError(
+      `Anthropic tool input ${id} must contain only JSON values`,
+      state.requestId,
+    );
+  }
   state.toolNames.set(id, name);
   return { type: "toolCall", id, name, arguments: input };
 }

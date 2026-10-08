@@ -122,8 +122,10 @@ describe("direct Pi provider streaming", () => {
       baseUrl: "https://resolved.test",
     });
     expect(harness.calls[0]?.context).toMatchObject({
-      systemPrompt: "system",
-      messages: [{ role: "user", content: "hello" }],
+      messages: [
+        { role: "system", content: "system" },
+        { role: "user", content: "hello" },
+      ],
     });
     expect(harness.calls[0]?.options).toMatchObject({
       apiKey: "key",

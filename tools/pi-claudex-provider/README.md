@@ -1,6 +1,10 @@
 # pi-claudex-provider
 
-Bidirectional integration package for Pi and Claudex.
+Bidirectional integration package for Pi 1.0.4+ and Claudex. The direct gateway normalizes
+contexts through Pi's native transcript helper before calling provider `streamSimple`, preserving
+system prompts and tool declarations. Tool inputs must contain finite JSON values; unsupported
+values fail explicitly instead of being silently coerced. Reinstall local dependencies with
+`bun install` and reload/restart Pi after updating.
 
 Direction A exposes Pi providers as a raw model gateway over an authenticated Unix socket. It calls provider `streamSimple` directly, so Pi's agent loop does not run. Direction B registers configured Claudex models as the Pi provider `claudex` and uses Pi's Anthropic Messages streaming implementation to call the adapter.
 

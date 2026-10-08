@@ -50,7 +50,10 @@ describe("Claudex model catalog", () => {
     });
     const models = await loadClaudexModels(file);
     expect(
-      models.map((model) => ({ id: model.id, contextWindow: model.contextWindow })),
+      models.map((model) => ({
+        id: model.id,
+        contextWindow: "contextWindow" in model ? model.contextWindow : undefined,
+      })),
     ).toStrictEqual([
       { id: "gpt-5.6-luna", contextWindow: 110_000 },
       { id: "gpt-5.6-terra", contextWindow: 110_000 },
