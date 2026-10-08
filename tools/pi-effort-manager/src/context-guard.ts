@@ -1,7 +1,8 @@
 // This TypeScript file is executed with Bun.
 import { Buffer } from "node:buffer";
-import { URL } from "node:url";
-import { createAssistantMessageEventStream, uuidv7, type Api, type Model, type ProviderHeaders } from "@earendil-works/pi-ai";
+import { providerSessionHeaders } from "./provider-session-headers.ts";
+export { providerSessionHeaders, type SessionHeaderTarget } from "./provider-session-headers.ts";
+import { createAssistantMessageEventStream, uuidv7, type Api, type Model } from "@earendil-works/pi-ai";
 import {
   convertToLlm,
   compact,
@@ -20,11 +21,6 @@ export interface GuardContext {
   readonly model: Model<Api> | undefined;
   readonly modelRegistry: Pick<ExtensionContext["modelRegistry"], "complete">;
   readonly ui: Pick<ExtensionContext["ui"], "notify">;
-}
-
-export interface SessionHeaderTarget {
-  readonly provider: string;
-  readonly baseUrl: string;
 }
 
 const MAX_OUTPUT_TOKENS = 8192;
@@ -48,18 +44,6 @@ const REQUESTS_CLOSE = `\n${REQUESTS_END}`;
 const REQUEST_BUDGET = 20_000;
 const REQUEST_LIMIT = 4000;
 const REQUEST_TRUNCATED = "\n[request middle truncated; see original session]\n";
-const OPENCODE_HOST = "opencode.ai";
-const OPENCODE_CLIENT = "pi-coding-agent";
-const OPENCODE_PROVIDERS: ReadonlySet<string> = new Set(["opencode", "opencode-go"]);
-
-function hostOf(baseUrl: string): string | undefined {
-  try {
-    return new URL(baseUrl).hostname;
-  } catch {
-    return undefined;
-  }
-}
-
 /**
  * Pi summarizes a compaction in one request: the retained turns stay out of the input and the output
  * is capped by the compaction reserve, so Pi handles the compaction itself whenever that request
@@ -85,26 +69,6 @@ export function piCompactionFits(
     historyTokens <= SUMMARY_COMPRESSION_RATIO * outputCap &&
     historyTokens + outputTokens + SUMMARIZATION_PROMPT_TOKENS <= model.contextWindow
   );
-}
-
-/**
- * Pi's provider runner adds these headers to its own requests. Extension model calls bypass that
- * runner, and OpenCode rejects a request without the session header (MissingSessionID), so the
- * bounded compaction requests must carry them explicitly.
- */
-export function providerSessionHeaders(
-  model: SessionHeaderTarget,
-  sessionId: string,
-): ProviderHeaders {
-  if (!OPENCODE_PROVIDERS.has(model.provider) && hostOf(model.baseUrl) !== OPENCODE_HOST) {
-    return {};
-  }
-  return {
-    "x-opencode-session": sessionId,
-    "x-opencode-client": "pi",
-    // OpenCode Go drops generic SDK/fetch user-agents; Pi's runner sets this, extension complete() does not.
-    "User-Agent": OPENCODE_CLIENT,
-  };
 }
 
 // Codex retains user messages alongside its summary; Pi's hook can only retain them in the summary.
