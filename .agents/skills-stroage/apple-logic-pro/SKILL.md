@@ -63,8 +63,8 @@ Scripter is a MIDI-FX JavaScript environment; controller Lua profiles are anothe
 specialized integration. Neither is a general-purpose external project API.
 This MCP does not install either, create arbitrary tracks/plugins through a public
 API, guarantee sample-accurate performance or provide automatic bounce/export.
-For those UI-only tasks, identify the gap and then use `apple-pro-apps-ui` under
-shared rules. Read the actual current key-command set; don't remap it or assume
+For those UI-only tasks, use the native background `ui_*` tools first; identify any
+remaining gap and only then use `apple-pro-apps-ui` (Peekaboo) under shared rules. Read the actual current key-command set; don't remap it or assume
 factory shortcuts. Verify bounce range, sample rate, bit depth and output artifact.
 
 ## Apple references
