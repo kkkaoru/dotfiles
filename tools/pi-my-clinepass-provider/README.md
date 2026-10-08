@@ -25,13 +25,15 @@ updates pi's selectable catalog without changing this extension.
 The CLI supplies model identity, name, description, and availability. Local
 metadata supplies pi-specific context/output limits, pricing references,
 reasoning maps, and compatibility flags. Unknown future CLI models receive
-conservative metadata until reviewed, but are still selectable.
+conservative metadata until reviewed, but are still selectable. Cache-only refresh keeps chat
+models and ignores image/classifier entries from Pi's mixed-operation catalog; it never reinterprets
+them as chat models.
 
 ## Requirements
 
 - Node.js 22+
 - Bun
-- pi 0.84.2+
+- pi 1.0.4+
 - `cline` available on `PATH`
 - Cline authenticated with `cline auth`
 

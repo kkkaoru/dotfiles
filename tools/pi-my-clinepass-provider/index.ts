@@ -26,7 +26,9 @@ function cloneProviderModel(model: Model<Api>): ProviderModelConfig {
 const FALLBACK_MODELS: ProviderModelConfig[] = toProviderModels(MODELS);
 
 function restoreModels(context: RefreshModelsContext): ProviderModelConfig[] {
-  const stored = context.stored?.models;
+  const stored = context.stored?.models.filter(
+    (model): model is Model<Api> => model.type === undefined || model.type === "chat",
+  );
   return stored === undefined || stored.length === 0
     ? FALLBACK_MODELS
     : stored.map((model) => cloneProviderModel(model));
