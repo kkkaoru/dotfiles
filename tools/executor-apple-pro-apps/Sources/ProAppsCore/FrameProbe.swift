@@ -51,7 +51,7 @@ public actor FrameProbe {
 
   public init() {}
 
-  private func source(path: String, samples: [FrameSample]) async throws
+  func source(path: String, samples: [FrameSample]) async throws
     -> sending AVAssetImageGenerator
   {
     try Task.checkCancellation()

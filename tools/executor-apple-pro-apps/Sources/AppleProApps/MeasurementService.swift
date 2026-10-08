@@ -109,6 +109,15 @@ extension ToolSpec {
       ],
       required: ["path", "samples"], readOnly: true),
     .init(
+      name: "video_head_detect",
+      description:
+        "Detect face and whole-person rectangles locally with Apple Vision in 1–8 explicit video frames. Returns requested and actual decoded times, display dimensions and top-left pixel rectangles, at most 32 per category per frame. Empty arrays mean no detection; no subject identity, interpolation, hair boundary, caption placement or exhaustive coverage is inferred. Full frames only, 16-megapixel decoder budget, 60-second disposable child deadline. No upload, playback, screenshots or source writes.",
+      properties: [
+        "path": string(),
+        "samples": array(
+          object(["timeSeconds": number], ["timeSeconds"]), maximum: FrameProbe.maximumSamples),
+      ], required: ["path", "samples"], readOnly: true),
+    .init(
       name: "video_frame_measure",
       description:
         "Measure mean device-RGB values (0–1) in 1–8 selected decoded video frames/regions. Regions use top-left display-oriented pixels. Returns actual sample times and dimensions. Limited to 16 megapixels; no screenshots, image export or playback. Selected-region evidence only, not full-file verification.",
@@ -207,6 +216,13 @@ extension NativeService {
       let input = try decode(Input.self, arguments)
       measured = try await Value(
         FrameProbe().recognizeText(path: input.path, samples: input.samples))
+    case "video_head_detect":
+      struct Input: Decodable {
+        let path: String
+        let samples: [FrameSample]
+      }
+      let input = try decode(Input.self, arguments)
+      measured = try await Value(FrameProbe().detectHeads(path: input.path, samples: input.samples))
     case "video_frame_measure":
       struct Input: Decodable {
         let path: String
