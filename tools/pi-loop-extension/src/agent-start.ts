@@ -33,7 +33,7 @@ interface StartLoopHost {
 export function registerAgentLoop(
   host: StartLoopHost,
   runtime: LoopRuntime,
-  afterStart?: () => void,
+  afterStart?: () => void | Promise<void>,
 ): void {
   host.registerTool({
     name: "start_loop",
@@ -50,7 +50,7 @@ export function registerAgentLoop(
     ],
     async execute(_id, params, _signal, _onUpdate, context) {
       const discarded: number = runtime.startFromAgent(params.prompt, context);
-      afterStart?.();
+      await afterStart?.();
       if (discarded > 0) {
         context.ui.notify(
           `Superseded a paused loop (${String(discarded)} job(s) discarded).`,

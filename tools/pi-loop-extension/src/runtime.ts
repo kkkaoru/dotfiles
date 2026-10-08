@@ -80,6 +80,7 @@ export class LoopRuntime {
   }
 
   shutdown(): void {
+    this.#host.cancelDelivery?.();
     this.#stopPoller();
     this.#settledDelivery.cancel();
     clearLoopDisplay(this.#context?.ui);
@@ -143,6 +144,7 @@ export class LoopRuntime {
   }
 
   clear(): number {
+    this.#host.cancelDelivery?.();
     const count: number = this.#jobs.size;
     this.#jobs.clear();
     this.#paused = false;
@@ -247,7 +249,6 @@ export class LoopRuntime {
 
   #fire(job: LoopJob, now: number): void {
     const prompt: string = job.intervalMs === undefined ? commandPrompt(job.prompt) : job.prompt;
-    this.#send(prompt, `#${String(job.id)} | ${job.reason}`, job.submittedAt, now);
     if (job.intervalMs === undefined) {
       this.#jobs.delete(job.id);
     } else {
@@ -257,6 +258,7 @@ export class LoopRuntime {
         submittedAt: now,
       });
     }
+    this.#send(prompt, `#${String(job.id)} | ${job.reason}`, job.submittedAt, now);
     if (this.#jobs.size === 0) {
       this.#stopPoller();
     }
@@ -269,6 +271,7 @@ export class LoopRuntime {
       context.ui.notify("Loop jobs are already paused.", "info");
       return;
     }
+    this.#host.cancelDelivery?.();
     this.#jobs = pauseJobs({ jobs: this.#jobs, now: this.#scheduler.now() });
     this.#paused = true;
     this.#persist();

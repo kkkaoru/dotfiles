@@ -37,14 +37,14 @@ const context: LoopContext = {
 const scheduler: Scheduler = {
   clearInterval: (poller): void => {
     cleared();
-    clearInterval(poller);
+    poller();
   },
   now: (): number => currentTime,
   setInterval: (callback, intervalMs) => {
     const poller = setInterval((): void => undefined, 1_000_000);
     pollers.push(poller);
     callbacks.push({ callback, intervalMs, poller });
-    return poller;
+    return (): void => clearInterval(poller);
   },
 };
 

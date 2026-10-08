@@ -78,7 +78,9 @@ Use `tmux_exec` for potentially blocking or duration-uncertain work. Set a reali
 as `wrangler tail`, also supply `timeoutSeconds`. Hard deadlines require GNU coreutils on
 macOS. Inspect output and exit status when notified; do not leave duplicate watchers running.
 For an active self-paced `/loop`, continue actionable work, schedule a later check, or explicitly
-finish only when complete or blocked on user input.
+finish only when complete or blocked on user input. Loop state and waiting tasks use pi-durable;
+keep each session's `.loop-durable/` sibling directory with its session file. It resumes when
+that Pi session is reopened, not while Pi is closed. See `tools/pi-loop-extension/README.md`.
 
 `/goal <objective>` explicitly starts a persistent goal; `/goal pause`, `resume`, and `clear`
 control its future continuations. Agents may also deliberately use `start_goal` and `start_loop`

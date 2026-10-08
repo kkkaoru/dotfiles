@@ -6,8 +6,11 @@ import { LoopRuntime, type LoopContext, type Scheduler } from "./runtime.ts";
 const context: LoopContext = { isIdle: () => false, ui: { notify: vi.fn(), setStatus: vi.fn() } };
 const scheduler: Scheduler = {
   now: () => Date.now(),
-  setInterval: (callback, milliseconds) => globalThis.setInterval(callback, milliseconds),
-  clearInterval: (timer) => globalThis.clearInterval(timer),
+  setInterval: (callback, milliseconds) => {
+    const timer = globalThis.setInterval(callback, milliseconds);
+    return (): void => globalThis.clearInterval(timer);
+  },
+  clearInterval: (cancel) => cancel(),
 };
 afterEach(() => vi.useRealTimers());
 

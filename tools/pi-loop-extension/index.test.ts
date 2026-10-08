@@ -1,6 +1,7 @@
 // This TypeScript file is executed with Bun.
 import { afterEach, expect, it, vi } from "vitest";
-import loopExtension, {
+import {
+  registerLoop as loopExtension,
   type LoopCommandDefinition,
   type LoopExtensionHost,
   type LoopToolDefinition,
@@ -13,7 +14,7 @@ afterEach((): void => {
   vi.useRealTimers();
 });
 
-it("registers the loop command, tools, and shutdown handler", () => {
+it("registers the loop command, tools, and shutdown handler", async () => {
   let command: LoopCommandDefinition | undefined;
   const tools: LoopToolDefinition[] = [];
   let onShutdown: ((event: unknown, context: LoopContext) => void) | undefined;
@@ -57,7 +58,7 @@ it("registers the loop command, tools, and shutdown handler", () => {
   ]);
   const [wakeupTool] = tools;
   expect(wakeupTool?.executionMode).toBe("parallel");
-  command?.handler("list", context);
+  await command?.handler("list", context);
   expect(context.ui.notify).toHaveBeenCalledWith("No loop jobs are scheduled.", "info");
   onShutdown?.({}, context);
   expect(context.ui.setStatus).toHaveBeenLastCalledWith("loop", undefined);
@@ -88,7 +89,7 @@ it("schedules a wakeup through the registered tool after session start", async (
 
   loopExtension(host);
   onStart?.({}, context);
-  command?.handler("check", context);
+  await command?.handler("check", context);
   const [wakeupTool] = tools;
   if (wakeupTool?.name !== "loop_wakeup") {
     throw new Error("loop_wakeup was not registered first");
@@ -127,7 +128,7 @@ it("completes a self-paced loop through the registered tool", async () => {
   };
 
   loopExtension(host);
-  command?.handler("finish work", context);
+  await command?.handler("finish work", context);
   const [, completeTool] = tools;
   if (completeTool?.name !== "loop_complete") {
     throw new Error("loop_complete was not registered second");
@@ -146,7 +147,7 @@ it("completes a self-paced loop through the registered tool", async () => {
   });
 });
 
-it("continues a loop after the settled event has returned", () => {
+it("continues a loop after the settled event has returned", async () => {
   vi.useFakeTimers();
   let command: LoopCommandDefinition | undefined;
   let onCompaction: ((event: unknown, context: LoopContext) => void) | undefined;
@@ -172,7 +173,7 @@ it("continues a loop after the settled event has returned", () => {
   };
 
   loopExtension(host);
-  command?.handler("continue work", context);
+  await command?.handler("continue work", context);
   onCompaction?.({ willRetry: false }, context);
   expect(sendUserMessage).toHaveBeenCalledOnce();
   vi.runOnlyPendingTimers();
@@ -191,7 +192,7 @@ it("continues a loop after the settled event has returned", () => {
   expect(sendUserMessage).toHaveBeenCalledTimes(2);
 });
 
-it("watches detached launches announced after session start", () => {
+it("watches detached launches announced after session start", async () => {
   vi.useFakeTimers();
   const emitter: EventTarget = new globalThis.EventTarget();
   const events: ActivityBus = {
@@ -231,7 +232,7 @@ it("watches detached launches announced after session start", () => {
 
   loopExtension(host);
   callbacks.get("session_start")?.({}, context);
-  command?.handler("check work", context);
+  await command?.handler("check work", context);
   announceTask(events, { name: "job-1", sessionId: "session" });
   vi.runOnlyPendingTimers();
   callbacks.get("agent_settled")?.({}, context);

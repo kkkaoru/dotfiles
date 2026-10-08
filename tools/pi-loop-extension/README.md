@@ -1,7 +1,8 @@
 # pi loop extension
 
 A global [pi extension](https://pi.dev/docs/latest/extensions) for continuing work without
-repeated manual prompts.
+repeated manual prompts, backed by `@earendil-works/pi-durable` (pinned to 1.0.4).
+Requires Pi 1.0.4 or newer. Existing commands and tools are unchanged.
 
 - `start_loop` lets the agent autonomously define a self-paced loop grounded in the user's established
   task. It adopts the current turn without injecting or queuing another initial prompt, then uses
@@ -38,19 +39,39 @@ dispatch when multiple settled handlers observe idle before an earlier asynchron
 `sendUserMessage` call has activated or queued its run. Every `loop_wakeup` tick reapplies the
 self-paced decision instructions around the saved task prompt, so later turns do not depend on the
 model copying those instructions into its own wakeup prompt. A session-scoped
-five-second background poller checks wall-clock deadlines, including overdue jobs after system
-sleep. If pi compacts during an in-flight self-paced tick without retrying it, the extension continues
+five-second Pi Durable task checks wall-clock deadlines, including overdue jobs after system
+sleep. Its wait deadline is checkpointed; Pi Durable owns the waiting task rather than a
+JavaScript interval in the installed extension. If pi compacts during an in-flight self-paced tick without retrying it, the extension continues
 that tick once from the compacted context. Every schedule, pause, resume,
-fire, clear, and ready continuation writes a versioned custom session entry. On `/reload`, the newest entry restores jobs, queued follow-ups, and in-flight ticks. If the loop is
+fire, clear, and ready continuation commits a Pi Durable document before acknowledging tools
+or dispatching prompts. A custom session entry is mirrored after the commit for compatibility
+and forks. On `/reload`, the durable document restores jobs, queued follow-ups, and in-flight ticks;
+old session entries are imported only when no durable document exists. If the loop is
 not paused, overdue jobs fire and ready continuations are delivered. If it is paused, the widget
 stays and a warning tells you to `/loop resume` or `/loop clear`. Live ticks still continue once
 without a terminal tool, then stop.
-Pi's own retry and recurring jobs are left untouched to avoid duplicate runs. `loop_wakeup` uses
-parallel tool execution because its schedule, state and persistence updates are synchronous and it
-does not need to serialize sibling tools. Polling starts only
+Pi's own retry and recurring jobs are left untouched to avoid duplicate runs. Tool acknowledgements
+await the serialized durable commit queue; state changes remain synchronous within a turn.
+Polling starts only
 after a command or tool schedules a job and stops when jobs are paused, cleared, or exhausted. Jobs
 are session-scoped and persist across extension reloads and later resume of the same Pi session, but
 do not migrate to an unrelated session.
+
+## Durable storage and boundaries
+
+Each persisted Pi session uses a sibling `<session-file>.loop-durable/` directory, with
+fsync-enabled JSONL storage and an exclusive `proper-lockfile` lock. Keep it with the session
+when backing up or moving it. No-session SDK runs use MemoryStorage and cannot survive exit.
+A lock conflict, corrupt durable state or storage failure fails closed; it does not silently
+fall back to stale session entries. Fix the storage issue and reopen the session to recover.
+Do not delete a live lock. An abandoned process lock expires through proper-lockfile's stale
+lock handling, not by forcibly taking ownership.
+
+Pi Durable owns loop state and timer tasks, not a second model agent. Model execution, tools,
+permissions, providers and MCP remain in the existing Pi coding-agent session. Closing Pi stops
+execution; reopening that session recovers it. This is not a background daemon. The bridge to
+`sendUserMessage` is not an atomic cross-runtime transaction: an in-flight continuation can be
+replayed after a crash. Do not treat it as exactly-once delivery or blindly retry side effects.
 
 ## Failure safety
 
@@ -86,14 +107,18 @@ From the dotfiles root:
 ./create-symlinks.sh
 ```
 
-This links the extension to `~/.pi/agent/extensions/loop`. Restart pi or run `/reload`.
+This links the extension to `~/.pi/agent/extensions/loop`. First run `bun install` in this
+component, then restart pi or run `/reload`. Existing paused loops remain paused on migration.
 
 ## Quality checks
 
 ```bash
 bun install
 bun run check
+bun run smoke
 ```
 
 Vitest enforces 95% minimum branch, function, line, and statement coverage. Oxlint enables every
-rule category and type-aware checks; Oxfmt is the sole formatter.
+rule category and type-aware checks; Oxfmt is the sole formatter. The offline smoke test
+uses the real Pi SDK, JSONL storage and exclusive lock in a disposable directory; it makes
+no model requests or network calls.

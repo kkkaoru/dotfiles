@@ -1,7 +1,11 @@
 // This TypeScript file is executed with Bun.
 import { afterEach, expect, it, vi } from "vitest";
 import { queryActivity, type ActivityBus } from "../../pi-goal-extension/src/activity.ts";
-import loopExtension, { type LoopCommandDefinition, type LoopExtensionHost } from "../index.ts";
+import {
+  registerLoop as loopExtension,
+  type LoopCommandDefinition,
+  type LoopExtensionHost,
+} from "../index.ts";
 import { LoopRuntime, type LoopContext } from "./runtime.ts";
 import { createLoopState } from "./state.ts";
 
@@ -9,7 +13,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("exposes scoped loop ownership and removes the provider on shutdown", () => {
+it("exposes scoped loop ownership and removes the provider on shutdown", async () => {
   vi.useFakeTimers();
   const emitter: EventTarget = new globalThis.EventTarget();
   const events: ActivityBus = {
@@ -51,12 +55,12 @@ it("exposes scoped loop ownership and removes the provider on shutdown", () => {
   expect(queryActivity(events, "session")).toStrictEqual([
     { source: "loop", ownsContinuation: false, pendingDelivery: false, tasks: [] },
   ]);
-  commands[0]?.handler("task", context);
+  await commands[0]?.handler("task", context);
   expect(queryActivity(events, "session")[0]?.ownsContinuation).toBe(true);
-  commands[0]?.handler("pause", context);
+  await commands[0]?.handler("pause", context);
   expect(queryActivity(events, "session")[0]?.ownsContinuation).toBe(false);
-  commands[0]?.handler("clear", context);
-  commands[0]?.handler("5m task", context);
+  await commands[0]?.handler("clear", context);
+  await commands[0]?.handler("5m task", context);
   expect(queryActivity(events, "session")[0]?.ownsContinuation).toBe(true);
   expect(queryActivity(events, "foreign")).toStrictEqual([]);
   callbacks.get("session_shutdown")?.({}, context);

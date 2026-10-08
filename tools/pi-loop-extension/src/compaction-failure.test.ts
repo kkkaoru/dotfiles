@@ -1,6 +1,10 @@
 // This TypeScript file is executed with Bun.
 import { afterEach, expect, it, vi } from "vitest";
-import loopExtension, { type LoopCommandDefinition, type LoopExtensionHost } from "../index.ts";
+import {
+  registerLoop as loopExtension,
+  type LoopCommandDefinition,
+  type LoopExtensionHost,
+} from "../index.ts";
 import {
   failedAgentRun,
   pauseAfterAgentFailure,
@@ -51,7 +55,7 @@ it("does not pause an unrelated session and retains messages while busy", () => 
   runtime.shutdown();
 });
 
-it("wires the failure lifecycle event and stops recurring timers", () => {
+it("wires the failure lifecycle event and stops recurring timers", async () => {
   vi.useFakeTimers();
   const handlers = new Map<string, (event: unknown, ctx: LoopContext) => void>();
   const commands: LoopCommandDefinition[] = [];
@@ -67,12 +71,12 @@ it("wires the failure lifecycle event and stops recurring timers", () => {
     sendUserMessage,
   };
   loopExtension(host);
-  commands[0]?.handler("1m check", context);
+  await commands[0]?.handler("1m check", context);
   handlers.get("session_compact_failed")?.({ aborted: false }, context);
   handlers.get("agent_settled")?.({}, context);
   vi.advanceTimersByTime(120_000);
   expect(sendUserMessage).toHaveBeenCalledTimes(1);
-  commands[0]?.handler("resume", context);
+  await commands[0]?.handler("resume", context);
   handlers.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "error" }] }, context);
   handlers.get("agent_settled")?.({}, context);
   vi.advanceTimersByTime(120_000);
@@ -80,7 +84,7 @@ it("wires the failure lifecycle event and stops recurring timers", () => {
   handlers.get("session_shutdown")?.({}, context);
 });
 
-it("allows successful native retries before settlement", () => {
+it("allows successful native retries before settlement", async () => {
   vi.useFakeTimers();
   const handlers = new Map<string, (event: unknown, ctx: LoopContext) => void>();
   const commands: LoopCommandDefinition[] = [];
@@ -95,7 +99,7 @@ it("allows successful native retries before settlement", () => {
     registerTool: () => undefined,
     sendUserMessage,
   });
-  commands[0]?.handler("finish", context);
+  await commands[0]?.handler("finish", context);
   handlers.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "error" }] }, context);
   handlers.get("agent_end")?.({ messages: [{ role: "assistant", stopReason: "stop" }] }, context);
   handlers.get("agent_settled")?.({}, context);

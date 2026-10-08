@@ -1,6 +1,8 @@
 // This TypeScript file is executed with Bun.
 import { type Static, Type, type TSchema } from "typebox";
 import { registerAgentLoop, type StartLoopToolDefinition } from "./src/agent-start.ts";
+import { durableHost } from "./src/durable-host.ts";
+import { SYSTEM_SCHEDULER, type Scheduler } from "./src/scheduler.ts";
 import {
   failedAgentRun,
   pauseAfterAgentFailure,
@@ -31,6 +33,7 @@ const completeSchema = Type.Object({
 }) satisfies TSchema;
 
 type LifecycleEvent =
+  | "before_agent_start"
   | "agent_end"
   | "agent_settled"
   | "session_compact"
@@ -89,14 +92,14 @@ export interface LoopCommandDefinition {
   readonly getArgumentCompletions: (
     prefix: string,
   ) => readonly { readonly label: string; readonly value: string }[] | null;
-  readonly handler: (args: string, context: LoopContext) => void;
+  readonly handler: (args: string, context: LoopContext) => void | Promise<void>;
 }
 
 export interface LoopExtensionHost extends LoopHost {
   readonly events?: ActivityBus;
   readonly on: (
     event: LifecycleEvent,
-    handler: (event: unknown, context: LoopContext) => void,
+    handler: (event: unknown, context: LoopContext) => void | Promise<void>,
   ) => void;
   readonly registerCommand: (name: "loop", definition: LoopCommandDefinition) => void;
   readonly registerTool: (definition: LoopToolDefinition) => void;
@@ -168,8 +171,11 @@ function registerLifecycleHandlers(
   });
 }
 
-export default function loopExtension(host: LoopExtensionHost): void {
-  const runtime: LoopRuntime = new LoopRuntime(host);
+export function registerLoop(
+  host: LoopExtensionHost,
+  scheduler: Scheduler = SYSTEM_SCHEDULER,
+): void {
+  const runtime: LoopRuntime = new LoopRuntime(host, scheduler);
   const watched = new WatchedLoopTasks();
 
   host.registerTool({
@@ -188,6 +194,7 @@ export default function loopExtension(host: LoopExtensionHost): void {
     promptSnippet: "Schedule the next useful self-paced /loop tick",
     async execute(_toolCallId, params, _signal, _onUpdate, context) {
       const result = runtime.wakeup(params, context);
+      await host.flush?.();
       return {
         content: [
           {
@@ -215,6 +222,7 @@ export default function loopExtension(host: LoopExtensionHost): void {
     async execute(_toolCallId, params, _signal, _onUpdate, context) {
       const result = runtime.complete(params.reason, context);
       watched.clear();
+      await host.flush?.();
       return {
         content: [{ text: `Completed loop: ${result.reason}`, type: "text" }],
         details: result,
@@ -232,14 +240,23 @@ export default function loopExtension(host: LoopExtensionHost): void {
         ? null
         : matches.map((value: string) => ({ label: value, value }));
     },
-    handler: (args: string, context: LoopContext): void => {
+    handler: async (args: string, context: LoopContext): Promise<void> => {
       runtime.command(args, context);
       if (parseLoopCommand(args).kind === "clear") {
         watched.clear();
       }
+      await host.flush?.();
     },
   });
 
-  registerAgentLoop(host, runtime, () => watched.clear());
+  registerAgentLoop(host, runtime, async () => {
+    watched.clear();
+    await host.flush?.();
+  });
   registerLifecycleHandlers(host, runtime, watched);
+}
+
+export default function loopExtension(host: LoopExtensionHost): void {
+  const durable = durableHost(host);
+  registerLoop(durable.host, durable.scheduler);
 }

@@ -9,6 +9,7 @@ export interface LoopContext {
   readonly sessionManager?: {
     readonly getEntries: () => readonly unknown[];
     readonly getSessionId?: () => string;
+    readonly getSessionFile?: () => string | undefined;
   };
   readonly ui: {
     readonly notify: (message: string, level?: "error" | "info" | "warning") => void;
@@ -23,5 +24,7 @@ export interface UserMessageDeliveryOptions {
 
 export interface LoopHost {
   readonly appendEntry?: (customType: string, data: unknown) => void;
+  readonly flush?: () => Promise<void>;
+  readonly cancelDelivery?: () => void;
   readonly sendUserMessage: (content: string, options?: UserMessageDeliveryOptions) => void;
 }
