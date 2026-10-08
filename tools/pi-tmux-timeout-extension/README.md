@@ -3,6 +3,28 @@
 A global [pi extension](https://pi.dev/docs/latest/extensions) that keeps pi responsive while
 long-running commands continue in detached tmux sessions.
 
+## Pi Durable boundary (Pi 1.0.4)
+
+The production entry point uses `@earendil-works/pi-durable` for a session-owned journal
+and checkpointed reconciliation waits. It stores records beside the Pi session file in
+`<session.jsonl>.tmux-durable`, uses fsync and an exclusive lock, and fails closed if storage
+or the lock fails. In-memory Pi sessions use in-memory Durable storage. Legacy launch/display
+entries are imported on first open; custom session entries remain a compatibility mirror.
+Launch intent is committed before executing the tmux wrapper; completion is committed before
+notification. Delivered records and artifact markers suppress normal replay. A crash between
+Pi accepting a notification and its acknowledgement may still cause a duplicate notice:
+this is not an exactly-once message transport.
+
+Durable does **not** replace the OS process boundary: tmux keeps commands alive after Pi exits,
+provides completion signals, and runs hard deadlines. Restoring state only reconciles existing
+jobs; it never re-executes a command, including a launch whose outcome is uncertain after a crash.
+Session ID namespaces, artifact checks and monotonically reserved launch IDs remain authoritative.
+The short in-process delivery retries and daily artifact cleanup are not durable user workloads.
+
+This uses the released extension API (`registerTool`, `registerCommand`, lifecycle events), not
+an unpublished experimental plugin entry point. Run `bun install` here after updating, then
+`/reload` or restart Pi; no global Pi upgrade or user-job restart is required.
+
 ## Behavior
 
 - Registers the parallel `tmux_exec` tool for explicitly starting a command in detached tmux.
@@ -62,7 +84,7 @@ long-running commands continue in detached tmux sessions.
 - Registers `/tmux-tasks [status|clear|hide|show|reset]` for session-scoped display control. `clear`
   persistently dismisses currently visible rows without stopping their jobs or completion monitoring;
   `hide` and `show` control the whole widget, and `reset` restores all tracked rows. The state survives
-  `/reload` and session resume through a custom session entry.
+  `/reload` and session resume through the Durable journal and mirrored custom session entry.
 - Subscribes to a per-command `tmux wait-for` completion channel and starts an immediate continuation
   when tmux signals completion; minute reconciliation also covers missed signals, orphans, and overdue
   check-ins.
@@ -191,4 +213,13 @@ This links the extension to `~/.pi/agent/extensions/tmux-timeout`. Restart pi or
 ```bash
 bun install
 bun run check
+bun run smoke
 ```
+
+`smoke` disables network access, loads the extension with the installed native SDK, and uses
+an isolated real tmux job and real Durable JSONL storage to verify lock exclusivity, recovery
+and notification deduplication. It only cleans its own fixture namespace.
+
+Verified together with `pi-loop-extension` and `pi-goal-extension`: 132 + 93 + 101 unit tests,
+all component checks/coverage gates and all three offline smoke scripts pass on Pi 1.0.4.
+Tmux line coverage is 99.88%, branch coverage 98.61%. No model calls or user workloads are used.

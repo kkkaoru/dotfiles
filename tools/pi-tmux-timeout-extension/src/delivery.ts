@@ -22,6 +22,7 @@ export interface CompletionDeliveryContext {
   readonly sessionManager?: {
     readonly getEntries: () => readonly unknown[];
     readonly getSessionId: () => string;
+    readonly getSessionFile?: () => string | undefined;
   };
   readonly ui: {
     readonly notify: (message: string, level?: "error" | "info" | "warning") => void;

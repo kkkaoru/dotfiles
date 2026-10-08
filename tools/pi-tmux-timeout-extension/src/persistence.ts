@@ -7,6 +7,8 @@ import type { TmuxLaunch } from "./tmux.ts";
 export const DELIVERY_MARKER_FILENAME = "completion-delivered";
 export const LAUNCH_METADATA_FILENAME = "launch.json";
 export const TMUX_SESSION_ENTRY_TYPE = "pi-tmux-launch-v2";
+export const TMUX_DELIVERED_ENTRY_TYPE = "pi-tmux-delivered-v1";
+export const TMUX_COMPLETED_ENTRY_TYPE = "pi-tmux-completed-v1";
 
 interface PersistedTmuxLaunch {
   readonly completionChannel: string;
@@ -218,6 +220,24 @@ export function recoverSessionTmuxLaunches(
   operations: PersistenceOperations = SYSTEM_OPERATIONS,
 ): readonly TmuxLaunch[] {
   const launches = new Map<string, TmuxLaunch>();
+  const delivered = new Set(
+    entries.flatMap((entry): string[] => {
+      if (
+        typeof entry !== "object" ||
+        entry === null ||
+        !("customType" in entry) ||
+        entry.customType !== TMUX_DELIVERED_ENTRY_TYPE ||
+        !("data" in entry) ||
+        typeof entry.data !== "object" ||
+        entry.data === null ||
+        !("sessionName" in entry.data) ||
+        typeof entry.data.sessionName !== "string"
+      ) {
+        return [];
+      }
+      return [entry.data.sessionName];
+    }),
+  );
   const recovered: readonly TmuxLaunch[] = entries.flatMap(
     (entry: unknown): readonly TmuxLaunch[] => {
       const launch: TmuxLaunch | undefined = launchFromSessionEntry(entry);
@@ -226,11 +246,26 @@ export function recoverSessionTmuxLaunches(
   );
   for (const launch of recovered) {
     const artifactDirectory: string = path.dirname(launch.statusPath);
-    if (operations.exists(artifactDirectory) && !operations.exists(deliveryMarkerPath(launch))) {
+    if (
+      !delivered.has(launch.sessionName) &&
+      operations.exists(artifactDirectory) &&
+      !operations.exists(deliveryMarkerPath(launch))
+    ) {
       launches.set(launch.sessionName, launch);
     }
   }
   return [...launches.values()];
+}
+
+export function nextSessionTmuxLaunchId(entries: readonly unknown[], namespace: string): number {
+  const ids = entries.flatMap((entry): number[] => {
+    const launch = launchFromSessionEntry(entry);
+    if (launch?.socketName !== `pi-tmux-${namespace}`) {
+      return [];
+    }
+    return [Number(launch.sessionName.split("-").at(-1))];
+  });
+  return Math.max(0, ...ids) + 1;
 }
 
 export function nextTmuxLaunchId(options: RecoveryOptions): number {

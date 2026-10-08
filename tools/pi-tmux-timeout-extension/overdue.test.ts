@@ -1,6 +1,10 @@
 // This TypeScript file is executed with Bun.
 import { afterEach, expect, it, vi } from "vitest";
-import tmuxTimeoutExtension, { type TmuxExtensionHost, type TmuxToolDefinition } from "./index.ts";
+import {
+  registerTmux as tmuxTimeoutExtension,
+  type TmuxExtensionHost,
+  type TmuxToolDefinition,
+} from "./index.ts";
 import {
   CompletionDelivery,
   type CompletionDeliveryContext,

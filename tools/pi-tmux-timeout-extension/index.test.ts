@@ -1,6 +1,7 @@
 // This TypeScript file is executed with Bun.
 import { afterEach, expect, it, vi } from "vitest";
-import tmuxTimeoutExtension, {
+import {
+  registerTmux as tmuxTimeoutExtension,
   CompletionDelivery,
   type TmuxExtensionHost,
   type TmuxToolDefinition,
@@ -328,6 +329,7 @@ it("delivers a real completion callback after lifecycle handlers return", async 
   const handlers = new Map<string, (event: unknown, context?: CompletionDeliveryContext) => void>();
   const sendUserMessage = vi.fn<TmuxExtensionHost["sendUserMessage"]>();
   const host: TmuxExtensionHost = {
+    complete: (_completion, deliver) => deliver(),
     exec: vi.fn<TmuxExtensionHost["exec"]>().mockResolvedValue({
       code: 0,
       stderr: "",
@@ -429,9 +431,9 @@ it("ignores lifecycle context updates when Pi supplies no context", () => {
   handlers.get("session_shutdown")?.({});
 });
 
-it("automatically rewrites and event-subscribes potentially blocking bash calls", () => {
+it("automatically rewrites and event-subscribes potentially blocking bash calls", async () => {
   let onShutdown: ((event: unknown) => void) | undefined;
-  let onToolCall: ((event: unknown) => void) | undefined;
+  let onToolCall: ((event: unknown) => unknown) | undefined;
   let onToolResult: ((event: unknown) => void) | undefined;
   const subscribe = vi.fn((): (() => void) => (): void => undefined);
   const host: TmuxExtensionHost = {
@@ -457,7 +459,7 @@ it("automatically rewrites and event-subscribes potentially blocking bash calls"
   if (onToolCall === undefined || onToolResult === undefined) {
     throw new Error("Tmux extension tool handlers were not registered");
   }
-  const handleToolCall: (event: unknown) => void = onToolCall;
+  const handleToolCall: (event: unknown) => unknown = onToolCall;
   const handleToolResult: (event: unknown) => void = onToolResult;
   [
     null,
@@ -469,11 +471,9 @@ it("automatically rewrites and event-subscribes potentially blocking bash calls"
     { input: { command: 42 }, toolCallId: "bad-3", toolName: "bash" },
     { input: { command: "echo ok", timeout: "slow" }, toolCallId: "bad-4", toolName: "bash" },
     { input: { command: "echo ok" }, toolCallId: "short", toolName: "bash" },
-  ].map((event: unknown): void => handleToolCall(event));
-  [
-    { input, toolCallId: "call-1", toolName: "bash" },
-    { input: failedInput, toolCallId: "call-2", toolName: "bash" },
-  ].map((event: unknown): void => handleToolCall(event));
+  ].map((event: unknown): unknown => handleToolCall(event));
+  await handleToolCall({ input, toolCallId: "call-1", toolName: "bash" });
+  await handleToolCall({ input: failedInput, toolCallId: "call-2", toolName: "bash" });
   [
     {},
     { isError: false, toolCallId: "missing" },

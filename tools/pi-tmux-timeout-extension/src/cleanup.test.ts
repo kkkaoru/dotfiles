@@ -134,8 +134,7 @@ it("runs a due cleanup once and updates the shared throttle stamp", async () => 
 });
 
 it("checks a shared daily stamp without scanning on every reload", async () => {
-  const unref = vi.fn<CleanupTimer["unref"]>();
-  const timer: CleanupTimer = { cancel: vi.fn(), unref };
+  const timer: CleanupTimer = { cancel: vi.fn(), unref: vi.fn() };
   const clear = vi.fn<CleanupScheduler["clear"]>();
   const schedule = vi.fn<CleanupScheduler["schedule"]>((callback): CleanupTimer => {
     callback();
@@ -154,14 +153,23 @@ it("checks a shared daily stamp without scanning on every reload", async () => {
     scheduler: { clear, schedule },
   });
 
+  cleaner.stop();
   await setImmediate();
+  expect(schedule).not.toHaveBeenCalled();
+  cleaner.start();
+  cleaner.start();
+  await setImmediate();
+  cleaner.stop();
   cleaner.stop();
 
   expect(schedule).toHaveBeenCalledWith(
     expect.any(Function),
     ARTIFACT_CLEANUP_INTERVAL_MILLISECONDS,
   );
-  expect(unref).toHaveBeenCalledOnce();
+  expect(timer.unref).toHaveBeenCalledOnce();
   expect(readDirectory).not.toHaveBeenCalled();
-  expect(clear).toHaveBeenCalledWith(timer);
+  expect(clear.mock.calls).toStrictEqual([[timer]]);
+  cleaner.start();
+  expect(schedule).toHaveBeenCalledTimes(2);
+  cleaner.stop();
 });

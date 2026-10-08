@@ -43,6 +43,7 @@ export interface TmuxLaunch {
 
 export interface TmuxRuntimeOptions {
   readonly events?: CompletionEvents;
+  readonly monitor?: (reconcile: () => void) => () => void;
   readonly onActiveChange?: (launches: readonly TmuxLaunch[]) => void;
   readonly onComplete: (completion: Completion) => void;
   readonly onOverdue?: (launches: readonly TmuxLaunch[]) => void;
@@ -118,7 +119,7 @@ export function createTmuxLaunch(input: CreateTmuxLaunchInput): TmuxLaunch {
     taskCommand: command,
   };
   const metadataPath: string = path.join(outputDirectory, LAUNCH_METADATA_FILENAME);
-  const launchCommand = `mkdir -p ${shellQuote(outputDirectory)} && tmux -L ${shellQuote(socketName)} new-session -d -s ${shellQuote(sessionName)} -- sh -lc ${shellQuote(detachedScript)} && printf '%s' ${shellQuote(serializeLaunchMetadata(launch))} > ${shellQuote(metadataPath)} && printf '%s\\n' ${shellQuote(message)}`;
+  const launchCommand = `umask 077; mkdir -p ${shellQuote(outputDirectory)} && printf '%s' ${shellQuote(serializeLaunchMetadata(launch))} > ${shellQuote(metadataPath)} && tmux -L ${shellQuote(socketName)} new-session -d -s ${shellQuote(sessionName)} -- sh -lc ${shellQuote(detachedScript)} && printf '%s\\n' ${shellQuote(message)}`;
   return { ...launch, command: launchCommand };
 }
 
@@ -136,6 +137,12 @@ function launchIdForNamespace(launch: TmuxLaunch, namespace: string): number | u
   return Number(match[1]);
 }
 
+function scheduleReconciliation(reconcile: () => void): () => void {
+  const timer = globalThis.setInterval(reconcile, RECONCILIATION_INTERVAL_MILLISECONDS);
+  timer.unref();
+  return (): void => globalThis.clearInterval(timer);
+}
+
 export class TmuxRuntime {
   readonly #active = new Map<string, TmuxLaunch>();
   readonly #onActiveChange: (launches: readonly TmuxLaunch[]) => void;
@@ -145,12 +152,14 @@ export class TmuxRuntime {
   readonly #overdueReported = new Map<string, number>();
   readonly #waiter: CompletionWaiter;
   #nextId = 1;
-  #reconciliationTimer: NodeJS.Timeout | undefined;
+  #reconciliationTimer: (() => void) | undefined;
+  readonly #monitor: (reconcile: () => void) => () => void;
   #namespace = tmuxSessionNamespace(randomUUID());
 
   constructor(options: TmuxRuntimeOptions) {
     this.#onActiveChange = options.onActiveChange ?? ((): void => undefined);
     this.#onComplete = options.onComplete;
+    this.#monitor = options.monitor ?? scheduleReconciliation;
     this.#onTrack = options.onTrack ?? ((): void => undefined);
     this.#onOverdue = options.onOverdue ?? ((): void => undefined);
     this.#waiter = new CompletionWaiter({
@@ -277,7 +286,7 @@ export class TmuxRuntime {
   #updateReconciliationTimer(): void {
     if (this.#active.size === 0) {
       if (this.#reconciliationTimer !== undefined) {
-        globalThis.clearInterval(this.#reconciliationTimer);
+        this.#reconciliationTimer();
         this.#reconciliationTimer = undefined;
       }
       return;
@@ -285,10 +294,6 @@ export class TmuxRuntime {
     if (this.#reconciliationTimer !== undefined) {
       return;
     }
-    this.#reconciliationTimer = globalThis.setInterval(
-      (): void => this.reconcile(),
-      RECONCILIATION_INTERVAL_MILLISECONDS,
-    );
-    this.#reconciliationTimer.unref();
+    this.#reconciliationTimer = this.#monitor((): void => this.reconcile());
   }
 }

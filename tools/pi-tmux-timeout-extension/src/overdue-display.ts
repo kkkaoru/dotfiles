@@ -5,7 +5,11 @@ import {
   recoverActiveTaskDisplayState,
 } from "./active-display.ts";
 import type { CompletionDelivery, CompletionDeliveryContext } from "./delivery.ts";
-import { recoverSessionTmuxLaunches, type RecoveryOptions } from "./persistence.ts";
+import {
+  recoverSessionTmuxLaunches,
+  nextSessionTmuxLaunchId,
+  type RecoveryOptions,
+} from "./persistence.ts";
 import type { TmuxLaunch, TmuxRuntime } from "./tmux.ts";
 
 interface DisplaySync {
@@ -50,7 +54,7 @@ export function restoreOverdue(sync: RestoreSync): void {
       namespace,
       sync.recovery === false ? undefined : sync.recovery?.operations,
     ),
-    1,
+    nextSessionTmuxLaunchId(sync.sessionManager.getEntries(), namespace),
     state.acknowledgedAt,
   );
   sync.delivery.deferAfterCompaction(sync.context);

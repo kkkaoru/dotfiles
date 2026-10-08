@@ -12,6 +12,16 @@ function resultText(launch: TmuxLaunch): string {
   ].join("\n");
 }
 
+function launchError(result: Awaited<ReturnType<TmuxExtensionHost["exec"]>>): string {
+  return (
+    result.stderr.trim() ||
+    result.stdout.trim() ||
+    (result.killed === true
+      ? `tmux launch timed out after ${String(TMUX_LAUNCH_TIMEOUT_MILLISECONDS)}ms`
+      : "Failed to start tmux command")
+  );
+}
+
 export function registerTmuxTool(host: TmuxExtensionHost, runtime: TmuxRuntime): void {
   host.registerTool({
     description:
@@ -34,6 +44,7 @@ export function registerTmuxTool(host: TmuxExtensionHost, runtime: TmuxRuntime):
           : { estimatedDurationSeconds: params.estimatedDurationSeconds }),
         ...(params.timeoutSeconds === undefined ? {} : { timeoutSeconds: params.timeoutSeconds }),
       });
+      await host.prepareLaunch?.(launch);
       const options: Parameters<TmuxExtensionHost["exec"]>[2] =
         signal === undefined
           ? { timeout: TMUX_LAUNCH_TIMEOUT_MILLISECONDS }
@@ -46,15 +57,10 @@ export function registerTmuxTool(host: TmuxExtensionHost, runtime: TmuxRuntime):
       // Pi's exec reports a signalled kill as exit code 0 with killed=true.
       // Treat that as a failed launch instead of a started task.
       if (result.code !== 0 || result.killed === true) {
-        throw new Error(
-          result.stderr.trim() ||
-            result.stdout.trim() ||
-            (result.killed === true
-              ? `tmux launch timed out after ${String(TMUX_LAUNCH_TIMEOUT_MILLISECONDS)}ms`
-              : "Failed to start tmux command"),
-        );
+        throw new Error(launchError(result));
       }
       runtime.trackLaunch(launch);
+      await host.flush?.();
       return { content: [{ text: resultText(launch), type: "text" }], details: launch };
     },
   });

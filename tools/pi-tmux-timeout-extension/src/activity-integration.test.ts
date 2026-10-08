@@ -5,7 +5,11 @@ import {
   subscribeTasks,
   type ActivityBus,
 } from "../../pi-goal-extension/src/activity.ts";
-import tmuxTimeoutExtension, { type TmuxExtensionHost, type TmuxToolDefinition } from "../index.ts";
+import {
+  registerTmux as tmuxTimeoutExtension,
+  type TmuxExtensionHost,
+  type TmuxToolDefinition,
+} from "../index.ts";
 import type { CompletionDeliveryContext } from "./delivery.ts";
 
 interface Harness {

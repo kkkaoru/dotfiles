@@ -135,15 +135,21 @@ export async function removeExpiredArtifactsIfDue(options?: ArtifactCleanupOptio
 }
 
 export class ArtifactCleaner {
-  #cleanup: Promise<void>;
+  #cleanup: Promise<void> = Promise.resolve();
   readonly #options: ArtifactCleanupOptions;
   readonly #scheduler: CleanupScheduler;
-  readonly #timer: CleanupTimer;
+  #timer: CleanupTimer | undefined;
 
   constructor(options?: ArtifactCleanerOptions) {
     this.#options = options ?? {};
     this.#scheduler = options?.scheduler ?? SYSTEM_SCHEDULER;
-    this.#cleanup = removeExpiredArtifactsIfDue(this.#options);
+  }
+
+  start(): void {
+    if (this.#timer !== undefined) {
+      return;
+    }
+    this.#cleanup = this.#cleanup.then(async () => removeExpiredArtifactsIfDue(this.#options));
     this.#timer = this.#scheduler.schedule((): void => {
       this.#cleanup = this.#cleanup.then(async (): Promise<void> =>
         removeExpiredArtifactsIfDue(this.#options),
@@ -153,6 +159,10 @@ export class ArtifactCleaner {
   }
 
   stop(): void {
+    if (this.#timer === undefined) {
+      return;
+    }
     this.#scheduler.clear(this.#timer);
+    this.#timer = undefined;
   }
 }
