@@ -15,6 +15,7 @@ import {
   type ToolName,
   type TurnEndedUpdate,
 } from "@cursor/sdk";
+import { getCurrentTools, normalizeContext } from "@earendil-works/pi-ai";
 import type {
   Api,
   AssistantMessageEventStream,
@@ -183,6 +184,7 @@ class CursorSession {
   private output: CursorOutput | undefined;
   private abortCleanup: (() => void) | undefined;
   private currentSignal: AbortSignal | undefined;
+  private providerStreamEvent: SimpleStreamOptions["onProviderStreamEvent"];
   private toolBatchTimer: ReturnType<typeof setTimeout> | undefined;
   private disposed = false;
   private settle!: Promise<void>;
@@ -208,7 +210,9 @@ class CursorSession {
     await this.fail(reason);
   }
 
-  attach(output: CursorOutput, signal: AbortSignal | undefined): void {
+  attach(output: CursorOutput, options: SimpleStreamOptions | undefined): void {
+    const signal = options?.signal;
+    this.providerStreamEvent = options?.onProviderStreamEvent;
     this.detachOutput();
     this.output = output;
     this.currentSignal = signal;
@@ -225,7 +229,10 @@ class CursorSession {
     await claimIndependentSession(this);
     if (this.disposed) return;
     const customTools = Object.fromEntries(
-      (this.context.tools ?? []).map((tool) => [tool.name, this.createCustomTool(tool)]),
+      getCurrentTools(normalizeContext(this.context).messages).map((tool) => [
+        tool.name,
+        this.createCustomTool(tool),
+      ]),
     );
     const model = await cursorModelSelection(
       this.model.id,
@@ -265,7 +272,10 @@ class CursorSession {
       return;
     }
     this.run = await this.agent.send(buildCursorMessage(this.context), {
-      onDelta: ({ update }) => this.handleDelta(update),
+      onDelta: async ({ update }) => {
+        await this.providerStreamEvent?.(update, this.model);
+        this.handleDelta(update);
+      },
       local: { force: true },
     });
     const result = await this.run.wait();
@@ -477,7 +487,7 @@ export function streamCursor(
   const toolResults = findToolResults(context);
   const pendingSession = findPendingSession(toolResults);
   const session = pendingSession ?? new CursorSession(context, model, options);
-  session.attach(output, options?.signal);
+  session.attach(output, options);
 
   const operation = pendingSession
     ? Promise.resolve(session.resolveToolResults(toolResults))

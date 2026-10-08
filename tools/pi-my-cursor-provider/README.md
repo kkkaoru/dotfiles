@@ -8,7 +8,9 @@ Minimal Cursor agent bridge for pi and Claudex. It preserves the existing `curso
 - Serializes independent Cursor requests so a new `send()` waits until the previous local agent has been cancelled and disposed. This avoids Cursor's `AgentBusyError` after abort or a follow-up prompt.
 - Isolates each pi process onto its own Cursor local-agent store under `~/.cache/pi-my-cursor-provider/agents/<pid>`, gives every independent request a unique `pi-cursor-<pid>-<uuid>` agent id, and sends with `local.force`. Concurrent `cursor/auto` sessions therefore do not reuse one busy local agent across repositories.
 - Keeps a live Cursor run only across the tool-result continuation belonging to that same request.
-- Converts pi `Context.tools` schemas into Cursor SDK `customTools`.
+- Resolves Pi 1.0.4 transcript tool declarations (including additions/removals) into Cursor SDK `customTools`; legacy `Context.tools` inputs are normalized first.
+- Replays native system-message/section updates using Pi's transcript helpers, instead of misclassifying them as tool results.
+- Awaits Pi's `onProviderStreamEvent` hook for each SDK delta before normalization. Cursor SDK does not expose raw HTTP request bodies or response headers, so those hooks are not fabricated.
 - Returns Cursor custom-tool callbacks as normal pi tool calls and resolves them from the next `ToolResultMessage` context.
 - Allows Cursor `mcp`, `webSearch`, `semSearch`, and `shell`. `mcp` keeps the pi custom-tool bridge; `webSearch` and `semSearch` have no pi equivalent; `shell` keeps Cursor-native command execution. Native `task` and `await` stay disabled so those SDK-internal tools cannot stall the TUI on Working...
 - Discovers the authenticated Cursor model catalog and provides a multi-model fallback catalog when discovery is unavailable.
@@ -16,6 +18,8 @@ Minimal Cursor agent bridge for pi and Claudex. It preserves the existing `curso
 - Selects Cursor GPT-5.6 Luna's 272K context variant and enables its `fast` parameter.
 - Advertises Cursor models to pi at 80% of their real context window (256k models report 204.8k; Luna's 272K variant reports 217.6K) so pi's native auto-compaction fires before requests can reach Cursor's hard limit, where Cursor returns usage-guideline blocks instead of recognizable overflow errors.
 - Compaction summaries are routed through an off-Cursor fallback chain — `ollama-cloud/kimi-k3` → `github-copilot/gemini-3.7-flash` → `commandcode/gemini-3.7-flash` — because Cursor's moderation frequently blocks pi's whole-conversation summarization payloads. Each candidate is checked for configured auth and retried down the chain on failure; when the whole chain is unavailable, pi's default compaction runs instead. Successful fallback summaries retain a bounded ledger of original user requests, just like other providers' compaction.
+
+Requires Pi 1.0.4 or newer. Run `bun install` in this package and reload/restart Pi after updating.
 
 A Cursor API key must be available through pi `/login`, `CURSOR_API_KEY`, or request-level `--api-key` resolution.
 

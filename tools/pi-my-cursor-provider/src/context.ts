@@ -1,3 +1,5 @@
+// This file runs with Bun.
+import { getCurrentSystemPrompt, normalizeContext } from "@earendil-works/pi-ai";
 import type { SDKImage, SDKJsonValue, SDKUserMessage } from "@cursor/sdk";
 import type { Context, ImageContent, Message, ToolResultMessage } from "@earendil-works/pi-ai";
 
@@ -30,7 +32,10 @@ function contentText(content: Message["content"], state: TranscriptState): strin
     .join("\n");
 }
 
-function formatMessage(message: Message, state: TranscriptState): string {
+function formatMessage(
+  message: Exclude<Message, { role: "system" }>,
+  state: TranscriptState,
+): string {
   if (message.role === "user") return `USER:\n${contentText(message.content, state)}`;
   if (message.role === "assistant") return `ASSISTANT:\n${contentText(message.content, state)}`;
   const status = message.isError ? "error" : "success";
@@ -39,8 +44,12 @@ function formatMessage(message: Message, state: TranscriptState): string {
 
 export function buildCursorMessage(context: Context): SDKUserMessage {
   const state: TranscriptState = { images: [] };
-  const sections = context.messages.map((message) => formatMessage(message, state));
-  if (context.systemPrompt) sections.unshift(`SYSTEM INSTRUCTIONS:\n${context.systemPrompt}`);
+  const transcript = normalizeContext(context);
+  const sections = transcript.messages
+    .filter((message) => message.role !== "system")
+    .map((message) => formatMessage(message, state));
+  const systemPrompt = getCurrentSystemPrompt(transcript.messages);
+  if (systemPrompt) sections.unshift(`SYSTEM INSTRUCTIONS:\n${systemPrompt}`);
   sections.push("Continue from the transcript above. Follow the latest user request.");
 
   return {

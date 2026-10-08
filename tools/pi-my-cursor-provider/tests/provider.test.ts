@@ -177,6 +177,27 @@ test("streams Cursor text with usage through a fresh agent", async () => {
   expect(captured.sendOptions?.local).toStrictEqual({ force: true });
 });
 
+test("awaits provider event instrumentation before consuming SDK deltas", async () => {
+  const seen: string[] = [];
+  const onProviderStreamEvent = vi.fn(async () => {
+    await Promise.resolve();
+    seen.push("observed");
+  });
+  installScenario({
+    async onSend(options) {
+      await options?.onDelta?.({ update: { type: "text-delta", text: "hello" } });
+      expect(seen).toStrictEqual(["observed"]);
+      return result("hello");
+    },
+  });
+  const { streamCursor } = await import("../src/provider.ts");
+  await collect(streamCursor(MODEL, baseContext(), { apiKey: "key", onProviderStreamEvent }));
+  expect(onProviderStreamEvent).toHaveBeenCalledWith(
+    { type: "text-delta", text: "hello" },
+    expect.objectContaining({ provider: "cursor", id: "auto" }),
+  );
+});
+
 test("forwards explicit-model effort with the live default variant", async () => {
   installScenario({
     async onSend() {
@@ -235,7 +256,8 @@ test("bridges custom tools and continues the same live run with its result", asy
     },
   });
   const { streamCursor } = await import("../src/provider.ts");
-  const context: Context = {
+  const { normalizeContext } = await import("@earendil-works/pi-ai");
+  const context: Context = normalizeContext({
     ...baseContext(),
     tools: [
       {
@@ -248,7 +270,7 @@ test("bridges custom tools and continues the same live run with its result", asy
         },
       },
     ],
-  };
+  });
 
   const firstEvents = await collect(streamCursor(MODEL, context, { apiKey: "key" }));
   expect(firstEvents.map((event) => event.type)).toStrictEqual([
