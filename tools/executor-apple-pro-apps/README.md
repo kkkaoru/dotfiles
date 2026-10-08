@@ -1,7 +1,7 @@
 # Apple Pro Apps — native Swift MCP through Executor
 
-**Machine integration first, UI last.** The Swift source catalog now defines 34 typed
-MCP tools, including the editing expansion, for the existing Executor Desktop runtime.
+**Machine integration first, UI last.** The Swift source catalog now defines 48 typed
+MCP tools, including the editing expansion and background Accessibility UI tools, for the existing Executor Desktop runtime.
 See the verification report for the most recently confirmed deployed catalog. The separate optional
 Peekaboo integration handles UI gaps. There is no new Shell implementation,
 parallel Executor runtime, permanent daemon, model-provider account or API key.
@@ -10,6 +10,161 @@ parallel Executor runtime, permanent daemon, model-provider account or API key.
 results, current quality gates and remaining application-specific verification. The user's native-boundary approval is
 scoped in [NATIVE-BOUNDARIES.md](NATIVE-BOUNDARIES.md); it does not waive quality
 checks. Registration is not production sign-off.
+
+## Single-pass part rendering and FCPXML export (development, 2026-10-03)
+
+`media_edit` with `video.encoding` renders like the FFmpeg part renderer in one
+pass: AVAssetReader composes the clips (fit/fill), Core Image applies color, timed
+blur/black masks, titles and `styledCaptions`, and AVAssetWriter encodes once with
+hardware H.264/HEVC (average bit rate, optional B-frames off, BT.709 tags, fast start,
+15360 timescale at 30 fps). Output is video-only. Variable-rate sources are filled to
+a constant cadence like FFmpeg's `fps` filter (round to nearest, hold the tail), so
+the frame count equals the plan exactly. Frames are rendered back into their own
+color space, so pixel values round-trip like FFmpeg (no color management).
+
+`styledCaptions` are positioned cues (`x` block center, `bottom` block bottom) with a
+`captionAppearance`: exact PostScript font, libass-compatible `assFontSize` (OS/2
+winAscent+winDescent), fill over an inner border over an outer rim. On a real
+1080×1920 part with 58 ASS captions the fill bounding box matched libass within
+10 px horizontally and 2 px vertically. `media_edit_batch` renders 1–32 requests in
+parallel children (default concurrency 3).
+
+Every video render also writes `<outputName>.fcpxml` (FCPXML 1.11: spine clips,
+Basic Title captions/titles with lane allocation, masks as markers) and validates it
+against the installed Final Cut Pro DTD. Unrepresentable recipes report a reason.
+
+Measured on 30 real parts (315.6 s of output, 1258 captions), 3 at a time: FFmpeg
+`part_render` 38.3 s, native debug build 33.6 s including FCPXML export/validation.
+On a variable-rate source both native renderers (export session and single pass,
+which match each other) show source frames one output frame later than FFmpeg.
+Native files were ~26% larger at the same average bit rate because FFmpeg's
+maxrate/bufsize cap is not available through AVFoundation's typed settings.
+
+### Post-effects foreground video (development, not deployed)
+
+`video.foregroundVideoPath` requires `video.encoding` and composites one local
+full-canvas video after color, masks and text, in the same hardware encode. Unlike
+`additionalVideo`, source-caption masks therefore cannot blur the new foreground.
+Source alpha is honored; opaque pixels cover the processed base, and audio is
+ignored. No resizing, rotation, retiming, repetition or inferred alignment is
+performed: dimensions, track extent, nominal rate, every decoded PTS, frame count
+and end-of-stream must agree with the output clock. Decoders may omit sample
+duration; the exact PTS sequence and track end remain mandatory. Only one decoded
+foreground frame is retained at a time, and the reader is cancelled on early exit.
+
+This is a delivery compositor, not editable-title interchange. Such recipes
+report FCPXML as unsupported rather than silently omitting the foreground. Keep
+editable Motion titles in a separately validated editing project. Full native
+quality gates and actual Motion acceptance remain required before deployment.
+
+## Local face geometry (development, not deployed)
+
+`video_head_detect` measures face and whole-person rectangles on 1–8 explicitly
+selected full video frames using on-device Vision. It reuses the OCR decoder's
+16-megapixel budget, orientation and exact-time requests, and reports actual
+sample times. At most 32 rectangles per category per frame are returned; empty
+arrays remain missing detections, not invented tracks. Rectangles use top-left
+display pixels. No subject is selected, no hairline is inferred, and no gap is
+interpolated. Caption layout must separately bind source clocks and canvas fit,
+select the intended subject, estimate head clearance and verify rendered bounds.
+This candidate is not yet a deployed tool or real-video placement acceptance.
+
+## Native background UI (development, 2026-10-03)
+
+Twelve tools move routine Peekaboo work into this package, limited to the five
+supported apps' documented bundle IDs: `ui_windows`, `ui_inspect`, `ui_menu_list`,
+`ui_menu_select`, `ui_perform`, `ui_set_value`, `ui_wait`, `ui_capture`,
+`input_source_status`, `input_source_select`, `app_launch` and `app_quit`.
+Each call runs in a disposable `ui-native` child process (Accessibility handles never
+outlive it) with a bounded deadline and a 3-second AX messaging timeout.
+
+- Background by default: no activation, focus change, keyboard or pointer
+  synthesis. Every result reports `focus.frontmostBefore/After/Changed`.
+- Text is written as AXValue, so keyboard layouts and input methods do not apply.
+- Locators are typed (`path`, `role`, `identifier`, `title`, `containsText`, …);
+  ambiguity fails instead of guessing. Writes are read back (`effectVerified`).
+- `ui_capture` uses ScreenCaptureKit for background/occluded windows and writes a
+  new private PNG; it needs Screen Recording for the Executor host.
+- Keyboard-only UI (for example a Save panel's Go to Folder sheet) is out of scope;
+  Peekaboo remains an auxiliary fallback for explained gaps.
+
+The interop boundary is scoped in [NATIVE-BOUNDARIES.md](NATIVE-BOUNDARIES.md).
+Tests use a synthetic accessory fixture (`Tests/UIFixture`), never an Apple app.
+
+## Final Cut Pro live timeline (2026-10-08)
+
+Seven typed tools drive the project open in Final Cut Pro's timeline through the
+same `ui-native` child: `fcp_timeline_read`, `fcp_timeline_select`,
+`fcp_project_open`, `fcp_playhead_move`, `fcp_playhead_seek`, `fcp_timeline_edit`
+(`bladeAll`, `delete`, `deselectAll`, `setClipRange`) and `fcp_export`.
+
+- Timeline clips are the timeline `AXLayoutArea`'s `AXLayoutItem` children; the
+  playhead is its `AXValueIndicator`. Selection writes `AXSelectedChildren`.
+- Seeking needs no keyboard: it hops edit points that do not pass the target and
+  then steps single frames through the Mark menu, reading the playhead back after
+  every step (about 1 ms per frame measured). Blade All at the playhead and Delete
+  of the selection are frame exact. Undo is not available from the background.
+- `fcp_export` is the only operation that activates an app (`allowForeground:
+  true` required): Final Cut Pro disables Share while inactive. It drives Share >
+  Export File, sets format/codec and "Save only", navigates the Save panel from
+  the sidebar home item through the column browser (localized system folder names
+  come from `SystemFolderLocalizations`), saves a new file inside the home folder
+  and restores the previous frontmost app, also after failures. Rendering
+  continues afterwards; verify the file separately.
+- Japanese menu titles are verified on Final Cut Pro 12.3; English titles are
+  documented but reported as `vocabularyVerified: false`.
+
+Effects, parameters and keyframes (five more tools):
+
+- `fcp_effect_catalog` lists the bundle's Motion effect templates with their FCPXML
+  UIDs and localized names (read-only file scan).
+- `fcp_inspector_read` / `fcp_inspector_set` read and write the selected clip's
+  inspector value fields, enable checkboxes and pop-ups in the background; values
+  are confirmed and read back numerically ("37" equals "37.0").
+- `fcp_effects_paste` writes a carrier FCPXML (solid generator with opacity,
+  position, scale, rotation, anchor and effects by UID, constant or keyframed,
+  clip-relative seconds), imports it without activation into the disposable
+  `Claude-Effect-Carriers` library in the work directory, copies it (this
+  overwrites the clipboard, as approved) and runs Edit > Paste Effects on the
+  targets. Keyframes stay relative to each target clip.
+- `fcp_xml_export` (activation like `fcp_export`) writes Final Cut Pro's own
+  FCPXML; use it to verify keyframes and to read effect parameter keys, which
+  depend on each template's object hierarchy and are never guessed.
+- `fcp_timeline_edit` also runs Add Color Adjustments / Color Board / Cross
+  Dissolve and Remove Effects.
+
+Safety and coverage additions (2026-10-08, after an incident where edit
+commands from a batch reached another project):
+
+- Every timeline-mutating tool takes `project` (required for select, edit and
+  inspector set) and refuses with "nothing was changed" when the timeline shows
+  another project. Batch callers must stop at the first error.
+- `fcp_project_open` runs Open Clip with Final Cut Pro briefly active (inactive,
+  its real focus can stay on the timeline and Open Clip opens a timeline clip);
+  if a timeline clip opens anyway it navigates back and fails.
+- `fcp_effects_paste` defaults to `mode: merge` (Edit > Paste Attributes with
+  only the carrier's attributes checked, timing "Maintain"), keeping existing
+  effects and keyframes; `replace` uses Paste Effects. The carrier library is
+  closed afterwards (`closeCarrierLibrary`), and the targets are reselected.
+- `fcp_effect_parameters` derives FCPXML keys from a template's object path
+  (`9999/` + ids, `100` below a rig, `3` before a filter, then the channel);
+  22 structures covering 1731 of 1736 published parameters matched Final Cut
+  Pro's own XML. The catalog also lists the built-in FxPlug filters Final Cut
+  Pro offers (`FxPlug:<UUID>`, `finalCutSimplifiedList`).
+- `fcp_library_close` closes a library by its exact name; inspector tools show
+  a requested pane only for the call and restore the previous one; tools wait
+  up to 10 s while Final Cut Pro reports AXError -25204 (busy).
+- Japanese and English UI titles were exercised on Final Cut Pro 12.3.
+- After redeploying the release binary, make one read-only call (for example
+  `fcp_timeline_read`) before mutations: the first call after the held `serve`
+  process restarts can fail once (Executor correlation 8cc49891).
+
+Keyframe buttons and parameter menus in the inspector ignore Accessibility
+presses even with Final Cut Pro active, and applying a browser effect needs a
+double-click; the carrier route replaces both without input synthesis.
+
+Scope and compensating checks are in [NATIVE-BOUNDARIES.md](NATIVE-BOUNDARIES.md);
+real acceptance evidence is in [VERIFICATION.md](VERIFICATION.md).
 
 ## Replay editing development (not yet deployed)
 
@@ -329,8 +484,10 @@ for branch coverage. Any unsupported-check exemption requires explicit approval.
 ## What is not promised
 
 There is no universal public all-functions API across these five apps. FCPXML is
-interchange, not arbitrary live timeline control; Custom Share Destinations and
-Workflow Extensions require separate app/extension work. Motion has no established
+interchange; the `fcp_*` tools cover reading, selection, seeking, blade/delete and
+Share > Export File, not effects, color, keyframes, drag trims or other share
+destinations. Custom Share Destinations and Workflow Extensions require separate
+app/extension work. Motion has no established
 public headless project renderer. Logic/MainStage control routing is user-specific,
 and MainStage has no documented native OSC listener. Plugin/protected UI and
 licensing may still require a human. Native delivery, experimental file editing,
