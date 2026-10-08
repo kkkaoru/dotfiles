@@ -2,7 +2,12 @@
 import { Buffer } from "node:buffer";
 import { providerSessionHeaders } from "./provider-session-headers.ts";
 export { providerSessionHeaders, type SessionHeaderTarget } from "./provider-session-headers.ts";
-import { createAssistantMessageEventStream, uuidv7, type Api, type Model } from "@earendil-works/pi-ai";
+import {
+  createAssistantMessageEventStream,
+  uuidv7,
+  type Api,
+  type Model,
+} from "@earendil-works/pi-ai";
 import {
   convertToLlm,
   compact,
@@ -88,7 +93,9 @@ function prefixWithinBytes(text: string, limit: number): string {
   let end = 0;
   for (const character of text) {
     const next = Buffer.byteLength(character, "utf8");
-    if (bytes + next > limit) { break; }
+    if (bytes + next > limit) {
+      break;
+    }
     bytes += next;
     end += character.length;
   }
@@ -102,7 +109,9 @@ function suffixWithinBytes(text: string, limit: number): string {
     const offset = (text.codePointAt(start - 2) ?? 0) > 65_535 ? 2 : 1;
     const next = start - offset;
     const size = Buffer.byteLength(text.slice(next, start), "utf8");
-    if (bytes + size > limit) { break; }
+    if (bytes + size > limit) {
+      break;
+    }
     bytes += size;
     start = next;
   }
@@ -110,10 +119,15 @@ function suffixWithinBytes(text: string, limit: number): string {
 }
 
 function clipRequest(text: string, limit: number): string {
-  if (Buffer.byteLength(text, "utf8") <= limit) { return text; }
+  if (Buffer.byteLength(text, "utf8") <= limit) {
+    return text;
+  }
   const available = Math.max(0, limit - Buffer.byteLength(REQUEST_TRUNCATED));
-  return prefixWithinBytes(text, Math.ceil(available / 2)) + REQUEST_TRUNCATED
-    + suffixWithinBytes(text, Math.floor(available / 2));
+  return (
+    prefixWithinBytes(text, Math.ceil(available / 2)) +
+    REQUEST_TRUNCATED +
+    suffixWithinBytes(text, Math.floor(available / 2))
+  );
 }
 
 export function retainedUserRequests(
@@ -121,37 +135,54 @@ export function retainedUserRequests(
   contextWindow?: number,
 ): string {
   // UTF-8 bytes conservatively bound Japanese-heavy requests; leave most of small windows for work.
-  const budget = Math.min(REQUEST_BUDGET, Math.floor((contextWindow ?? REQUEST_BUDGET * 8) / 8))
-    - Buffer.byteLength(REQUESTS_OPEN + REQUESTS_CLOSE);
-  if (budget < 64) { return ""; }
+  const budget =
+    Math.min(REQUEST_BUDGET, Math.floor((contextWindow ?? REQUEST_BUDGET * 8) / 8)) -
+    Buffer.byteLength(REQUESTS_OPEN + REQUESTS_CLOSE);
+  if (budget < 64) {
+    return "";
+  }
   const previous: string = (preparation.previousSummary ?? "").trimEnd();
   const start = ledgerStart(previous);
-  const archived: string = start < 0 ? "" : previous.slice(start + REQUESTS_OPEN.length, -REQUESTS_CLOSE.length);
+  const archived: string =
+    start < 0 ? "" : previous.slice(start + REQUESTS_OPEN.length, -REQUESTS_CLOSE.length);
   const messages = [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages];
   const requests: string[] = messages.flatMap((message) => {
-    if (message.role !== "user") { return []; }
-    const content: string = typeof message.content === "string"
-      ? message.content
-      : message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+    if (message.role !== "user") {
+      return [];
+    }
+    const content: string =
+      typeof message.content === "string"
+        ? message.content
+        : message.content
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join("\n");
     const clipped = clipRequest(content, Math.min(REQUEST_LIMIT, budget - 4));
     const entry = JSON.stringify(clipped);
     // Escaped control characters can expand in JSON; shrink only if the entry itself exceeds budget.
-    return [Buffer.byteLength(entry) <= budget
-      ? entry
-      : JSON.stringify(clipRequest(content, Math.floor(budget / 8)))];
+    return [
+      Buffer.byteLength(entry) <= budget
+        ? entry
+        : JSON.stringify(clipRequest(content, Math.floor(budget / 8))),
+    ];
   });
   const entries: string[] = [...archived.trim().split("\n").filter(Boolean), ...requests];
   const selected: string[] = [];
   for (const entry of entries.toReversed()) {
-    if (Buffer.byteLength([...selected, entry].join("\n")) > budget) { break; }
+    if (Buffer.byteLength([...selected, entry].join("\n")) > budget) {
+      break;
+    }
     selected.unshift(entry);
   }
   return selected.length === 0 ? "" : `${REQUESTS_OPEN}${selected.join("\n")}${REQUESTS_CLOSE}`;
 }
 
-async function nativeSummary(
-  options: { event: SessionBeforeCompactEvent; ctx: GuardContext; requests: string; previousSummary: string },
-): Promise<CompactionResult | undefined> {
+async function nativeSummary(options: {
+  event: SessionBeforeCompactEvent;
+  ctx: GuardContext;
+  requests: string;
+  previousSummary: string;
+}): Promise<CompactionResult | undefined> {
   const { event, ctx, requests, previousSummary } = options;
   const { model, modelRegistry } = ctx;
   if (model === undefined || requests.length === 0) {
@@ -159,8 +190,13 @@ async function nativeSummary(
   }
   const result = await compact(
     { ...event.preparation, previousSummary },
-    model, undefined, undefined, event.customInstructions, event.signal,
-    undefined, async (selectedModel, context, requestOptions) => {
+    model,
+    undefined,
+    undefined,
+    event.customInstructions,
+    event.signal,
+    undefined,
+    async (selectedModel, context, requestOptions) => {
       const sessionId = requestOptions?.sessionId ?? uuidv7();
       const response = await modelRegistry.complete(selectedModel, context, {
         ...requestOptions,
@@ -182,9 +218,9 @@ function summarySource(event: SessionBeforeCompactEvent, previousSummary: string
   const { preparation } = event;
   return [
     previousSummary,
-    serializeConversation(convertToLlm([
-      ...preparation.messagesToSummarize, ...preparation.turnPrefixMessages,
-    ])),
+    serializeConversation(
+      convertToLlm([...preparation.messagesToSummarize, ...preparation.turnPrefixMessages]),
+    ),
     event.customInstructions === undefined
       ? ""
       : `Summary focus requested by user: ${event.customInstructions}`,

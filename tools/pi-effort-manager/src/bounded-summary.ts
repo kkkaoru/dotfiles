@@ -130,7 +130,9 @@ async function completeSegment(
       lastMessage = message;
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
-      if (!TRANSIENT_FAILURE.test(message)) { throw error; }
+      if (!TRANSIENT_FAILURE.test(message)) {
+        throw error;
+      }
       lastMessage = message;
     }
     attempt += 1;
