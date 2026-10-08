@@ -75,7 +75,19 @@ public struct UIAutomation<Backend: UIBackend> {
   public static var quitWaitSeconds: Double { 10 }
 
   let backend: Backend
-  public init(backend: Backend) { self.backend = backend }
+  /// Folder that bounds Final Cut Pro export destinations, and the table of
+  /// localized system folder names the Save panel shows.
+  let home: URL
+  let folderLocalizations: URL
+
+  public init(
+    backend: Backend, home: URL = FileManager.default.homeDirectoryForCurrentUser,
+    folderLocalizations: URL = FCPExportPlan.systemFolderLocalizations
+  ) {
+    self.backend = backend
+    self.home = home
+    self.folderLocalizations = folderLocalizations
+  }
 
   public func run(_ request: UIRequest) async throws -> UIResponse {
     let before = backend.frontmostBundleID()
@@ -239,6 +251,10 @@ public struct UIAutomation<Backend: UIBackend> {
       }
       response.terminated = gone
       response.running = !gone
+    case .finalCut(let target, let request):
+      let process = try requireProcess(target)
+      response.pid = process.pid
+      response.finalCut = try await finalCut(request, process: process)
     }
     return response
   }

@@ -201,18 +201,19 @@ public enum UIRequest: Equatable, Sendable {
   case inputSourceSelect(id: String?, asciiCapable: Bool)
   case launch(UITarget, activate: Bool)
   case quit(UITarget, force: Bool)
+  case finalCut(UITarget, FCPRequest)
 }
 
 extension UIRequest: Codable {
   private enum Keys: String, CodingKey {
     case operation, target, window, root, maxDepth, maxElements, path, element, action, attribute
     case stringValue, boolValue, condition, timeoutSeconds, outputPath, id, asciiCapable, activate
-    case force
+    case force, finalCut
   }
 
   private enum Operation: String, Codable {
     case windows, inspect, menuList, menuSelect, perform, set, wait, capture
-    case inputSourceStatus, inputSourceSelect, launch, quit
+    case inputSourceStatus, inputSourceSelect, launch, quit, finalCut
   }
 
   public init(from decoder: any Decoder) throws {
@@ -277,6 +278,10 @@ extension UIRequest: Codable {
       self = .quit(
         try c.decode(UITarget.self, forKey: .target), force: try c.decode(Bool.self, forKey: .force)
       )
+    case .finalCut:
+      self = .finalCut(
+        try c.decode(UITarget.self, forKey: .target),
+        try c.decode(FCPRequest.self, forKey: .finalCut))
     }
   }
 
@@ -349,6 +354,10 @@ extension UIRequest: Codable {
       try c.encode(Operation.quit, forKey: .operation)
       try c.encode(target, forKey: .target)
       try c.encode(force, forKey: .force)
+    case .finalCut(let target, let request):
+      try c.encode(Operation.finalCut, forKey: .operation)
+      try c.encode(target, forKey: .target)
+      try c.encode(request, forKey: .finalCut)
     }
   }
 }
@@ -471,6 +480,7 @@ public struct UIResponse: Codable, Equatable, Sendable {
   public var inputSource: UIInputSource?
   public var previousInputSource: UIInputSource?
   public var terminated: Bool?
+  public var finalCut: FCPResult?
 
   public init(focus: UIFocusEvidence) { self.focus = focus }
 }

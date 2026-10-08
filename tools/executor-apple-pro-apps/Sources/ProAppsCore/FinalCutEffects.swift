@@ -88,6 +88,33 @@ public struct FCPCarrierSpec: Codable, Equatable, Sendable {
   }
 }
 
+/// Paste the carrier's effects and attributes onto clips of an open project.
+public struct FCPPasteRequest: Codable, Equatable, Sendable {
+  public let library: String
+  public let event: String
+  public let project: String
+  public let targets: [FCPClipReference]
+  public let carrier: FCPCarrierSpec
+  public let workDirectory: String
+  public let mode: FCPPasteMode
+  public let closeCarrierLibrary: Bool
+
+  public init(
+    library: String, event: String, project: String, targets: [FCPClipReference],
+    carrier: FCPCarrierSpec, workDirectory: String, mode: FCPPasteMode = .merge,
+    closeCarrierLibrary: Bool = true
+  ) {
+    self.library = library
+    self.event = event
+    self.project = project
+    self.targets = targets
+    self.carrier = carrier
+    self.workDirectory = workDirectory
+    self.mode = mode
+    self.closeCarrierLibrary = closeCarrierLibrary
+  }
+}
+
 /// Validated carrier FCPXML for one paste.
 public struct FCPCarrierDocument: Equatable, Sendable {
   public let xml: String

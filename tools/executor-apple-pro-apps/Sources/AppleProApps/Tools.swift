@@ -46,7 +46,7 @@ struct ToolSpec: Sendable {
   static let app = string(ProApp.allCases.map(\.rawValue))
 
   static let all: [ToolSpec] =
-    measurements + editing + ui + [
+    measurements + editing + ui + finalCut + [
       .init(
         name: "fcpxml_validate",
         description:

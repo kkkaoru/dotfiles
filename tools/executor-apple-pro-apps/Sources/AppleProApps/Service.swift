@@ -189,7 +189,7 @@ actor NativeService {
             "Project open + bounded XML inspect/query/copy/patch. Undocumented ozml writes are opt-in; no documented headless Motion render API."
           ),
           "finalCutPro": .string(
-            "FCPXML inspect/query/write/copy/patch, separate installed Apple DTD validation and Open Document delivery. Not a live timeline editing/export API; DTD validity does not prove import."
+            "FCPXML inspect/query/write/copy/patch, separate installed Apple DTD validation and Open Document delivery. Live fcp_* tools read, select, seek, blade and delete in the background, read/write inspector parameters, paste effects and keyframes through a carrier clip (clipboard), and export media or FCPXML with authorized activation; not every editor operation. DTD validity does not prove import."
           ),
           "compressor": .string(
             "Official CLI source inspection, submission, bounded status, pause/resume/cancel by ID."
@@ -214,6 +214,8 @@ actor NativeService {
       return try await editing(name, args, render: interfaces.editMedia)
     case let name where ToolSpec.uiNames.contains(name):
       return try await uiTool(name, args)
+    case let name where ToolSpec.finalCutNames.contains(name):
+      return try await finalCutTool(name, args)
     case "media_inspect":
       struct Input: Decodable { let path: String }
       let input = try decode(Input.self, args)
