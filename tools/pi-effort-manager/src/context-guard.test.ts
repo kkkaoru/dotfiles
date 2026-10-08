@@ -1,6 +1,10 @@
 // This TypeScript file is executed with Bun.
-import { Buffer } from "node:buffer";
-import { normalizeContext, type Api, type AssistantMessage, type Model } from "@earendil-works/pi-ai";
+import {
+  normalizeContext,
+  type Api,
+  type AssistantMessage,
+  type Model,
+} from "@earendil-works/pi-ai";
 import type { SessionBeforeCompactEvent } from "@earendil-works/pi-coding-agent";
 import * as piCompaction from "@earendil-works/pi-coding-agent";
 import { expect, it, vi } from "vitest";
@@ -13,8 +17,6 @@ import contextGuard, {
   guardedCompaction,
   piCompactionFits,
   providerSessionHeaders,
-  retainedUserRequests,
-  summaryWithoutRequests,
   type GuardContext,
   type GuardHost,
 } from "./context-guard.ts";
@@ -69,6 +71,25 @@ const EVENT: SessionBeforeCompactEvent = {
   },
 };
 
+it("leaves fitting histories without retained requests to native compaction", async () => {
+  const complete = vi.fn();
+  expect(
+    await guardedCompaction(
+      {
+        ...EVENT,
+        reason: "manual",
+        preparation: { ...EVENT.preparation, messagesToSummarize: [], turnPrefixMessages: [] },
+      },
+      {
+        model: MODEL,
+        modelRegistry: { complete },
+        ui: { notify: vi.fn() },
+      },
+    ),
+  ).toBeUndefined();
+  expect(complete).not.toHaveBeenCalled();
+});
+
 it("registers the compaction guard", () => {
   const on = vi.fn<GuardHost["on"]>();
   contextGuard({ on });
@@ -77,12 +98,20 @@ it("registers the compaction guard", () => {
 
 it("keeps Pi's native compaction for small histories and handles no selected model", async () => {
   const compact = vi.mocked(piCompaction.compact).mockResolvedValue({
-    summary: "handoff", firstKeptEntryId: "kept", tokensBefore: 100_000,
+    summary: "handoff",
+    firstKeptEntryId: "kept",
+    tokensBefore: 100_000,
   });
   try {
     const complete = vi.fn().mockResolvedValue(RESPONSE);
-    const ctx: GuardContext = { model: MODEL, modelRegistry: { complete }, ui: { notify: vi.fn() } };
-    expect(await guardedCompaction({ ...EVENT, reason: "manual" }, ctx)).toHaveProperty("compaction");
+    const ctx: GuardContext = {
+      model: MODEL,
+      modelRegistry: { complete },
+      ui: { notify: vi.fn() },
+    };
+    expect(await guardedCompaction({ ...EVENT, reason: "manual" }, ctx)).toHaveProperty(
+      "compaction",
+    );
     expect(await guardedCompaction(EVENT, { ...ctx, model: undefined })).toBeUndefined();
     expect(compact).toHaveBeenCalledOnce();
     expect(complete).not.toHaveBeenCalled();
@@ -93,21 +122,27 @@ it("keeps Pi's native compaction for small histories and handles no selected mod
 
 it("uses native compaction for a fitting small-window model without invoking the bounded minimum", async () => {
   const compact = vi.mocked(piCompaction.compact).mockResolvedValue({
-    summary: "handoff", firstKeptEntryId: "kept", tokensBefore: 700,
+    summary: "handoff",
+    firstKeptEntryId: "kept",
+    tokensBefore: 700,
   });
   try {
-    const result = await guardedCompaction({
-      ...EVENT, reason: "manual",
-      preparation: {
-        ...EVENT.preparation,
-        tokensBefore: 700,
-        settings: { enabled: true, reserveTokens: 1000, keepRecentTokens: 100 },
+    const result = await guardedCompaction(
+      {
+        ...EVENT,
+        reason: "manual",
+        preparation: {
+          ...EVENT.preparation,
+          tokensBefore: 700,
+          settings: { enabled: true, reserveTokens: 1000, keepRecentTokens: 100 },
+        },
       },
-    }, {
-      model: { ...MODEL, contextWindow: 6000, maxTokens: 600 },
-      modelRegistry: { complete: vi.fn() },
-      ui: { notify: vi.fn() },
-    });
+      {
+        model: { ...MODEL, contextWindow: 6000, maxTokens: 600 },
+        modelRegistry: { complete: vi.fn() },
+        ui: { notify: vi.fn() },
+      },
+    );
     expect(result).toHaveProperty("compaction");
     expect(compact).toHaveBeenCalledOnce();
   } finally {
@@ -117,77 +152,17 @@ it("uses native compaction for a fitting small-window model without invoking the
 
 it("leaves Cursor's specialized off-provider summarizer in control", async () => {
   const complete = vi.fn();
-  expect(await guardedCompaction({ ...EVENT, reason: "manual" }, {
-    model: { ...MODEL, provider: "cursor" },
-    modelRegistry: { complete },
-    ui: { notify: vi.fn() },
-  })).toBeUndefined();
+  expect(
+    await guardedCompaction(
+      { ...EVENT, reason: "manual" },
+      {
+        model: { ...MODEL, provider: "cursor" },
+        modelRegistry: { complete },
+        ui: { notify: vi.fn() },
+      },
+    ),
+  ).toBeUndefined();
   expect(complete).not.toHaveBeenCalled();
-});
-
-it("retains original user requests across repeated compactions without archiving tool output", () => {
-  const first = retainedUserRequests({
-    ...EVENT.preparation,
-    messagesToSummarize: [
-      { role: "user", content: "first request", timestamp: 0 },
-      { role: "toolResult", toolCallId: "id", toolName: "bash", content: [{ type: "text", text: "massive tool output" }], isError: false, timestamp: 0 },
-      { role: "user", content: "second request", timestamp: 0 },
-    ],
-  });
-  expect(first).toMatch(/"first request"\n"second request"/u);
-  expect(first).not.toMatch(/massive tool output/u);
-  expect(retainedUserRequests({
-    ...EVENT.preparation,
-    previousSummary: `handoff${first}`,
-    messagesToSummarize: [{ role: "user", content: "third request", timestamp: 0 }],
-  })).toMatch(/"first request"\n"second request"\n"third request"/u);
-});
-
-it("does not confuse literal ledger tags in a user's request with the ledger boundary", () => {
-  const first = retainedUserRequests({
-    ...EVENT.preparation,
-    messagesToSummarize: [{ role: "user", content: "literal <retained-user-requests> and </retained-user-requests>", timestamp: 0 }],
-  });
-  expect(summaryWithoutRequests(`handoff${first}`)).toBe("handoff");
-  expect(summaryWithoutRequests("handoff <retained-user-requests> example")).toBe(
-    "handoff <retained-user-requests> example",
-  );
-  expect(retainedUserRequests({
-    ...EVENT.preparation,
-    previousSummary: `handoff${first}`,
-    messagesToSummarize: [{ role: "user", content: "latest", timestamp: 0 }],
-  })).toMatch(/literal <retained-user-requests> and <\/retained-user-requests>[\s\S]*"latest"/u);
-});
-
-it("bounds Japanese requests for small models without dropping the newest request", () => {
-  const requests = retainedUserRequests({
-    ...EVENT.preparation,
-    messagesToSummarize: [{ role: "user", content: "🦊日本語".repeat(1200), timestamp: 0 }],
-  }, 24_000);
-  expect(Buffer.byteLength(requests, "utf8")).toBeLessThan(3100);
-  expect(requests).toMatch(/🦊日本語/u);
-  expect(requests).toMatch(/request middle truncated; see original session/u);
-  expect(requests).not.toMatch(/\uFFFD/u);
-});
-
-it("keeps both ends of a long request like Codex's middle truncation", () => {
-  const requests = retainedUserRequests({
-    ...EVENT.preparation,
-    messagesToSummarize: [{ role: "user", content: `initial instruction ${"x".repeat(10_000)} final requirement`, timestamp: 0 }],
-  });
-  expect(requests).toMatch(/initial instruction/u);
-  expect(requests).toMatch(/final requirement/u);
-  expect(requests).toMatch(/request middle truncated; see original session/u);
-});
-
-it("retains a valid newest entry even when JSON escaping expands past a tiny budget", () => {
-  const requests = retainedUserRequests({
-    ...EVENT.preparation,
-    messagesToSummarize: [{ role: "user", content: "\u0000".repeat(1000), timestamp: 0 }],
-  }, 1024);
-  expect(Buffer.byteLength(requests, "utf8")).toBeLessThan(129);
-  expect(requests).toMatch(/request middle truncated; see original session/u);
-  expect(requests).toMatch(/<retained-user-requests>\n"/u);
 });
 
 it("uses bounded compaction for overflow and preserves boundary, files, usage, previous summary and focus", async () => {
@@ -225,32 +200,45 @@ it("uses bounded compaction for overflow and preserves boundary, files, usage, p
 
 it("retains requests with native compaction across providers using the configured model router", async () => {
   const compact = vi.mocked(piCompaction.compact).mockResolvedValue({
-    summary: "handoff", firstKeptEntryId: "kept", tokensBefore: 100_000,
+    summary: "handoff",
+    firstKeptEntryId: "kept",
+    tokensBefore: 100_000,
     usage: RESPONSE.usage,
   });
   try {
     const complete = vi.fn().mockResolvedValue(RESPONSE);
-    const result = await guardedCompaction({
-      ...EVENT,
-      reason: "manual",
-      preparation: {
-        ...EVENT.preparation,
-        previousSummary: 'old handoff\n\n<retained-user-requests>\n"prior request"\n</retained-user-requests>',
+    const result = await guardedCompaction(
+      {
+        ...EVENT,
+        reason: "manual",
+        preparation: {
+          ...EVENT.preparation,
+          previousSummary:
+            'old handoff\n\n<retained-user-requests>\n"prior request"\n</retained-user-requests>',
+        },
       },
-    }, {
-      model: { ...MODEL, provider: "custom-agent" },
-      modelRegistry: { complete },
-      ui: { notify: vi.fn() },
+      {
+        model: { ...MODEL, provider: "custom-agent" },
+        modelRegistry: { complete },
+        ui: { notify: vi.fn() },
+      },
+    );
+    expect(result).toMatchObject({
+      compaction: {
+        summary: expect.stringMatching(/handoff[\s\S]*"prior request"\n"historical request"/u),
+        firstKeptEntryId: "kept",
+      },
     });
-    expect(result).toMatchObject({ compaction: {
-      summary: expect.stringMatching(/handoff[\s\S]*"prior request"\n"historical request"/u),
-      firstKeptEntryId: "kept",
-    } });
     expect(compact).toHaveBeenCalledOnce();
-    expect(compact.mock.calls[0]?.[0]).toMatchObject({ firstKeptEntryId: "kept", previousSummary: "old handoff" });
+    expect(compact.mock.calls[0]?.[0]).toMatchObject({
+      firstKeptEntryId: "kept",
+      previousSummary: "old handoff",
+    });
     const route = compact.mock.calls[0]?.[7];
     expect(route).toBeTypeOf("function");
-    if (route === undefined) { throw new Error("Compaction model router missing"); }
+    if (route === undefined) {
+      throw new Error("Compaction model router missing");
+    }
     const stream = await route(MODEL, normalizeContext({ messages: [] }));
     expect(await stream.result()).toStrictEqual(RESPONSE);
     const openCode = await route(
@@ -294,7 +282,9 @@ it("also guards oversized threshold compaction with split turn prefixes and no p
 
 it("uses Pi's single-call compaction while its summary cap can hold the history", async () => {
   const compact = vi.mocked(piCompaction.compact).mockResolvedValue({
-    summary: "handoff", firstKeptEntryId: "kept", tokensBefore: 200_000,
+    summary: "handoff",
+    firstKeptEntryId: "kept",
+    tokensBefore: 200_000,
   });
   const complete = vi.fn().mockResolvedValue(RESPONSE);
   const ctx: GuardContext = { model: MODEL, modelRegistry: { complete }, ui: { notify: vi.fn() } };
@@ -386,7 +376,11 @@ it("bounds a large-window compaction whose history outgrows Pi's summary cap", a
 
 it("uses a positive bounded output cap when model metadata leaves maxTokens unspecified", async () => {
   const complete = vi.fn().mockResolvedValue(RESPONSE);
-  await guardedCompaction(EVENT, { model: { ...MODEL, maxTokens: 0 }, modelRegistry: { complete }, ui: { notify: vi.fn() } });
+  await guardedCompaction(EVENT, {
+    model: { ...MODEL, maxTokens: 0 },
+    modelRegistry: { complete },
+    ui: { notify: vi.fn() },
+  });
   expect(complete.mock.calls[0]?.[2]).toMatchObject({ maxTokens: 3000 });
 });
 
