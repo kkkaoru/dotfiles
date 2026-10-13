@@ -5,7 +5,19 @@ that survives compaction and reload.
 Inspired by Codex's `codex-rs/ext/goal` objective/state/continuation design (reference checkout
 `c4017a87`); this is a
 Pi implementation, not a complete port of Codex's TUI, attachments or accounting system.
-Requires Pi 0.85.1 or newer. State validation uses Valibot.
+Requires Pi 1.0.4 or newer within major version 1. State validation uses Valibot.
+
+Goal guidance is projected through `context_with_system` on every model request. A goal completed,
+paused, edited or cleared between tool rounds is reflected on the next request. The extension
+preserves the existing system sections and tool declarations instead of freezing a rendered prompt
+at run start. This lets goal guidance coexist with dynamic-effort progress without adding synthetic
+user requests. Completion remains an explicit goal audit, never an inference from a successful
+tool call, compaction or effort change.
+Failed tool calls do not count as progress for the stalled-goal audit. A later successful work tool,
+an explicit justified wait or the existing owned-task wait rules can still establish progress.
+The stall audit and completion guard share the same task-ownership rule: unrelated pending
+notifications do not reset stalled turns. Publishers without per-task notice metadata conservatively
+keep owned tasks waiting; they cannot establish a wait for a goal with no owned tasks.
 
 ## Commands
 

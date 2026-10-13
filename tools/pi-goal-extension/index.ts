@@ -252,18 +252,27 @@ export default function goalExtension(pi: GoalExtensionHost): void {
       ? { action: "continue" }
       : { action: "handled" };
   });
-  pi.on("before_agent_start", (event) => {
+  pi.on("context_with_system", (event) => {
     const guidance: string = goalGuidance(state.runtime?.state ?? null);
     return guidance.length === 0
       ? undefined
-      : { systemPrompt: `${event.systemPrompt}\n\n${guidance}` };
+      : {
+          messages: [
+            ...event.messages,
+            {
+              role: "system",
+              content: guidance,
+              timestamp: Date.now(),
+            },
+          ],
+        };
   });
   pi.on("agent_start", () => state.runtime?.begin());
   pi.on("message_end", (event) =>
     state.runtime?.recordTokens(usageTokens(event.message)),
   );
   pi.on("tool_execution_end", (event) =>
-    state.runtime?.recordTool(event.toolName),
+    state.runtime?.recordTool(event.toolName, event.isError),
   );
   pi.on("agent_end", (event) => state.runtime?.end(runError(event.messages)));
   pi.on("agent_settled", () => state.runtime?.settled());

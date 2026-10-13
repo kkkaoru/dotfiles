@@ -36,7 +36,7 @@ function fakePi() {
         };
       },
     },
-    on: vi.fn<(event: string, handler: unknown) => void>(),
+    on: vi.fn<(event: string, handler: unknown) => () => void>(() => () => {}),
     registerCommand: vi.fn<GoalExtensionHost["registerCommand"]>(),
     registerTool: vi.fn<(definition: unknown) => void>(),
     sendUserMessage: vi.fn<GoalExtensionHost["sendUserMessage"]>(),
@@ -184,11 +184,13 @@ it("summarizes restored ownership in tools and prompts without weakening complet
     /trackedTaskCount\\":512/u,
   );
   expect(field(field(result, "details"), "goal")).toStrictEqual(goal);
-  const prompt: unknown = await h.call("before_agent_start", {
-    systemPrompt: "base",
+  const prompt: unknown = await h.call("context_with_system", {
+    messages: [{ role: "system", content: "base", timestamp: 0 }],
   });
-  expect(field(prompt, "systemPrompt")).not.toMatch(/pi-tmux|"tasks"/u);
-  expect(field(prompt, "systemPrompt")).toMatch(
+  expect(JSON.stringify(field(prompt, "messages"))).not.toMatch(
+    /pi-tmux|"tasks"/u,
+  );
+  expect(JSON.stringify(field(prompt, "messages"))).toMatch(
     /no unverified switch or NAR 9\/25 replay/u,
   );
   const activity: ActivityProvider = new ActivityProvider(h.pi.events, () => ({
@@ -355,7 +357,9 @@ it("registers explicit goal commands and tools without creating a goal", async (
     details: { goal: null },
   });
   expect(
-    await h.call("before_agent_start", { systemPrompt: "base" }),
+    await h.call("context_with_system", {
+      messages: [{ role: "system", content: "base", timestamp: 0 }],
+    }),
   ).toBeUndefined();
   await h.call("input", { source: "extension", text: "ordinary notification" });
   await h.call("session_shutdown", {});
@@ -364,7 +368,9 @@ it("registers explicit goal commands and tools without creating a goal", async (
   await h.call("message_end", { message: {} });
   await h.call("tool_execution_end", { toolName: "read" });
   await h.call("agent_end", { messages: [] });
-  await h.call("before_agent_start", { systemPrompt: "base" });
+  await h.call("context_with_system", {
+    messages: [{ role: "system", content: "base", timestamp: 0 }],
+  });
   await h.call("input", { source: "user", text: "ordinary input" });
   expect(
     await h.call("input", {
@@ -383,9 +389,18 @@ it("creates, injects goal guidance, accepts only current tickets and audits comp
     action: "continue",
   });
   expect(
-    await h.call("before_agent_start", { systemPrompt: "base" }),
+    await h.call("context_with_system", {
+      messages: [{ role: "system", content: "base", timestamp: 0 }],
+    }),
   ).toMatchObject({
-    systemPrompt: expect.stringMatching(/base\n\nThe following JSON/),
+    messages: [
+      { role: "system", content: "base", timestamp: 0 },
+      {
+        role: "system",
+        content: expect.stringMatching(/The following JSON/),
+        timestamp: expect.any(Number),
+      },
+    ],
   });
   await h.call("agent_start", {});
   await h.call("tool_execution_end", { toolName: "read" });
@@ -478,4 +493,35 @@ it("compaction, blocking UI and pending user input prevent competing delivery", 
     details: { goal: { tokensUsed: 5, status: "paused" } },
   });
   await h.call("session_shutdown", {});
+});
+
+it("refreshes goal state between tool rounds without freezing prompts or changing user messages", async () => {
+  const h: Harness = harness();
+  await h.call("session_start", {});
+  await h.command("Finish the authorized task");
+  const messages = [
+    {
+      role: "system",
+      content: "Project rules",
+      sections: { project: "Preserve constraints" },
+      toolsAdded: [{ name: "read" }],
+      timestamp: 0,
+    },
+    { role: "user", content: "Only JSON output", timestamp: 1 },
+  ];
+  const active: unknown = await h.call("context_with_system", { messages });
+  expect(JSON.stringify(active)).toMatch(/active/u);
+  await h.command("pause");
+  const paused: unknown = await h.call("context_with_system", { messages });
+  expect(field(paused, "messages")).toMatchObject([
+    messages[0],
+    messages[1],
+    { role: "system", content: expect.stringMatching(/"status":"paused"/u) },
+  ]);
+  await h.command("clear");
+  expect(await h.call("context_with_system", { messages })).toBeUndefined();
+  expect(
+    h.pi.on.mock.calls.some(([name]) => name === "before_agent_start"),
+  ).toBe(false);
+  expect(messages).toHaveLength(2);
 });
