@@ -1,4 +1,6 @@
-import type { ThinkingLevel } from "@earendil-works/pi-ai";
+// This TypeScript file is executed with Bun.
+import type { ModelThinkingLevel, ThinkingLevel } from "@earendil-works/pi-ai";
+import { readRecoveryState, type RecoveryState } from "./recovery-effort.ts";
 
 export const STATE_ENTRY_TYPE = "pi-effort-manager-state-v1";
 
@@ -30,11 +32,30 @@ export interface ResetPolicyDefaults {
 }
 
 export interface PersistedState {
+  recovery?: RecoveryState;
   compactionCount?: number | undefined;
   enabled?: boolean | undefined;
   overrides?: SessionOverrides | undefined;
   resetEffort?: ThinkingLevel | undefined;
   resetInterval?: number | undefined;
+}
+
+export interface ManagerState {
+  compactionCount: number;
+  enabled: boolean;
+  forceBaselineTurns: number;
+  overrides: SessionOverrides;
+  preCompactionLevel: ModelThinkingLevel | undefined;
+}
+
+export function initialManagerState(enabled: boolean): ManagerState {
+  return {
+    compactionCount: 0,
+    enabled,
+    forceBaselineTurns: 0,
+    overrides: {},
+    preCompactionLevel: undefined,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -79,6 +100,7 @@ function persistedState(entry: unknown): PersistedState | undefined {
       data["compactionCount"] >= 0
         ? data["compactionCount"]
         : undefined,
+    recovery: readRecoveryState(data["recovery"]),
     enabled: typeof data["enabled"] === "boolean" ? data["enabled"] : undefined,
     overrides: sessionOverrides(data["overrides"]),
     resetEffort: thinkingLevel(data["resetEffort"]),

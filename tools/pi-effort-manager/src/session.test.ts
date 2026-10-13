@@ -24,6 +24,7 @@ it("restores the latest valid session policy and qualifying compaction count", (
     },
   ];
   expect(latestPersistedState(entries)).toStrictEqual({
+    recovery: { steps: 0, successes: 0, lastTurn: "" },
     compactionCount: 2,
     enabled: true,
     overrides: {
@@ -46,6 +47,7 @@ it("restores the latest valid session policy and qualifying compaction count", (
       },
     ]),
   ).toStrictEqual({
+    recovery: { steps: 0, successes: 0, lastTurn: "" },
     compactionCount: undefined,
     enabled: undefined,
     overrides: undefined,

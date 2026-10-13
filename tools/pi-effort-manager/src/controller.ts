@@ -1,5 +1,6 @@
 // This TypeScript file is executed with Bun.
 import path from "node:path";
+import { RecoveryEffort, type TurnEvidence } from "./recovery-effort.ts";
 import type { ModelThinkingLevel, ThinkingLevel } from "@earendil-works/pi-ai";
 import {
   CONFIG_DIR_NAME,
@@ -31,7 +32,8 @@ import {
   restoredCompactionCount,
   setSessionOverride,
   STATE_ENTRY_TYPE,
-  type SessionOverrides,
+  initialManagerState,
+  type ManagerState,
 } from "./session.ts";
 import {
   isRecord,
@@ -41,19 +43,11 @@ import {
   type ManagerSettings,
 } from "./settings.ts";
 
-interface ManagerState {
-  compactionCount: number;
-  enabled: boolean;
-  forceBaselineTurns: number;
-  overrides: SessionOverrides;
-  preCompactionLevel: ModelThinkingLevel | undefined;
-}
-
-function modelKey(ctx: ExtensionContext): string {
-  return ctx.model === undefined ? "none" : `${ctx.model.provider}/${ctx.model.id}`;
-}
+const modelKey = (ctx: ExtensionContext): string =>
+  ctx.model === undefined ? "none" : `${ctx.model.provider}/${ctx.model.id}`;
 
 export class EffortController {
+  readonly #recovery = new RecoveryEffort();
   readonly #observed = new Map<string, Map<ModelThinkingLevel, ObservedReasoning>>();
   readonly #pi: ExtensionAPI;
   readonly #settingsPath: string;
@@ -69,13 +63,7 @@ export class EffortController {
     this.#settings = readManagerSettings(this.#settingsPath);
     this.#projectSettingsPath = undefined;
     this.#reserveTokens = readReserveTokens(this.#settingsPath);
-    this.#state = {
-      compactionCount: 0,
-      enabled: this.#settings.dynamicDefault,
-      forceBaselineTurns: 0,
-      overrides: {},
-      preCompactionLevel: undefined,
-    };
+    this.#state = initialManagerState(this.#settings.dynamicDefault);
     this.#activeRequestLevel = "off";
   }
 
@@ -98,6 +86,9 @@ export class EffortController {
   }
 
   setDynamic(ctx: ExtensionContext, enabled: boolean, persistDefault = false): void {
+    if (!enabled) {
+      this.compactionFailed(ctx);
+    }
     this.#state.enabled = enabled;
     this.#state.forceBaselineTurns = enabled ? 1 : 0;
     this.#persistState();
@@ -145,7 +136,7 @@ export class EffortController {
     const profile = this.#profile(ctx);
     const observations = this.#observed.get(modelKey(ctx));
     const resetPolicy = effectiveResetPolicy(this.#state.overrides, this.#settings);
-    return formatEffortStatus({
+    return `${formatEffortStatus({
       compaction: profileValue(profile?.compaction),
       compactionCount: this.#state.compactionCount,
       contextTokens: contextTokens(ctx),
@@ -158,7 +149,7 @@ export class EffortController {
       resetEffort: resetPolicy.effort,
       resetInterval: resetPolicy.interval,
       start: profileValue(profile?.baseline),
-    });
+    })} recoverySteps=${this.#recovery.snapshot().steps}`;
   }
 
   setFast(ctx: ExtensionContext, enabled: boolean): void {
@@ -185,7 +176,7 @@ export class EffortController {
     return this.#settings;
   }
 
-  sessionStart(ctx: ExtensionContext, dynamicFlag: unknown): void {
+  sessionStart(ctx: ExtensionContext, dynamicFlag?: unknown): void {
     this.#projectSettingsPath = ctx.isProjectTrusted()
       ? path.join(ctx.cwd, CONFIG_DIR_NAME, "settings.json")
       : undefined;
@@ -193,6 +184,7 @@ export class EffortController {
     this.#reserveTokens = readReserveTokens(this.#settingsPath, this.#projectSettingsPath);
     const entries = ctx.sessionManager.getBranch();
     const persisted = latestPersistedState(entries);
+    this.#recovery.restore(persisted.recovery);
     const overrides = persisted.overrides ?? {};
     const resetPolicy = effectiveResetPolicy(overrides, this.#settings);
     this.#state = {
@@ -210,7 +202,10 @@ export class EffortController {
   }
 
   modelSelected(ctx: ExtensionContext): boolean {
-    return this.#applyDynamic(ctx);
+    this.#state.preCompactionLevel = undefined;
+    const changed = this.#applyDynamic(ctx);
+    this.#activeRequestLevel = this.#pi.getThinkingLevel();
+    return changed;
   }
 
   beforeAgentStart(ctx: ExtensionContext): boolean {
@@ -221,7 +216,10 @@ export class EffortController {
     return changed;
   }
 
-  turnEnded(ctx: ExtensionContext): boolean {
+  turnEnded(ctx: ExtensionContext, evidence?: TurnEvidence): boolean {
+    if (this.#state.enabled && evidence !== undefined && this.#recovery.observe(evidence)) {
+      this.#persistState();
+    }
     const changed = this.#applyDynamic(ctx);
     this.#activeRequestLevel = this.#pi.getThinkingLevel();
     return changed;
@@ -240,7 +238,7 @@ export class EffortController {
   }
 
   beforeCompaction(ctx: ExtensionContext): void {
-    if (!this.#state.enabled) {
+    if (!this.#state.enabled || this.#state.preCompactionLevel !== undefined) {
       return;
     }
     const profile = this.#profile(ctx);
@@ -251,9 +249,9 @@ export class EffortController {
     this.#setManagedLevel(ctx, profile.compaction);
   }
 
-  compacted(ctx: ExtensionContext): void {
-    if (!this.#state.enabled) {
-      return;
+  compacted(ctx: ExtensionContext): boolean {
+    if (!this.#state.enabled || this.#state.preCompactionLevel === undefined) {
+      return false;
     }
     const resetPolicy = effectiveResetPolicy(this.#state.overrides, this.#settings);
     const qualifies = effortAtLeast(this.#state.preCompactionLevel, resetPolicy.effort);
@@ -264,6 +262,7 @@ export class EffortController {
     this.#state.preCompactionLevel = undefined;
     this.#persistState();
     this.#applyDynamic(ctx, reset);
+    return true;
   }
 
   compactionFailed(ctx: ExtensionContext): void {
@@ -275,7 +274,7 @@ export class EffortController {
   }
 
   #applyDynamic(ctx: ExtensionContext, forceBaseline = false): boolean {
-    if (!this.#state.enabled) {
+    if (!this.#state.enabled || this.#state.preCompactionLevel !== undefined) {
       this.updateUi(ctx);
       return false;
     }
@@ -293,6 +292,7 @@ export class EffortController {
       compactionCount: this.#state.compactionCount,
       enabled: this.#state.enabled,
       overrides: this.#state.overrides,
+      recovery: this.#recovery.snapshot(),
       resetEffort: resetPolicy.effort,
       resetInterval: resetPolicy.interval,
     });
@@ -316,14 +316,17 @@ export class EffortController {
     if (profile === undefined || ctx.model === undefined) {
       return undefined;
     }
-    return selectDynamicEffort({
-      contextTokens: ctx.getContextUsage()?.tokens ?? 0,
-      contextWindow: ctx.model.contextWindow,
-      forceBaseline,
+    return this.#recovery.select(
       profile,
-      rampStartRatio: this.#settings.rampStartRatio,
-      reserveTokens: this.#reserveTokens,
-    });
+      selectDynamicEffort({
+        contextTokens: ctx.getContextUsage()?.tokens ?? 0,
+        contextWindow: ctx.model.contextWindow,
+        forceBaseline,
+        profile,
+        rampStartRatio: this.#settings.rampStartRatio,
+        reserveTokens: this.#reserveTokens,
+      }),
+    );
   }
 
   #setManagedLevel(ctx: ExtensionContext, level: ThinkingLevel): boolean {

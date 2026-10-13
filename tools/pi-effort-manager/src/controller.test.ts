@@ -148,6 +148,7 @@ it("supports dynamic toggles and reasoning observations", () => {
       compactionCount: 0,
       enabled: false,
       overrides: {},
+      recovery: { steps: 0, successes: 0, lastTurn: "" },
       resetEffort: "xhigh",
       resetInterval: 1,
     },
@@ -271,4 +272,77 @@ it("manages fast mode and priority payloads", () => {
   } as unknown as ExtensionContext;
   controller.setFast(plainContext, true);
   expect(controller.providerPayload({}, plainContext)).toBeUndefined();
+});
+
+it("uses failed tool rounds as an effort floor and requires sustained recovery", () => {
+  const controller = new EffortController(pi);
+  controller.sessionStart(context, "on");
+  controller.turnEnded(context, { id: "error-1", results: [{ isError: true }] });
+  expect(thinking).toBe("high");
+  controller.turnEnded(context, { id: "error-1", results: [{ isError: true }] });
+  expect(thinking).toBe("high");
+  controller.beforeCompaction(context);
+  contextTokenCount = 5;
+  controller.compacted(context);
+  expect(thinking).toBe("high");
+  controller.turnEnded(context, { id: "ok-1", results: [{ isError: false }] });
+  expect(thinking).toBe("high");
+  controller.turnEnded(context, { id: "ok-2", results: [{ isError: false }] });
+  expect(thinking).toBe("medium");
+});
+it("guards duplicate compaction transitions and restores the original effort on failure", () => {
+  const controller = new EffortController(pi);
+  controller.sessionStart(context, "on");
+  contextTokenCount = 90;
+  controller.beforeAgentStart(context);
+  controller.beforeCompaction(context);
+  controller.beforeCompaction(context);
+  controller.turnEnded(context);
+  expect(thinking).toBe("max");
+  controller.compactionFailed(context);
+  expect(thinking).toBe("xhigh");
+  expect(controller.compacted(context)).toBe(false);
+  controller.beforeCompaction(context);
+  expect(controller.compacted(context)).toBe(true);
+  expect(controller.compacted(context)).toBe(false);
+  expect(controller.status(context)).toMatch(/compactions=1/u);
+});
+it("restores recovery from the selected branch and discards another branch's state", () => {
+  const controller = new EffortController(pi);
+  branchEntries = [
+    {
+      type: "custom",
+      customType: "pi-effort-manager-state-v1",
+      data: {
+        enabled: true,
+        recovery: { steps: 2, successes: 0, lastTurn: "old" },
+      },
+    },
+  ];
+  controller.sessionStart(context, undefined);
+  expect(thinking).toBe("xhigh");
+  branchEntries = [];
+  controller.sessionStart(context, "on");
+  expect(thinking).toBe("medium");
+});
+it("disabling dynamic mode during compaction restores work effort", () => {
+  const controller = new EffortController(pi);
+  controller.sessionStart(context, "on");
+  controller.beforeCompaction(context);
+  expect(thinking).toBe("max");
+  controller.setDynamic(context, false);
+  expect(thinking).toBe("medium");
+  expect(controller.compacted(context)).toBe(false);
+});
+
+it("invalidates an old compaction transition when the model changes", () => {
+  const controller = new EffortController(pi);
+  controller.sessionStart(context, "on");
+  controller.beforeCompaction(context);
+  controller.modelSelected(context);
+  expect(thinking).toBe("medium");
+  expect(controller.compacted(context)).toBe(false);
+  controller.compactionFailed(context);
+  expect(thinking).toBe("medium");
+  expect(controller.status(context)).toMatch(/recoverySteps=0/u);
 });
