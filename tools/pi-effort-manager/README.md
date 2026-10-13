@@ -79,6 +79,30 @@ first `/loop pause` and `/goal pause`, then `/compact`; only resume scheduling a
 compaction. If bounded recovery fails, use `/tree` to an earlier safe point or `/new` with a concise
 handoff, retaining the original session for reference. Do not repeatedly send `continue`.
 
+### Durable compaction checkpoints
+
+Bounded model summarization checkpoints each successful segment with `@earendil-works/pi-durable`
+(pinned to 1.0.4, matching this package's SDK baseline). A persisted session uses the sibling
+`<session.jsonl>.effort-durable/` journal with fsync and an exclusive lock. Each checkpoint holds
+the next segment, the bounded running summary, and accumulated usage. After cancellation, failure,
+or restart, retrying the same compaction reuses committed segments instead of paying for them again.
+A completed checkpoint can also be reused if Pi stopped before recording its compaction entry.
+
+Reuse requires an exact hash match for the serialized input (including previous summary and user
+focus), model configuration, context window, retained-entry boundary, and checkpoint algorithm
+version. Changed inputs start fresh. The original request ledger and file-operation metadata are
+still attached by the guard. Only the final complete handoff is returned to Pi; partial summaries
+never replace the conversation. A provider call that finished before its checkpoint was committed
+may run again. Usage in the final handoff includes the reused segments once.
+
+Pi continues to own provider routing and cancellation. Reopening a journal does not autonomously
+restart model calls or tools: work resumes only on another compaction attempt. Non-persistent
+sessions use the existing in-memory path. Native, Cursor, and emergency source-recovery compaction
+behavior remains unchanged. Lock, journal, and checkpoint errors cancel compaction instead of
+falling back to an oversized request. Resources open only while bounded compaction is running and
+close on success or failure. The journal contains private summary text and remains beside the
+original session history.
+
 ## Controls
 
 Pi's standard controls remain authoritative for static effort selection:

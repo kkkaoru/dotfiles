@@ -9,10 +9,23 @@ export interface SummaryRequest {
   readonly signal: AbortSignal;
   readonly complete: (prompt: string) => Promise<AssistantMessage>;
   readonly onRecovery?: (notice: string) => void;
+  readonly checkpoint?: SummaryCheckpointStore;
 }
 export interface SummaryResult {
   readonly text: string;
   readonly usage: Usage;
+}
+export interface SummaryCheckpoint extends SummaryResult {
+  readonly nextChunk: number;
+}
+export interface SummaryCheckpointStore {
+  readonly load: () => Promise<SummaryCheckpoint | undefined>;
+  readonly save: (checkpoint: SummaryCheckpoint) => Promise<void>;
+}
+interface SummarySegments {
+  readonly characters: readonly string[];
+  readonly chunkSize: number;
+  readonly budget: number;
 }
 interface SummaryState {
   text: string;
@@ -166,26 +179,43 @@ function emergencySummary(source: RecoverySource, budget: number): SummaryResult
   };
 }
 
-export async function summarizeBounded(request: SummaryRequest): Promise<SummaryResult> {
-  const budget: number = summaryInputBudget(request.contextWindow);
-  const chunkSize: number = Math.floor(budget / CHUNK_BUDGET_DIVISOR / MAX_BYTES_PER_CODE_POINT);
-  request.signal.throwIfAborted();
-  const source: RecoverySource = sourceForRequest(request, chunkSize);
-  if (source.omittedCodeUnits > 0) {
-    return emergencySummary(source, budget);
-  }
-  // Split at code points (not UTF-16 units). Grapheme clusters can be unbounded in bytes.
-  // oxlint-disable-next-line typescript/no-misused-spread
-  const characters: string[] = [...source.text];
-  const chunks: number = Math.ceil(characters.length / chunkSize);
+async function restoreCheckpoint(
+  request: SummaryRequest,
+  segments: SummarySegments,
+): Promise<SummaryCheckpoint> {
+  const chunks: number = Math.ceil(segments.characters.length / segments.chunkSize);
   if (chunks === 0) {
     throw new Error("Bounded compaction requires non-empty history; history was not changed");
   }
-  const state: SummaryState = {
-    text: "",
-    usage: emptyUsage(),
-  };
-  for (const offset of Array.from({ length: chunks }, (_value, index) => index * chunkSize)) {
+  const saved: SummaryCheckpoint | undefined = await request.checkpoint?.load();
+  if (saved === undefined) {
+    return { nextChunk: 0, text: "", usage: emptyUsage() };
+  }
+  if (
+    !Number.isSafeInteger(saved.nextChunk) ||
+    saved.nextChunk < 0 ||
+    saved.nextChunk > chunks ||
+    saved.text.trim().length === 0 ||
+    Buffer.byteLength(saved.text) > segments.budget / PARTS
+  ) {
+    throw new Error("Invalid bounded compaction checkpoint; history was not changed");
+  }
+  return globalThis.structuredClone(saved);
+}
+
+async function summarizeChunks(
+  request: SummaryRequest,
+  segments: SummarySegments,
+): Promise<SummaryResult> {
+  const { characters, chunkSize, budget } = segments;
+  const chunks: number = Math.ceil(characters.length / chunkSize);
+  const saved: SummaryCheckpoint = await restoreCheckpoint(request, segments);
+  const nextChunk: number = saved.nextChunk;
+  const state: SummaryState = { text: saved.text, usage: saved.usage };
+  for (const offset of Array.from(
+    { length: chunks - nextChunk },
+    (_value, index) => (index + nextChunk) * chunkSize,
+  )) {
     request.signal.throwIfAborted();
     const prompt = `${SUMMARY_PROMPT}\n<previous-summary>\n${state.text}\n</previous-summary>\n<segment>\n${characters.slice(offset, offset + chunkSize).join("")}\n</segment>`;
     // Each segment depends on the preceding summary; parallel calls would lose that context.
@@ -197,9 +227,29 @@ export async function summarizeBounded(request: SummaryRequest): Promise<Summary
     );
     request.signal.throwIfAborted();
     mergeSegment(state, response, budget / PARTS);
+    if (state.text.trim().length > 0) {
+      // Commit each successful segment before issuing the next provider request.
+      // oxlint-disable-next-line no-await-in-loop
+      await request.checkpoint?.save({ ...state, nextChunk: offset / chunkSize + 1 });
+    }
   }
+  request.signal.throwIfAborted();
   if (state.text.trim().length === 0) {
     throw new Error("Bounded compaction returned an empty summary");
   }
   return state;
+}
+
+export async function summarizeBounded(request: SummaryRequest): Promise<SummaryResult> {
+  const budget: number = summaryInputBudget(request.contextWindow);
+  const chunkSize: number = Math.floor(budget / CHUNK_BUDGET_DIVISOR / MAX_BYTES_PER_CODE_POINT);
+  request.signal.throwIfAborted();
+  const source: RecoverySource = sourceForRequest(request, chunkSize);
+  if (source.omittedCodeUnits > 0) {
+    return emergencySummary(source, budget);
+  }
+  // Split at code points (not UTF-16 units). Grapheme clusters can be unbounded in bytes.
+  // oxlint-disable-next-line typescript/no-misused-spread
+  const characters: string[] = [...source.text];
+  return summarizeChunks(request, { characters, chunkSize, budget });
 }

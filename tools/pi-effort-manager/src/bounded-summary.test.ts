@@ -329,3 +329,23 @@ it("handles providers without reasoning usage and joins only text blocks", async
   expect(result.text).toBe("one\ntwo");
   expect(result.usage.reasoning).toBeUndefined();
 });
+
+it("honors cancellation after a committed segment without starting another request", async () => {
+  const controller = new globalThis.AbortController();
+  const complete = vi.fn().mockResolvedValue(RESPONSE);
+  const save = vi.fn().mockImplementation(async () => {
+    controller.abort();
+  });
+  await expect(
+    summarizeBounded({
+      text: "x".repeat(2001),
+      contextWindow: 24_000,
+      signal: controller.signal,
+      complete,
+      checkpoint: { load: vi.fn().mockResolvedValue(undefined), save },
+    }),
+  ).rejects.toThrow();
+  expect(complete).toHaveBeenCalledOnce();
+  expect(save).toHaveBeenCalledOnce();
+  expect(save.mock.calls[0]?.[0]).toMatchObject({ nextChunk: 1, text: "handoff" });
+});

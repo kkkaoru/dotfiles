@@ -16,7 +16,8 @@ import {
   type SessionBeforeCompactEvent,
   type CompactionResult,
 } from "@earendil-works/pi-coding-agent";
-import { summarizeBounded, summaryInputBudget } from "./bounded-summary.ts";
+import { summaryInputBudget } from "./bounded-summary.ts";
+import { summarizeDurably } from "./durable-summary.ts";
 
 export interface GuardHost {
   readonly on: (event: "session_before_compact", handler: typeof guardedCompaction) => void;
@@ -26,6 +27,7 @@ export interface GuardContext {
   readonly model: Model<Api> | undefined;
   readonly modelRegistry: Pick<ExtensionContext["modelRegistry"], "complete">;
   readonly ui: Pick<ExtensionContext["ui"], "notify">;
+  readonly sessionManager?: Pick<ExtensionContext["sessionManager"], "getSessionFile">;
 }
 
 const MAX_OUTPUT_TOKENS = 8192;
@@ -227,6 +229,10 @@ function summarySource(event: SessionBeforeCompactEvent, previousSummary: string
   ].join("\n\n");
 }
 
+function compactionSessionFile(ctx: GuardContext): string | undefined {
+  return ctx.sessionManager?.getSessionFile();
+}
+
 export async function guardedCompaction(
   event: SessionBeforeCompactEvent,
   ctx: GuardContext,
@@ -257,7 +263,9 @@ export async function guardedCompaction(
       "info",
     );
     const sessionId: string = uuidv7();
-    const result = await summarizeBounded({
+    const result = await summarizeDurably({
+      sessionFile: compactionSessionFile(ctx),
+      identity: JSON.stringify({ model, firstKeptEntryId: preparation.firstKeptEntryId }),
       text,
       contextWindow: model.contextWindow,
       signal: event.signal,
