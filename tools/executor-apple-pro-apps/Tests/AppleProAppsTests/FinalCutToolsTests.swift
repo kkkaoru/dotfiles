@@ -261,5 +261,7 @@ struct FinalCutToolsTests {
         == ["fcp_timeline_read", "fcp_effect_catalog", "fcp_effect_parameters"])
     let export = ToolSpec.finalCut.first { $0.name == "fcp_export" }
     #expect(export?.required.contains("allowForeground") == true)
+    #expect(export?.description.contains("including external volumes") == true)
+    #expect(export?.description.contains("inside the home folder") == false)
   }
 }

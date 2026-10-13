@@ -276,12 +276,12 @@ public struct FCPTimecode: Comparable, Sendable, CustomStringConvertible {
   }
 }
 
-/// Validated Save-panel route for an export: the destination is reached from the
-/// sidebar's home item through the column browser, one display name at a time.
+/// Validated Save-panel destination with an optional legacy home-column route.
 public struct FCPExportPlan: Equatable, Sendable {
   public let outputPath: String
   public let homeDisplayName: String
   public let components: [String]
+  public var usesHomeColumns = true
 
   public static let mediaExtensions: Set<String> = ["mov", "mp4", "m4v", "m4a"]
   public static let xmlExtensions: Set<String> = ["fcpxml", "fcpxmld"]
@@ -294,7 +294,7 @@ public struct FCPExportPlan: Equatable, Sendable {
   static let localizationTable = "SystemFolderLocalizations.strings"
 
   /// Validate the request against the real filesystem. Destinations must be
-  /// existing, non-hidden, symlink-free directories inside `home`, and the output
+  /// existing, non-hidden, symlink-free canonical directories, and the output
   /// file must not exist; Final Cut Pro would otherwise ask to replace it.
   /// Folders marked `.localized` are shown by the Save panel under their name in
   /// Final Cut Pro's UI `language`, so those names come from `localizations`.
@@ -309,13 +309,14 @@ public struct FCPExportPlan: Equatable, Sendable {
     }
     let name = request.fileName
     guard (1...maximumFileName).contains(name.count), !name.contains("/"), !name.contains(":"),
+      !name.contains("\0"),
       !name.hasPrefix("."),
       extensions.contains(URL(fileURLWithPath: name).pathExtension.lowercased())
     else {
       let allowed = extensions.sorted().map { "." + $0 }.joined(separator: ", ")
       throw ProAppsError.invalid("fileName must be a plain visible name ending in \(allowed)")
     }
-    let directory = URL(fileURLWithPath: request.directory)
+    let directory = try Files.absolute(request.directory)
     guard request.directory.hasPrefix("/"),
       directory.standardizedFileURL.path == request.directory,
       directory.resolvingSymlinksInPath().path == request.directory
@@ -325,10 +326,8 @@ public struct FCPExportPlan: Equatable, Sendable {
     let homePath = home.standardizedFileURL.resolvingSymlinksInPath()
     let base = homePath.pathComponents
     let parts = directory.pathComponents
-    guard parts.count >= base.count, Array(parts.prefix(base.count)) == base else {
-      throw ProAppsError.invalid("directory must be inside the home folder")
-    }
-    let relative = Array(parts.dropFirst(base.count))
+    let insideHome = parts.count >= base.count && Array(parts.prefix(base.count)) == base
+    let relative = Array(parts.dropFirst(insideHome ? base.count : 1))
     guard relative.allSatisfy({ !$0.hasPrefix(".") }) else {
       throw ProAppsError.invalid("Hidden folders are not reachable in the Save panel")
     }
@@ -337,9 +336,7 @@ public struct FCPExportPlan: Equatable, Sendable {
       isDirectory.boolValue
     else { throw ProAppsError.invalid("directory does not exist") }
     let output = directory.appendingPathComponent(name)
-    guard !fileManager.fileExists(atPath: output.path) else {
-      throw ProAppsError.invalid("The output file already exists; choose a new fileName")
-    }
+    try requireNewDestination(output, fileManager: fileManager)
     let table = try localizedNames(language: language, in: localizations)
     var current = homePath
     let names = relative.map { part -> String in
@@ -349,7 +346,22 @@ public struct FCPExportPlan: Equatable, Sendable {
       return marked ? table[part] ?? part : part
     }
     return FCPExportPlan(
-      outputPath: output.path, homeDisplayName: homePath.lastPathComponent, components: names)
+      outputPath: output.path, homeDisplayName: homePath.lastPathComponent, components: names,
+      usesHomeColumns: insideHome)
+  }
+
+  static func requireNewDestination(_ output: URL, fileManager: FileManager = .default) throws {
+    let parent = output.deletingLastPathComponent()
+    var isDirectory: ObjCBool = false
+    guard parent.resolvingSymlinksInPath().path == parent.path,
+      fileManager.fileExists(atPath: parent.path, isDirectory: &isDirectory), isDirectory.boolValue
+    else { throw ProAppsError.invalid("The export directory changed before Save") }
+    do {
+      _ = try fileManager.attributesOfItem(atPath: output.path)
+    } catch CocoaError.fileReadNoSuchFile {
+      return
+    }
+    throw ProAppsError.invalid("The output file already exists; choose a new fileName")
   }
 
   /// Read the system folder name table for `language`; a missing table means

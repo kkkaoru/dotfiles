@@ -80,7 +80,7 @@ extension ToolSpec {
     .init(
       name: "fcp_export",
       description:
-        "Export the project open in the timeline with File > Share > Export File into a NEW file in an existing folder inside the home folder. Final Cut Pro only enables sharing while active, so this ACTIVATES it (allowForeground must be true), sets format/codec and 'Save only', drives the Save panel through Accessibility and restores the previous frontmost app. Rendering continues after this returns: verify the file with media_inspect/media_verify_video.",
+        "Export the project open in the timeline with File > Share > Export File into a NEW file in an explicitly requested existing canonical, non-hidden, symlink-free directory, including external volumes when already selected. Final Cut Pro only enables sharing while active, so this ACTIVATES it (allowForeground must be true), sets format/codec and 'Save only', drives the Save panel through Accessibility and restores the previous frontmost app. The current directory requires complete observed folder ancestry before any filename write or Save; otherwise only readable home-column navigation is supported. Arbitrary directory navigation is not provided. Rendering continues after this returns: verify the file with media_inspect/media_verify_video.",
       properties: finalCutTargeted([
         "project": string(maximum: 512), "directory": string(), "fileName": string(maximum: 200),
         "format": string(FCPExportFormat.allCases.map(\.rawValue)), "codec": string(maximum: 128),
@@ -140,7 +140,7 @@ extension ToolSpec {
     .init(
       name: "fcp_xml_export",
       description:
-        "Export the project open in the timeline as FCPXML (File > Export XML) into a NEW .fcpxmld/.fcpxml inside the home folder. Like fcp_export it ACTIVATES Final Cut Pro (allowForeground must be true) and restores the previous app. Use it to read effect parameter keys and verify keyframes.",
+        "Export the project open in the timeline as FCPXML (File > Export XML) into a NEW .fcpxmld/.fcpxml in an explicitly requested existing canonical, non-hidden, symlink-free directory. Like fcp_export it ACTIVATES Final Cut Pro (allowForeground must be true), verifies the Save destination and restores the previous app. Use it to read effect parameter keys and verify keyframes.",
       properties: finalCutTargeted([
         "project": string(maximum: 512), "directory": string(), "fileName": string(maximum: 200),
         "allowForeground": boolean,

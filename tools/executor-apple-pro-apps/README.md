@@ -107,9 +107,15 @@ same `ui-native` child: `fcp_timeline_read`, `fcp_timeline_select`,
 - `fcp_export` is the only operation that activates an app (`allowForeground:
   true` required): Final Cut Pro disables Share while inactive. It drives Share >
   Export File, sets format/codec and "Save only", navigates the Save panel from
-  the sidebar home item through the column browser (localized system folder names
-  come from `SystemFolderLocalizations`), saves a new file inside the home folder
-  and restores the previous frontmost app, also after failures. Rendering
+  the sidebar home item through the column browser when readable. Explicit existing
+  canonical, visible, symlink-free directories also permit external volumes when
+  already selected. Before home navigation, the current location menu's complete
+  ancestor chain is verified; a matching location is saved without using columns.
+  A basename alone is not directory proof. Different destinations require the
+  existing readable home-column route; arbitrary directory navigation is not
+  provided. No absolute path is entered into the filename and Save is never used
+  for navigation. This new current-directory route requires real-app verification.
+  It refuses existing files and restores the previous frontmost app after failures. Rendering
   continues afterwards; verify the file separately.
 - Japanese menu titles are verified on Final Cut Pro 12.3; English titles are
   documented but reported as `vocabularyVerified: false`.

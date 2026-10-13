@@ -96,7 +96,8 @@ struct FinalCutModelsTests {
   }
 
   func sandbox() throws -> Sandbox {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+    let scratch = try #require(ProcessInfo.processInfo.environment["TMPDIR"])
+    let root = URL(fileURLWithPath: scratch).appendingPathComponent(
       "fcp-plan-\(UUID().uuidString)"
     ).resolvingSymlinksInPath()
     let home = root.appendingPathComponent("home")
@@ -154,7 +155,7 @@ struct FinalCutModelsTests {
       request(out, ".hidden.mov"), request(out, "clip.avi"), request(out, ""),
       request(out, String(repeating: "a", count: 201) + ".mov"), request("relative/out"),
       request(out + "/../out"), request(box.home.appendingPathComponent("link").path),
-      request(box.root.path), request(box.home.appendingPathComponent(".hidden").path),
+      request(box.home.appendingPathComponent(".hidden").path),
       request(box.home.appendingPathComponent("missing").path),
       request(box.home.appendingPathComponent("file.txt").path), request(out, "taken.mov"),
     ]

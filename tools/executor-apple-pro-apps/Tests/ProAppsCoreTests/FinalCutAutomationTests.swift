@@ -358,7 +358,10 @@ final class FakeFinalCut {
     ]
     backend.attributes[306] = [.role: .string("AXColumn")]
     backend.attributes[305] = [.role: .string("AXBrowser")]
-    backend.attributes[311] = [.role: .string("AXPopUpButton"), .value: .string("デスクトップ")]
+    backend.attributes[311] = [
+      .role: .string("AXPopUpButton"), .identifier: .string("where popup"),
+      .value: .string("デスクトップ"),
+    ]
     backend.attributes[312] = [.role: .string("AXTextField"), .value: .string("Live60.mov")]
     backend.attributes[313] = [.role: .string("AXTextField"), .subrole: .string("AXSearchField")]
     backend.attributes[314] = [.role: .string("AXButton"), .title: .string("キャンセル")]
@@ -707,7 +710,8 @@ struct FinalCutAutomationTests {
 
   /// home/Movies(.localized)/out plus a ja table mapping Movies → ムービー.
   func exportHome() throws -> ExportHome {
-    let root = FileManager.default.temporaryDirectory.appendingPathComponent(
+    let scratch = try #require(ProcessInfo.processInfo.environment["TMPDIR"])
+    let root = URL(fileURLWithPath: scratch).appendingPathComponent(
       "fcp-export-\(UUID().uuidString)")
     let home = root.appendingPathComponent("user")
     let output = home.appendingPathComponent("Movies/out")

@@ -769,6 +769,15 @@ extension UIAutomation {
   /// browser, then name the file and press Save. Each step is read back through
   /// the location pop-up so a mismatched folder stops the export.
   func saveAs(_ plan: FCPExportPlan, sheet: UIHandle, vocabulary: FCPVocabulary) async throws {
+    if try await currentSaveDirectoryMatches(plan, sheet: sheet, language: vocabulary.language) {
+      try finishSave(plan, sheet: sheet, vocabulary: vocabulary)
+      return
+    }
+    guard plan.usesHomeColumns else {
+      throw ProAppsError.unavailable(
+        "Requested directory is not the verified current Save location; no supported navigation route"
+      )
+    }
     if try finalCutNodes(from: sheet, maxDepth: Self.textSearchDepth, skipping: []).contains(
       where: { $0.role == "AXBrowser" }) == false
     {
@@ -800,6 +809,11 @@ extension UIAutomation {
         try backend.set(.selectedRows, to: .elements(homeRows), on: outline)
       }
     }
+    if try columnLists(browser).isEmpty {
+      throw ProAppsError.unavailable(
+        "The Save panel column browser is not readable; current directory is not the requested location"
+      )
+    }
     // Column `level` lists the folder reached after `level` components. A column
     // that already selects the right folder is kept; a deeper leftover selection
     // in the destination column is cleared so the panel saves exactly there.
@@ -830,6 +844,10 @@ extension UIAutomation {
       }
     }
     try await awaitLocation(plan.components.last ?? plan.homeDisplayName, sheet: sheet)
+    try finishSave(plan, sheet: sheet, vocabulary: vocabulary)
+  }
+
+  func finishSave(_ plan: FCPExportPlan, sheet: UIHandle, vocabulary: FCPVocabulary) throws {
     let name = try uniqueNode(
       in: sheet, depth: Self.textSearchDepth, skipping: ["AXBrowser", "AXOutline"],
       name: "File name field"
@@ -844,6 +862,7 @@ extension UIAutomation {
     else {
       throw ProAppsError.unavailable("The Save panel did not accept the file name")
     }
+    try FCPExportPlan.requireNewDestination(URL(fileURLWithPath: plan.outputPath))
     try perform(.press, on: try button(vocabulary.save, in: sheet))
   }
 
