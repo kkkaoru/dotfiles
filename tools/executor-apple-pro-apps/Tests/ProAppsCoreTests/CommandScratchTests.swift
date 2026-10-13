@@ -6,7 +6,9 @@ import Testing
 struct CommandScratchTests {
   @Test func explicitScratchIsCanonicalAndNeverSilentlyFallsBack() throws {
     let path = try #require(ProcessInfo.processInfo.environment["TMPDIR"])
-    #expect(try CommandScratch.directory(environment: ["TMPDIR": path]).path == path)
+    let directory = try CommandScratch.directory(environment: ["TMPDIR": path])
+    #expect(directory.path == URL(fileURLWithPath: path).path)
+    #expect(directory.resolvingSymlinksInPath().path == directory.path)
     #expect(
       try CommandScratch.directory(environment: [:]) == FileManager.default.temporaryDirectory)
     #expect(throws: ProAppsError.self) {
