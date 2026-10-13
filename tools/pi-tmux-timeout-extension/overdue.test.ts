@@ -57,8 +57,8 @@ it("delivers overdue context during an ongoing run and reconciles finished jobs 
   );
   vi.advanceTimersByTime(60_000);
   expect(sendUserMessage).not.toHaveBeenCalled();
-  expect(handlers.get("context")?.({ messages: [] }, context)).toStrictEqual({
-    messages: [expect.objectContaining({ customType: "tmux-overdue" })],
+  expect(handlers.get("context_with_system")?.({ messages: [] }, context)).toStrictEqual({
+    messages: [expect.objectContaining({ role: "system" })],
   });
   const launch = await tools[0]?.execute(
     "second",
@@ -71,7 +71,7 @@ it("delivers overdue context during an ongoing run and reconciles finished jobs 
     isError: false,
     input: { path: launch?.details.logPath },
   });
-  expect(handlers.get("context")?.({ messages: [] }, context)).toStrictEqual({
+  expect(handlers.get("context_with_system")?.({ messages: [] }, context)).toStrictEqual({
     messages: [
       expect.objectContaining({
         content: expect.stringMatching(/^tmux overdue check-in: 1 task/u),
@@ -80,7 +80,7 @@ it("delivers overdue context during an ongoing run and reconciles finished jobs 
   });
   vi.advanceTimersByTime(300_000);
   read.mockReturnValue("0\n");
-  expect(handlers.get("context")?.({ messages: [] }, context)).toBeUndefined();
+  expect(handlers.get("context_with_system")?.({ messages: [] }, context)).toBeUndefined();
   handlers.get("session_shutdown")?.({});
 });
 
@@ -172,8 +172,9 @@ it("retains deduplicated notices across model calls until the log is read", () =
     messages: [
       { role: "user", content: "continue" },
       expect.objectContaining({
-        role: "custom",
-        customType: "tmux-overdue",
+        role: "system",
+        timestamp: expect.any(Number),
+
         content: expect.stringMatching(/^tmux overdue check-in: 1 task\(s\)/u),
       }),
     ],

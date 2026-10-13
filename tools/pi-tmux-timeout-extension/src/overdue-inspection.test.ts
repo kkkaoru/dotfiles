@@ -118,3 +118,23 @@ it("rotates the twenty-first job into the next request without dropping earlier 
   ]);
   expect(delivery.hasPending()).toBe(true);
 });
+
+it("preserves original instructions and user requests when projecting overdue evidence", () => {
+  const delivery = new CompletionDelivery({ sendUserMessage: vi.fn() });
+  delivery.setContext({ isIdle: () => false, ui: { notify: vi.fn(), setStatus: vi.fn() } });
+  delivery.overdue([createTmuxLaunch({ command: "review", id: 1, namespace: "a".repeat(32) })]);
+  const messages = [
+    { role: "system", content: "Project constraints", sections: { goal: "paused" } },
+    { role: "user", content: "Answer only in JSON" },
+  ];
+  const result = delivery.injectOverdue({ messages });
+  expect(result?.messages.slice(0, 2)).toStrictEqual(messages);
+  expect(result?.messages.at(-1)).toMatchObject({
+    role: "system",
+    content: expect.stringMatching(
+      /Current user instructions, goal state and output requirements take precedence/u,
+    ),
+  });
+  expect(result?.messages.at(-1)).not.toHaveProperty("customType");
+  expect(messages).toHaveLength(2);
+});

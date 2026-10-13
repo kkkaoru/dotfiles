@@ -3,6 +3,12 @@
 A global [pi extension](https://pi.dev/docs/latest/extensions) that keeps pi responsive while
 long-running commands continue in detached tmux sessions.
 
+Overdue evidence is projected via `context_with_system`, preserving existing instructions and
+tool declarations. It does not append a synthetic user request to each model call. Current user
+constraints and goal state take precedence; a notification neither resumes a stopped goal nor
+proves completion. Idle completion/overdue wakeups retain their existing delivery and deduplication
+behavior, and successful log inspection is still required to acknowledge overdue evidence.
+
 ## Pi Durable boundary (Pi 1.0.4)
 
 The production entry point uses `@earendil-works/pi-durable` for a session-owned journal

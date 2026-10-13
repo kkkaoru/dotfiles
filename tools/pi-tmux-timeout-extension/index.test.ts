@@ -423,6 +423,8 @@ it("ignores lifecycle context updates when Pi supplies no context", () => {
     ui: { notify: vi.fn(), setStatus: vi.fn() },
   };
 
+  expect(handlers.has("context_with_system")).toBe(true);
+  expect(handlers.has("context")).toBe(false);
   handlers.get("session_start")?.({});
   handlers.get("session_start")?.({}, context);
   handlers.get("agent_start")?.({});

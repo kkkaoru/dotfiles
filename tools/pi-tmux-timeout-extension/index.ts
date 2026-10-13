@@ -74,7 +74,7 @@ export interface TmuxToolDefinition {
 type TmuxLifecycleEvent =
   | "agent_settled"
   | "agent_start"
-  | "context"
+  | "context_with_system"
   | "session_before_compact"
   | "session_compact"
   | "session_compact_failed"
@@ -188,7 +188,7 @@ function registerLifecycleHandlers(input: {
   readonly rewriter: AutomaticTmuxRewriter;
   readonly runtime: TmuxRuntime;
 }): void {
-  input.host.on("context", (event: unknown) => {
+  input.host.on("context_with_system", (event: unknown) => {
     input.runtime.reconcile();
     return input.delivery.injectOverdue(event);
   });

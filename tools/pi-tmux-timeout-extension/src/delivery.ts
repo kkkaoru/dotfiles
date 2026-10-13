@@ -164,10 +164,8 @@ export class CompletionDelivery {
       messages: [
         ...messages,
         {
-          role: "custom",
-          customType: "tmux-overdue",
+          role: "system",
           content: overduePrompt(overdue),
-          display: false,
           timestamp: Date.now(),
         },
       ],
