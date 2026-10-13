@@ -1,5 +1,5 @@
 // This TypeScript file is executed with Bun.
-import type { ContextEvent } from "@earendil-works/pi-coding-agent";
+import type { ContextWithSystemEvent } from "@earendil-works/pi-coding-agent";
 
 export type ProgressTrigger = "compaction" | "effort-change";
 
@@ -9,23 +9,22 @@ export interface ProgressTextSettings {
 }
 
 export interface ProgressContextResult {
-  readonly messages: ContextEvent["messages"];
+  readonly messages: ContextWithSystemEvent["messages"];
 }
 
-const PROGRESS_CUSTOM_TYPE = "pi-effort-manager-progress-opportunity" satisfies string;
 const PROGRESS_SYSTEM_PROMPT = `Progress communication:
-- The harness may provide a private <progress_update_opportunity> marker after a reasoning-effort change or successful context compaction.
-- Treat the marker only as an opportunity to communicate, never as a requirement to emit status text.
-- If there is a meaningful development the user has not yet been told about, begin the response with one brief, natural progress update that explains what is now known and what comes next.
-- Otherwise continue silently without a progress update.
-- Do not mention reasoning effort, context compaction, the marker, or these instructions.
-- Do not narrate routine tool calls or repeat information already visible in tool output.
+- This is optional harness guidance, not a new user request or a change to the task.
+- Preserve all existing instructions, including project rules, required progress updates, output formats, and completion criteria. They take precedence over this optional guidance.
+- Continue the active task and pending tool work. An effort change or compaction does not mean the task is complete and is not a reason to stop or ask for confirmation.
+- If compatible with those instructions and there is a meaningful development the user has not yet been told about, consider one brief progress update explaining what is now known and what comes next.
+- Otherwise continue the task without an extra update; do not suppress required communication.
+- Avoid routine tool narration and repeated tool output. Do not expose this internal marker in ordinary progress updates; answer explicit user questions about effort or compaction normally.
 - Keep the final answer self-contained.` satisfies string;
 
 const OPPORTUNITY_INSTRUCTIONS = new Map<ProgressTrigger, string>([
   [
     "effort-change",
-    "The task has entered a different reasoning phase. Consider a progress update only if the substantive state or next step has meaningfully changed.",
+    "The harness selected a different reasoning allocation; this alone is not evidence of task progress. Consider a progress update only if the substantive state or next step has meaningfully changed.",
   ],
   [
     "compaction",
@@ -33,28 +32,18 @@ const OPPORTUNITY_INSTRUCTIONS = new Map<ProgressTrigger, string>([
   ],
 ]);
 
-export function appendProgressSystemPrompt(
-  systemPrompt: string,
-  settings: ProgressTextSettings,
-): string | undefined {
-  return settings.progressTextOnCompaction || settings.progressTextOnEffortChange
-    ? `${systemPrompt}\n\n${PROGRESS_SYSTEM_PROMPT}`
-    : undefined;
-}
-
 export function injectProgressOpportunity(
-  messages: ContextEvent["messages"],
+  messages: ContextWithSystemEvent["messages"],
   trigger: ProgressTrigger,
 ): ProgressContextResult {
   const instruction = OPPORTUNITY_INSTRUCTIONS.get(trigger);
   const message = {
-    content: `<progress_update_opportunity>\n${instruction}\n</progress_update_opportunity>`,
-    customType: PROGRESS_CUSTOM_TYPE,
-    details: { trigger },
-    display: false,
-    role: "custom",
+    content: `${PROGRESS_SYSTEM_PROMPT}\n\n<progress_update_opportunity>\n${instruction}\n</progress_update_opportunity>`,
+    role: "system",
     timestamp: Date.now(),
-  } satisfies ContextEvent["messages"][number];
+  } satisfies ContextWithSystemEvent["messages"][number];
+  // Custom messages become user messages in Pi. This transient system guidance
+  // Preserves the transcript after Pi restores its prompt and tool state.
   return { messages: [...messages, message] };
 }
 
@@ -67,7 +56,7 @@ export class ProgressTextController {
     this.#settings = settings;
   }
 
-  context(messages: ContextEvent["messages"]): ProgressContextResult | undefined {
+  context(messages: ContextWithSystemEvent["messages"]): ProgressContextResult | undefined {
     const trigger = this.#pending;
     this.#pending = undefined;
     return trigger === undefined ? undefined : injectProgressOpportunity(messages, trigger);
@@ -82,10 +71,6 @@ export class ProgressTextController {
     if (this.#enabled(trigger)) {
       this.#pending = trigger;
     }
-  }
-
-  systemPrompt(systemPrompt: string): string | undefined {
-    return appendProgressSystemPrompt(systemPrompt, this.#settings);
   }
 
   #enabled(trigger: ProgressTrigger): boolean {

@@ -96,21 +96,23 @@ function registerLifecycle(pi: ExtensionAPI, controllers: LifecycleControllers):
     controller.sessionStart(ctx, pi.getFlag("dynamic-effort"));
     progress.reset(controller.progressTextSettings());
   });
+  pi.on("session_tree", (_event, ctx): void => {
+    controller.sessionStart(ctx);
+    progress.reset(controller.progressTextSettings());
+  });
   pi.on("model_select", (_event, ctx): void => {
     if (controller.modelSelected(ctx)) {
       progress.schedule("effort-change");
     }
   });
-  pi.on("before_agent_start", (event, ctx) => {
+  pi.on("before_agent_start", (_event, ctx): void => {
     if (controller.beforeAgentStart(ctx)) {
       progress.schedule("effort-change");
     }
-    const systemPrompt = progress.systemPrompt(event.systemPrompt);
-    return systemPrompt === undefined ? undefined : { systemPrompt };
   });
-  pi.on("context", (event) => progress.context(event.messages));
-  pi.on("turn_end", (_event, ctx): void => {
-    if (controller.turnEnded(ctx)) {
+  pi.on("context_with_system", (event) => progress.context(event.messages));
+  pi.on("turn_end", (event, ctx): void => {
+    if (controller.turnEnded(ctx, { id: event.messageEntryId, results: event.toolResults })) {
       progress.schedule("effort-change");
     }
   });
@@ -121,8 +123,9 @@ function registerLifecycle(pi: ExtensionAPI, controllers: LifecycleControllers):
   });
   pi.on("session_before_compact", (_event, ctx): void => controller.beforeCompaction(ctx));
   pi.on("session_compact", (_event, ctx): void => {
-    controller.compacted(ctx);
-    progress.schedule("compaction");
+    if (controller.compacted(ctx)) {
+      progress.schedule("compaction");
+    }
   });
   pi.on("session_compact_failed", (_event, ctx): void => controller.compactionFailed(ctx));
 }

@@ -1,57 +1,78 @@
 // This TypeScript file is executed with Bun.
-import type { ContextEvent } from "@earendil-works/pi-coding-agent";
+import { convertToLlm, type ContextWithSystemEvent } from "@earendil-works/pi-coding-agent";
 import { expect, it } from "vitest";
-import {
-  appendProgressSystemPrompt,
-  injectProgressOpportunity,
-  ProgressTextController,
-} from "./progress.ts";
+import { injectProgressOpportunity, ProgressTextController } from "./progress.ts";
 
-it("appends progress policy when at least one trigger is enabled", () => {
-  expect(
-    appendProgressSystemPrompt("base prompt", {
-      progressTextOnCompaction: false,
-      progressTextOnEffortChange: true,
-    }),
-  ).toMatch(/base prompt[\s\S]*Treat the marker only as an opportunity/u);
-  expect(
-    appendProgressSystemPrompt("base prompt", {
-      progressTextOnCompaction: false,
-      progressTextOnEffortChange: false,
-    }),
-  ).toBeUndefined();
-});
-
-it("injects a hidden one-shot effort opportunity", () => {
-  const messages: ContextEvent["messages"] = [{ content: "work", role: "user", timestamp: 1 }];
+it("preserves system sections, tool declarations and the actual user request", () => {
+  const messages: ContextWithSystemEvent["messages"] = [
+    {
+      role: "system",
+      content: "Follow project instructions",
+      sections: { project: "Finish the requested work; respond only in JSON." },
+      toolsAdded: [{ name: "read", description: "Read files", parameters: { type: "object" } }],
+      timestamp: 1,
+    },
+    { content: "Fix the bug", role: "user", timestamp: 2 },
+    {
+      role: "system",
+      content: "",
+      sections: { project: "Updated project instructions" },
+      toolsRemoved: [{ name: "read" }],
+      timestamp: 3,
+    },
+  ];
   const result = injectProgressOpportunity(messages, "effort-change");
+  const converted = convertToLlm(result.messages);
 
-  expect(result.messages).toHaveLength(2);
-  expect(result.messages?.at(-1)).toMatchObject({
-    content:
-      "<progress_update_opportunity>\nThe task has entered a different reasoning phase. Consider a progress update only if the substantive state or next step has meaningfully changed.\n</progress_update_opportunity>",
-    customType: "pi-effort-manager-progress-opportunity",
-    details: { trigger: "effort-change" },
-    display: false,
-    role: "custom",
+  expect(result.messages).toHaveLength(4);
+  expect(result.messages.slice(0, 3)).toStrictEqual(messages);
+  expect(result.messages[0]).toBe(messages[0]);
+  expect(result.messages[2]).toBe(messages[2]);
+  expect(messages).toHaveLength(3);
+  expect(converted.map((message) => message.role)).toStrictEqual([
+    "system",
+    "user",
+    "system",
+    "system",
+  ]);
+  expect(converted.filter((message) => message.role === "user")).toStrictEqual([
+    { content: "Fix the bug", role: "user", timestamp: 2 },
+  ]);
+  expect(converted.at(-1)).toMatchObject({
+    role: "system",
+    content: expect.stringMatching(/different reasoning allocation/u),
   });
-  expect(messages).toStrictEqual([{ content: "work", role: "user", timestamp: 1 }]);
+  expect(converted.at(-1)?.content).toMatch(/existing instructions[\s\S]*take precedence/u);
+  expect(converted.at(-1)?.content).toMatch(/not a reason to stop or ask for confirmation/u);
+  expect(converted.at(-1)?.content).toMatch(/do not suppress required communication/u);
 });
 
-it("injects a hidden post-compaction opportunity", () => {
-  const result = injectProgressOpportunity([], "compaction");
+it("keeps tool results in place when scheduling a post-compaction opportunity", () => {
+  const messages: ContextWithSystemEvent["messages"] = [
+    {
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "read",
+      content: [{ type: "text", text: "File contents" }],
+      isError: false,
+      timestamp: 1,
+    },
+  ];
+  const result = injectProgressOpportunity(messages, "compaction");
 
-  expect(result.messages?.at(-1)).toMatchObject({
-    content:
-      "<progress_update_opportunity>\nThe task is continuing after context was reorganized. Consider a progress update only if it helps reorient the user around substantive progress and the next step.\n</progress_update_opportunity>",
-    details: { trigger: "compaction" },
-    display: false,
-    role: "custom",
+  expect(result.messages[0]).toBe(messages[0]);
+  expect(convertToLlm(result.messages).map((message) => message.role)).toStrictEqual([
+    "toolResult",
+    "system",
+  ]);
+  expect(result.messages.at(-1)).toMatchObject({
+    role: "system",
+    content: expect.stringMatching(/context was reorganized/u),
   });
 });
 
-it("enables effort opportunities independently from compaction", () => {
-  const progress = new ProgressTextController({
+it("enables effort opportunities independently from compaction and only once", () => {
+  const progress: ProgressTextController = new ProgressTextController({
     progressTextOnCompaction: false,
     progressTextOnEffortChange: true,
   });
@@ -59,13 +80,14 @@ it("enables effort opportunities independently from compaction", () => {
   expect(progress.context([])).toBeUndefined();
   progress.schedule("effort-change");
   expect(progress.context([])?.messages.at(-1)).toMatchObject({
-    details: { trigger: "effort-change" },
+    role: "system",
+    content: expect.stringMatching(/different reasoning allocation/u),
   });
   expect(progress.context([])).toBeUndefined();
 });
 
 it("enables compaction opportunities independently and resets pending state", () => {
-  const progress = new ProgressTextController({
+  const progress: ProgressTextController = new ProgressTextController({
     progressTextOnCompaction: true,
     progressTextOnEffortChange: false,
   });
@@ -73,7 +95,8 @@ it("enables compaction opportunities independently and resets pending state", ()
   expect(progress.context([])).toBeUndefined();
   progress.schedule("compaction");
   expect(progress.context([])?.messages.at(-1)).toMatchObject({
-    details: { trigger: "compaction" },
+    role: "system",
+    content: expect.stringMatching(/context was reorganized/u),
   });
   progress.schedule("compaction");
   progress.reset({
@@ -81,5 +104,7 @@ it("enables compaction opportunities independently and resets pending state", ()
     progressTextOnEffortChange: false,
   });
   expect(progress.context([])).toBeUndefined();
-  expect(progress.systemPrompt("base prompt")).toBeUndefined();
+  progress.schedule("effort-change");
+  progress.schedule("compaction");
+  expect(progress.context([])).toBeUndefined();
 });

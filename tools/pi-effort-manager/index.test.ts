@@ -137,8 +137,11 @@ function exerciseEvents(): void {
     { systemPrompt: "base prompt" },
     context,
   );
-  required(events.get("context"), "context")({ messages: [] }, context);
-  required(events.get("turn_end"), "turn_end")({}, context);
+  required(events.get("context_with_system"), "context_with_system")({ messages: [] }, context);
+  required(events.get("turn_end"), "turn_end")(
+    { messageEntryId: "round", toolResults: [] },
+    context,
+  );
   required(events.get("message_end"), "message_end")(
     { message: { role: "assistant", usage: { reasoning: 10 } } },
     context,
@@ -158,7 +161,10 @@ function exerciseEffortChangeEvents(): void {
     context,
   );
   thinking = "off";
-  required(events.get("turn_end"), "turn_end")({}, context);
+  required(events.get("turn_end"), "turn_end")(
+    { messageEntryId: "round", toolResults: [] },
+    context,
+  );
 }
 
 afterAll(() => {
@@ -171,10 +177,14 @@ it("registers and executes the complete effort management surface", async () => 
   expect([...flags.keys()]).toStrictEqual(["dynamic-effort"]);
   expect([...commands.keys()]).toStrictEqual(["dynamic-effort", "fast"]);
   expect([...shortcuts.keys()]).toStrictEqual(["ctrl+shift+e"]);
+  expect(events.has("context")).toBe(false);
+  expect(events.has("context_with_system")).toBe(true);
 
   exerciseEvents();
   await exerciseCommands();
   required(shortcuts.get("ctrl+shift+e"), "dynamic shortcut").handler(context);
+  required(events.get("session_before_compact"), "session_before_compact")({}, context);
+  required(events.get("session_compact"), "session_compact")({}, context);
 
   expect(
     required(events.get("before_provider_request"), "before_provider_request")(
@@ -188,19 +198,37 @@ it("registers and executes the complete effort management surface", async () => 
       { systemPrompt: "base prompt" },
       context,
     ),
-  ).toMatchObject({ systemPrompt: expect.stringMatching(/Progress communication/u) });
-  expect(required(events.get("context"), "context")({ messages: [] }, context)).toMatchObject({
+  ).toBeUndefined();
+  expect(
+    required(events.get("context_with_system"), "context_with_system")({ messages: [] }, context),
+  ).toMatchObject({
     messages: [
       {
-        details: { trigger: "compaction" },
-        display: false,
-        role: "custom",
+        content: expect.stringMatching(/context was reorganized/u),
+        role: "system",
       },
     ],
   });
   exerciseEffortChangeEvents();
-  expect(required(events.get("context"), "context")({ messages: [] }, context)).toMatchObject({
-    messages: [{ details: { trigger: "effort-change" } }],
+  expect(
+    required(events.get("context_with_system"), "context_with_system")({ messages: [] }, context),
+  ).toMatchObject({
+    messages: [
+      { role: "system", content: expect.stringMatching(/different reasoning allocation/u) },
+    ],
   });
-  expect(required(events.get("context"), "context")({ messages: [] }, context)).toBeUndefined();
+  expect(
+    required(events.get("context_with_system"), "context_with_system")({ messages: [] }, context),
+  ).toBeUndefined();
+});
+
+it("clears pending progress and restores the selected branch on tree navigation", () => {
+  effortManager(createPi());
+  required(events.get("session_start"), "session_start")({}, context);
+  thinking = "off";
+  required(events.get("model_select"), "model_select")({}, context);
+  required(events.get("session_tree"), "session_tree")({}, context);
+  expect(
+    required(events.get("context_with_system"), "context_with_system")({ messages: [] }, context),
+  ).toBeUndefined();
 });

@@ -138,6 +138,55 @@ Models without reasoning stay unchanged. Models with fewer than three distinct l
 safely: the deepest level remains reserved when possible, and a single-level model uses that level for
 both work and compaction.
 
+Dynamic work effort also has an evidence-based recovery floor. A completed tool round with at least
+one `isError` result raises that floor one supported work level; multiple failures in the same round
+count once. Two consecutive successful, non-empty tool rounds lower the floor one step. Empty
+rounds are not recovery evidence. The effective level is the deeper of this floor and the context
+ramp, capped at the configured work boundary. Compaction cannot erase unresolved failure evidence.
+This is a bounded heuristic, not a claim that tool success proves task completion or that higher
+effort guarantees better answers. Recovery pressure is capped at six steps; `/dynamic-effort status`
+shows `recoverySteps`. Static mode remains untouched.
+
+## Harness transitions and ownership
+
+The extensions share Pi's request/tool lifecycle instead of starting a second agent runner. The
+graph below describes enforced transitions, not an LLM-generated execution plan:
+
+```mermaid
+flowchart TD
+  Branch[Selected session branch] --> Work[Work: context ramp + recovery floor]
+  Work -->|failed tool round| Recover[Raise recovery floor]
+  Recover --> Work
+  Work -->|two clean tool rounds| Lower[Lower recovery floor one step]
+  Lower --> Work
+  Work -->|begin compaction| Compact[Compacting: preserve prior work effort]
+  Compact -->|validated summary committed| Work
+  Compact -->|failure or cancellation| Restore[Restore prior work effort]
+  Restore --> Work
+  Work -->|goal completion audit| Done[Goal complete]
+```
+
+- Goal owns the objective and completion audit. Loop/tmux own their existing wakeups and process
+  notifications; effort never queues work, declares completion, or resumes stopped automation.
+- The goal extension projects current goal state into each model request, including after a tool
+  changes it. Neither goal nor effort freezes the full system prompt or converts optional guidance
+  into a user request. Effort changes alone are not evidence of task progress.
+- Repeated compaction starts preserve the original work level. A success/failure consumes its
+  pending transition once; a late success cannot reset effort after a failure. Model selection
+  invalidates the old compaction transition.
+- Recovery state and its last processed turn ID are recorded in branch-local session entries.
+  Repeated delivery of the last turn does not count twice. `/tree` restores the selected branch and
+  clears pending progress messages; it does not import another branch's transient state.
+- Durable summary reuse follows the exact input identity and validated segment boundary described
+  above. Checkpointing does not replay shell commands or manufacture authorization.
+
+Offline integration coverage lives in `../pi-goal-extension/smoke.mjs` and
+`../pi-goal-extension/recovery-smoke.mjs`: they load goal, loop, tmux, dynamic effort and the
+compaction guard together, use a fake provider, and reject network access. They exercise live goal
+updates, optional progress roles, pause/resume, retry, shared continuation ownership, real disposable
+tmux output, persistent sessions and overflow recovery. These checks establish lifecycle behavior;
+they do not measure live-model instruction-following quality.
+
 `/dynamic-effort status` reports dynamic state, resolved start/end/compaction efforts, reset interval, context
 usage, supported levels, successful compaction count, and observed reasoning-token average/maximum
 per effort when the provider supplies `usage.reasoning`. The status and working-message effort labels
@@ -145,9 +194,12 @@ include `dynamic` while automatic control is active.
 
 Natural progress text is model-authored rather than emitted as fixed extension notifications. When
 enabled, an effort change or successful compaction gives the next model call one private, one-shot
-opportunity to write a brief update. The system prompt tells the model to remain silent when there is
-no meaningful development, avoid narrating routine tools, and never expose internal effort or
-compaction mechanics. The two triggers are independently configurable.
+opportunity to write a brief update. This uses a transient system message through
+`context_with_system`, preserving Pi's structured prompt sections and tool declarations. It never
+adds a synthetic user request or replaces the full system prompt. Existing instructions, required
+updates, output formats, and completion criteria take precedence; the optional update must not
+interrupt pending work. Internal markers are omitted from ordinary updates, while explicit questions
+about effort or compaction can still be answered. The two triggers are independently configurable.
 Both are opt-in: only an explicit `true` enables a trigger; an omitted, malformed, or `false` value
 keeps it disabled.
 
