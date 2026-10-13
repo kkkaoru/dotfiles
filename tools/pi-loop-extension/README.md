@@ -4,6 +4,12 @@ A global [pi extension](https://pi.dev/docs/latest/extensions) for continuing wo
 repeated manual prompts, backed by `@earendil-works/pi-durable` (pinned to 1.0.4).
 Requires Pi 1.0.4 or newer. Existing commands and tools are unchanged.
 
+Session startup clears stale run-failure flags and watched-task ownership; shutdown detaches the
+task listener. A previous session's error or detached work cannot make a new loop pause or appear
+unfinished. Loops and detached processes remain session-owned external work across `/tree`;
+history navigation does not replay their launches. Goal and dynamic-effort policy restore from
+the selected branch while external job identities remain stable.
+
 - `start_loop` lets the agent autonomously define a self-paced loop grounded in the user's established
   task. It adopts the current turn without injecting or queuing another initial prompt, then uses
   the same `loop_wakeup`/`loop_complete` decisions and persistence as `/loop`. Starting one supersedes

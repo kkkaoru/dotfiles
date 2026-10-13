@@ -51,6 +51,7 @@ export class WatchedLoopTasks {
     isActive: () => boolean,
   ): void {
     this.detach();
+    this.clear();
     this.#sessionId = sessionId;
     if (bus === undefined || sessionId === undefined) {
       return;

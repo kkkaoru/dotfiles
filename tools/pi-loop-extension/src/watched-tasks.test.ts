@@ -1,6 +1,11 @@
 // This TypeScript file is executed with Bun.
 import { describe, expect, it } from "vitest";
-import { announceTask, type ActivityBus, type ActivitySnapshot } from "./goal-activity.ts";
+import {
+  ActivityProvider,
+  announceTask,
+  type ActivityBus,
+  type ActivitySnapshot,
+} from "./goal-activity.ts";
 import { liveTaskNames, pruneWatchedTasks, WatchedLoopTasks } from "./watched-tasks.ts";
 
 function tmux(tasks: readonly string[], pendingTasks?: readonly string[]): ActivitySnapshot {
@@ -115,4 +120,20 @@ describe("WatchedLoopTasks", () => {
     expect(watched.unfinished(bus)).toBe(false);
     watched.detach();
   });
+});
+
+it("drops watched task ownership when attaching a different session", () => {
+  const bus = testBus();
+  const watched = new WatchedLoopTasks();
+  watched.attach(bus, "old-session", () => true);
+  announceTask(bus, { name: "old-task", sessionId: "old-session" });
+  watched.attach(bus, "new-session", () => true);
+  const provider = new ActivityProvider(bus, () => tmux(["old-task"]));
+  provider.start("new-session");
+  expect(watched.unfinished(bus)).toBe(false);
+  announceTask(bus, { name: "old-task", sessionId: "old-session" });
+  expect(watched.unfinished(bus)).toBe(false);
+  watched.detach();
+  watched.clear();
+  provider.stop();
 });

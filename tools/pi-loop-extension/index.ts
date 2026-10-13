@@ -129,6 +129,7 @@ function registerLifecycleHandlers(
           tasks: [],
         }));
   host.on("session_start", (_event: unknown, context: LoopContext): void => {
+    health.failed = false;
     const restored: LoopRuntimeState =
       latestLoopState(context.sessionManager?.getEntries() ?? []) ??
       createLoopState({
@@ -167,6 +168,8 @@ function registerLifecycleHandlers(
   });
   host.on("session_shutdown", (): void => {
     activity?.stop();
+    watched.detach();
+    watched.clear();
     runtime.shutdown();
   });
 }

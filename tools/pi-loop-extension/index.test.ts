@@ -242,3 +242,36 @@ it("watches detached launches announced after session start", async () => {
   vi.runOnlyPendingTimers();
   expect(context.ui.notify).toHaveBeenCalledWith(ABANDONED_LOOP_NOTICE, "warning");
 });
+
+it("does not carry an old session failure into a newly started loop", async () => {
+  vi.useFakeTimers();
+  const handlers = new Map<string, Parameters<LoopExtensionHost["on"]>[1]>();
+  const commands: LoopCommandDefinition[] = [];
+  const entries: unknown[] = [];
+  const context: LoopContext = { isIdle: () => true, ui: { notify: vi.fn(), setStatus: vi.fn() } };
+  loopExtension({
+    on: (name, handler) => {
+      handlers.set(name, handler);
+    },
+    registerCommand: (_name, command) => {
+      commands.push(command);
+    },
+    registerTool: vi.fn(),
+    sendUserMessage: vi.fn(),
+    appendEntry: (customType, data) => {
+      entries.push({ type: "custom", customType, data });
+    },
+  });
+  await handlers.get("session_start")?.({}, context);
+  await handlers.get("agent_end")?.(
+    { messages: [{ role: "assistant", stopReason: "error" }] },
+    context,
+  );
+  await handlers.get("session_shutdown")?.({}, context);
+  await handlers.get("session_start")?.({}, context);
+  await commands[0]?.handler("1m inspect current work", context);
+  await handlers.get("agent_settled")?.({}, context);
+  vi.advanceTimersByTime(0);
+  expect(entries.at(-1)).toMatchObject({ data: { paused: false } });
+  await handlers.get("session_shutdown")?.({}, context);
+});
