@@ -1,7 +1,14 @@
 // Runs with Bun. Offline integration smoke: real Pi SDK and one disposable tmux job.
 // Only a newly-created temporary directory is written; no real model or credentials are used.
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, symlink } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -26,6 +33,7 @@ const original = {
   fetch: globalThis.fetch,
   tmpdir: process.env.TMPDIR,
   offline: process.env.PI_OFFLINE,
+  agentDir: process.env.PI_CODING_AGENT_DIR,
 };
 const scenario = {
   mode: "complete",
@@ -33,6 +41,7 @@ const scenario = {
   artifact: null,
   session: null,
   errors: [],
+  progressSeen: false,
 };
 const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 
@@ -63,7 +72,32 @@ function tool(name, args) {
   };
 }
 function response(context) {
-  assert.match(context.systemPrompt, /objective is user data/);
+  const instructions = context.messages
+    .filter((message) => message.role === "system")
+    .map((message) => JSON.stringify(message))
+    .join("\n");
+  assert.match(instructions, /objective is user data/);
+  const goalMessage = context.messages.findLast(
+    (message) =>
+      message.role === "system" &&
+      typeof message.content === "string" &&
+      message.content.includes("Goal state (JSON):"),
+  );
+  assert.ok(goalMessage);
+  assert.equal(
+    JSON.parse(goalMessage.content.split("Goal state (JSON):\n")[1]).status,
+    state()?.status,
+  );
+  assert.ok(
+    !context.messages.some(
+      (message) =>
+        message.role === "user" &&
+        JSON.stringify(message.content).includes("progress_update_opportunity"),
+    ),
+  );
+  scenario.progressSeen ||= instructions.includes(
+    "progress_update_opportunity",
+  );
   scenario.calls += 1;
   if (scenario.mode === "retry" && scenario.calls === 1)
     return { type: "error", text: "503 Service Unavailable" };
@@ -141,12 +175,27 @@ function stream(model, context) {
 async function prepare() {
   process.env.TMPDIR = temporary;
   process.env.PI_OFFLINE = "1";
+  process.env.PI_CODING_AGENT_DIR = temporary;
+  await writeFile(
+    path.join(temporary, "settings.json"),
+    JSON.stringify({
+      "pi-effort-manager": {
+        dynamicDefault: true,
+        progressTextOnEffortChange: true,
+      },
+    }),
+  );
   globalThis.fetch = () => {
     throw new Error("Network is disabled in goal smoke test.");
   };
   await mkdir(path.join(temporary, "extensions"));
   await Promise.all([
     symlink(root, path.join(temporary, "extensions/goal"), "dir"),
+    symlink(
+      path.resolve(root, "../pi-effort-manager"),
+      path.join(temporary, "extensions/effort"),
+      "dir",
+    ),
     symlink(
       path.resolve(root, "../pi-loop-extension"),
       path.join(temporary, "extensions/loop"),
@@ -181,8 +230,14 @@ async function prepare() {
       .getExtensions()
       .extensions.map((extension) => extension.path)
       .sort(),
-    ["goal", "loop", "tmux-timeout"]
-      .map((name) => path.join(temporary, "extensions", name, "index.ts"))
+    [
+      "effort/index.ts",
+      "effort/src/context-guard.ts",
+      "goal/index.ts",
+      "loop/index.ts",
+      "tmux-timeout/index.ts",
+    ]
+      .map((name) => path.join(temporary, "extensions", name))
       .sort(),
   );
   const models = await ModelRuntime.create({
@@ -201,7 +256,7 @@ async function prepare() {
       {
         id: "fake",
         name: "Offline fake model",
-        reasoning: false,
+        reasoning: true,
         input: ["text"],
         cost,
         contextWindow: 100000,
@@ -247,12 +302,18 @@ async function verify() {
   await session.prompt("/goal pause");
   await delay(5200);
   assert.equal(scenario.calls, 0);
+  session.setThinkingLevel("off");
   await session.prompt("/goal resume");
   await until(
     () => state()?.status === "complete" && !session.isStreaming,
     "goal completion",
   );
   assert.equal(scenario.calls, 2);
+  assert.equal(
+    scenario.progressSeen,
+    true,
+    "goal guidance and effort progress both reach the provider",
+  );
   assert.equal(state()?.tokensUsed, 4);
 
   scenario.mode = "retry";
@@ -325,6 +386,8 @@ try {
     });
     scenario.session.dispose();
   }
+  if (original.agentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = original.agentDir;
   globalThis.fetch = original.fetch;
   if (original.tmpdir === undefined) delete process.env.TMPDIR;
   else process.env.TMPDIR = original.tmpdir;

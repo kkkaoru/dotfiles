@@ -1,6 +1,6 @@
 // Runs with Bun. Offline end-to-end recovery: real Pi SDK, no user history or real provider.
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -23,6 +23,8 @@ import { restoreGoal } from "./src/state.ts";
 const root = path.dirname(fileURLToPath(import.meta.url));
 const temporary = await mkdtemp(path.join(tmpdir(), "pi-recovery-smoke-"));
 const originalFetch = globalThis.fetch;
+const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+const originalTmpdir = process.env.TMPDIR;
 const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 const overflow =
   "Codex error: Your input exceeds the context window of this model. Please adjust your input and try again.";
@@ -54,9 +56,38 @@ function assistant(block, model) {
 }
 function streamFor(scenario) {
   return (model, context) => {
-    const summary = JSON.stringify(context.messages[0]).includes(
-      "Summarize this transcript segment",
+    const summary = context.messages.some(
+      (message) =>
+        message.role === "user" &&
+        JSON.stringify(message.content).includes(
+          "Summarize this transcript segment",
+        ),
     );
+    if (!summary) {
+      assert.ok(
+        !context.messages.some(
+          (message) =>
+            message.role === "user" &&
+            JSON.stringify(message.content).includes(
+              "progress_update_opportunity",
+            ),
+        ),
+      );
+      const current = scenario.readGoal?.();
+      if (current) {
+        const guidance = context.messages.findLast(
+          (message) =>
+            message.role === "system" &&
+            typeof message.content === "string" &&
+            message.content.includes("Goal state (JSON):"),
+        );
+        assert.ok(guidance);
+        assert.equal(
+          JSON.parse(guidance.content.split("Goal state (JSON):\n")[1]).status,
+          current.status,
+        );
+      }
+    }
     const events = createAssistantMessageEventStream();
     if (summary) scenario.summaryCalls += 1;
     else scenario.calls += 1;
@@ -168,11 +199,13 @@ async function createSession(scenario) {
       path.join(root, "index.ts"),
       path.resolve(root, "../pi-loop-extension/index.ts"),
       path.resolve(root, "../pi-effort-manager/src/context-guard.ts"),
+      path.resolve(root, "../pi-effort-manager/index.ts"),
+      path.resolve(root, "../pi-tmux-timeout-extension/index.ts"),
     ],
   });
   await loader.reload();
   assert.deepEqual(loader.getExtensions().errors, []);
-  assert.equal(loader.getExtensions().extensions.length, 3);
+  assert.equal(loader.getExtensions().extensions.length, 5);
   const models = await ModelRuntime.create({
     credentials: new InMemoryCredentialStore(),
     modelsStore: new InMemoryModelsStore(),
@@ -189,7 +222,7 @@ async function createSession(scenario) {
       {
         id: "fake",
         name: "Offline recovery fake",
-        reasoning: false,
+        reasoning: true,
         input: ["text"],
         cost,
         contextWindow: 100_000,
@@ -206,7 +239,10 @@ async function createSession(scenario) {
     modelRuntime: models,
     settingsManager: settings,
     resourceLoader: loader,
-    sessionManager: SessionManager.inMemory(temporary),
+    sessionManager: SessionManager.create(
+      temporary,
+      path.join(temporary, "sessions"),
+    ),
     tools: [
       "get_goal",
       "start_goal",
@@ -217,6 +253,7 @@ async function createSession(scenario) {
       "loop_wakeup",
     ],
   });
+  scenario.readGoal = () => goal(session);
   session.subscribe((event) => {
     if (event.type === "compaction_start" || event.type === "compaction_end")
       scenario.events.push(event);
@@ -364,6 +401,18 @@ async function verify(mode) {
   }
 }
 try {
+  process.env.PI_CODING_AGENT_DIR = temporary;
+  process.env.TMPDIR = temporary;
+  await writeFile(
+    path.join(temporary, "settings.json"),
+    JSON.stringify({
+      "pi-effort-manager": {
+        dynamicDefault: true,
+        progressTextOnCompaction: true,
+        progressTextOnEffortChange: true,
+      },
+    }),
+  );
   globalThis.fetch = () => {
     throw new Error("Network is disabled in recovery smoke test.");
   };
@@ -372,6 +421,10 @@ try {
   await verify("summary-failure");
   await verify("retry-failure");
 } finally {
+  if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+  if (originalTmpdir === undefined) delete process.env.TMPDIR;
+  else process.env.TMPDIR = originalTmpdir;
   globalThis.fetch = originalFetch;
   await rm(temporary, { recursive: true, force: true });
 }
