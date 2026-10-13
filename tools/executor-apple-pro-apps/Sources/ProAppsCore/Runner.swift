@@ -84,8 +84,9 @@ private actor ProcessWorker {
     _ executable: URL, _ arguments: [String], environment: [String: String]?, timeout: Duration
   ) async throws -> CommandResult {
     try Task.checkCancellation()
-    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(
-      "pro-apps-\(UUID().uuidString)")
+    let directory = try CommandScratch.directory(environment: ProcessInfo.processInfo.environment)
+      .appendingPathComponent(
+        "pro-apps-\(UUID().uuidString)")
     try FileManager.default.createDirectory(
       at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
     // Report cleanup failures without replacing the primary command error.
