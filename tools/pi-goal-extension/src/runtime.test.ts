@@ -412,3 +412,81 @@ it("completion stops scheduling and permits a new explicit goal", () => {
   vi.advanceTimersByTime(5000);
   expect(host.send).not.toHaveBeenCalled();
 });
+
+it("does not count repeated failed tools as progress toward the goal", () => {
+  const { runtime } = setup();
+  runtime.startFromAgent("Fix the failing build");
+  runtime.begin();
+  runtime.recordTool("bash", true);
+  runtime.end(null);
+  expect(runtime.state?.noProgressTurns).toBe(1);
+  runtime.begin();
+  runtime.recordTool("read", true);
+  runtime.end(null);
+  expect(runtime.state?.noProgressTurns).toBe(2);
+  runtime.begin();
+  runtime.recordTool("bash", true);
+  runtime.end(null);
+  expect(runtime.state?.status).toBe("blocked");
+});
+
+it.each([
+  { pendingTasks: ["unrelated"], owned: true, waiting: false },
+  { pendingTasks: ["owned"], owned: true, waiting: true },
+  { pendingTasks: [], owned: true, waiting: false },
+  { pendingTasks: undefined, owned: true, waiting: true },
+  { pendingTasks: undefined, owned: false, waiting: false },
+])(
+  "scopes notification wait evidence to the goal: %j",
+  ({ pendingTasks, owned, waiting }) => {
+    const { host, runtime } = setup();
+    const tmux = new ActivityProvider(host.bus, () => ({
+      source: "tmux",
+      ownsContinuation: false,
+      pendingDelivery: true,
+      ...(pendingTasks === undefined ? {} : { pendingTasks }),
+      tasks: ["unrelated"],
+    }));
+    tmux.start("session");
+    runtime.startFromAgent("Verify the requested build");
+    if (owned) announceTask(host.bus, { sessionId: "session", name: "owned" });
+    for (const turn of [1, 2, 3]) {
+      runtime.begin();
+      runtime.end(null);
+      expect(runtime.state?.noProgressTurns).toBe(waiting ? 0 : turn);
+    }
+    expect(runtime.state?.status).toBe(waiting ? "active" : "blocked");
+    tmux.stop();
+  },
+);
+
+it("does not mistake a loop task name for an owned tmux wait", () => {
+  const { host, runtime } = setup();
+  const loop = new ActivityProvider(host.bus, () => ({
+    source: "loop",
+    ownsContinuation: true,
+    pendingDelivery: true,
+    tasks: ["owned"],
+  }));
+  loop.start("session");
+  runtime.startFromAgent("Verify the requested build");
+  announceTask(host.bus, { sessionId: "session", name: "owned" });
+  runtime.begin();
+  runtime.end(null);
+  expect(runtime.state?.noProgressTurns).toBe(1);
+  loop.stop();
+});
+
+it("resets stalled progress when a later tool actually succeeds", () => {
+  const { runtime } = setup();
+  runtime.startFromAgent("Fix the failing build");
+  runtime.begin();
+  runtime.recordTool("bash", true);
+  runtime.end(null);
+  runtime.begin();
+  runtime.recordTool("bash", true);
+  runtime.recordTool("read", false);
+  runtime.end(null);
+  expect(runtime.state?.noProgressTurns).toBe(0);
+  expect(runtime.state?.status).toBe("active");
+});

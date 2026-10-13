@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import {
   type ActivityBus,
+  pendingOwnedTasks,
   queryActivity,
   subscribeTasks,
   type TaskNotice,
@@ -230,8 +231,8 @@ export class GoalRuntime {
       });
   }
 
-  recordTool(name: string): void {
-    if (!CONTROL_TOOLS.has(name)) this.#observedWork = true;
+  recordTool(name: string, isError?: boolean): void {
+    if (isError !== true && !CONTROL_TOOLS.has(name)) this.#observedWork = true;
   }
 
   recordTokens(tokens: number): void {
@@ -283,9 +284,7 @@ export class GoalRuntime {
     const waiting: boolean =
       (goal.wait !== null && goal.wait.until > Date.now()) ||
       activity.some(
-        (snapshot) =>
-          snapshot.tasks.some((name) => goal.tasks.includes(name)) ||
-          snapshot.pendingDelivery,
+        (snapshot) => pendingOwnedTasks(snapshot, goal.tasks).length > 0,
       );
     const reportedBlocker: boolean = goal.blocker?.turn === goal.turn;
     const noProgressTurns: number =
@@ -384,15 +383,7 @@ export class GoalRuntime {
         "Owned task monitoring is unavailable; enable the tmux extension before continuing.",
       );
     if (tmux === undefined) return [];
-    // Per-task pending notices are authoritative. A publisher that only reports the aggregate
-    // cannot say which task is pending, so it blocks every owned task.
-    const pending: readonly string[] = tmux.pendingTasks ?? [];
-    const aggregatePending: boolean =
-      tmux.pendingTasks === undefined && tmux.pendingDelivery;
-    return goal.tasks.filter(
-      (name) =>
-        aggregatePending || tmux.tasks.includes(name) || pending.includes(name),
-    );
+    return pendingOwnedTasks(tmux, goal.tasks);
   }
 
   #cancelTimer(): void {

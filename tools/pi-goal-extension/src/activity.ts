@@ -23,6 +23,24 @@ export interface TaskNotice {
   readonly name: string;
 }
 
+export function pendingOwnedTasks(
+  snapshot: ActivitySnapshot,
+  owned: readonly string[],
+): readonly string[] {
+  if (snapshot.source !== "tmux") {
+    return [];
+  }
+  // Older publishers cannot identify pending notices; conservatively wait for owned tasks.
+  const aggregatePending =
+    snapshot.pendingTasks === undefined && snapshot.pendingDelivery;
+  return owned.filter(
+    (name) =>
+      aggregatePending ||
+      snapshot.tasks.includes(name) ||
+      snapshot.pendingTasks?.includes(name) === true,
+  );
+}
+
 const QUERY = "pi:goal:activity-query:v1";
 const LAUNCH = "pi:goal:task-launch:v1";
 
