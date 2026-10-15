@@ -7,6 +7,7 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 s=qwen
 work="$(mktemp -d)"
+"$root/scripts/colab-qwen-ensure-key.sh"
 key="$(jq -er '.["google-colab"].key' "$root/.pi/agent/auth.json")"
 
 run() { colab exec -s "$s" --timeout "${2:-120}" -f "$1"; }

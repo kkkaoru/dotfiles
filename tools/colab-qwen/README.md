@@ -1,16 +1,24 @@
 # Qwen3.8-27B on Google Colab for pi
 
-1. Open `qwen38_27b_vllm.ipynb` in Colab on an A100 runtime and run all cells.
-   It serves `Qwen/Qwen3.8-27B` with vLLM (on-load FP8, since bf16 ~56GB exceeds 40GB)
-   behind a Cloudflare quick tunnel protected by a random API key.
-2. On the Mac run the line the last cell prints:
-   `./scripts/colab-qwen-connect.sh <tunnel-url> <api-key>`
-   (updates the tunnel URL in `.pi/agent/models.json`, stores the key in the fish universal
-   variable `COLAB_QWEN_API_KEY`, and checks `/v1/models`).
-3. Restart pi: `pi --provider google-colab --model Qwen3.8-27B`.
+## Setup on a new machine
 
-The tunnel URL and key change every Colab session; `models.json` shows a diff for the URL.
-Set `QUANT = "bitsandbytes"` in the notebook for 4-bit if FP8 runs out of KV memory.
+```bash
+git pull
+./scripts/setup-colab-qwen.sh   # colab CLI (uv), extension deps, extension link, API key
+colab --auth=oauth2 sessions    # one-time Google sign-in, if the script asks for it
+```
 
-Verified (A100 40GB): FP8 + `--enforce-eager --max-num-seqs 4`; pi created a file and ran it via `pi -p`.
-The `colab` CLI can drive this without the browser: `colab new -s qwen --gpu A100`, then `colab exec -s qwen --timeout 150 -f script.py`.
+The API key is created once in `~/.pi/agent/auth.json` (never in Git). Then pick
+`google-colab / Qwen3.8-27B` in pi. Use one machine at a time: each keeps its own idle state, so
+two machines would stop each other's Colab.
+
+## How it works
+
+- `pi-colab-lifecycle-extension` starts Colab on demand (`scripts/colab-qwen-up.sh`: A100, vLLM
+  with FP8 + `--enforce-eager --max-num-seqs 4`, Cloudflare quick tunnel), points the
+  `google-colab` provider at the tunnel URL, and shows the remaining compute units in the footer.
+- `scripts/colab-qwen-idle-stop.sh` (detached watcher) stops the session after 10 minutes without
+  a request. The first request after a stop takes ~10 min.
+- `qwen38_27b_vllm.ipynb` is the same server as a notebook, for running it by hand in the Colab UI.
+- bf16 weights (~56GB) do not fit an A100 40GB, hence FP8 on load; eager mode and a small batch
+  avoid a CUDA-graph profiling OOM.
