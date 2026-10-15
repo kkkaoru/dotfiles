@@ -1,7 +1,7 @@
 // Runs under bun (see package.json scripts) via pi's TypeScript extension loader.
 import { spawn } from "node:child_process";
 import process from "node:process";
-import { mkdirSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, openSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { isColabModel, PROVIDER } from "./src/policy.ts";
@@ -42,9 +42,10 @@ export interface ColabLifecycleHost {
   readonly registerProvider: (name: string, config: { readonly baseUrl?: string }) => void;
 }
 
-const ROOT = path.resolve(import.meta.dirname, "..", "..");
+// Resolve the real path first: pi loads this through a symlink under ~/.pi/agent/extensions.
+const ROOT = path.resolve(realpathSync(import.meta.dirname), "..", "..");
 const STATE_FILE =
-  process.env["COLAB_QWEN_STATE"] ?? path.join(homedir(), ".cache", "google-colab", "state.json");
+  process.env["COLAB_QWEN_STATE"] ?? path.join(homedir(), ".cache", "colab-qwen", "state.json");
 
 const CONFIG: Config = {
   colabCommand: path.join(homedir(), ".local", "bin", "colab"),

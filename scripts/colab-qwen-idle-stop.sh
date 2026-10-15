@@ -2,6 +2,7 @@
 # Detached watcher: stop the Colab `qwen` session after 10 minutes without a colab-qwen request.
 # pi's colab-lifecycle extension spawns it; the lock makes extra spawns exit immediately.
 set -euo pipefail
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 state="${COLAB_QWEN_STATE:-$HOME/.cache/colab-qwen/state.json}"
 idle_ms="${COLAB_QWEN_IDLE_MS:-600000}"

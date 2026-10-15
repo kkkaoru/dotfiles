@@ -86,6 +86,7 @@ it("ignores other providers on every handler", async () => {
 vi.mock("node:fs", () => ({
   mkdirSync: vi.fn(),
   openSync: vi.fn(() => 3),
+  realpathSync: vi.fn((value: string) => value),
   readFileSync: vi.fn(() => '{"url":"https://s.trycloudflare.com","lastRequestAt":7}'),
   writeFileSync: vi.fn(),
 }));

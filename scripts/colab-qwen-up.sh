@@ -2,6 +2,7 @@
 # Bring up Qwen3.8-27B on a fresh Colab A100 via the `colab` CLI and connect pi to it.
 # Reuses the persistent key in ~/.pi/agent/auth.json. Stop later with: colab stop -s qwen
 set -euo pipefail
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 s=qwen

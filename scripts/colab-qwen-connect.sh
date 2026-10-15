@@ -3,6 +3,7 @@
 # `colab-qwen` provider at it. The API key lives in ~/.pi/agent/auth.json, never in Git.
 # Usage: scripts/colab-qwen-connect.sh <https://xxx.trycloudflare.com>
 set -euo pipefail
+export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 url="${1:?usage: $0 <tunnel-url>}"
 [[ "$url" =~ ^https://[a-z0-9-]+\.trycloudflare\.com$ ]] || { echo "unexpected tunnel url: $url" >&2; exit 1; }
