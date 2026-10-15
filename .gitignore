@@ -210,3 +210,7 @@ tools/claudex-agent-adapter/grok-acp-mock.jsonl
 .codex/queue_*
 
 .cursor/plugins/cache/
+.codex/.sqlite-maintenance.lock
+.codex/app-server-control/
+.codex/app-server-daemon/
+.codex/tui-thread-reference-capabilities/
