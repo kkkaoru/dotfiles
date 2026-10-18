@@ -1,0 +1,96 @@
+---
+paths:
+  - "**/*.cs"
+  - "**/*.csproj"
+  - "**/*.asmdef"
+  - "**/*.asmref"
+  - "**/csc.rsp"
+  - "**/Directory.Build.props"
+  - "**/Directory.Build.targets"
+  - "**/Directory.Packages.props"
+---
+
+# C#コーディングルール
+
+これは正規英語版の日本語訳で、Unity projectも対象です。各要件は1個のRule IDだけを持ち、1箇所だけに記載します。.NETとUnityの公式資料を参考にした厳格なリポジトリ方針であり、C#やUnity公式のスタイル標準ではありません。MUST、MUST NOT、禁止事項は必須であり、優先方針は全必須ルールを満たす選択肢の間でのみ適用します。調査資料とバージョン上の注意は[sources.md](sources.md)に記載しています。
+
+`ProjectSettings/ProjectVersion.txt`が存在するリポジトリを**Unity project**とします。Unity projectではすべてのルールを適用します。「Unity: CSxx参照」と書かれたルールは、その点に限り指定のUnityルールが優先します。
+
+## リポジトリと検証
+
+- **CS01 リポジトリ設定:** 設定済みの.NET SDK（`global.json`）、target framework、`LangVersion`、solution/project構成、Central Package Management、scriptを使ってください。compilerの言語バージョン、target frameworkまたはAPI profile、runtime APIの利用可否は別々の制約であり、機能を使う前にそれぞれ確認してください。別のbuild system、package manager、ユーザー承認のない新しい依存の追加を禁止します。Unity: CS34、CS35参照。
+- **CS02 実装計画:** 実装前に、影響するpublic契約、nullability、serialization、async/thread境界、allocationの振る舞い、互換性、検証を含む入念な計画を立ててください。
+- **CS03 検証toolchain:** 論理的な変更単位ごとに対象を絞ったcheckを行い、その後、設定済みのbuild、format check（`dotnet format --verify-no-changes`またはCSharpierなど設定済みformatter）、analyzer、testを実行してください。対象projectのcompiler、nullable、analyzer、testのwarning/errorをすべてゼロにし、期待動作を再現して実際のcommand結果とlogを確認してください。必須checkの失敗や実行不能は検証済み完了を妨げるblockerです。既存failureも含めて報告し、成功扱いや無断の検証範囲縮小をしないでください。Unity: CS34参照。
+- **CS04 品質の維持:** `#pragma warning disable`、`[SuppressMessage]`、`.editorconfig`やrulesetでのseverity引き下げ、`<NoWarn>`/`-nowarn`、`= null!`初期化子を含むあらゆる場所でのnull許容演算子（`!`）、`#nullable disable`、testのskipや無視（`Skip`、`[Ignore]`、`[Explicit]`）、`LogAssert.ignoreFailingMessages = true`、coverage除外、成功するまでの再実行、`TreatWarningsAsErrors`・analysis level・analyzer package・coverage gateの弱体化を禁止します。このルールセットの例外には、実装前のユーザーによる明示承認、技術的必要性の文書化、最小の適用範囲、補完test、例外の解消条件が必須です。このskillや一般的な実装依頼を例外承認と解釈しないでください。
+
+## 型、値、API
+
+- **CS05 Nullable参照型:** 新規・変更codeでは、projectの設定済みの仕組み（`<Nullable>enable</Nullable>`、Unityではリポジトリの`csc.rsp`またはfile単位の`#nullable enable`の慣習）でnullable参照型を必ず有効にしてください。不在は`T?`で表現し、guard節やpattern matchingで絞り込んでください。publicとinternalのAPIでは、すべての必須引数を入口で検証してください。`??`は契約上のfallbackだけに使い、不正な値や必須入力の欠落を隠さないでください。Unity: `UnityEngine.Object`はCS38参照。
+- **CS06 ドメインモデル:** 関連の薄いprimitiveではなく専用の型（`readonly struct`、enum、sealed class、対応環境ではrecord）で有効状態、単位、識別子を表現してください。継承用に設計・文書化されていないclassは必ず`sealed`にしてください。enumや専用型で表せる状態を`bool`や`int`のflagで表すことを禁止します。
+- **CS07 不変性と定数:** 変更が必要でないfieldは必ず`readonly`にしてください。API境界では読み取り専用propertyと読み取り専用collection interfaceを公開し、内部のmutable collectionを公開しないでください。すべてのmagic numberとmagic stringを意味を表す名前の`const`または`static readonly`に置き換え、共有定数をmethod内で定義することを禁止します。CS04の承認なしにmutableなstatic stateを導入することを禁止します。Unity: CS42参照。
+- **CS08 安全でない型付け:** `dynamic`、`object`型のdomain値、未検証の直接cast、直後にnull checkのない`as`、reflectionによるdispatchの導入を禁止します。generic、interface、`is`/`switch` patternを使い、一致しないcaseを明示的に処理してください。`var`は右辺から型が明らかな場合だけ使ってください。
+- **CS09 抽象化:** 標準ではconcrete typeを使ってください。interface、base class、generic、source generatorは、実証された重複、必須のtest seam、必須の境界がある場合だけ導入し、どれに当たるかを計画に記載してください。単一実装を写すだけのinterfaceの追加を禁止します。
+- **CS10 API設計とaccess:** .NET命名ガイドラインに従い、型・member・定数は`PascalCase`、引数とlocal変数は`camelCase`、private fieldは`_camelCase`、interfaceは`I`接頭辞にしてください。すべての型とmemberは成立する最小のaccessにし、実装詳細を公開しないでください。すべてのpublic・protected memberを、送出する例外と観測可能な副作用を含めてXML documentation commentで文書化してください。
+- **CS11 網羅性:** patternを使った`switch`式で、所有するenumのすべての値を明示的に処理してください。discard armは未定義値で例外を投げるためだけに使い、新しいcaseを隠さないでください。外部から渡された値やdeserializeしたenum値は使用前に検証してください。
+
+## 関数と制御フロー
+
+- **CS12 関数の凝集:** methodを単一の目的に保ち、production logicを再利用し、test以外のcodeはできる限りDRYにしてください。`Main`、top-level statement、controller、hosted service、Unityのmessage methodは、手順をできる限り少なくした薄いorchestration層にし、business logicをhostやengineなしでtestできる素のC#型へ抽出してください。
+- **CS13 分岐:** guard節、early return、pattern matchingでnestを減らしてください。method内で2段より深いnestはrefactoringが必要です。条件演算子は明瞭で単純な値だけに使い、nestや連鎖をしないでください。繰り返される`if`/`else if`や`switch`のdispatchは、より明瞭なら`switch`式や型付きdictionaryに置き換えてください。`goto`と`#region`を禁止します。
+- **CS14 反復とLINQ:** hot path以外の明瞭で副作用のない変換にはLINQを使い、mutation、短絡、状態を持つ制御フローの方が明瞭ならloopを使ってください。1つのmethod内で2重以上のloop nestを避けてください。`IEnumerable<T>`を2回以上列挙することを禁止し、`ToList`/`ToArray`による実体化は必要な場合だけにしてください。再利用するcomparerやkey selectorはsort呼び出しとは別に定義してください。Unity: CS41参照。
+- **CS15 引数:** 3個以上のまとまりのある引数は、不変条件とcall siteが明瞭になる場合に型付きoptions型にまとめてください。必須依存はconstructorまたは初期化methodによる注入で明示し、依存のためのservice locator、static singleton、ambient stateを禁止します。
+
+## エラー、リソース、メモリ
+
+- **CS16 例外:** 具体的な例外型を投げ、処理できる最小の型だけをcatchしてください。空の`catch`、logを出して終了または失敗を報告する文書化されたtop-level境界以外での`Exception`/`SystemException`のcatch、`throw ex;`（`throw;`を使う）を禁止します。原因は`innerException`で保持してください。想定内の結果に例外を使うことを禁止し、`Try…`パターンやresult型を使ってください。
+- **CS17 データ境界:** すべての外部入力（file、network、ユーザー入力、deserializeしたdata、save data）を、domain値を作る前に検証してください。型付きのserializer modelを使い、不正なdata、欠落field、数値範囲、versioning、culture（機械向け形式には`CultureInfo.InvariantCulture`）、文字列比較（明示的な`StringComparison`）、HTTP status codeを明示的に扱ってください。文字列連結ではなく`Path`/`Uri` APIを、文字列組み立てのSQLではなくparameterized queryを使ってください。
+- **CS18 リソースのlifecycle:** 所有するすべての`IDisposable`/`IAsyncDisposable`を、`using`宣言、`using`文、`await using`で確定的に破棄してください。cleanupをfinalizerに頼ることを禁止します。HTTP clientはrequestごとに作らず再利用してください（`IHttpClientFactory`または長寿命instance。Unityでは破棄を伴うリポジトリの`UnityWebRequest` wrapper）。fileの読み書きを最小限にし、順序が不要な独立I/Oだけを並行実行してください。Unity: CS39参照。
+- **CS19 unsafe code:** `Span<T>`、`Memory<T>`、安全なcollectionを優先してください。CS04の承認なしに`unsafe` block、pointer、`Unsafe`/`MemoryMarshal`による再解釈、P/Invokeを導入することを禁止します。承認されたnative interopは安全なAPIの背後に隔離し、寿命、範囲、所有権の不変条件を文書化し、利用可能なら`SafeHandle`を使い、境界条件をtestしてください。
+
+## 非同期と並行性
+
+- **CS20 asyncの正しさ:** 実際の非同期処理にだけ`async`/`await`を使ってください。taskを返せないframework event handler以外での`async void`の導入（Unityのmessage methodは常に不可。CS40参照）、`.Result`、`.Wait()`、`GetAwaiter().GetResult()`による非同期codeのblockを禁止します。非同期methodには`Async`接尾辞を付け、`ValueTask`やpoolされたawaitableはちょうど1回だけawaitしてください。リポジトリの`ConfigureAwait`方針に一貫して従ってください。Unity: CS40参照。
+- **CS21 キャンセル:** 呼び出し元より長く生きる可能性がある、または長時間かかり得る非同期操作は、必ず最後の引数で`CancellationToken`を受け取り、すべての呼び出しに渡してください。`OperationCanceledException`は通常の失敗ではなくキャンセルとして扱い、retryやerror logをしないでください。キャンセル時もリソースをcleanupしてください。
+- **CS22 Taskの所有:** fire-and-forgetのtaskや破棄されたtask結果の導入を禁止します。すべてのtaskには完了と例外を観測するownerが必要です。固定数の独立操作には`Task.WhenAll`を、動的入力には上限付きの並行性（`MaxDegreeOfParallelism`付き`Parallel.ForEachAsync`、`Channel<T>`、`SemaphoreSlim`）を使ってください。I/O-bound処理のwrapやlibrary APIでの同期処理の隠蔽に`Task.Run`を使うことを禁止します。
+- **CS23 共有状態:** 共有mutable stateは不変data、`lock`、`Interlocked`、concurrent collectionで保護してください。lock範囲は短くし、lock保持中に`await`しないでください。`this`、型、文字列へのlockを禁止します。UIやengineのAPIはframeworkが要求するthreadからだけ呼び出してください。Unity: CS39参照。
+
+## 構成と診断
+
+- **CS24 source構成:** すべての型をfolderまたはassembly構成に一致するnamespaceに置いてください。言語バージョンが対応していればfile-scoped namespaceを使ってください。1 fileに1つのtop-level型を置き、file名を型名にしてください。`using` directiveは先頭に置き、`global using`はリポジトリが既に使っている場合に専用の1 fileでだけ使ってください。型内では定数、field、constructor、property、methodをリポジトリと一貫した順序で並べてください。
+- **CS25 未使用code:** toolを黙らせるのではなく、未使用の型、member、変数、`using` directive、依存、空のmethod、古い互換branchを削除してください。discardの`_`は本当に無視する結果や必須の未使用引数だけに使ってください。comment outしたcodeを残すことを禁止します。
+- **CS26 文書と診断:** comment、XML documentation、log、例外messageは英語で書き、構文の言い換えではなく契約、理由、不変条件を説明してください。設定済みのlogging抽象を使い、文字列補間ではなく構造化message templateを使ってください。credentialや機微なユーザーdataをlogに出すことを禁止します。Unity: CS43参照。
+- **CS27 性能:** `Span`中心のcode、pooling、`stackalloc`、struct layout制御、積極的なinliningを導入する前に（BenchmarkDotNet、またはUnity Profiler/Profile Analyzerで）計測し、計測結果を変更説明に記録してください。不要なallocation、boxing、繰り返しの文字列連結を避けてください。ただし、検証済みの正しさと可読性を推測による最適化と引き換えにしないでください。
+
+## テストとカバレッジ
+
+- **CS28 testの責任:** test以外のC# fileを作成、編集、削除するときは、リポジトリのtest projectと命名に従い、影響する振る舞い、public契約、serialize対象data、data modelの関連testを追加または更新してください。project fileだけの変更では、unit testを作るのではなく影響するbuildとtestを検証してください。
+- **CS29 test framework:** リポジトリ既存のtest framework（xUnit、NUnit、MSTest、Unity Test Framework）、assertionの書き方、mocking libraryを使ってください。別のrunner、assertion library、mocking frameworkの追加を禁止します。
+- **CS30 testの明瞭さ:** test codeをDRYに書かないでください。literalの期待結果を持つ明示的で独立したcaseを書き、production logicで期待値を計算することを禁止します。test内のloopとloop内のassertionを禁止します。framework標準のparameterized test（`[Theory]`/`[InlineData]`、`[TestCase]`、`[DataRow]`）は、明示的なliteralのcase dataを持ち、本当に同一の振る舞いの場合だけ使ってください。nestしたtest classを最小限にし、部分的な包含checkではなく完全な結果をassertしてください。
+- **CS31 testの隔離:** filesystem、時計、環境変数、process、networkの依存には、時計（利用可能なら`TimeProvider`、なければリポジトリの時計interface）、HTTP handlerのstub、一時directory、test doubleを注入し、testを決定的かつ高速に保ってください。mutable fixtureの共有やtest順の仮定を禁止します。`Task.Delay`、`Thread.Sleep`、推測した時間での待機を禁止し、上限付きtimeoutで観測可能な完了をawaitしてください。
+- **CS32 testシナリオ:** 成功、null・不正・欠落した入力、境界値、例外の伝播、破棄、serializationの往復、変更したasync契約（キャンセルを含む）をカバーしてください。実際の境界の振る舞いを確かめるintegration testは、高速な隔離testと分けてください。
+- **CS33 カバレッジ:** 設定済みcollector（例: `dotnet test --collect:"XPlat Code Coverage"`やcoverlet）を使い、変更したtest可能なsource fileごとにline coverage 95%以上、branch coverage 95%以上を必須とします。既存の低い閾値はこの要件を免除しません。gateを下げたりproject全体の平均で不足を隠したりしないでください。test終了statusだけでなくfile単位のreportを確認してください。手書きlogicへの`[ExcludeFromCodeCoverage]`やfilter除外にはCS04の承認が必要です。Unity: CS51参照。
+
+## Unity project
+
+- **CS34 Unity toolchainと検証:** `ProjectSettings/ProjectVersion.txt`のeditor versionと、`Packages/manifest.json`・`packages-lock.json`で固定されたpackageを使ってください。承認なしのeditorやpackageの更新を禁止します。Unityが生成する`.csproj`/`.sln`の手動編集とcommitを禁止し、compile設定は`.asmdef`、`.asmref`、`csc.rsp`、Player Settingsだけで行ってください。設定済みscriptまたはUnity batch modeで、`-testResults`付きの`-runTests -testPlatform EditMode`と`-testPlatform PlayMode`を実行し、さらに出荷する全platformとscripting backend（IL2CPPを含む）でplayer buildまたはscript compileを行い、`#if` branchとstrippingをcompileしてください。test結果とeditor/build logを確認し、変更codeにcompiler、analyzer（設定済みならMicrosoft.Unity.Analyzersを含む）、consoleのwarningやerrorがあれば完了できません。
+- **CS35 Unityの言語とAPIの利用可否:** 言語機能やBCL機能を使う前に、projectのC# version、API Compatibility Level、scripting backendを確認してください。MonoベースのUnityはC# 9.0でcompileし、文書化された欠落（init-only setter、covariant return、module initializerなどは未対応）があり、.NET Standard 2.1または.NET Framework profileを対象とします。この場合、file-scoped namespace、`record struct`、`global using`などのC# 10以降の機能や、`ArgumentNullException.ThrowIfNull`、`TimeProvider`、`System.Threading.Lock`などの.NET 6以降のAPIは使えません。`IsExternalInit`などのpolyfillを承認なしに追加することを禁止し、Unityでserializeする型にrecordを使うことを禁止します。CoreCLRベースのversionではこれらの制限が変わるため、projectのUnity文書で再確認してください。
+- **CS36 asset、meta file、serializeされたrename:** 各assetとfolderの`.meta` fileを一緒にcommitしてください。GUIDの削除、再生成、編集を禁止します。assetの移動やrenameは`.meta` fileと一緒に行ってください。script fileには、file名と一致する名前の`MonoBehaviour`または`ScriptableObject`型をちょうど1つだけ含めてください。serializeされたfieldのrenameには`[FormerlySerializedAs]`を、`[SerializeReference]`で使う型の移動やrenameには`[MovedFrom]`を必ず付けてください。ユーザーの承認を得た検証済みの軽微な変更を除き、scene、prefab、assetのYAMLの手動編集を禁止します。
+- **CS37 serializeされたfield:** Unity objectにpublic fieldを宣言することを禁止します。`[SerializeField] private` fieldを読み取り専用propertyやmethodで公開してください。serializeされたfieldはconstructorで初期化されないため、`= null!`でnullable warningを黙らせることを禁止します。必須参照は`T?`で宣言し、`OnValidate`（editor）と`Awake`（runtime）で検証し、例外またはerrorで明確に失敗させてcomponentを無効にしてください。検証後は、絞り込んだlocal変数か`Awake`で代入したnon-nullable fieldだけを通して読んでください。serializeする型は必ずUnityでserialize可能にし、property、dictionary、`[SerializeReference]`なしのinterface、recordのserializationに頼らないでください。
+- **CS38 UnityEngine.Objectのnull意味論:** `UnityEngine.Object`派生の値には`?.`、`??`、`??=`、`is null`、`is not null`、`is { }`、`ReferenceEquals`の使用を禁止します。これらはUnityの破棄済みobject判定を迂回します。`== null`、`!= null`、暗黙のbool変換を使い、取得には`TryGetComponent`を使ってください。破棄済みobjectは不在として扱ってください。
+- **CS39 lifecycleとmain thread:** 自身が所有する状態は`Awake`で初期化し、`OnEnable`で購読して対応する`OnDisable`で解除し、他objectへの参照は`Start`または明示的な初期化で解決してください。宣言されていないobject間の`Awake`順序への依存や、承認なしのScript Execution Orderの使用を禁止します。constructor、field初期化子、finalizer、background threadからUnity APIを呼ぶことを禁止します。background処理はJob Systemまたは`Awaitable.BackgroundThreadAsync`に移し、`Awaitable.MainThreadAsync`（またはリポジトリの同等機能）で戻ってください。所有するengineリソース（event購読、Addressables handle、`NativeContainer`、`RenderTexture`、実行時に作ったmaterial・mesh・texture）はすべて`OnDisable`/`OnDestroy`で解放してください。実行時の`DestroyImmediate`を禁止します。
+- **CS40 Unityのasync model:** リポジトリのasync model（`Awaitable`、UniTask、coroutine）を使い、2つ目のmodelの導入を禁止します。`async void`のUnity message method（`Start`、`Update`、`OnEnable`など）の宣言を禁止し、完了と例外を観測する所有されたasync methodへ委譲してください。すべての操作を`destroyCancellationToken`、または`OnDisable`/`OnDestroy`でcancelする所有された`CancellationTokenSource`に結び付けてください。各`Awaitable`はちょうど1回だけawaitしてください。Unity APIに触れるcodeで`Task.Delay`、`Thread.Sleep`、`ConfigureAwait(false)`の使用を禁止し、待機がscaled timeかunscaled timeかを明示してください。所有するcoroutineはdisable時に停止し、文字列名によるcoroutineの開始・停止を禁止します。
+- **CS41 frame予算とallocation:** 毎frame実行されるpath（`Update`、`LateUpdate`、`FixedUpdate`、`OnGUI`、毎frameのcallback、job）は定常状態でmanaged memoryをallocateしてはいけません。LINQ、captureするlambda、boxing、`params`配列、文字列連結や補間、新しいcollection、毎frameの`new WaitForSeconds`を禁止します。`GetComponent`の結果、`Camera.main`、`Animator`/`Shader`のproperty ID（`Animator.StringToHash`、`Shader.PropertyToID`）をcacheし、`CompareTag`、buffer再利用のnon-allocating物理query、object poolingを使ってください。空のUnity message methodは削除してください。変更したhot pathはProfilerのGC Alloc列またはperformance testで検証してください。
+- **CS42 禁止Unity APIとstatic state:** 承認なしに`SendMessage`、`BroadcastMessage`、名前指定の`Invoke`/`InvokeRepeating`、runtime codeでの`GameObject.Find*`・`FindObjectOfType`/`FindObjectsOfType`/`FindAnyObjectByType`/`FindFirstObjectByType`、新規の`Resources` folder読み込み、`DontDestroyOnLoad` singleton、`OnGUI`によるruntime UIを導入することを禁止します。serializeされた参照、明示的な注入、Addressablesを使ってください。Enter Play Mode設定でdomain reloadが省略され得るため、承認されたstatic fieldとstatic eventは必ず`[RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]` methodでresetしてください。実行時に`ScriptableObject` assetを変更することを禁止し、実行時の状態はinstanceへcopyしてください。
+- **CS43 Unityのlogging:** 出荷するruntime code pathへの`Debug.Log*`の追加は、リポジトリのlogging wrapper経由を除き禁止します。wrapperは`[Conditional]`やdefineでrelease buildから詳細logを必ず除去してください。利用可能ならlog呼び出しにcontext objectを渡してください。errorには必ず`Debug.LogError`/`LogException`かwrapperのerror levelを使い、`Debug.Log`を使わないでください。
+- **CS44 物理、時間、入力:** 力の適用と`Rigidbody`の変更は`FixedUpdate`で`Time.fixedDeltaTime`を使って行ってください。`transform`の設定で`Rigidbody`を動かすことを禁止します（`MovePosition`/`MoveRotation`を使う）。frame依存の動きは`Update`で`Time.deltaTime`を掛けてください。入力は`Update`または設定済みInput Systemのcallbackで読み、`FixedUpdate`で読まないでください。
+- **CS45 assemblyとeditorの隔離:** 新しいcodeは必ずassembly definitionに属させてください。既定の`Assembly-CSharp` assemblyへのcode追加を禁止します。editor codeはeditor専用assembly（`includePlatforms: ["Editor"]`）に置いてください。runtime assemblyから`UnityEditor`の参照を禁止し、runtime code内の`#if UNITY_EDITOR` blockには承認と最小範囲が必要です。参照は明示的に宣言し、依存graphを非循環に保ち、engineに依存しないlogicは可能な限り`noEngineReferences`のassemblyに置いてください。
+- **CS46 platform defineとAOT:** platformの`#if` branch（`UNITY_IOS`、`UNITY_ANDROID`、`UNITY_WEBGL`など）は小さなadapter型に隔離し、検証時にすべてのbranchをcompileしてください。codeは必ずIL2CPP/AOT安全にしてください。`System.Reflection.Emit`、実行時code生成、値型に対する無制限のgeneric virtual methodを禁止します。reflectionにはCS04の承認と、`[Preserve]`または`link.xml`による保持、strippingを有効にしたIL2CPP buildでの検証が必要です。WebGL targetではthreadの使用を禁止します。
+- **CS47 data指向code:** Jobs、Burst、ECSのcodeでは、blittableなdataと、`Allocator`と破棄を明示した`NativeContainer`だけを使い、`[ReadOnly]`/`[WriteOnly]`のaccessを宣言し、結果の読み取りや入力の破棄の前にscheduleしたすべての`JobHandle`をcompleteしてください。CS04の承認なしにsafety checkの無効化や`[NativeDisableContainerSafetyRestriction]`/`[NativeDisableParallelForRestriction]`の使用を禁止します。
+- **CS48 Unity testの構成:** Unity Test Frameworkを使い、test assemblyを`UNITY_INCLUDE_TESTS`で制約し、EditModeとPlayModeのassemblyを分けてください。logicは素のC#型に置いてEditModeでtestし、PlayModeはlifecycle、物理、rendering、sceneの統合に限ってください。`Find*`、scene名の検索、production singletonを通したtestを禁止します。
+- **CS49 Unity testの振る舞い:** `[UnityTest]` coroutineでは、推測した`WaitForSeconds`の時間ではなく、明示的なframe数または時間の上限付きで観測可能な条件を待ってください。作成したすべての`GameObject`とassetを`TearDown`/`UnityTearDown`で破棄し、native containerを破棄してください。予期しないerrorや例外のlogは必ずtestを失敗させ、意図したlogは`LogAssert.Expect`で期待してください。`Time.timeScale`や注入した時計は決定的に使い、終了後にglobal stateを戻してください。
+- **CS50 Unityの性能検証:** hot path、loading、memoryに関わる変更では、target platformまたは文書化した代替環境で、Profiler、Memory Profiler、Performance Testing packageによる変更前後の計測を記録してください。editorのPlay Mode実行だけではplayerの性能を証明できません。
+- **CS51 Unityのカバレッジ:** Code Coverage package（`com.unity.testtools.codecoverage`）をEditModeとPlayModeのtestと併用してください。このpackageはbranch coverageを実装していないため、変更したtest可能なruntime source fileごとにline coverage 95%以上と、変更したすべてのpublic methodの完全なcoverageを必須とし、すべてのbranchをdiffと照合した明示的なtest caseでカバーしてください。CS04の承認なしに、assemblyやpathのfilterで手書きlogicを除外することを禁止します。
+
+## 完了
+
+- **CS52 ルールレビュー:** 実装後、該当するすべてのRule IDを実際のdiffに照らして自動的にレビューしてください。検証済み完了を宣言する前に、正確な検証commandと結果、file単位のcoverage、必要な場合の計測結果、明示承認された例外を報告してください。未解決の該当違反や不足している必須checkがある状態を完了として提示してはいけません。

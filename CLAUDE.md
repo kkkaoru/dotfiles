@@ -45,7 +45,7 @@ before modifying it.
 Use Executor Desktop's bundled CLI through `scripts/executor` (also available as `executor`).
 Do not install a duplicate Executor runtime or `pi-executor` sidecar.
 
-- The generic skill set retains Python/Rust/Swift/TypeScript coding rules,
+- The generic skill set retains C#/Python/Rust/Swift/TypeScript coding rules,
   git-commit-by-feature, find-skills, project-skills and history guidance.
   The `executor-and-skills` router remains package-loaded. Follow the relevant language skill.
 - Select optional domain guidance from `.agents/skills-stroage/` using `project-skills`.
