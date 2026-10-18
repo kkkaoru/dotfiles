@@ -12,7 +12,7 @@
       "Bash(* terraform -chdir=* apply*)"
     ]
   },
-  "model": "sonnet",
+  "model": "opus",
   "enableAllProjectMcpServers": true,
   "hooks": {
     "SessionStart": [
