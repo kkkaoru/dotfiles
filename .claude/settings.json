@@ -5,6 +5,7 @@
     "DISABLE_AUTOUPDATER": "1"
   },
   "permissions": {
+    "defaultMode": "bypassPermissions",
     "allow": [],
     "deny": [
       "Bash(terraform apply:*)",
