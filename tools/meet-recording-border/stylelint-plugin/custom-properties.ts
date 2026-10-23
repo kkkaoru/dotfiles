@@ -68,15 +68,15 @@ const reportReference = ({ result, selector, declaration }: ReferenceReport): vo
     message: literalTokenMessages.rejected(selector, declaration.prop),
   });
 
+const mixedRules = (root: Root): CssRule[] =>
+  rulesOf(root).filter((rule) => mixesKinds(declarationsOf(rule)));
+
+// Invalid options report nothing: validateOptions has already reported them.
 const noMixed: RuleBase = (primary: unknown) => (root, result) => {
-  if (
-    !stylelintUtilities.validateOptions(result, NO_MIXED, { actual: primary, possible: [true] })
-  ) {
-    return;
-  }
-  rulesOf(root)
-    .filter((rule) => mixesKinds(declarationsOf(rule)))
-    .map((rule) => reportMixed(result, rule));
+  (stylelintUtilities.validateOptions(result, NO_MIXED, { actual: primary, possible: [true] })
+    ? mixedRules(root)
+    : []
+  ).map((rule) => reportMixed(result, rule));
 };
 
 // Returns the token scope's selector when the primary option is a valid one.
