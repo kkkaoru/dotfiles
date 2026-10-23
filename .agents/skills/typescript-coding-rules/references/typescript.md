@@ -53,50 +53,53 @@ TypeScript coding rules. Follow every item at all times.
 35. Avoid double or deeper `for` nesting inside a single function scope as much as possible.
 36. Replace repeated `if` / `if else` or `switch` with a `Map` object when that replacement is possible.
 37. Define functions passed to `sort` separately.
+38. Do not add a statement only to destructure a value (for example `const [first] = items;`). Destructure in the parameter list or use the value where it is needed.
+39. Do not abbreviate names: write `element`, not `el`; `page` or `document`, not `doc`; `englishPhrases`, not `enPhrases`. Established acronyms and units (`id`, `url`, `css`, `dom`, `ms`, `px`) and names required by an external API are allowed.
 
 ## Values, I/O, and modules
 
-38. Define fixed values as constants.
-39. Reduce magic numbers as much as possible.
-40. Do not define constants inside a function scope when possible.
-41. Keep `const` constants at the top of the file. Ban defining constants between function definitions.
-42. Keep `type`, `interface`, and constant definitions at the top of the file.
-43. Always ban `let`.
-44. Ban including default values in code.
-45. Delete unused functions and variables.
-46. Delete all unused definitions.
-47. Always either delete or use unused constants and variables. Ban fixing them with an underscore prefix. Underscores are allowed only when adjusting function parameters.
-48. Minimize file reads and writes. When there are multiple writes, write them in parallel.
-49. Escape `\n` correctly when writing it to a file as a string.
-50. Ban loading libraries with `import * as`.
-51. Always ban creating `index.ts` barrel files.
-52. Always output error logs in English.
-53. Always write comments and logs in English.
+40. Define fixed values as constants.
+41. Reduce magic numbers as much as possible.
+42. Do not define constants inside a function scope when possible.
+43. Keep `const` constants at the top of the file. Ban defining constants between function definitions.
+44. Keep `type`, `interface`, and constant definitions at the top of the file.
+45. Always ban `let`.
+46. Ban including default values in code.
+47. Delete unused functions and variables.
+48. Delete all unused definitions.
+49. Always either delete or use unused constants and variables. Ban fixing them with an underscore prefix. Underscores are allowed only when adjusting function parameters.
+50. Minimize file reads and writes. When there are multiple writes, write them in parallel.
+51. Escape `\n` correctly when writing it to a file as a string.
+52. Ban loading libraries with `import * as`.
+53. Always ban creating `index.ts` barrel files.
+54. A source directory holds either only files or only subdirectories, never both; split mixed content into sibling subdirectories (for example `detection/state/` and `detection/phrases/`). Keep sibling directories MECE: each has one distinct responsibility, they do not overlap, and together they cover the whole parent. The project root, whose files are placed by tools such as `package.json` or `manifest.json`, is exempt.
+55. Always output error logs in English.
+56. Always write comments and logs in English.
 
 ## External data and DOM
 
-54. Prefer `fetch` for fetching HTML.
-55. When fetching data from HTML, always define the processing from actual HTML information.
-56. When the data source is not UTF-8, always decode it appropriately with iconv-lite.
-57. Never use jsdom. Prefer happy-dom.
+57. Prefer `fetch` for fetching HTML.
+58. When fetching data from HTML, always define the processing from actual HTML information.
+59. When the data source is not UTF-8, always decode it appropriately with iconv-lite.
+60. Never use jsdom. Prefer happy-dom.
 
 ## Tests
 
-58. Create a `*.test.ts` test file in the same directory as the file.
-59. When creating, editing, changing, or deleting a non-test `.ts` file, always update the related test files.
-60. When TypeScript definitions change, automatically update the related tests and keep coverage at 80% or higher.
-61. Keep coverage at 90% or higher.
-62. Always keep tests for the target file at 90% coverage or higher.
-63. Always create test files and keep coverage for the created files at 80% or higher.
-64. Keep coverage for the target file at 80% or higher.
-65. Do not write test code in a DRY way.
-66. Ban `for` in test code. Define test code as NOT DRY as possible.
-67. Ban asserting inside a `for` scope in test files.
-68. Minimize `describe` usage and always minimize nesting in test code too. Do not overuse `describe`. Reduce `describe` as much as possible.
-69. Use `toStrictEqual` instead of `toEqual`.
-70. Ban `toContain` assertions.
-71. Always ban `expect(.includes(xxx)).toBe(true)` assertions in all test code.
-72. Ban variables, constants, and string interpolation in `toBe` and `toStrictEqual` assertion arguments. When asserting strings or arrays, always assert with fixed strings or arrays.
-73. Always ban `from bun:test` in test code.
-74. In test code, mock all file reads/writes and web requests. Make tests run quickly.
-75. Implement tests with execution speed as a priority as well.
+61. Create a `*.test.ts` test file in the same directory as the file.
+62. When creating, editing, changing, or deleting a non-test `.ts` file, always update the related test files.
+63. When TypeScript definitions change, automatically update the related tests and keep coverage at 80% or higher.
+64. Keep coverage at 90% or higher.
+65. Always keep tests for the target file at 90% coverage or higher.
+66. Always create test files and keep coverage for the created files at 80% or higher.
+67. Keep coverage for the target file at 80% or higher.
+68. Do not write test code in a DRY way.
+69. Ban `for` in test code. Define test code as NOT DRY as possible.
+70. Ban asserting inside a `for` scope in test files.
+71. Minimize `describe` usage and always minimize nesting in test code too. Do not overuse `describe`. Reduce `describe` as much as possible.
+72. Use `toStrictEqual` instead of `toEqual`.
+73. Ban `toContain` assertions.
+74. Always ban `expect(.includes(xxx)).toBe(true)` assertions in all test code.
+75. Ban variables, constants, and string interpolation in `toBe` and `toStrictEqual` assertion arguments. When asserting strings or arrays, always assert with fixed strings or arrays.
+76. Always ban `from bun:test` in test code.
+77. In test code, mock all file reads/writes and web requests. Make tests run quickly.
+78. Implement tests with execution speed as a priority as well.
