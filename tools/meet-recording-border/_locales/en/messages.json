@@ -1,0 +1,23 @@
+{
+  "name": {
+    "message": "Recording Border for Google Meet"
+  },
+  "description": {
+    "message": "Shows Google Meet recording, transcription and Gemini note-taking status as a colored border and label."
+  },
+  "loading": {
+    "message": "Before joining (checking status)"
+  },
+  "idle": {
+    "message": "Not recording"
+  },
+  "recording": {
+    "message": "● Recording"
+  },
+  "transcription": {
+    "message": "Transcribing"
+  },
+  "gemini": {
+    "message": "Gemini taking notes"
+  }
+}

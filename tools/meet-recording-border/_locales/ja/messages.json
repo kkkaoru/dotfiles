@@ -1,0 +1,23 @@
+{
+  "name": {
+    "message": "Recording Border for Google Meet"
+  },
+  "description": {
+    "message": "Google Meet の会議画面に、録画・文字起こし・Gemini メモの状態を縁の色と文字で表示します。"
+  },
+  "loading": {
+    "message": "参加前（状態を確認中）"
+  },
+  "idle": {
+    "message": "録画なし"
+  },
+  "recording": {
+    "message": "● 録画中"
+  },
+  "transcription": {
+    "message": "文字起こし中"
+  },
+  "gemini": {
+    "message": "Gemini メモ作成中"
+  }
+}

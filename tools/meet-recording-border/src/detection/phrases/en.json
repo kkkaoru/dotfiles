@@ -1,0 +1,5 @@
+{
+  "recording": ["is being recorded", "will be recorded", "^rec$"],
+  "transcription": ["is being transcribed", "will be transcribed", "^transcribing$"],
+  "gemini": ["Gemini is taking notes", "Gemini will take notes"]
+}

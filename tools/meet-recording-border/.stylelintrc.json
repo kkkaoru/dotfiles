@@ -1,0 +1,74 @@
+{
+  "extends": ["stylelint-config-standard", "stylelint-config-recess-order"],
+  "plugins": [
+    "stylelint-high-performance-animation",
+    "stylelint-declaration-strict-value",
+    "./stylelint-plugin/custom-properties.ts"
+  ],
+  "reportDescriptionlessDisables": true,
+  "reportInvalidScopeDisables": true,
+  "reportNeedlessDisables": true,
+  "reportUnscopedDisables": true,
+  "rules": {
+    "local/no-mixed-custom-properties": true,
+    "plugin/no-low-performance-animation-properties": true,
+    "scale-unlimited/declaration-strict-value": [
+      [
+        "/color$/",
+        "/^border/",
+        "/^padding/",
+        "/^margin/",
+        "background",
+        "box-shadow",
+        "font",
+        "font-size",
+        "font-weight",
+        "line-height",
+        "opacity",
+        "top",
+        "z-index",
+        "/^animation/"
+      ],
+      {
+        "ignoreValues": [
+          "0",
+          "auto",
+          "none",
+          "inherit",
+          "initial",
+          "transparent",
+          "currentcolor",
+          "solid",
+          "inset",
+          "infinite",
+          "alternate"
+        ]
+      }
+    ],
+    "at-rule-allowed-list": ["keyframes", "media"],
+    "color-named": "never",
+    "declaration-property-value-no-unknown": true,
+    "font-weight-notation": "numeric",
+    "function-url-scheme-allowed-list": [],
+    "max-nesting-depth": 0,
+    "media-feature-name-allowed-list": ["prefers-reduced-motion"],
+    "no-unknown-animations": true,
+    "no-unknown-custom-properties": true,
+    "number-max-precision": 2,
+    "selector-max-attribute": 1,
+    "selector-max-class": 1,
+    "selector-max-combinators": 0,
+    "selector-max-compound-selectors": 1,
+    "selector-max-id": 0,
+    "selector-max-pseudo-class": 1,
+    "selector-max-specificity": "0,2,0",
+    "selector-max-type": 0,
+    "selector-max-universal": 0,
+    "selector-no-qualifying-type": true,
+    "selector-pseudo-class-allowed-list": ["host"],
+    "selector-pseudo-element-allowed-list": ["before"],
+    "time-min-milliseconds": 100,
+    "unit-allowed-list": ["px", "ms"],
+    "local/literal-token-custom-properties": ":host"
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "name": "@kkkaoru/meet-recording-border",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "check": "bun run format:check && bun run lint && bun run tsc && bun run test && bun run build",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "icons": "for size in 16 32 48 128; do rsvg-convert -w $size -h $size icons/icon.svg -o icons/icon-$size.png; done",
+    "lint": "oxlint --type-aware --type-check . && stylelint --max-warnings 0 \"src/**/*.css\"",
+    "package": "bun run check && rm -rf release && mkdir -p release && zip -r -X -q \"release/recording-border-for-google-meet-$(node -p \"require('./manifest.json').version\").zip\" manifest.json _locales dist icons/*.png",
+    "store:images": "for image in store/images/*/*.svg; do rsvg-convert \"$image\" -o \"${image%.svg}.png\"; done",
+    "test": "vitest run --coverage",
+    "tsc": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.1.24",
+    "@types/node": "24.10.1",
+    "@vitest/coverage-v8": "4.1.11",
+    "esbuild": "0.28.2",
+    "happy-dom": "20.0.10",
+    "oxfmt": "0.63.0",
+    "oxlint": "1.78.0",
+    "oxlint-tsgolint": "7.0.2001",
+    "stylelint": "17.16.0",
+    "stylelint-config-recess-order": "7.8.2",
+    "stylelint-config-standard": "40.0.0",
+    "stylelint-declaration-strict-value": "1.12.1",
+    "stylelint-high-performance-animation": "2.0.0",
+    "stylelint-order": "8.1.2",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <!-- Store guideline: 96x96 artwork inside a 128x128 canvas with 16px transparent padding. -->
+  <rect x="16" y="24" width="96" height="80" rx="14" fill="#202124"/>
+  <rect x="21" y="29" width="86" height="70" rx="10" fill="none" stroke="#ea4335" stroke-width="10"/>
+  <circle cx="64" cy="64" r="15" fill="#ea4335" stroke="#ffffff" stroke-width="5"/>
+</svg>
