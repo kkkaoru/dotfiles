@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800" viewBox="0 0 1280 800">
+  <defs><filter id="glow" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="22"/></filter></defs>
+  <rect width="1280" height="800" fill="#202124"/>
+  <rect x="100" y="150" width="520" height="390" rx="18" fill="#4a4e51"/><circle cx="360" cy="320" r="70" fill="#6b7075"/><rect x="275" y="410" width="170" height="80" rx="40" fill="#6b7075"/><rect x="660" y="150" width="520" height="390" rx="18" fill="#4a4e51"/><circle cx="920" cy="320" r="70" fill="#6b7075"/><rect x="835" y="410" width="170" height="80" rx="40" fill="#6b7075"/>
+  <rect x="440" y="600" width="400" height="64" rx="32" fill="#303134"/>
+  <circle cx="540" cy="632" r="20" fill="#5f6368"/><circle cx="600" cy="632" r="20" fill="#5f6368"/><circle cx="660" cy="632" r="20" fill="#5f6368"/><rect x="700" y="612" width="80" height="40" rx="20" fill="#ea4335"/>
+  <rect x="6" y="6" width="1268" height="788" fill="none" stroke="#f9ab00" stroke-width="40" opacity="0.55" filter="url(#glow)"/>
+  <rect x="6" y="6" width="1268" height="788" rx="26" fill="none" stroke="#f9ab00" stroke-width="12"/>
+  <rect x="530.0" y="22" width="220" height="40" rx="20" fill="#f9ab00"/>
+  <text x="640.0" y="49" text-anchor="middle" font-family="YuGothic, Hiragino Sans, sans-serif" font-size="20" font-weight="700" fill="#ffffff">文字起こし中</text>
+  <rect x="0" y="700" width="1280" height="100" fill="#000000" opacity="0.55"/>
+  <text x="640.0" y="763" text-anchor="middle" font-family="YuGothic, Hiragino Sans, sans-serif" font-size="40" font-weight="700" fill="#ffffff">文字起こし中はオレンジ</text>
+</svg>
