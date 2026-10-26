@@ -35,3 +35,17 @@
         # picker offers only these. Add `- id: <model>` rows to widen it.
         models:
           - id: deepseek-v4.1-flash
+- id: permission
+  name: "@deepseek-ai/dsh-permission-presets"
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+    defaultPreset: danger-full-access
