@@ -245,6 +245,7 @@ link_path "${DOTPATH}/scripts/serena-dotfiles-mcp" "${HOME}/.local/bin/serena-do
 link_path "${DOTPATH}/scripts/ensure-omlx.sh" "${HOME}/.local/bin/ensure-omlx"
 link_path "${DOTPATH}/scripts/omlx-idle-stop.sh" "${HOME}/.local/bin/omlx-idle-stop"
 link_path "${DOTPATH}/scripts/pi" "${HOME}/.local/bin/pi"
+link_path "${DOTPATH}/tools/dsh-workspace/src/cli.ts" "${HOME}/.local/bin/dsh-workspace"
 if [ -x "${DOTPATH}/scripts/omlx-idle-stop.sh" ]; then
   "${DOTPATH}/scripts/omlx-idle-stop.sh" --install
 fi

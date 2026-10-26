@@ -1,0 +1,28 @@
+{
+  "name": "@kkkaoru/dsh-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Register a DeepSeek Harness workspace for a directory, idempotently",
+  "bin": {
+    "dsh-workspace": "./src/cli.ts"
+  },
+  "type": "module",
+  "scripts": {
+    "check": "bun run format:check && bun run lint && bun run typecheck && bun run test:coverage",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint --type-aware --type-check .",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "@vitest/coverage-v8": "4.1.11",
+    "oxfmt": "0.63.0",
+    "oxlint": "1.78.0",
+    "oxlint-tsgolint": "7.0.2001",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}
