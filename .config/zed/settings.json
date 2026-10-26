@@ -7,6 +7,7 @@
 // custom settings, run `zed: open default settings` from the
 // command palette (cmd-shift-p / ctrl-shift-p)
 {
+  "copilot": {},
   "cli_default_open_behavior": "new_window",
   "project_panel": {
     "dock": "left",
@@ -34,7 +35,6 @@
     "copilot": {
       "proxy": null,
       "proxy_no_verify": null,
-      "enterprise_uri": null,
     },
     "enabled_in_text_threads": false,
   },
