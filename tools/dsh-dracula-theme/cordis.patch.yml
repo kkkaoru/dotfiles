@@ -1,0 +1,5 @@
+# The dsh-dracula-theme bundle layer: one row referencing this package, so the
+# row's `name` resolves through the profile that installed the bundle.
+- insert:
+    - id: dracula-theme
+      name: dsh-dracula-theme

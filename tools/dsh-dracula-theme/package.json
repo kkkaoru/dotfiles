@@ -1,0 +1,23 @@
+{
+  "name": "dsh-dracula-theme",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Dracula palette for the DeepSeek Harness Web and Desktop UI",
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "cordis.patch.yml"
+  ],
+  "keywords": [
+    "dsh-plugin"
+  ],
+  "engines": {
+    "dsh": ">=0.2.1-rc.0 <0.3.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}
