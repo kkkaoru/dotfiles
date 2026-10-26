@@ -36,6 +36,9 @@ integrations. These instructions apply to agents working here, including pi and 
 - `tools/dsh-dracula-theme/` — A DeepSeek Harness bundle (no build step) that
   injects the Dracula palette into the Web and Desktop clients. Install it into
   a profile with `dsh plugin --profile <name> add <checkout>/tools/dsh-dracula-theme`.
+- `tools/dsh-workspace/` — TypeScript CLI (`bun`, `bun run check`) that registers a
+  directory idempotently through the Harness `workspace/create` RPC. Linked to
+  `~/.local/bin/dsh-workspace`.
 - `tools/executor-skills/` — Read-only skills MCP, agmsg MCP adapter, and pi routing package.
 - `.omlx/` — oMLX configuration; `~/.omlx` is a repository symlink.
 
