@@ -1,0 +1,13 @@
+# Home-level dsh patch layer: applies to every profile under $DSH_HOME.
+# The Desktop app owns the per-profile layers (its Models page rewrites
+# profiles/<name>/cordis.patch.yml atomically), so provider routes shared across
+# machines live here. Secrets stay in the local credential store or $DSH_HOME/.env.
+- id: credentials
+  # The headless bundle disables the on-machine credential store; re-enable it so
+  # `dsh headless` resolves the same stored keys as the Desktop and Web profiles.
+  disabled: false
+- id: llm-pi-ai
+  config:
+    providers:
+      opencode-go:
+        apiKeyEnv: OPENCODE_GO_API_KEY

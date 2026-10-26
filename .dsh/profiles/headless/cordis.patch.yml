@@ -1,0 +1,9 @@
+# Your patch layer for this dsh profile, applied after every bundle layer:
+# a top-level YAML array of loader patch entries (id-targeted config
+# overrides, disables, and insert lists; `!!js` expressions allowed).
+# Headless runs get a concrete model so `dsh headless "..."` needs no flags;
+# the Desktop and Web profiles keep their own model selection.
+- id: agent-default-model
+  config:
+    provider: opencode-go
+    model: deepseek-v4-flash
