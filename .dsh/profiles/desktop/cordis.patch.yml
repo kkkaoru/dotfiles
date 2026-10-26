@@ -20,3 +20,18 @@
     purpose: null
     process: standard
     completion: api-key
+- id: agent-default-model
+  name: "@deepseek-ai/dsh-agent-default-model"
+  config:
+    provider: opencode-go
+    model: deepseek-v4.1-flash
+- id: llm-pi-ai
+  name: "@deepseek-ai/dsh-llm-pi-ai"
+  config:
+    providers:
+      opencode-go:
+        apiKeyEnv: OPENCODE_GO_API_KEY
+        # Limiting the catalog here replaces the published list, so the model
+        # picker offers only these. Add `- id: <model>` rows to widen it.
+        models:
+          - id: deepseek-v4.1-flash

@@ -2,7 +2,13 @@
 # a top-level YAML array of loader patch entries (id-targeted config
 # overrides, disables, and insert lists; `!!js` expressions allowed).
 # Headless runs get a concrete model so `dsh headless "..."` needs no flags;
-# the Desktop and Web profiles keep their own model selection.
+# the Desktop and Web profiles keep their own model selection. The provider route
+# lives in each profile instead of the home layer so the Models page can edit it.
+- id: llm-pi-ai
+  config:
+    providers:
+      opencode-go:
+        apiKeyEnv: OPENCODE_GO_API_KEY
 - id: agent-default-model
   config:
     provider: opencode-go
