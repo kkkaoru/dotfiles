@@ -156,6 +156,28 @@ class ValidationTests(GitFixture):
         with self.assertRaisesRegex(ValueError, "tracked"):
             quality.validate_agents(self.root)
 
+    def test_accepts_jsonc_only_for_zed_settings(self) -> None:
+        zed = self.root / ".config/zed"
+        zed.mkdir(parents=True)
+        (zed / "settings.json").write_text(
+            '// leading\n'
+            '{\n'
+            '  "url": "https://example.com/a//b", // trailing\n'
+            '  "escaped": "quote \\" and comma ,}",\n'
+            '  "list": [1, 2,],\n'
+            '  /* block */\n'
+            '  "object": {"a": 1,},\n'
+            '  "comment": "/* not a comment */"\n'
+            '}\n',
+            encoding="utf-8",
+        )
+        quality.validate_changed_files(self.root, {".config/zed/settings.json"})
+        self.assertEqual(quality.jsonc_loads('{"a": 1} // end'), {"a": 1})
+        self.assertEqual(quality.jsonc_loads('{"a": 1} /* end'), {"a": 1})
+        (self.root / "data.json").write_text("// not allowed\n{}", encoding="utf-8")
+        with self.assertRaises(json.JSONDecodeError):
+            quality.validate_changed_files(self.root, {"data.json"})
+
     def test_accepts_tracked_agents_and_rejects_bad_frontmatter(self) -> None:
         valid = "---\nname: valid\n---\nPrompt\n"
         self.write_commit(".claude/agents/valid.md", valid)

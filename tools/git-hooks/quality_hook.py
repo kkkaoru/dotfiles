@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Iterable, TextIO
 
 ZERO_OID = "0" * 40
+JSONC_PATHS = frozenset({".config/zed/settings.json"})
 
 
 @dataclass(frozen=True)
@@ -145,6 +146,49 @@ def validate_agents(root: Path) -> None:
             raise ValueError(f"invalid agent frontmatter: {relative}")
 
 
+def jsonc_loads(text: str) -> object:
+    """Parse JSON with comments and trailing commas, as used by Zed settings."""
+    output: list[str] = []
+    index = 0
+    in_string = False
+    escaped = False
+    while index < len(text):
+        character = text[index]
+        if in_string:
+            output.append(character)
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            index += 1
+            continue
+        if character == '"':
+            in_string = True
+            output.append(character)
+            index += 1
+            continue
+        if text.startswith("//", index):
+            newline = text.find("\n", index)
+            index = len(text) if newline < 0 else newline
+            continue
+        if text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            index = len(text) if end < 0 else end + 2
+            continue
+        if character == ",":
+            lookahead = index + 1
+            while lookahead < len(text) and text[lookahead].isspace():
+                lookahead += 1
+            if lookahead < len(text) and text[lookahead] in "}]":
+                index += 1
+                continue
+        output.append(character)
+        index += 1
+    return json.loads("".join(output))
+
+
 def validate_changed_files(root: Path, paths: set[str]) -> None:
     """Parse data files and statically inspect changed shell scripts."""
     for relative in sorted(paths):
@@ -152,7 +196,11 @@ def validate_changed_files(root: Path, paths: set[str]) -> None:
         if not path.is_file():
             continue
         if path.suffix == ".json":
-            json.loads(path.read_text(encoding="utf-8"))
+            content = path.read_text(encoding="utf-8")
+            if relative in JSONC_PATHS:
+                jsonc_loads(content)
+            else:
+                json.loads(content)
         elif path.suffix == ".toml":
             tomllib.loads(path.read_text(encoding="utf-8"))
     if any(path == ".gitconfig" for path in paths):
