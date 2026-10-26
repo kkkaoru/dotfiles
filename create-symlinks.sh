@@ -176,6 +176,17 @@ for name in agents commands hooks plugins skills; do
   fi
 done
 
+# ~/.dsh is repository-managed like ~/.pi. The app keeps credentials, sessions,
+# and its own package tree there, so migrate an existing directory instead of
+# refusing: tracked patch layers win and machine state (sessions, .env) comes
+# along, which is what makes restoring a checkout on another Mac one command.
+if [ -e "${HOME}/.dsh" ] && [ ! -L "${HOME}/.dsh" ]; then
+  echo "merge: moving ${HOME}/.dsh into ${DOTPATH}/.dsh (tracked files win)" >&2
+  mkdir -p "${DOTPATH}/.dsh"
+  cp -an "${HOME}/.dsh/." "${DOTPATH}/.dsh/"
+  rm -rf "${HOME}/.dsh"
+fi
+
 # ~/.pi is a top-level symlink to this repository. Keep repository-owned
 # extensions inside the managed tree so a fresh clone still installs them.
 mkdir -p "${DOTPATH}/.pi/agent/extensions" "${DOTPATH}/.pi/agent/packages"

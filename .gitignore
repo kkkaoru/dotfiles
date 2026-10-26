@@ -86,6 +86,20 @@ coverage_out/
 !.pi/agent/themes/**
 !.pi/web-search.json
 
+# DeepSeek Harness keeps credentials, sessions, storages and its app-managed
+# profile tree under ~/.dsh. Deny by default and track only the patch layers a
+# person edits: the home layer plus each profile's user layer. Never commit
+# .env, the credential store, sessions, or installed packages.
+.dsh/**
+!.dsh/cordis.patch.yml
+!.dsh/.env.example
+!.dsh/README.md
+!.dsh/profiles/
+.dsh/profiles/*
+!.dsh/profiles/*/
+.dsh/profiles/*/*
+!.dsh/profiles/*/cordis.patch.yml
+
 # Executor's home lives in this checkout, but its database may contain secrets.
 # Deny by default; allow reviewed docs and the non-secret sync configuration only.
 /.executor/**
