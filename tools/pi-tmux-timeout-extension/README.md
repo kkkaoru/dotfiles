@@ -7,7 +7,8 @@ Overdue evidence is projected via `context_with_system`, preserving existing ins
 tool declarations. It does not append a synthetic user request to each model call. Current user
 constraints and goal state take precedence; a notification neither resumes a stopped goal nor
 proves completion. Idle completion/overdue wakeups retain their existing delivery and deduplication
-behavior, and successful log inspection is still required to acknowledge overdue evidence.
+behavior; acknowledging overdue evidence still requires a successful log inspection or an explicit
+bounded `tmux_check_in` decision.
 
 ## Pi Durable boundary (Pi 1.0.4)
 
@@ -33,7 +34,8 @@ an unpublished experimental plugin entry point. Run `bun install` here after upd
 
 ## Behavior
 
-- Registers the parallel `tmux_exec` tool for explicitly starting a command in detached tmux.
+- Registers the parallel `tmux_exec` tool for explicitly starting a command in detached tmux and
+  `tmux_check_in` for resolving an overdue check-in with a bounded next check.
 - Derives a 128-bit namespace from Pi's main session ID and uses a dedicated tmux server socket for
   that namespace. Session names are `pi-tmux-<namespace>-<counter>`, so different Pi sessions neither
   share names nor subscribe to each other's completion channels.
@@ -62,26 +64,33 @@ an unpublished experimental plugin entry point. Run `bun install` here after upd
 - Reconciliation also detects live jobs past their estimate, changes their row to `⚠ overdue`, and
   wakes Pi for a progress check without pretending that the command finished. A successful `read`
   of that exact live job's log marks the current check-in `✓ checked · running`: the task stays
-  visible and tracked, but no longer shows an unhandled warning; it does not certify process health
-  or completion. This acknowledgment is persisted
-  across `/reload` and delays the next overdue reminder until five minutes after inspection.
-  A new reminder restores `⚠ overdue` until inspected again; completion removes the row. Reload
-  alone never acknowledges work or stops a process. Check-ins arrive within
-  one minute of the estimate and repeat about every five minutes while the job remains active. Reload/resume
-  immediately checks overdue restored jobs, including legacy jobs without an estimate (two-minute
-  fallback). While Pi is busy, pending check-ins are injected into the next model call via the `context`
-  event instead of waiting for the entire run to settle. This does not abort a streaming response or
-  running tool. Idle sessions still receive follow-up wakeups; compaction defers injection until safe.
+  visible and tracked, but no longer shows an unhandled warning. This acknowledgment is persisted
+  across `/reload` and keeps the row quiet for 30 minutes instead of the unchecked five-minute
+  cadence. It does not certify process health or completion, and a new reminder restores
+  `⚠ overdue`; completion removes the row. Reload alone never acknowledges work or stops a process.
+  Check-ins arrive within one minute of the estimate and repeat about every five minutes while the
+  job remains unchecked. Reload/resume immediately checks overdue restored jobs, including legacy
+  jobs without an estimate (two-minute fallback). While Pi is busy, pending check-ins are injected
+  into the next model call via the `context` event instead of waiting for the entire run to settle.
+  This does not abort a streaming response or running tool. Idle sessions still receive follow-up
+  wakeups; compaction defers injection until safe.
+- `tmux_check_in` turns an inspected check-in into an explicit decision. After inspecting a live
+  job, the agent calls it with the exact `sessionName` and a bounded `nextCheckSeconds`; the job's
+  estimate is rebased, the pending notice is cleared, the row shows `⏳` with the new expectation,
+  and the next check-in is scheduled at that time. It never stops, kills or completes the job and
+  cannot revive a job that already finished. This lets a long-running watcher stay tracked without
+  repeating the same `⚠ overdue` notice every five minutes.
   Context injection and follow-up delivery alone do not acknowledge a check-in: uninspected
   notices remain available to later model calls until a successful `read` of that job's exact
-  `logPath` (a leading `@` is accepted). Failed reads, status-only reads and unrelated tools do
-  not acknowledge it. A delivered notice is not re-sent every retry tick; the next five-minute
-  overdue reconciliation sends a fresh follow-up if the live job remains overdue. The acknowledgment
-  only covers this check-in; the live job still receives the next reminder. If the agent settles
-  without inspecting, the pending notice is delivered once as a normal persistent follow-up instead
-  of being silently lost. Receiving that follow-up does not prove the model acted on it.
-  Repeated pending notices are deduplicated, and reconciliation before context injection removes jobs
-  that finished in the meantime. Batches contain at most 20 jobs and rotate so overflow is not starved.
+  `logPath` (a leading `@` is accepted) or `tmux_check_in`. Failed reads, status-only reads and
+  unrelated tools do not acknowledge it. A delivered notice is not re-sent every retry tick; the
+  next five-minute overdue reconciliation sends a fresh follow-up if the live job remains
+  unresolved. A read only quiets the next reminder for 30 minutes; a check-in schedules exactly the
+  requested next check. If the agent settles without inspecting, the pending notice is delivered
+  once as a normal persistent follow-up instead of being silently lost. Receiving that follow-up
+  does not prove the model acted on it. Repeated pending notices are deduplicated, and
+  reconciliation before context injection removes jobs that finished in the meantime. Batches
+  contain at most 20 jobs and rotate so overflow is not starved.
 - `output.log` is capped at 512 MiB so a command that reads its own log cannot fill the disk. At the
   cap the log gets an error line, the pipe closes so the command dies of SIGPIPE on its next write,
   the exit status becomes 1 and the completion notice carries an `ERROR` line for the agent.
@@ -197,11 +206,13 @@ tmux_exec({ command: "bunx wrangler tail --format=json > /tmp/worker-tail.json",
 
 A check-in is not completion. Inspect progress and either stop the specific unnecessary job or
 arrange a bounded next check. Do not launch a duplicate watcher or wait indefinitely for it to exit.
-An estimate-only job receives automatic overdue reminders every five minutes until it finishes or
-becomes orphaned. Busy sessions coalesce reminders and keep them in successive model calls until
-log inspection, rather than accumulating queued prompts. Use `read` on the reported log path to
-acknowledge the current check-in, then inspect process state and decide what to do; acknowledgment
-is not completion or evidence that the underlying work succeeded. Context-only notices are not
+An unchecked estimate-only job receives automatic overdue reminders every five minutes until it
+finishes or becomes orphaned; a checked job stays quiet for 30 minutes. Busy sessions coalesce
+reminders and keep them in successive model calls until the notice is resolved, rather than
+accumulating queued prompts. Use `read` on the reported log path and inspect process state, then
+stop the job or call `tmux_check_in` with a realistic `nextCheckSeconds`; a read only quiets the
+current check-in, while `tmux_check_in` records the decision and schedules the next check.
+Acknowledgment is not completion or evidence that the underlying work succeeded. Context-only notices are not
 persisted in conversation history; reload/resume rechecks live jobs. No notice can interrupt an
 already streaming model response or running tool: delivery resumes at the next model boundary or
 settled event. Existing jobs are not retroactively given a kill deadline by `/reload`.
@@ -232,6 +243,6 @@ bun run smoke
 an isolated real tmux job and real Durable JSONL storage to verify lock exclusivity, recovery
 and notification deduplication. It only cleans its own fixture namespace.
 
-Verified together with `pi-loop-extension` and `pi-goal-extension`: 132 + 93 + 101 unit tests,
+Verified together with `pi-loop-extension` and `pi-goal-extension`: 160 + 93 + 101 unit tests,
 all component checks/coverage gates and all three offline smoke scripts pass on Pi 1.0.4.
-Tmux line coverage is 99.88%, branch coverage 98.61%. No model calls or user workloads are used.
+Tmux line coverage is 99.89%, branch coverage 98.70%. No model calls or user workloads are used.
