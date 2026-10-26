@@ -10,6 +10,8 @@ it("drops credentials that would move the child off the Claude plan", () => {
       ANTHROPIC_API_KEY: "key",
       ANTHROPIC_AUTH_TOKEN: "token",
       ANTHROPIC_BASE_URL: "http://127.0.0.1:8318",
+      CLAUDECODE: "1",
+      CLAUDE_CODE_ENTRYPOINT: "cli",
       HOME: "/home/me",
     }),
   ).toStrictEqual({ HOME: "/home/me" });

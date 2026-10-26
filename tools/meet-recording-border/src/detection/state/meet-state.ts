@@ -45,47 +45,61 @@ const PHRASE_SEPARATOR = "|";
 const PHRASE_FLAGS = "imu";
 const LINE_BREAK = "\n";
 
-const patternOf = (sources: readonly string[]): RegExp =>
-  new RegExp(sources.join(PHRASE_SEPARATOR), PHRASE_FLAGS);
+function patternOf(sources: readonly string[]): RegExp {
+  return new RegExp(sources.join(PHRASE_SEPARATOR), PHRASE_FLAGS);
+}
 
 // Meet's UI language can differ from the browser's, so every language's phrases are combined.
-export const compilePatterns = (sets: readonly PhraseSet[]): FeaturePatterns => ({
-  recording: patternOf(sets.flatMap((set) => set.recording)),
-  transcription: patternOf(sets.flatMap((set) => set.transcription)),
-  gemini: patternOf(sets.flatMap((set) => set.gemini)),
-});
+export function compilePatterns(sets: readonly PhraseSet[]): FeaturePatterns {
+  return {
+    recording: patternOf(sets.flatMap((set) => set.recording)),
+    transcription: patternOf(sets.flatMap((set) => set.transcription)),
+    gemini: patternOf(sets.flatMap((set) => set.gemini)),
+  };
+}
 
-export const isMeetingPath = (pathname: string): boolean => MEETING_PATH.test(pathname);
+export function isMeetingPath(pathname: string): boolean {
+  return MEETING_PATH.test(pathname);
+}
 
-export const isInCall = (text: string): boolean => LEAVE_CALL_LINE.test(text);
+export function isInCall(text: string): boolean {
+  return LEAVE_CALL_LINE.test(text);
+}
 
-const tooltipOf = (element: Element): string | undefined =>
-  element instanceof HTMLElement ? element.dataset["tooltip"] : undefined;
+function tooltipOf(element: Element): string | undefined {
+  return element instanceof HTMLElement ? element.dataset["tooltip"] : undefined;
+}
 
 // Both are read: an icon can carry a generic aria-label and the indicator text in its tooltip.
-const labelText = (element: Element): string =>
-  `${element.getAttribute("aria-label") ?? ""}${LINE_BREAK}${tooltipOf(element) ?? ""}`;
+function labelText(element: Element): string {
+  return `${element.getAttribute("aria-label") ?? ""}${LINE_BREAK}${tooltipOf(element) ?? ""}`;
+}
 
 // One string per check, so each pattern scans the page once instead of once per line.
 // The innerText follows the rendered layout, so a badge is its own line.
 // It also skips hidden, script and style text (~74 KB on Meet) that textContent would include.
-export const readPage = (page: Document): string =>
-  [
+export function readPage(page: Document): string {
+  return [
     ...[...page.querySelectorAll(LABELLED_SELECTOR)].map((element) => labelText(element)),
     // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- see the reason above.
     page.body.innerText,
   ].join(LINE_BREAK);
+}
 
-export const detectFeatures = ({ text, patterns }: DetectInput): FeatureId[] =>
-  FEATURES.filter((feature) => patterns[feature].test(text));
+export function detectFeatures({ text, patterns }: DetectInput): FeatureId[] {
+  return FEATURES.filter((feature) => patterns[feature].test(text));
+}
 
-const withGraceHint = (input: ViewInput): FeatureId[] =>
-  input.msSinceJoin < JOIN_GRACE_MS
+function withGraceHint(input: ViewInput): FeatureId[] {
+  return input.msSinceJoin < JOIN_GRACE_MS
     ? FEATURES.filter((feature) => input.active.includes(feature) || input.hint.includes(feature))
     : [...input.active];
+}
 
-const viewOf = ([first, ...rest]: readonly FeatureId[]): View =>
-  first === undefined ? IDLE_VIEW : { tone: first, messages: [first, ...rest] };
+function viewOf([first, ...rest]: readonly FeatureId[]): View {
+  return first === undefined ? IDLE_VIEW : { tone: first, messages: [first, ...rest] };
+}
 
-export const resolveView = (input: ViewInput): View =>
-  input.inCall ? viewOf(withGraceHint(input)) : LOADING_VIEW;
+export function resolveView(input: ViewInput): View {
+  return input.inCall ? viewOf(withGraceHint(input)) : LOADING_VIEW;
+}

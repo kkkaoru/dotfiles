@@ -43,8 +43,18 @@ const PLAN_OVERRIDING_ENV: ReadonlySet<string> = new Set([
   "ANTHROPIC_BASE_URL",
 ]);
 
+/* An enclosing Claude Code session's identity (CLAUDECODE, CLAUDE_CODE_ENTRYPOINT=cli, ...)
+   must not leak into the child; the SDK labels its own traffic. */
+const PARENT_SESSION_PREFIX = "CLAUDE_CODE_";
+
+function isInherited(key: string): boolean {
+  return (
+    PLAN_OVERRIDING_ENV.has(key) || key === "CLAUDECODE" || key.startsWith(PARENT_SESSION_PREFIX)
+  );
+}
+
 export function childEnv(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
-  return Object.fromEntries(Object.entries(env).filter(([key]) => !PLAN_OVERRIDING_ENV.has(key)));
+  return Object.fromEntries(Object.entries(env).filter(([key]) => !isInherited(key)));
 }
 
 export function sessionOptions(settings: SessionSettings, pending: PendingToolCalls): Options {

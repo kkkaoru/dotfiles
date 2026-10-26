@@ -8,9 +8,15 @@ const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_MAX_TOKENS = 32_768;
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
-interface ModelCandidate {
+export interface ModelCandidate {
   id: string;
   contextWindow: number;
+}
+
+export interface LoadClaudexModelsOptions {
+  /** Claude plan models, served by the adapter's `claude -p` backend. */
+  readonly subscription: readonly ModelCandidate[];
+  readonly signal?: AbortSignal | undefined;
 }
 
 function expandHome(filePath: string): string {
@@ -122,20 +128,23 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   }
 }
 
+/** Catalog models first; plan models the catalog does not already name follow. */
 export async function loadClaudexModels(
   configPath: string,
-  signal?: AbortSignal,
+  options: LoadClaudexModelsOptions,
 ): Promise<ProviderModelConfig[]> {
-  throwIfAborted(signal);
+  throwIfAborted(options.signal);
   const text = await readFile(expandHome(configPath), "utf8");
-  throwIfAborted(signal);
+  throwIfAborted(options.signal);
   const parsed: unknown = JSON.parse(text);
   if (!isRecord(parsed)) {
     throw new Error("Claudex provider config must be a JSON object");
   }
-  const models = collectCandidates(parsed).map((candidate) => toProviderModel(candidate));
-  if (models.length === 0) {
+  const candidates = collectCandidates(parsed);
+  if (candidates.length === 0) {
     throw new Error("Claudex provider config contains no enabled models");
   }
-  return models;
+  const seen = new Set(candidates.map((candidate) => candidate.id));
+  const extra = options.subscription.filter((candidate) => !seen.has(candidate.id));
+  return [...candidates, ...extra].map((candidate) => toProviderModel(candidate));
 }

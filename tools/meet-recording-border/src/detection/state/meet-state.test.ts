@@ -13,7 +13,9 @@ import englishPhrases from "../phrases/en.json" with { type: "json" };
 import japanesePhrases from "../phrases/ja.json" with { type: "json" };
 
 const patterns = compilePatterns([englishPhrases, japanesePhrases]);
-const featureIds = (): string[] => detectFeatures({ text: readPage(document), patterns });
+function featureIds(): string[] {
+  return detectFeatures({ text: readPage(document), patterns });
+}
 
 beforeEach(() => {
   document.body.innerHTML = "";

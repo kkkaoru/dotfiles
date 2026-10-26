@@ -23,6 +23,7 @@ mod message_router;
 mod message_router_dispatch;
 mod model_concurrency;
 mod pasted_text;
+pub mod pi_tools_mcp;
 mod request_identity;
 mod request_routing;
 pub(crate) use request_routing::{normalize_claude_model_to_haiku, official_claude_haiku_model};

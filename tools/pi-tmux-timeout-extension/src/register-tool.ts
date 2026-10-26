@@ -1,5 +1,6 @@
 // This TypeScript file is executed with Bun.
 import type { TmuxExtensionHost } from "../index.ts";
+import { shellLoopWarnings } from "./log-cap.ts";
 import { TMUX_LAUNCH_TIMEOUT_MILLISECONDS, type TmuxLaunch, type TmuxRuntime } from "./tmux.ts";
 import { tmuxExecSchema } from "./tool-schema.ts";
 
@@ -9,6 +10,7 @@ function resultText(launch: TmuxLaunch): string {
     `tmux session: ${launch.sessionName}`,
     `log: ${launch.logPath}`,
     `exit status: ${launch.statusPath}`,
+    ...shellLoopWarnings(launch.taskCommand),
   ].join("\n");
 }
 

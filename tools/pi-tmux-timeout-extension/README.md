@@ -82,6 +82,12 @@ an unpublished experimental plugin entry point. Run `bun install` here after upd
   of being silently lost. Receiving that follow-up does not prove the model acted on it.
   Repeated pending notices are deduplicated, and reconciliation before context injection removes jobs
   that finished in the meantime. Batches contain at most 20 jobs and rotate so overflow is not starved.
+- `output.log` is capped at 512 MiB so a command that reads its own log cannot fill the disk. At the
+  cap the log gets an error line, the pipe closes so the command dies of SIGPIPE on its next write,
+  the exit status becomes 1 and the completion notice carries an `ERROR` line for the agent.
+  A command that ignores SIGPIPE and stops writing keeps running; bound it with `timeoutSeconds`.
+- A command with a shell loop (`for`/`while`/`until` in command position) gets a `WARNING` in its
+  launch result, reminding the agent to ensure it terminates and never reads pi-tmux logs.
 - A hard `timeoutSeconds` uses GNU `gtimeout`/`timeout` to send TERM to the command process group,
   escalating to KILL after five seconds. It runs inside the detached job, so enforcement continues
   while Pi is closed. The normal completion path records the exit status and wakes Pi: usually 124

@@ -41,11 +41,12 @@ const OBSERVED_CHANGES: MutationObserverInit = {
   subtree: true,
 };
 
-const observe = (context: WatchContext): void =>
-  context.observer.observe(context.page.documentElement, OBSERVED_CHANGES);
+function observe(context: WatchContext): void {
+  return context.observer.observe(context.page.documentElement, OBSERVED_CHANGES);
+}
 
 // A hidden tab stays detached until visibilitychange schedules the next check.
-const runCheck = (context: WatchContext, reschedule: Reschedule): void => {
+function runCheck(context: WatchContext, reschedule: Reschedule): void {
   context.state.pending = false;
   if (context.state.stopped || context.page.hidden) {
     return;
@@ -56,31 +57,31 @@ const runCheck = (context: WatchContext, reschedule: Reschedule): void => {
   if (recheckIn !== undefined) {
     globalThis.setTimeout(reschedule, recheckIn, context);
   }
-};
+}
 
-const waitForIdle = (context: WatchContext, reschedule: Reschedule): void => {
+function waitForIdle(context: WatchContext, reschedule: Reschedule): void {
   globalThis.requestIdleCallback(() => runCheck(context, reschedule), {
     timeout: IDLE_TIMEOUT_MS,
   });
-};
+}
 
 // The pending check covers every later change, so nothing is observed until it has run.
-const schedule = (context: WatchContext): void => {
+function schedule(context: WatchContext): void {
   if (context.state.pending || context.state.stopped) {
     return;
   }
   context.state.pending = true;
   context.observer.disconnect();
   globalThis.setTimeout(waitForIdle, MIN_GAP_MS, context, schedule);
-};
+}
 
-const stopWatching = (context: WatchContext): void => {
+function stopWatching(context: WatchContext): void {
   context.state.stopped = true;
   context.observer.disconnect();
   context.page.removeEventListener(VISIBILITY_EVENT, context.onChange);
-};
+}
 
-export const watchPage = ({ page, check }: WatchInput): Watcher => {
+export function watchPage({ page, check }: WatchInput): Watcher {
   const context: WatchContext = {
     page,
     check,
@@ -91,4 +92,4 @@ export const watchPage = ({ page, check }: WatchInput): Watcher => {
   page.addEventListener(VISIBILITY_EVENT, context.onChange);
   schedule(context);
   return { stop: () => stopWatching(context) };
-};
+}

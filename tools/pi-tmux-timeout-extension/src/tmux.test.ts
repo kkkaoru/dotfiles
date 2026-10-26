@@ -46,6 +46,19 @@ it("creates a quoted detached tmux launch command", () => {
   ).toThrow("invalid tmux session namespace");
 });
 
+it("adds the shell loop warning to the bash detach message", () => {
+  const launch = createTmuxLaunch({
+    command: "for s in a b; do echo $s; done",
+    id: 2,
+    namespace: SESSION_NAMESPACE,
+  });
+
+  expect(launch.command).toMatch(/WARNING: the command contains a shell loop/u);
+  expect(
+    createTmuxLaunch({ command: "echo ok", id: 3, namespace: SESSION_NAMESPACE }).command,
+  ).not.toMatch(/WARNING/u);
+});
+
 it("detects uncertain work, thirty-second timeouts, and known watch commands", () => {
   expect(shouldDetachBash({ command: "bun run check" })).toBe(true);
   expect(shouldDetachBash({ command: "echo uncertain", timeout: 30 })).toBe(true);

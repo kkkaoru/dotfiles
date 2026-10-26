@@ -389,6 +389,17 @@ inheriting the parent provider. Nested work created natively inside Grok remains
 session. Cross-provider work is initiated by main orchestration as an explicit routed
 Agent/Task, then returns to the main session for integration.
 
+Requests from the pi provider (`x-claudex-origin: pi-provider`) that reach the Claude subscription
+backend run lean: the `claude -p` child adds `--strict-mcp-config` and
+`--exclude-dynamic-system-prompt-sections`, and its prompt carries only the conversation, without
+the SubAgent orchestration preamble and policies. Pi omits its own system prompt and sends the
+working directory in `x-claudex-working-directory`. Measured on 2026-10-21, a one-line pi turn
+dropped from about 69k to 11k input tokens; the user's MCP tool definitions were most of it.
+Claude Code's built-in tools are disabled (`--tools ""`). Pi's own tools reach the child through
+a stub stdio MCP server (`claudex-agent-adapter __pi-tools-mcp`) as `mcp__pi__<name>`. The
+adapter strips that prefix when it forwards the tool_use, so pi runs the tool and the stub never
+answers `tools/call`.
+
 ## Daemon update and hot-swap
 
 End-user commands and the daily update workflow are in the

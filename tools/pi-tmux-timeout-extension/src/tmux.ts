@@ -2,6 +2,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { cappedLogCommand, MAX_LOG_BYTES, shellLoopWarnings, shellQuote } from "./log-cap.ts";
 import { LAUNCH_METADATA_FILENAME, serializeLaunchMetadata } from "./persistence.ts";
 import { type MutableBashInput, shouldDetachBash } from "./policy.ts";
 import {
@@ -51,16 +52,15 @@ export interface TmuxRuntimeOptions {
   readonly operations?: StatusOperations;
 }
 
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
-function launchMessage(launch: Pick<TmuxLaunch, "logPath" | "sessionName" | "statusPath">): string {
+function launchMessage(
+  launch: Pick<TmuxLaunch, "logPath" | "sessionName" | "statusPath" | "taskCommand">,
+): string {
   return [
     "Started detached tmux command.",
     `tmux session: ${launch.sessionName}`,
     `log: ${launch.logPath}`,
     `exit status: ${launch.statusPath}`,
+    ...shellLoopWarnings(launch.taskCommand),
     "Return control now. Pi will wake automatically when the exit-status file appears.",
   ].join("\n");
 }
@@ -105,8 +105,9 @@ export function createTmuxLaunch(input: CreateTmuxLaunchInput): TmuxLaunch {
   const estimatedCompletionAt: string = new Date(
     Date.parse(submittedAt) + estimatedDurationSeconds * 1000,
   ).toISOString();
-  const detachedScript = `(${boundedTaskCommand(input)}) > ${shellQuote(logPath)} 2>&1\nexit_code=$?\nprintf '%s\\n' "$exit_code" > ${shellQuote(statusPath)}\ntmux -L ${shellQuote(socketName)} wait-for -S ${shellQuote(completionChannel)}`;
-  const message = launchMessage({ logPath, sessionName, statusPath });
+  const commandExitPath: string = path.join(outputDirectory, "command-exit");
+  const detachedScript = `${cappedLogCommand({ command: boundedTaskCommand(input), commandExitPath, logPath, maxBytes: MAX_LOG_BYTES })}\nexit_code=$(cat ${shellQuote(commandExitPath)})\nprintf '%s\\n' "$exit_code" > ${shellQuote(statusPath)}\ntmux -L ${shellQuote(socketName)} wait-for -S ${shellQuote(completionChannel)}`;
+  const message = launchMessage({ logPath, sessionName, statusPath, taskCommand: command });
   const launch: TmuxLaunch = {
     command: "",
     completionChannel,

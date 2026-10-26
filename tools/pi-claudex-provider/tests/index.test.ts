@@ -4,8 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const createProviderConfigMock = vi.hoisted(() => vi.fn());
 const resolveConfigMock = vi.hoisted(() => vi.fn());
 const startServerMock = vi.hoisted(() => vi.fn());
-vi.mock("../src/claudex-provider.ts", () => ({
-  CLAUDEX_PROVIDER_ID: "claudex",
+vi.mock("../src/claudex-provider.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/claudex-provider.ts")>()),
   createClaudexProviderConfig: createProviderConfigMock,
 }));
 vi.mock("../src/config.ts", () => ({ resolveGatewayConfig: resolveConfigMock }));
@@ -54,7 +54,37 @@ describe("pi extension lifecycle", () => {
     const test = harness();
     await extension(test.host);
     expect(test.providers).toStrictEqual(["claudex"]);
-    expect([...test.handlers.keys()]).toStrictEqual([]);
+    expect([...test.handlers.keys()]).toStrictEqual([
+      "before_provider_request",
+      "before_provider_headers",
+    ]);
+  });
+
+  it("drops pi's system prompt and sends the cwd only for claudex requests", async () => {
+    resolveConfigMock.mockReturnValue(undefined);
+    const extension = (await import("../index.ts")).default;
+    const test = harness();
+    await extension(test.host);
+    const request = test.handlers.get("before_provider_request");
+    const headers = test.handlers.get("before_provider_headers");
+    const claudex = { model: { provider: "claudex" }, cwd: "/tmp/a b" };
+    const other = { model: { provider: "anthropic" }, cwd: "/tmp/a b" };
+    const payload = {
+      model: "claude-haiku-5-5",
+      system: [{ type: "text", text: "pi" }],
+      messages: [],
+    };
+    expect(request?.({ payload }, claudex)).toStrictEqual({
+      model: "claude-haiku-5-5",
+      messages: [],
+    });
+    expect(request?.({ payload }, other)).toBe(undefined);
+    const claudexHeaders: Record<string, string> = {};
+    headers?.({ headers: claudexHeaders }, claudex);
+    expect(claudexHeaders).toStrictEqual({ "x-claudex-working-directory": "%2Ftmp%2Fa%20b" });
+    const otherHeaders: Record<string, string> = {};
+    headers?.({ headers: otherHeaders }, other);
+    expect(otherHeaders).toStrictEqual({});
   });
 
   it("starts, replaces, and shuts down the configured gateway", async () => {
@@ -69,7 +99,12 @@ describe("pi extension lifecycle", () => {
     const test = harness();
     await extension(test.host);
     expect(test.providers).toStrictEqual(["claudex"]);
-    expect([...test.handlers.keys()]).toStrictEqual(["session_start", "session_shutdown"]);
+    expect([...test.handlers.keys()]).toStrictEqual([
+      "before_provider_request",
+      "before_provider_headers",
+      "session_start",
+      "session_shutdown",
+    ]);
     const { start, shutdown } = requiredLifecycle(test);
     const context = { modelRegistry: { marker: true } } as unknown as ExtensionContext;
     await start({}, context);

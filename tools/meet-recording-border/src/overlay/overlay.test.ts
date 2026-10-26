@@ -8,10 +8,15 @@ import japanesePhrases from "../detection/phrases/ja.json" with { type: "json" }
 import { type JoinState, createOverlay, renderView, start, tick } from "./overlay.ts";
 
 const patterns = compilePatterns([englishPhrases, japanesePhrases]);
-const english = (key: MessageKey): string => englishMessages[key].message;
-const japanese = (key: MessageKey): string => japaneseMessages[key].message;
-const overlayHosts = (): Element[] =>
-  [...document.documentElement.children].filter((element) => element.tagName === "DIV");
+function english(key: MessageKey): string {
+  return englishMessages[key].message;
+}
+function japanese(key: MessageKey): string {
+  return japaneseMessages[key].message;
+}
+function overlayHosts(): Element[] {
+  return [...document.documentElement.children].filter((element) => element.tagName === "DIV");
+}
 
 beforeEach(() => {
   document.body.innerHTML = "";
@@ -34,14 +39,16 @@ test("createOverlay builds a hidden, detached overlay inside a closed shadow roo
   expect(overlay.label.textContent).toBe("");
 });
 
-const propertyNames = (style: CSSStyleDeclaration | undefined): string[] =>
-  style === undefined
+function propertyNames(style: CSSStyleDeclaration | undefined): string[] {
+  return style === undefined
     ? []
     : Array.from({ length: style.length }, (_value, index) => style.item(index));
-const styleRules = (overlay: ReturnType<typeof createOverlay>): CSSStyleRule[] =>
-  [...(overlay.frame.parentNode?.querySelector("style")?.sheet?.cssRules ?? [])].filter(
+}
+function styleRules(overlay: ReturnType<typeof createOverlay>): CSSStyleRule[] {
+  return [...(overlay.frame.parentNode?.querySelector("style")?.sheet?.cssRules ?? [])].filter(
     (rule) => rule instanceof CSSStyleRule,
   );
+}
 
 test("the :host scope only defines the custom properties", () => {
   const overlay = createOverlay(document);
@@ -67,15 +74,31 @@ test("the frame styles define no custom properties", () => {
   expect(frame?.style.getPropertyValue("will-change")).toBe("opacity");
 });
 
+// Happy-dom does not resolve var() chains inherited from :host; Chrome resolves the rest.
+// These tests check that the frame matches each tone rule and what that rule assigns.
+function toneRule(
+  overlay: ReturnType<typeof createOverlay>,
+  tone: string,
+): CSSStyleRule | undefined {
+  return styleRules(overlay).find((rule) => rule.selectorText === `.frame[data-tone="${tone}"]`);
+}
+
 test("the tone switches the border color", () => {
   const overlay = createOverlay(document);
   document.documentElement.append(overlay.host);
   renderView({ overlay, view: { tone: "recording", messages: ["recording"] }, translate: english });
-  expect(getComputedStyle(overlay.frame).borderTopColor).toBe("#ea4335");
+  expect(overlay.frame.matches('.frame[data-tone="recording"]')).toBe(true);
+  expect(toneRule(overlay, "recording")?.style.getPropertyValue("--color")).toBe(
+    "var(--color-recording)",
+  );
   renderView({ overlay, view: { tone: "gemini", messages: ["gemini"] }, translate: english });
-  expect(getComputedStyle(overlay.frame).borderTopColor).toBe("#a142f4");
+  expect(overlay.frame.matches('.frame[data-tone="gemini"]')).toBe(true);
+  expect(toneRule(overlay, "gemini")?.style.getPropertyValue("--color")).toBe(
+    "var(--color-gemini)",
+  );
   renderView({ overlay, view: { tone: "idle", messages: ["idle"] }, translate: english });
-  expect(getComputedStyle(overlay.frame).borderTopColor).toBe("#1a73e8");
+  expect(overlay.frame.matches('.frame[data-tone="idle"]')).toBe(true);
+  expect(toneRule(overlay, "idle")?.style.getPropertyValue("--color")).toBe("var(--color-idle)");
 });
 
 test("the loading tone stops the pulse through a variable", () => {
@@ -83,7 +106,9 @@ test("the loading tone stops the pulse through a variable", () => {
   document.documentElement.append(overlay.host);
   renderView({ overlay, view: { tone: "loading", messages: ["loading"] }, translate: english });
   expect(getComputedStyle(overlay.frame).getPropertyValue("--pulse-name")).toBe("none");
-  expect(getComputedStyle(overlay.frame).borderTopColor).toBe("#5f6368");
+  expect(toneRule(overlay, "loading")?.style.getPropertyValue("--color")).toBe(
+    "var(--color-loading)",
+  );
 });
 
 test("renderView shows the frame with a tone and English labels", () => {

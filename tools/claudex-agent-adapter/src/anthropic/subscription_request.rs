@@ -108,6 +108,6 @@ pub(super) use tools::requested_tools_for_request;
 mod prompt;
 pub(crate) use prompt::cwd_from_system;
 pub(super) use prompt::{
-    is_compaction_request, request_json_schema, subscription_request_cwd,
-    subscription_request_prompt,
+    is_compaction_request, lean_subscription_request_prompt, request_json_schema,
+    subscription_request_cwd, subscription_request_prompt,
 };

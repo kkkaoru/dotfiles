@@ -5,14 +5,14 @@
     "DISABLE_AUTOUPDATER": "1"
   },
   "permissions": {
-    "defaultMode": "bypassPermissions",
     "allow": [],
     "deny": [
       "Bash(terraform apply:*)",
       "Bash(* terraform apply*)",
       "Bash(terraform -chdir=* apply*)",
       "Bash(* terraform -chdir=* apply*)"
-    ]
+    ],
+    "defaultMode": "bypassPermissions"
   },
   "model": "opus",
   "enableAllProjectMcpServers": true,
@@ -70,6 +70,7 @@
   "advisorModel": "opus",
   "tui": "fullscreen",
   "skipDangerousModePermissionPrompt": true,
+  "switchModelsOnFlag": false,
   "agentPushNotifEnabled": true,
   "skipAutoPermissionPrompt": true,
   "feedbackSurveyState": {

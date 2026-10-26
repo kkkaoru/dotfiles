@@ -8,8 +8,9 @@ import { type Plugin, transform } from "esbuild";
 const CSS_FILE = /\.css$/;
 const UTF8 = "utf8";
 
-export const minifyCss = async (source: string): Promise<string> =>
-  transform(source, { loader: "css", minify: true }).then((result) => result.code);
+export async function minifyCss(source: string): Promise<string> {
+  return transform(source, { loader: "css", minify: true }).then((result) => result.code);
+}
 
 // Inlines imported CSS as minified text, matching the `*.css` module in @types/css.d.ts.
 export const minifiedCssText: Plugin = {

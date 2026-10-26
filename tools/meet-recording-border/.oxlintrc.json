@@ -16,7 +16,7 @@
     "curly": ["error", "all"],
     "default-case": "off",
     "explicit-member-accessibility": "off",
-    "func-style": "off",
+    "func-style": ["error", "declaration"],
     "max-depth": ["error", 3],
     "max-lines": [
       "error",

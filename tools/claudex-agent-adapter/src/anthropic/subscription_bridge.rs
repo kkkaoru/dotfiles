@@ -8,7 +8,8 @@ use super::{
     ACTIVITY_KEEPALIVE_INTERVAL, Bridge, DEFAULT_STDERR_DRAIN_GRACE, DEFAULT_TERMINATION_TIMEOUT,
     INITIAL_ACTIVITY_DELAY, MessagesRequest, SUBAGENT_INITIAL_ACTIVITY_DELAY, Segment,
     SubscriptionOptions, SubscriptionToolContext, Usage, WebEvidenceSummary, anthropic_response,
-    estimated_tokens, is_compaction_request, request_json_schema, requested_tools_for_request,
+    estimated_tokens, is_compaction_request, is_pi_provider_request,
+    lean_subscription_request_prompt, request_json_schema, requested_tools_for_request,
     run_subscription_model, subscription_request_cwd, subscription_request_prompt,
     subscription_streaming_response, token_count,
 };
@@ -23,7 +24,11 @@ impl Bridge {
     ) -> Result<Response<Body>> {
         let input_tokens = u64::try_from(token_count(&request)).unwrap_or(u64::MAX);
         let options = self.subscription_options(&request, effort, is_subagent, tools_were_provided);
-        let prompt = subscription_request_prompt(&request);
+        let prompt = if options.pi_tools.is_some() {
+            lean_subscription_request_prompt(&request)
+        } else {
+            subscription_request_prompt(&request)
+        };
         if request.stream {
             return Ok(subscription_streaming_response(
                 self.subscription_program.clone(),
@@ -92,6 +97,7 @@ impl Bridge {
                 disabled_subagent_models: request.disabled_subagent_models.clone(),
                 is_subagent,
             }),
+            pi_tools: is_pi_provider_request(request).then(|| request.tools.clone()),
         }
     }
 }

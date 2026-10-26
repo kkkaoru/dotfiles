@@ -37,11 +37,11 @@ class FakeMutationObserver implements MutationObserver {
   }
 }
 
-const notifyMutation = (): void => {
+function notifyMutation(): void {
   observerRecords
     .filter((record) => !record.disconnected)
     .map((record) => record.callback([], record.observer));
-};
+}
 
 beforeEach(() => {
   vi.useFakeTimers();

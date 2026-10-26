@@ -2,8 +2,14 @@
 
 A pi custom provider (`claude-sdk`) that runs Claude through the official
 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/typescript) with the local Claude
-Code login, so requests draw from the Claude plan's usage limits instead of API billing or
-extra usage. Pi keeps its own agent loop: the model sees pi's tools and pi executes every call.
+Code login. Pi keeps its own agent loop: the model sees pi's tools and pi executes every call.
+
+**Billing (verified 2026-10-21):** requests carrying pi's system prompt are billed as *extra
+usage*, not plan usage. The API classifies them by content (a single line of pi's prompt is
+enough); the same SDK call with a plain prompt uses plan usage. With no extra-usage balance the
+API answers `400 You're out of extra usage`. Earlier plan-usage results were an artifact of
+testing inside a Claude Code shell, whose `CLAUDE_CODE_*` identity leaked into the child; the
+provider now strips it. Do not rewrite pi's prompt to dodge this classification.
 
 ## Requirements
 
@@ -35,8 +41,9 @@ The dotfiles `create-symlinks.sh` script links this package under `.pi/agent/pac
   call, or new user input after a finished reply. Compaction, branching, steering mixed into
   tool results, or changed system prompt, tools, model, cwd or thinking on/off start a fresh
   session that replays the transcript as text. Effort changes apply live via `applyFlagSettings`.
-- `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_BASE_URL` are removed from the child
-  environment so the plan login is always used, even inside a claudex shell.
+- `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `CLAUDECODE` and
+  `CLAUDE_CODE_*` are removed from the child environment, so the Claude login is used and an
+  enclosing Claude Code session's identity never leaks into the child.
 - Sessions close after 15 idle minutes, on abort, on error, and after each reply in `pi -p`.
 - Cost is reported as zero; token counts come from the API usage in the stream.
 
@@ -48,7 +55,6 @@ The dotfiles `create-symlinks.sh` script links this package under `.pi/agent/pac
   `rate_limit_event` window, status and reset time.
 - A restart replays history as text, so earlier images and exact tool-call structure are lost.
   Mid-conversation system-message updates (from other pi extensions) trigger such restarts.
-- Usage counts against the same plan limits as Claude Code itself.
 
 ## Development
 

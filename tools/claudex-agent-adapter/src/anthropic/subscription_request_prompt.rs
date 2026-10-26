@@ -7,6 +7,16 @@ use super::{
     SUBSCRIPTION_PROMPT_PREAMBLE, is_compaction_text, message_text, system_text,
 };
 
+/// Pi drives its own agent loop, so its turns carry only the conversation; the Claudex
+/// orchestration preamble and SubAgent policies are for Claudex's own Claude Code sessions.
+/// Without the tool_result sentence, Haiku re-issued an answered call in about half of runs.
+pub(in crate::anthropic) fn lean_subscription_request_prompt(request: &MessagesRequest) -> String {
+    format!(
+        "Write the next assistant turn of this conversation. Your earlier tool calls already ran; each tool_result holds the real output, so use it rather than repeating the call.\n\nMessages:\n{}",
+        serde_json::to_string(&request.messages).unwrap_or_default()
+    )
+}
+
 pub(in crate::anthropic) fn subscription_request_prompt(request: &MessagesRequest) -> String {
     // Keep turn-varying scheduler/lane text after the stable preamble + System +
     // Messages prefix so Anthropic prompt-cache can reuse the long shared head.

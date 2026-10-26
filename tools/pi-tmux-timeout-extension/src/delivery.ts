@@ -1,6 +1,7 @@
 // This TypeScript file is executed with Bun.
 import { formatLocalTimestamp } from "./policy.ts";
 import { completionIdentity, inspectedLogPath, overduePrompt } from "./overdue-inspection.ts";
+import { logCapNotice } from "./log-cap.ts";
 import type { TmuxLaunch } from "./tmux.ts";
 import type { Completion } from "./waiter.ts";
 
@@ -61,7 +62,7 @@ function completionName(completion: Completion): string {
 }
 
 function completionPrompt(completion: Completion): string {
-  return `${completionName(completion)}\nlog: ${completion.launch.logPath}\nstatus: ${completion.launch.statusPath}`;
+  return `${completionName(completion)}\nlog: ${completion.launch.logPath}\nstatus: ${completion.launch.statusPath}${logCapNotice(completion.launch)}`;
 }
 
 function completionTimestamp(completion: Completion): number {

@@ -26,9 +26,10 @@ pub(super) use super::subscription_request::requested_tools_for_request;
 use super::{
     Bridge, MessagesRequest, Segment, Usage, WebEvidenceSummary,
     content::{anthropic_response, estimated_tokens, token_count},
+    message_router::is_pi_provider_request,
     subscription_request::{
-        is_compaction_request, request_json_schema, subscription_request_cwd,
-        subscription_request_prompt,
+        is_compaction_request, lean_subscription_request_prompt, request_json_schema,
+        subscription_request_cwd, subscription_request_prompt,
     },
     subscription_stream::{
         ACTIVITY_KEEPALIVE_INTERVAL, INITIAL_ACTIVITY_DELAY, SUBAGENT_INITIAL_ACTIVITY_DELAY,

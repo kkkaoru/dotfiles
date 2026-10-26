@@ -39,6 +39,18 @@ models force Anthropic adaptive thinking so Pi's displayed thinking level is ser
 `output_config.effort`; this keeps Pi's dynamic-effort TUI value identical to the adapter's logged
 `request_effort`.
 
+Direction B also lists the Claude plan's models, which the adapter serves through its
+`claude -p` subscription backend with streamed output. Startup reads the id list cached at
+`~/.cache/claudex/pi-subscription-models.json` (override: `CLAUDEX_SUBSCRIPTION_MODELS_CACHE`),
+or a built-in list before the first refresh. Pi's background catalog refresh asks the Claude
+Agent SDK's `supportedModels()` for the live list under the user's own Claude login (it only
+initializes Claude Code, so no usage is consumed) and rewrites the cache; a failed lookup keeps the
+cached list. Catalog entries win over plan entries with the same id. Context windows come from
+Pi's built-in Anthropic catalog (200K when unknown).
+
+Claudex requests omit pi's system prompt: Claude Code runs with its own, and the adapter keeps
+pi turns lean to save tokens. The working directory travels in `x-claudex-working-directory`.
+
 Direction B sends `x-claudex-origin: pi-provider`. The adapter must reject this origin if the selected route would enter the Pi gateway again. Direction A also excludes the `claudex` provider from model listing and rejects it explicitly.
 
 ## Gateway protocol

@@ -1035,3 +1035,115 @@ fn native_grok_route_effort_overrides_explicit_and_unmatched_request_effort() {
         "PiGateway launch-scoped effort must override stale request metadata"
     );
 }
+
+fn command_args(pi_tools: Option<Vec<serde_json::Value>>) -> Vec<String> {
+    let mut options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(1),
+    );
+    options.tools = vec!["bash".to_owned()];
+    options.pi_tools = pi_tools;
+    let command = subscription_command(
+        Path::new("claude"),
+        "claude-haiku-5-5",
+        &options,
+        OutputMode::StreamJson,
+    );
+    command
+        .as_std()
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect()
+}
+
+#[test]
+fn lean_subscription_children_skip_user_mcp_servers_and_dynamic_sections() {
+    let lean = command_args(Some(vec![
+        json!({"name":"bash","input_schema":{"type":"object"}}),
+    ]));
+    assert!(lean.contains(&"--strict-mcp-config".to_owned()));
+    assert!(lean.contains(&"--exclude-dynamic-system-prompt-sections".to_owned()));
+    let normal = command_args(None);
+    assert!(!normal.contains(&"--strict-mcp-config".to_owned()));
+    assert!(!normal.contains(&"--exclude-dynamic-system-prompt-sections".to_owned()));
+}
+
+#[test]
+fn pi_children_see_only_pi_tools_through_the_mcp_stub() {
+    let lean = command_args(Some(vec![
+        json!({"name":"bash","input_schema":{"type":"object"}}),
+    ]));
+    let tools = lean
+        .iter()
+        .position(|arg| arg == "--tools")
+        .expect("--tools");
+    assert_eq!(lean[tools + 1], "");
+    let allowed = lean
+        .iter()
+        .position(|arg| arg == "--allowedTools")
+        .expect("--allowedTools");
+    assert_eq!(lean[allowed + 1], "mcp__pi__bash");
+    assert!(
+        lean.iter()
+            .any(|arg| arg.contains(r#""args":["__pi-tools-mcp"]"#))
+    );
+    let toolless = command_args(Some(Vec::new()));
+    assert!(!toolless.contains(&"--mcp-config".to_owned()));
+    assert_eq!(
+        command_args(None)
+            .iter()
+            .filter(|arg| *arg == "bash")
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn pi_mcp_tool_names_map_back_to_pi_names() {
+    use crate::anthropic::subscription_frames::mapped_tool_name;
+    let available = vec!["bash".to_owned(), "read".to_owned()];
+    assert_eq!(mapped_tool_name("mcp__pi__read", &available), "read");
+    assert_eq!(mapped_tool_name("bash", &available), "bash");
+    assert_eq!(
+        mapped_tool_name("mcp__pi__write", &available),
+        "mcp__pi__write"
+    );
+}
+
+fn pi_request(metadata: serde_json::Value) -> MessagesRequest {
+    MessagesRequest {
+        model: "claude-haiku-5-5".to_owned(),
+        system: json!("pi system prompt"),
+        messages: vec![json!({"role":"user","content":"hello"})],
+        tools: Vec::new(),
+        stream: true,
+        output_config: serde_json::Value::Null,
+        metadata,
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    }
+}
+
+#[test]
+fn lean_prompt_carries_only_the_conversation() {
+    let prompt = crate::anthropic::subscription_request::lean_subscription_request_prompt(
+        &pi_request(serde_json::Value::Null),
+    );
+    assert_eq!(
+        prompt,
+        "Write the next assistant turn of this conversation. Your earlier tool calls already ran; each tool_result holds the real output, so use it rather than repeating the call.\n\nMessages:\n[{\"content\":\"hello\",\"role\":\"user\"}]"
+    );
+}
+
+#[test]
+fn pi_provider_origin_is_read_from_request_metadata() {
+    use crate::anthropic::message_router::is_pi_provider_request;
+    assert!(is_pi_provider_request(&pi_request(
+        json!({"_claudex_pi_provider_origin": true})
+    )));
+    assert!(!is_pi_provider_request(&pi_request(json!({}))));
+    assert!(!is_pi_provider_request(&pi_request(
+        serde_json::Value::Null
+    )));
+}

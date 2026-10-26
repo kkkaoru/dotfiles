@@ -4,10 +4,10 @@ import stylelint from "stylelint";
 import { expect, test } from "vitest";
 import plugins, { LITERAL_TOKEN, NO_MIXED } from "./custom-properties.ts";
 
-const lintTexts = async (code: string, rules: Record<string, unknown>): Promise<string[]> => {
+async function lintTexts(code: string, rules: Record<string, unknown>): Promise<string[]> {
   const { results } = await stylelint.lint({ code, config: { plugins, rules } });
   return results.flatMap((result) => result.warnings.map((warning) => warning.text));
-};
+}
 
 test("no-mixed-custom-properties accepts variable-only and style-only rules", async () => {
   expect(

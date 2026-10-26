@@ -65,11 +65,7 @@ impl Bridge {
     }
 
     fn reject_pi_provider_recursion(&self, request: &MessagesRequest) -> Result<()> {
-        let from_pi = request
-            .metadata
-            .get(crate::http_api::messages_handlers::PI_PROVIDER_ORIGIN_METADATA)
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
+        let from_pi = is_pi_provider_request(request);
         let routes_to_pi = self.app.backend_kind_for_model(&request.model)
             == Some(crate::agent_backend::BackendKind::PiGateway);
         if from_pi && routes_to_pi {
@@ -167,3 +163,11 @@ mod extra_tests;
 #[cfg(test)]
 #[path = "message_router_tests.rs"]
 mod tests;
+
+pub(in crate::anthropic) fn is_pi_provider_request(request: &MessagesRequest) -> bool {
+    request
+        .metadata
+        .get(crate::http_api::messages_handlers::PI_PROVIDER_ORIGIN_METADATA)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+}

@@ -35,7 +35,9 @@ pub(in crate::anthropic) fn subscription_command(
         output_format,
         "--no-session-persistence",
     ]);
-    if options.disable_tools {
+    if let Some(pi_tools) = &options.pi_tools {
+        pi_tool_args(&mut command, pi_tools);
+    } else if options.disable_tools {
         command.args(["--safe-mode", "--tools", "", "--allowedTools", ""]);
     } else if !options.tools.is_empty() {
         let tools = options.tools.join(",");
@@ -57,6 +59,23 @@ pub(in crate::anthropic) fn subscription_command(
     command.env(NONINTERACTIVE_CHILD_ENV, "1");
     remove_proxy_environment(&mut command);
     command
+}
+
+fn pi_tool_args(command: &mut Command, tools: &[serde_json::Value]) {
+    use crate::anthropic::pi_tools_mcp::{pi_allowed_tools, pi_mcp_config};
+    command.args([
+        "--strict-mcp-config",
+        "--exclude-dynamic-system-prompt-sections",
+        "--tools",
+        "",
+        "--allowedTools",
+        &pi_allowed_tools(tools),
+    ]);
+    if !tools.is_empty() {
+        // The daemon binary doubles as the stub server; see pi_tools_mcp.
+        let program = std::env::current_exe().unwrap_or_else(|_| "claudex-agent-adapter".into());
+        command.args(["--mcp-config", &pi_mcp_config(&program, tools)]);
+    }
 }
 
 fn remove_proxy_environment(command: &mut Command) {

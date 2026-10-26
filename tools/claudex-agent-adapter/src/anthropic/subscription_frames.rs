@@ -33,7 +33,10 @@ pub(super) fn mapped_tool_name<'a>(emitted: &'a str, available: &'a [String]) ->
     }
     available
         .iter()
-        .find(|name| name.as_str() == emitted)
+        .find(|name| {
+            name.as_str() == emitted
+                || emitted.strip_prefix(super::pi_tools_mcp::PI_MCP_PREFIX) == Some(name.as_str())
+        })
         .map(String::as_str)
         .unwrap_or(emitted)
 }

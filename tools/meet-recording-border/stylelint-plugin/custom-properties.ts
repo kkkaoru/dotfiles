@@ -3,6 +3,9 @@
 import type { ChildNode, Declaration, Rule as CssRule, Root } from "postcss";
 import stylelint, { type PostcssResult, type Rule, type RuleBase } from "stylelint";
 
+// What a rule returns for its options: the check stylelint runs on each stylesheet.
+type RuleCheck = ReturnType<RuleBase>;
+
 interface ReferenceReport {
   readonly result: PostcssResult;
   readonly selector: string;
@@ -27,83 +30,102 @@ const literalTokenMessages = stylelintUtilities.ruleMessages(LITERAL_TOKEN, {
     `Expected "${selector}" custom property "${property}" to have a literal value without var()`,
 });
 
-const isDeclaration = (node: ChildNode): node is Declaration => node.type === "decl";
+function isDeclaration(node: ChildNode): node is Declaration {
+  return node.type === "decl";
+}
 
-const isCustomProperty = (declaration: Declaration): boolean =>
-  declaration.prop.startsWith(CUSTOM_PROPERTY_PREFIX);
+function isCustomProperty(declaration: Declaration): boolean {
+  return declaration.prop.startsWith(CUSTOM_PROPERTY_PREFIX);
+}
 
-const declarationsOf = (rule: CssRule): Declaration[] =>
-  rule.nodes.filter((node) => isDeclaration(node));
+function declarationsOf(rule: CssRule): Declaration[] {
+  return rule.nodes.filter((node) => isDeclaration(node));
+}
 
-const mixesKinds = (declarations: readonly Declaration[]): boolean =>
-  declarations.some((declaration) => isCustomProperty(declaration)) &&
-  !declarations.every((declaration) => isCustomProperty(declaration));
+function mixesKinds(declarations: readonly Declaration[]): boolean {
+  return (
+    declarations.some((declaration) => isCustomProperty(declaration)) &&
+    !declarations.every((declaration) => isCustomProperty(declaration))
+  );
+}
 
-const referencesVariable = (declaration: Declaration): boolean =>
-  isCustomProperty(declaration) && VAR_FUNCTION.test(declaration.value);
+function referencesVariable(declaration: Declaration): boolean {
+  return isCustomProperty(declaration) && VAR_FUNCTION.test(declaration.value);
+}
 
-const rulesOf = (root: Root): CssRule[] => {
+function rulesOf(root: Root): CssRule[] {
   const rules: CssRule[] = [];
   root.walkRules((rule) => {
     rules.push(rule);
   });
   return rules;
-};
+}
 
-const isSelector = (value: unknown): value is string => typeof value === "string";
+function isSelector(value: unknown): value is string {
+  return typeof value === "string";
+}
 
-const reportMixed = (result: PostcssResult, rule: CssRule): void =>
-  stylelintUtilities.report({
+function reportMixed(result: PostcssResult, rule: CssRule): void {
+  return stylelintUtilities.report({
     ruleName: NO_MIXED,
     result,
     node: rule,
     message: noMixedMessages.rejected(rule.selector),
   });
+}
 
-const reportReference = ({ result, selector, declaration }: ReferenceReport): void =>
-  stylelintUtilities.report({
+function reportReference({ result, selector, declaration }: ReferenceReport): void {
+  return stylelintUtilities.report({
     ruleName: LITERAL_TOKEN,
     result,
     node: declaration,
     message: literalTokenMessages.rejected(selector, declaration.prop),
   });
+}
 
-const mixedRules = (root: Root): CssRule[] =>
-  rulesOf(root).filter((rule) => mixesKinds(declarationsOf(rule)));
+function mixedRules(root: Root): CssRule[] {
+  return rulesOf(root).filter((rule) => mixesKinds(declarationsOf(rule)));
+}
 
 // Invalid options report nothing: validateOptions has already reported them.
-const noMixed: RuleBase = (primary: unknown) => (root, result) => {
-  (stylelintUtilities.validateOptions(result, NO_MIXED, { actual: primary, possible: [true] })
-    ? mixedRules(root)
-    : []
-  ).map((rule) => reportMixed(result, rule));
-};
+function noMixed(primary: unknown): RuleCheck {
+  return (root, result) => {
+    (stylelintUtilities.validateOptions(result, NO_MIXED, { actual: primary, possible: [true] })
+      ? mixedRules(root)
+      : []
+    ).map((rule) => reportMixed(result, rule));
+  };
+}
 
 // Returns the token scope's selector when the primary option is a valid one.
-const validSelector = (result: PostcssResult, primary: unknown): string | undefined =>
-  stylelintUtilities.validateOptions(result, LITERAL_TOKEN, {
+function validSelector(result: PostcssResult, primary: unknown): string | undefined {
+  return stylelintUtilities.validateOptions(result, LITERAL_TOKEN, {
     actual: primary,
     possible: [isSelector],
   }) && isSelector(primary)
     ? primary
     : undefined;
+}
 
 // Matches the token scope inside @media as well, since walkRules visits nested rules.
-const referencingDeclarations = (root: Root, selector: string): Declaration[] =>
-  rulesOf(root)
+function referencingDeclarations(root: Root, selector: string): Declaration[] {
+  return rulesOf(root)
     .filter((rule) => rule.selector === selector)
     .flatMap((rule) => declarationsOf(rule))
     .filter((declaration) => referencesVariable(declaration));
+}
 
-const literalToken: RuleBase = (primary: unknown) => (root, result) => {
-  const selector = validSelector(result, primary);
-  if (selector === undefined) {
-    return;
-  }
-  referencingDeclarations(root, selector).map((declaration) =>
-    reportReference({ result, selector, declaration }),
-  );
-};
+function literalToken(primary: unknown): RuleCheck {
+  return (root, result) => {
+    const selector = validSelector(result, primary);
+    if (selector === undefined) {
+      return;
+    }
+    referencingDeclarations(root, selector).map((declaration) =>
+      reportReference({ result, selector, declaration }),
+    );
+  };
+}
 
 const noMixedRule: Rule = Object.assign(noMixed, {
   ruleName: NO_MIXED,

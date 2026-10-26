@@ -1,6 +1,14 @@
 // This TypeScript file is executed with Bun.
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { CompletionDelivery, type CompletionDeliveryContext } from "./delivery.ts";
+import {
+  CompletionDelivery,
+  type CompletionDeliveryContext,
+  type CompletionDeliveryHost,
+  wakePiOnCompletion,
+} from "./delivery.ts";
 import { createTmuxLaunch } from "./tmux.ts";
 
 it.each([
@@ -137,4 +145,36 @@ it("preserves original instructions and user requests when projecting overdue ev
   });
   expect(result?.messages.at(-1)).not.toHaveProperty("customType");
   expect(messages).toHaveLength(2);
+});
+
+it("reports an error to the agent when a completed job's log hit the cap", () => {
+  const directory: string = mkdtempSync(path.join(tmpdir(), "pi-tmux-cap-"));
+  writeFileSync(path.join(directory, "log-truncated"), "");
+  const sendUserMessage = vi.fn<CompletionDeliveryHost["sendUserMessage"]>();
+
+  wakePiOnCompletion(
+    { sendUserMessage },
+    {
+      completedAt: new Date(2026, 7, 26, 2, 15).toISOString(),
+      exitCode: 0,
+      launch: {
+        command: "tmux command",
+        completionChannel: "pi-tmux-test-complete",
+        logPath: path.join(directory, "output.log"),
+        sessionName: "pi-tmux-test",
+        socketName: "pi-tmux-socket",
+        statusPath: path.join(directory, "exit-status"),
+        submittedAt: new Date(2026, 7, 26, 2, 14).toISOString(),
+        taskCommand: "cat pi-tmux-*/output.log",
+      },
+    },
+  );
+  rmSync(directory, { recursive: true });
+
+  expect(sendUserMessage).toHaveBeenCalledWith(
+    expect.stringMatching(
+      /\nERROR: output exceeded the 536870912-byte log cap, so the job was terminated\. A runaway loop, such as a command reading its own output\.log, is the usual cause\.$/u,
+    ),
+    { deliverAs: "followUp" },
+  );
 });

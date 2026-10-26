@@ -34,6 +34,9 @@ pub(in crate::anthropic) struct SubscriptionOptions {
     pub(in crate::anthropic) stderr_drain_grace: Duration,
     pub(in crate::anthropic) termination_timeout: Duration,
     pub(in crate::anthropic) tool_context: Option<SubscriptionToolContext>,
+    /// Pi provider turns carry pi's tool schemas: the child sees only those tools (via the pi MCP
+    /// stub), skips the user's MCP servers and Claudex orchestration text to save tokens.
+    pub(in crate::anthropic) pi_tools: Option<Vec<Value>>,
 }
 
 #[derive(Clone)]
@@ -122,6 +125,7 @@ impl SubscriptionOptions {
             stderr_drain_grace: DEFAULT_STDERR_DRAIN_GRACE,
             termination_timeout: DEFAULT_TERMINATION_TIMEOUT,
             tool_context: None,
+            pi_tools: None,
         }
     }
 }
