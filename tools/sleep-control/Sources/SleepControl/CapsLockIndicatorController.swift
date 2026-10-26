@@ -7,6 +7,14 @@ import SleepControlCore
 private let capsLockKeyboardUsagePage: UInt32 = 0x07
 private let capsLockKeyUsage: UInt32 = 0x39
 private let capsLockReapplyDelayNanoseconds: UInt64 = 20_000_000
+private let keyboardDeviceMatching: [String: Int] = [
+  kIOHIDDeviceUsagePageKey: Int(kHIDPage_GenericDesktop),
+  kIOHIDDeviceUsageKey: Int(kHIDUsage_GD_Keyboard),
+]
+private let capsLockValueMatching: [String: Int] = [
+  kIOHIDElementUsagePageKey: Int(capsLockKeyboardUsagePage),
+  kIOHIDElementUsageKey: Int(capsLockKeyUsage),
+]
 private let capsLockInputCallback: IOHIDValueCallback = { context, _, _, value in
   guard
     let context,
@@ -118,11 +126,11 @@ internal final class CapsLockIndicatorController {
     }
 
     let manager = IOHIDManagerCreate(kCFAllocatorDefault, Self.hidOptions)
-    // A manager without an explicit matching dictionary returns an empty set
-    // from `IOHIDManagerCopyDevices`. Nil means all HID devices here; the
-    // built-in-device and LED-element checks below narrow the write safely.
-    IOHIDManagerSetDeviceMatching(manager, nil)
-    IOHIDManagerSetInputValueMatching(manager, nil)
+    // Match keyboards only and deliver only Caps Lock key values, so pointer
+    // and other HID input never wakes this process. The built-in-device and
+    // LED-element checks below still narrow the write.
+    IOHIDManagerSetDeviceMatching(manager, keyboardDeviceMatching as CFDictionary)
+    IOHIDManagerSetInputValueMatching(manager, capsLockValueMatching as CFDictionary)
     let context = Unmanaged.passUnretained(self).toOpaque()
     IOHIDManagerRegisterInputValueCallback(manager, capsLockInputCallback, context)
     IOHIDManagerScheduleWithRunLoop(manager, CFRunLoopGetMain(), Self.runLoopMode)
