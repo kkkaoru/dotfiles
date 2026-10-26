@@ -286,15 +286,58 @@ it("restores an inspected overdue interval without immediately re-alerting on re
   vi.advanceTimersByTime(120_000);
   runtime.restore([launch], 1, { [launch.sessionName]: Date.now() });
   expect(onOverdue).not.toHaveBeenCalled();
-  vi.advanceTimersByTime(299_999);
+  vi.advanceTimersByTime(1_799_999);
   expect(onOverdue).not.toHaveBeenCalled();
   vi.advanceTimersByTime(1);
   expect(onOverdue).toHaveBeenCalledExactlyOnceWith([launch]);
   runtime.acknowledgeOverdue([launch], Date.now());
-  vi.advanceTimersByTime(299_999);
+  vi.advanceTimersByTime(1_799_999);
   expect(onOverdue).toHaveBeenCalledOnce();
   vi.advanceTimersByTime(1);
   expect(onOverdue).toHaveBeenCalledTimes(2);
+  runtime.clear();
+});
+
+it("reschedules an overdue job after an inspected check-in without losing completion", () => {
+  vi.useFakeTimers();
+  const onComplete = vi.fn();
+  const onOverdue = vi.fn();
+  const onReschedule = vi.fn();
+  const runtime = new TmuxRuntime({
+    events: { subscribe: (): (() => void) => (): void => undefined },
+    onComplete,
+    onOverdue,
+    onReschedule,
+    operations: { isRunning: (): boolean => true, read: (): string => "" },
+  });
+  const launch = runtime.createLaunch("long watcher", { estimatedDurationSeconds: 60 });
+  runtime.trackLaunch(launch);
+  vi.advanceTimersByTime(61_000);
+  expect(onOverdue).toHaveBeenCalledOnce();
+
+  const rescheduled = runtime.reschedule(launch.sessionName, 1800);
+
+  expect(rescheduled?.estimatedCompletionAt).not.toBe(launch.estimatedCompletionAt);
+  expect(Date.parse(rescheduled?.estimatedCompletionAt ?? "") - Date.now()).toBe(1_800_000);
+  expect(onReschedule).toHaveBeenCalledExactlyOnceWith(rescheduled);
+  vi.advanceTimersByTime(1_800_000);
+  expect(onOverdue).toHaveBeenCalledOnce();
+  vi.advanceTimersByTime(60_000);
+  expect(onOverdue).toHaveBeenCalledTimes(2);
+  expect(runtime.reschedule("pi-tmux-unknown-1", 60)).toBeUndefined();
+  runtime.clear();
+});
+
+it("reschedules without optional observers", () => {
+  const runtime = new TmuxRuntime({
+    events: { subscribe: (): (() => void) => (): void => undefined },
+    onComplete: vi.fn(),
+    operations: { isRunning: (): boolean => true, read: (): string => "" },
+  });
+  const launch = runtime.createLaunch("long watcher", { estimatedDurationSeconds: 60 });
+  runtime.trackLaunch(launch);
+
+  expect(runtime.reschedule(launch.sessionName, 60)?.sessionName).toBe(launch.sessionName);
   runtime.clear();
 });
 

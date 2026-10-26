@@ -83,6 +83,22 @@ it("still wakes an idle agent after a context notice was ignored or its provider
   });
 });
 
+it("clears an overdue notice after an explicit bounded recheck", () => {
+  const delivery = new CompletionDelivery({ sendUserMessage: vi.fn() });
+  delivery.setContext({
+    isIdle: (): boolean => false,
+    ui: { notify: vi.fn(), setStatus: vi.fn() },
+  });
+  const launch = createTmuxLaunch({ command: "watcher", id: 1, namespace: "a".repeat(32) });
+  delivery.overdue([launch]);
+  expect(delivery.hasPending()).toBe(true);
+
+  delivery.resolved([launch]);
+
+  expect(delivery.hasPending()).toBe(false);
+  expect(delivery.injectOverdue({ messages: [] })).toBeUndefined();
+});
+
 it("keeps delivered overdue visible to later model requests until log inspection and re-alerts on the next interval", () => {
   vi.useFakeTimers();
   const sendUserMessage = vi.fn();

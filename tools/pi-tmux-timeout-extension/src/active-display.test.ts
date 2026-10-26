@@ -156,6 +156,24 @@ it("clears every acknowledged job in a simultaneous reminder batch", () => {
   expect(display.state()).toStrictEqual({ dismissedSessionNames: [], hidden: false });
 });
 
+it("drops the checked marker when the agent schedules a new bounded check", () => {
+  const launch = createTmuxLaunch({
+    command: "long inference",
+    estimatedDurationSeconds: 60,
+    id: 1,
+    namespace: "a".repeat(32),
+  });
+  vi.advanceTimersByTime(61_000);
+  const display = new ActiveTaskDisplay();
+  display.update([launch]);
+  expect(display.acknowledge([launch], Date.now())).toStrictEqual([launch]);
+  expect(display.state().acknowledgedAt).toStrictEqual({ [launch.sessionName]: Date.now() });
+
+  expect(display.clearAcknowledged([launch])).toBe(true);
+  expect(display.state().acknowledgedAt).toBeUndefined();
+  expect(display.clearAcknowledged([launch])).toBe(false);
+});
+
 it("recovers the latest valid session display state", () => {
   const entries: readonly unknown[] = [
     null,

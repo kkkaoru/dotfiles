@@ -16,6 +16,8 @@ export type { MutableBashInput } from "./policy.ts";
 export const DEFAULT_ESTIMATED_DURATION_SECONDS = 120;
 export const RECONCILIATION_INTERVAL_MILLISECONDS = 60_000;
 export const OVERDUE_REMINDER_INTERVAL_MILLISECONDS = 300_000;
+// A checked job stays quiet longer than an unchecked one: inspection is a decision to keep it.
+export const ACKNOWLEDGED_REMINDER_INTERVAL_MILLISECONDS = 1_800_000;
 export const TMUX_LAUNCH_TIMEOUT_MILLISECONDS = 30_000;
 export const TMUX_LAUNCH_TIMEOUT_SECONDS = 30;
 
@@ -48,6 +50,7 @@ export interface TmuxRuntimeOptions {
   readonly onActiveChange?: (launches: readonly TmuxLaunch[]) => void;
   readonly onComplete: (completion: Completion) => void;
   readonly onOverdue?: (launches: readonly TmuxLaunch[]) => void;
+  readonly onReschedule?: (launch: TmuxLaunch) => void;
   readonly onTrack?: (launch: TmuxLaunch) => void;
   readonly operations?: StatusOperations;
 }
@@ -150,6 +153,7 @@ export class TmuxRuntime {
   readonly #onComplete: (completion: Completion) => void;
   readonly #onTrack: (launch: TmuxLaunch) => void;
   readonly #onOverdue: (launches: readonly TmuxLaunch[]) => void;
+  readonly #onReschedule: (launch: TmuxLaunch) => void;
   readonly #overdueReported = new Map<string, number>();
   readonly #waiter: CompletionWaiter;
   #nextId = 1;
@@ -163,6 +167,7 @@ export class TmuxRuntime {
     this.#monitor = options.monitor ?? scheduleReconciliation;
     this.#onTrack = options.onTrack ?? ((): void => undefined);
     this.#onOverdue = options.onOverdue ?? ((): void => undefined);
+    this.#onReschedule = options.onReschedule ?? ((): void => undefined);
     this.#waiter = new CompletionWaiter({
       ...options,
       onComplete: (completion: Completion): void => this.#complete(completion),
@@ -226,7 +231,7 @@ export class TmuxRuntime {
       if (inspectedAt !== undefined && inspectedAt <= Date.now()) {
         this.#overdueReported.set(
           launch.completionChannel,
-          inspectedAt + OVERDUE_REMINDER_INTERVAL_MILLISECONDS,
+          inspectedAt + ACKNOWLEDGED_REMINDER_INTERVAL_MILLISECONDS,
         );
       }
       this.#waiter.track(launch);
@@ -240,9 +245,32 @@ export class TmuxRuntime {
     launches.map((launch: TmuxLaunch): Map<string, number> =>
       this.#overdueReported.set(
         launch.completionChannel,
-        now + OVERDUE_REMINDER_INTERVAL_MILLISECONDS,
+        now + ACKNOWLEDGED_REMINDER_INTERVAL_MILLISECONDS,
       ),
     );
+  }
+
+  /** Record an agent-decided next check for a live launch without touching the tmux process. */
+  reschedule(
+    sessionName: string,
+    nextCheckSeconds: number,
+    now = Date.now(),
+  ): TmuxLaunch | undefined {
+    const current: TmuxLaunch | undefined = [...this.#active.values()].find(
+      (launch: TmuxLaunch): boolean => launch.sessionName === sessionName,
+    );
+    if (current === undefined) {
+      return undefined;
+    }
+    const rescheduled: TmuxLaunch = {
+      ...current,
+      estimatedCompletionAt: new Date(now + nextCheckSeconds * 1000).toISOString(),
+    };
+    this.#active.set(rescheduled.completionChannel, rescheduled);
+    this.#overdueReported.delete(rescheduled.completionChannel);
+    this.#onReschedule(rescheduled);
+    this.#notifyActiveChange();
+    return rescheduled;
   }
 
   reconcile(): void {

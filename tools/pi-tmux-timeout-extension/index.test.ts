@@ -26,7 +26,9 @@ it("registers and executes the parallel tmux tool", async () => {
     exec,
     on: (): void => undefined,
     registerTool: (definition): void => {
-      tool = definition;
+      if (definition.name === "tmux_exec") {
+        tool = definition;
+      }
     },
     sendUserMessage: vi.fn(),
   };
@@ -112,8 +114,8 @@ it("routes overdue runtime check-ins through the extension lifecycle", async () 
     hidden: false,
     acknowledgedAt: { [launch?.details.sessionName ?? "missing"]: Date.now() },
   });
-  vi.advanceTimersByTime(300_000);
-  expect(setWidget).toHaveBeenCalledWith("tmux-running-tasks", [
+  vi.advanceTimersByTime(1_800_000);
+  expect(setWidget).toHaveBeenLastCalledWith("tmux-running-tasks", [
     expect.stringMatching(/^⚠ overdue/u),
   ]);
   handlers.get("session_shutdown")?.({});
@@ -174,7 +176,9 @@ it("clears old task displays while retaining background tracking", async () => {
       command = definition;
     },
     registerTool: (definition): void => {
-      tool = definition;
+      if (definition.name === "tmux_exec") {
+        tool = definition;
+      }
     },
     sendUserMessage: vi.fn(),
   };
@@ -210,7 +214,9 @@ it("reports tmux launch failures", async () => {
     }),
     on: (): void => undefined,
     registerTool: (definition): void => {
-      tool = definition;
+      if (definition.name === "tmux_exec") {
+        tool = definition;
+      }
     },
     sendUserMessage: vi.fn(),
   };
@@ -233,7 +239,9 @@ it("falls back through stdout and a generic tmux launch error", async () => {
     exec,
     on: (): void => undefined,
     registerTool: (definition): void => {
-      tool = definition;
+      if (definition.name === "tmux_exec") {
+        tool = definition;
+      }
     },
     sendUserMessage: vi.fn(),
   };
@@ -339,7 +347,9 @@ it("delivers a real completion callback after lifecycle handlers return", async 
       handlers.set(event, handler);
     },
     registerTool: (definition): void => {
-      state.tool = definition;
+      if (definition.name === "tmux_exec") {
+        state.tool = definition;
+      }
     },
     sendUserMessage,
   };

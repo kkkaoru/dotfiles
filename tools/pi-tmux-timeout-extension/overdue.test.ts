@@ -145,8 +145,12 @@ it("restores checked overdue display and waits for the next reminder after reloa
     expect.stringMatching(/^✓ checked · running/u),
   ]);
   expect(sendUserMessage).not.toHaveBeenCalled();
-  vi.advanceTimersByTime(300_000);
-  expect(setWidget).toHaveBeenCalledWith("tmux-running-tasks", [
+  vi.advanceTimersByTime(1_799_999);
+  expect(setWidget).toHaveBeenLastCalledWith("tmux-running-tasks", [
+    expect.stringMatching(/^✓ checked · running/u),
+  ]);
+  vi.advanceTimersByTime(1);
+  expect(setWidget).toHaveBeenLastCalledWith("tmux-running-tasks", [
     expect.stringMatching(/^⚠ overdue/u),
   ]);
   handlers.get("session_shutdown")?.({});

@@ -178,11 +178,13 @@ export class CompletionDelivery {
     const inspected = [...this.#pendingOverdue.values()].filter(
       (launch: TmuxLaunch): boolean => launch.logPath === path,
     );
-    inspected.map((launch: TmuxLaunch): boolean => {
-      this.#sentOverdue.delete(launch.completionChannel);
-      return this.#pendingOverdue.delete(launch.completionChannel);
-    });
+    inspected.map((launch: TmuxLaunch): boolean => this.#forgetOverdue(launch));
     return inspected;
+  }
+
+  /** Drop overdue notices after the agent recorded an explicit bounded recheck. */
+  resolved(launches: readonly TmuxLaunch[]): void {
+    launches.map((launch: TmuxLaunch): boolean => this.#forgetOverdue(launch));
   }
 
   hasPending(): boolean {
@@ -342,6 +344,11 @@ export class CompletionDelivery {
 
   #overdueBatch(): readonly TmuxLaunch[] {
     return [...this.#pendingOverdue.values()].slice(0, MAX_OVERDUE_BATCH_SIZE);
+  }
+
+  #forgetOverdue(launch: TmuxLaunch): boolean {
+    this.#sentOverdue.delete(launch.completionChannel);
+    return this.#pendingOverdue.delete(launch.completionChannel);
   }
 
   #removeOverdue(launches: readonly TmuxLaunch[]): void {

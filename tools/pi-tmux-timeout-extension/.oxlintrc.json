@@ -49,7 +49,7 @@
     {
       "files": ["src/delivery.ts"],
       "rules": {
-        "max-lines": ["error", 370]
+        "max-lines": ["error", 380]
       }
     },
     {

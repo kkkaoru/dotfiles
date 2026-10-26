@@ -141,7 +141,11 @@ it("loads the production entry point and restores the same owning session", asyn
   const { original, context, handlers } = fixture();
   tmuxTimeoutExtension(original);
   await handlers.get("session_start")?.({}, context);
-  expect(original.registerTool).toHaveBeenCalledOnce();
+  expect(vi.mocked(original.registerTool)).toHaveBeenCalledTimes(2);
+  expect(vi.mocked(original.registerTool).mock.calls.map(([tool]) => tool.name)).toStrictEqual([
+    "tmux_exec",
+    "tmux_check_in",
+  ]);
   await handlers.get("session_shutdown")?.({}, context);
 });
 

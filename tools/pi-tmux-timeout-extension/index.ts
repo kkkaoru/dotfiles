@@ -1,10 +1,10 @@
 // This TypeScript file is executed with Bun.
 import { ActivityProvider, announceTask, type ActivityBus } from "./src/goal-activity.ts";
-import type { Static } from "typebox";
+import type { Static, TSchema } from "typebox";
+import { registerCheckInTool } from "./src/check-in.ts";
 import { registerTmuxTool } from "./src/register-tool.ts";
 import { durableTmuxHost } from "./src/durable-host.ts";
 import { eventToolCallId, toolResultFailed } from "./src/tool-event.ts";
-import type { tmuxExecSchema } from "./src/tool-schema.ts";
 import { ArtifactCleaner, type ArtifactCleanerOptions } from "./src/cleanup.ts";
 import { ActiveTaskDisplay } from "./src/active-display.ts";
 import { inspectOverdue, remindOverdue, restoreOverdue } from "./src/overdue-display.ts";
@@ -56,17 +56,17 @@ export interface TmuxExtensionRuntimeOptions {
   readonly recovery?: false | Omit<RecoveryOptions, "sessionNamespace">;
 }
 
-export interface TmuxToolDefinition {
+export interface TmuxToolDefinition<Schema extends TSchema = TSchema> {
   readonly description: string;
   readonly executionMode: "parallel";
   readonly execute: (
     toolCallId: string,
-    params: Static<typeof tmuxExecSchema>,
+    params: Static<Schema>,
     signal: AbortSignal | undefined,
   ) => Promise<ToolResult>;
   readonly label: string;
-  readonly name: "tmux_exec";
-  readonly parameters: typeof tmuxExecSchema;
+  readonly name: string;
+  readonly parameters: Schema;
   readonly promptGuidelines: readonly string[];
   readonly promptSnippet: string;
 }
@@ -104,7 +104,7 @@ export interface TmuxExtensionHost extends ActiveDisplayCommandHost, CompletionD
     event: TmuxLifecycleEvent,
     handler: (event: unknown, context?: CompletionDeliveryContext) => unknown,
   ) => void;
-  readonly registerTool: (definition: TmuxToolDefinition) => void;
+  readonly registerTool: <Schema extends TSchema>(definition: TmuxToolDefinition<Schema>) => void;
 }
 
 function toolCallInput(event: unknown): unknown {
@@ -257,7 +257,7 @@ export function registerTmux(
   host: TmuxExtensionHost,
   runtimeOptions?: TmuxExtensionRuntimeOptions,
 ): void {
-  const activeDisplay = new ActiveTaskDisplay();
+  const display = new ActiveTaskDisplay();
   const cleaner = new ArtifactCleaner(runtimeOptions?.cleanup);
   const recovery: false | Omit<RecoveryOptions, "sessionNamespace"> | undefined =
     runtimeOptions?.recovery;
@@ -290,7 +290,7 @@ export function registerTmux(
     ...(host.monitor === undefined ? {} : { monitor: host.monitor }),
     onActiveChange: (launches: readonly TmuxLaunch[]): void => {
       activityState.tasks = launches.map((launch) => launch.sessionName);
-      activeDisplay.update(launches);
+      display.update(launches);
     },
     onComplete: (completion: Completion): void => {
       if (host.complete === undefined) {
@@ -301,11 +301,12 @@ export function registerTmux(
     },
     onOverdue: (launches: readonly TmuxLaunch[]): void =>
       remindOverdue(launches, {
-        display: activeDisplay,
+        display,
         delivery,
         runtime,
         persist: host.appendEntry,
       }),
+    onReschedule: (launch: TmuxLaunch): void => persistTmuxLaunch(host.appendEntry, launch),
     onTrack: (launch: TmuxLaunch): void => {
       persistTmuxLaunch(host.appendEntry, launch);
       if (host.events !== undefined && activityState.sessionId !== undefined) {
@@ -315,13 +316,14 @@ export function registerTmux(
   });
   const rewriter: AutomaticTmuxRewriter = new AutomaticTmuxRewriter(runtime);
 
-  registerDisplayCommand(host, activeDisplay);
+  registerDisplayCommand(host, display);
   registerTmuxTool(host, runtime);
+  registerCheckInTool(host, { delivery, display, persist: host.appendEntry, runtime });
 
   registerLifecycleHandlers({
     activity,
     activityState,
-    activeDisplay,
+    activeDisplay: display,
     cleaner,
     delivery,
     host,

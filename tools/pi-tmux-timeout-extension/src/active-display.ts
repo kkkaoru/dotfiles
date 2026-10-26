@@ -150,6 +150,11 @@ export class ActiveTaskDisplay {
   }
 
   remind(launches: readonly TmuxLaunch[]): boolean {
+    return this.clearAcknowledged(launches);
+  }
+
+  /** Forget the checked marker once the agent sets a new bounded next check. */
+  clearAcknowledged(launches: readonly TmuxLaunch[]): boolean {
     const changed = launches
       .map((launch: TmuxLaunch): boolean => this.#acknowledgedAt.delete(launch.sessionName))
       .includes(true);
