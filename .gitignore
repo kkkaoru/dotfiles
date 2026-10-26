@@ -203,6 +203,9 @@ coverage_out/
 
 .config/zed/prompts
 
+# Local Zed settings backups
+.config/zed/settings_backup.json
+
 # Local Codex backups
 .codex/*.bak
 
