@@ -23,18 +23,24 @@
 - id: agent-default-model
   name: "@deepseek-ai/dsh-agent-default-model"
   config:
-    provider: opencode-go
-    model: deepseek-v4.1-flash
+    provider: ollama-cloud
+    model: deepseek-v4.1-flash:1017
 - id: llm-pi-ai
   name: "@deepseek-ai/dsh-llm-pi-ai"
   config:
     providers:
       opencode-go:
         apiKeyEnv: OPENCODE_GO_API_KEY
-        # Limiting the catalog here replaces the published list, so the model
-        # picker offers only these. Add `- id: <model>` rows to widen it.
         models:
           - id: deepseek-v4.1-flash
+      ollama-cloud:
+        displayName: Ollama Cloud
+        apiKeyEnv: OLLAMA_CLOUD_API_KEY
+        api: openai-completions
+        baseURL: https://ollama.com/v1
+        models:
+          - id: deepseek-v4.1-flash:1017
+            name: deepseek-v4.1-flash:1017
 - id: permission
   name: "@deepseek-ai/dsh-permission-presets"
   config:
