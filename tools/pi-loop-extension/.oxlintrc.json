@@ -18,10 +18,21 @@
     "explicit-member-accessibility": "off",
     "func-style": "off",
     "max-depth": ["error", 3],
-    "max-lines": ["error", { "max": 340, "skipBlankLines": true, "skipComments": true }],
+    "max-lines": [
+      "error",
+      {
+        "max": 340,
+        "skipBlankLines": true,
+        "skipComments": true
+      }
+    ],
     "max-lines-per-function": [
       "error",
-      { "max": 80, "skipBlankLines": true, "skipComments": true }
+      {
+        "max": 80,
+        "skipBlankLines": true,
+        "skipComments": true
+      }
     ],
     "max-params": ["error", 5],
     "max-statements": ["error", 20],
@@ -43,7 +54,8 @@
     "require-await": "off",
     "sort-imports": "off",
     "sort-keys": "off",
-    "typescript/require-await": "off"
+    "typescript/require-await": "off",
+    "no-nested-ternary": "error"
   },
   "overrides": [
     {

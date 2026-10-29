@@ -16,7 +16,13 @@
     "curly": ["error", "all"],
     "default-case": "off",
     "explicit-member-accessibility": "off",
-    "func-style": ["error", "declaration"],
+    "func-style": [
+      "error",
+      "declaration",
+      {
+        "allowArrowFunctions": true
+      }
+    ],
     "max-depth": ["error", 3],
     "max-lines": [
       "error",
@@ -54,7 +60,8 @@
     "require-await": "off",
     "sort-imports": "off",
     "sort-keys": "off",
-    "typescript/require-await": "off"
+    "typescript/require-await": "off",
+    "no-nested-ternary": "error"
   },
   "overrides": [
     {

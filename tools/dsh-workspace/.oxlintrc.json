@@ -54,7 +54,8 @@
     "require-await": "off",
     "sort-imports": "off",
     "sort-keys": "off",
-    "typescript/require-await": "off"
+    "typescript/require-await": "off",
+    "no-nested-ternary": "error"
   },
   "overrides": [
     {

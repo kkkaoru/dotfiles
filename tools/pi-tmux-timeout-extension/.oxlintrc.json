@@ -21,7 +21,11 @@
     "max-lines": ["error", 340],
     "max-lines-per-function": [
       "error",
-      { "max": 80, "skipBlankLines": true, "skipComments": true }
+      {
+        "max": 80,
+        "skipBlankLines": true,
+        "skipComments": true
+      }
     ],
     "max-params": ["error", 5],
     "max-statements": ["error", 20],
@@ -43,7 +47,8 @@
     "require-await": "off",
     "sort-imports": "off",
     "sort-keys": "off",
-    "typescript/require-await": "off"
+    "typescript/require-await": "off",
+    "no-nested-ternary": "error"
   },
   "overrides": [
     {
