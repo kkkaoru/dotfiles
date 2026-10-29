@@ -1,17 +1,12 @@
 // This TypeScript file is executed with Bun.
 import type { ModelThinkingLevel, ThinkingLevel } from "@earendil-works/pi-ai";
+import { CANONICAL_LEVELS, effortAtLeast, shouldResetAfterCompaction } from "./policy.ts";
 import { readRecoveryState, type RecoveryState } from "./recovery-effort.ts";
+import { isRecord } from "./settings.ts";
 
 export const STATE_ENTRY_TYPE = "pi-effort-manager-state-v1";
 
-const THINKING_LEVELS = new Set<ThinkingLevel>([
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-]);
+const THINKING_LEVELS: ReadonlySet<string> = new Set(CANONICAL_LEVELS);
 
 export interface SessionOverrides {
   compactionEffort?: ThinkingLevel | undefined;
@@ -24,6 +19,17 @@ export interface SessionOverrides {
 export interface ResetPolicy {
   effort: ThinkingLevel;
   interval: number;
+}
+
+/** A finished compaction: the level it ran after, and the count before it. */
+export interface CompactionCount extends ResetPolicy {
+  readonly level: ModelThinkingLevel;
+  readonly count: number;
+}
+
+export interface CompactionOutcome {
+  readonly count: number;
+  readonly reset: boolean;
 }
 
 export interface ResetPolicyDefaults {
@@ -58,12 +64,8 @@ export function initialManagerState(enabled: boolean): ManagerState {
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function thinkingLevel(value: unknown): ThinkingLevel | undefined {
-  return typeof value === "string" && THINKING_LEVELS.has(value as ThinkingLevel)
+  return typeof value === "string" && THINKING_LEVELS.has(value)
     ? (value as ThinkingLevel)
     : undefined;
 }
@@ -109,25 +111,25 @@ function persistedState(entry: unknown): PersistedState | undefined {
 }
 
 export function latestPersistedState(entries: readonly unknown[]): PersistedState {
-  const latest = entries.findLast((entry): boolean => persistedState(entry) !== undefined);
-  return persistedState(latest) ?? {};
+  return (
+    persistedState(entries.findLast((entry): boolean => persistedState(entry) !== undefined)) ?? {}
+  );
 }
 
 export function effectiveResetPolicy(
-  overrides: SessionOverrides,
+  { compactionResetEffort, compactionResetInterval }: SessionOverrides,
   defaults: ResetPolicyDefaults,
 ): ResetPolicy {
   return {
-    effort: overrides.compactionResetEffort ?? defaults.compactionResetEffort,
-    interval: overrides.compactionResetInterval ?? defaults.compactionResetInterval,
+    effort: compactionResetEffort ?? defaults.compactionResetEffort,
+    interval: compactionResetInterval ?? defaults.compactionResetInterval,
   };
 }
 
-export function restoredCompactionCount(persisted: PersistedState, policy: ResetPolicy): number {
-  const matches =
-    persisted.resetEffort === policy.effort && persisted.resetInterval === policy.interval;
-  return matches ? (persisted.compactionCount ?? 0) : 0;
-}
+export const restoredCompactionCount = (
+  { resetEffort, resetInterval, compactionCount }: PersistedState,
+  { effort, interval }: ResetPolicy,
+): number => (resetEffort === effort && resetInterval === interval ? (compactionCount ?? 0) : 0);
 
 function clearedOverride(
   overrides: SessionOverrides,
@@ -170,4 +172,16 @@ export function setSessionOverride(
   }
   overrides[key] = effort;
   return overrides;
+}
+
+/** Counts a compaction that ran at or above the reset effort; every `interval`-th one resets. */
+export function countCompaction({
+  level,
+  count,
+  effort,
+  interval,
+}: CompactionCount): CompactionOutcome {
+  const qualifies = effortAtLeast(level, effort);
+  const counted = count + Number(qualifies);
+  return { count: counted, reset: qualifies && shouldResetAfterCompaction(counted, interval) };
 }

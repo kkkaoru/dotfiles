@@ -20,10 +20,10 @@ function hostOf(baseUrl: string): string | undefined {
 
 /** Extension model calls bypass Pi's provider runner and need its OpenCode session headers. */
 export function providerSessionHeaders(
-  model: SessionHeaderTarget,
+  { provider, baseUrl }: SessionHeaderTarget,
   sessionId: string,
 ): ProviderHeaders {
-  if (!OPENCODE_PROVIDERS.has(model.provider) && hostOf(model.baseUrl) !== OPENCODE_HOST) {
+  if (!OPENCODE_PROVIDERS.has(provider) && hostOf(baseUrl) !== OPENCODE_HOST) {
     return {};
   }
   return {

@@ -7,6 +7,8 @@ export interface ObservedReasoning {
   total: number;
 }
 
+export const NO_OBSERVATIONS: ObservedReasoning = { count: 0, maximum: 0, total: 0 };
+
 export interface EffortStatusInput {
   compaction: string;
   compactionCount: number;
@@ -26,12 +28,12 @@ export function profileValue(value: string | undefined): string {
   return value ?? "unavailable";
 }
 
-export function contextTokens(ctx: ExtensionContext): number {
-  return ctx.getContextUsage()?.tokens ?? 0;
+export function contextTokens(context: ExtensionContext): number {
+  return context.getContextUsage()?.tokens ?? 0;
 }
 
-export function contextWindow(ctx: ExtensionContext): number {
-  return ctx.model?.contextWindow ?? 0;
+export function contextWindow(context: ExtensionContext): number {
+  return context.model?.contextWindow ?? 0;
 }
 
 export function reasoningSummary(
@@ -48,7 +50,28 @@ export function reasoningSummary(
     .join(", ");
 }
 
-export function formatEffortStatus(input: EffortStatusInput): string {
-  const observed = input.reasoning.length === 0 ? "" : ` reasoning(avg/max)=${input.reasoning}`;
-  return `dynamic=${input.dynamicEnabled ? "on" : "off"} effort=${input.effort} start=${input.start} end=${input.end} compact=${input.compaction} reset=${String(input.resetInterval)}@${input.resetEffort} context=${String(input.contextTokens)}/${String(input.contextWindow)} compactions=${String(input.compactionCount)} levels=${input.levels}${observed}`;
+export function formatEffortStatus({
+  dynamicEnabled,
+  effort,
+  start,
+  end,
+  compaction,
+  resetInterval,
+  resetEffort,
+  contextTokens: tokens,
+  contextWindow: window,
+  compactionCount,
+  levels,
+  reasoning,
+}: EffortStatusInput): string {
+  return `dynamic=${dynamicEnabled ? "on" : "off"} effort=${effort} start=${start} end=${end} compact=${compaction} reset=${String(resetInterval)}@${resetEffort} context=${String(tokens)}/${String(window)} compactions=${String(compactionCount)} levels=${levels}${reasoning.length === 0 ? "" : ` reasoning(avg/max)=${reasoning}`}`;
 }
+
+export const withObservation = (
+  { count, maximum, total }: ObservedReasoning,
+  reasoning: number,
+): ObservedReasoning => ({
+  count: count + 1,
+  maximum: Math.max(maximum, reasoning),
+  total: total + reasoning,
+});

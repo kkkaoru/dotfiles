@@ -12,15 +12,19 @@ import {
   convertToLlm,
   compact,
   serializeConversation,
+  type ExtensionAPI,
   type ExtensionContext,
   type SessionBeforeCompactEvent,
   type CompactionResult,
 } from "@earendil-works/pi-coding-agent";
-import { summaryInputBudget } from "./bounded-summary.ts";
+import { guidedInstructions, summaryInputBudget } from "./bounded-summary.ts";
 import { summarizeDurably } from "./durable-summary.ts";
+
+type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 
 export interface GuardHost {
   readonly on: (event: "session_before_compact", handler: typeof guardedCompaction) => void;
+  readonly getThinkingLevel: () => ThinkingLevel;
 }
 
 export interface GuardContext {
@@ -65,16 +69,16 @@ const REQUEST_TRUNCATED = "\n[request middle truncated; see original session]\n"
  */
 export function piCompactionFits(
   preparation: SessionBeforeCompactEvent["preparation"],
-  model: Pick<Model<Api>, "contextWindow" | "maxTokens">,
+  { contextWindow, maxTokens }: Pick<Model<Api>, "contextWindow" | "maxTokens">,
 ): boolean {
   const { tokensBefore, settings } = preparation;
   const reservedShare = Math.floor(SUMMARY_RESERVE_SHARE * settings.reserveTokens);
-  const outputCap = model.maxTokens > 0 ? Math.min(reservedShare, model.maxTokens) : reservedShare;
-  const outputTokens = Math.max(settings.reserveTokens, model.maxTokens);
+  const outputCap = maxTokens > 0 ? Math.min(reservedShare, maxTokens) : reservedShare;
+  const outputTokens = Math.max(settings.reserveTokens, maxTokens);
   const historyTokens = tokensBefore - settings.keepRecentTokens;
   return (
     historyTokens <= SUMMARY_COMPRESSION_RATIO * outputCap &&
-    historyTokens + outputTokens + SUMMARIZATION_PROMPT_TOKENS <= model.contextWindow
+    historyTokens + outputTokens + SUMMARIZATION_PROMPT_TOKENS <= contextWindow
   );
 }
 
@@ -108,8 +112,7 @@ function suffixWithinBytes(text: string, limit: number): string {
   let bytes = 0;
   let start = text.length;
   while (start > 0) {
-    const offset = (text.codePointAt(start - 2) ?? 0) > 65_535 ? 2 : 1;
-    const next = start - offset;
+    const next = start - ((text.codePointAt(start - 2) ?? 0) > 65_535 ? 2 : 1);
     const size = Buffer.byteLength(text.slice(next, start), "utf8");
     if (bytes + size > limit) {
       break;
@@ -147,8 +150,10 @@ export function retainedUserRequests(
   const start = ledgerStart(previous);
   const archived: string =
     start < 0 ? "" : previous.slice(start + REQUESTS_OPEN.length, -REQUESTS_CLOSE.length);
-  const messages = [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages];
-  const requests: string[] = messages.flatMap((message) => {
+  const requests: string[] = [
+    ...preparation.messagesToSummarize,
+    ...preparation.turnPrefixMessages,
+  ].flatMap((message) => {
     if (message.role !== "user") {
       return [];
     }
@@ -159,8 +164,7 @@ export function retainedUserRequests(
             .filter((part) => part.type === "text")
             .map((part) => part.text)
             .join("\n");
-    const clipped = clipRequest(content, Math.min(REQUEST_LIMIT, budget - 4));
-    const entry = JSON.stringify(clipped);
+    const entry = JSON.stringify(clipRequest(content, Math.min(REQUEST_LIMIT, budget - 4)));
     // Escaped control characters can expand in JSON; shrink only if the entry itself exceeds budget.
     return [
       Buffer.byteLength(entry) <= budget
@@ -168,9 +172,8 @@ export function retainedUserRequests(
         : JSON.stringify(clipRequest(content, Math.floor(budget / 8))),
     ];
   });
-  const entries: string[] = [...archived.trim().split("\n").filter(Boolean), ...requests];
   const selected: string[] = [];
-  for (const entry of entries.toReversed()) {
+  for (const entry of [...archived.trim().split("\n").filter(Boolean), ...requests].toReversed()) {
     if (Buffer.byteLength([...selected, entry].join("\n")) > budget) {
       break;
     }
@@ -179,14 +182,17 @@ export function retainedUserRequests(
   return selected.length === 0 ? "" : `${REQUESTS_OPEN}${selected.join("\n")}${REQUESTS_CLOSE}`;
 }
 
-async function nativeSummary(options: {
-  event: SessionBeforeCompactEvent;
-  ctx: GuardContext;
-  requests: string;
-  previousSummary: string;
-}): Promise<CompactionResult | undefined> {
-  const { event, ctx, requests, previousSummary } = options;
-  const { model, modelRegistry } = ctx;
+async function nativeSummary(
+  options: {
+    event: SessionBeforeCompactEvent;
+    context: GuardContext;
+    requests: string;
+    previousSummary: string;
+  },
+  thinkingLevel: ThinkingLevel | undefined,
+): Promise<CompactionResult | undefined> {
+  const { event, context, requests, previousSummary } = options;
+  const { model, modelRegistry } = context;
   if (model === undefined || requests.length === 0) {
     return undefined;
   }
@@ -195,12 +201,12 @@ async function nativeSummary(options: {
     model,
     undefined,
     undefined,
-    event.customInstructions,
+    guidedInstructions(event.customInstructions),
     event.signal,
-    undefined,
-    async (selectedModel, context, requestOptions) => {
+    thinkingLevel,
+    async (selectedModel, requestContext, requestOptions) => {
       const sessionId = requestOptions?.sessionId ?? uuidv7();
-      const response = await modelRegistry.complete(selectedModel, context, {
+      const response = await modelRegistry.complete(selectedModel, requestContext, {
         ...requestOptions,
         sessionId,
         headers: {
@@ -229,19 +235,32 @@ function summarySource(event: SessionBeforeCompactEvent, previousSummary: string
   ].join("\n\n");
 }
 
-function compactionSessionFile(ctx: GuardContext): string | undefined {
-  return ctx.sessionManager?.getSessionFile();
+// Pi's single-call summary keeps a long history whole, so it is used unless the history is too big.
+const fitsNativeSummary = (
+  { reason, preparation }: SessionBeforeCompactEvent,
+  model: Model<Api>,
+  text: string,
+): boolean =>
+  reason !== "overflow" &&
+  (piCompactionFits(preparation, model) ||
+    (model.contextWindow >= 8192 &&
+      Buffer.byteLength(text, "utf8") < summaryInputBudget(model.contextWindow) / 2));
+
+function compactionSessionFile(context: GuardContext): string | undefined {
+  return context.sessionManager?.getSessionFile();
 }
 
+/** `thinkingLevel` is Pi's level at compaction start, already switched to `compactionEffort`. */
 export async function guardedCompaction(
   event: SessionBeforeCompactEvent,
-  ctx: GuardContext,
+  context: GuardContext,
+  thinkingLevel?: ThinkingLevel,
 ): Promise<{ compaction: CompactionResult } | { cancel: true } | undefined> {
   try {
-    if (ctx.model === undefined) {
+    if (context.model === undefined) {
       return undefined;
     }
-    const { model } = ctx;
+    const { model } = context;
     if (model.provider === "cursor") {
       return undefined;
     }
@@ -249,29 +268,27 @@ export async function guardedCompaction(
     const requests: string = retainedUserRequests(preparation, model.contextWindow);
     const previousSummary: string = summaryWithoutRequests(preparation.previousSummary);
     const text: string = summarySource(event, previousSummary);
-    if (
-      event.reason !== "overflow" &&
-      (piCompactionFits(preparation, model) ||
-        (model.contextWindow >= 8192 &&
-          Buffer.byteLength(text, "utf8") < summaryInputBudget(model.contextWindow) / 2))
-    ) {
-      const compaction = await nativeSummary({ event, ctx, requests, previousSummary });
+    if (fitsNativeSummary(event, model, text)) {
+      const compaction = await nativeSummary(
+        { event, context, requests, previousSummary },
+        thinkingLevel,
+      );
       return compaction === undefined ? undefined : { compaction };
     }
-    ctx.ui.notify(
+    context.ui.notify(
       "Compacting oversized history in bounded segments. Original history is preserved.",
       "info",
     );
     const sessionId: string = uuidv7();
     const result = await summarizeDurably({
-      sessionFile: compactionSessionFile(ctx),
+      sessionFile: compactionSessionFile(context),
       identity: JSON.stringify({ model, firstKeptEntryId: preparation.firstKeptEntryId }),
       text,
       contextWindow: model.contextWindow,
       signal: event.signal,
-      onRecovery: (notice): void => ctx.ui.notify(notice, "warning"),
+      onRecovery: (notice): void => context.ui.notify(notice, "warning"),
       complete: async (prompt) =>
-        ctx.modelRegistry.complete(
+        context.modelRegistry.complete(
           model,
           {
             messages: [
@@ -309,11 +326,13 @@ export async function guardedCompaction(
     };
   } catch (error: unknown) {
     // Throwing from a hook would let Pi fall back to the same oversized request.
-    ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+    context.ui.notify(error instanceof Error ? error.message : String(error), "error");
     return { cancel: true };
   }
 }
 
 export default function contextGuard(pi: GuardHost): void {
-  pi.on("session_before_compact", guardedCompaction);
+  pi.on("session_before_compact", async (event, context) =>
+    guardedCompaction(event, context, pi.getThinkingLevel()),
+  );
 }

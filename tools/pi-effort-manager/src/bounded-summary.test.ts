@@ -2,7 +2,7 @@
 import { Buffer } from "node:buffer";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { expect, it, vi } from "vitest";
-import { summarizeBounded, summaryInputBudget } from "./bounded-summary.ts";
+import { boundedEdges, summarizeBounded, summaryInputBudget } from "./bounded-summary.ts";
 
 const RESPONSE: AssistantMessage = {
   role: "assistant",
@@ -348,4 +348,12 @@ it("honors cancellation after a committed segment without starting another reque
   expect(complete).toHaveBeenCalledOnce();
   expect(save).toHaveBeenCalledOnce();
   expect(save.mock.calls[0]?.[0]).toMatchObject({ nextChunk: 1, text: "handoff" });
+});
+it("bounds an emergency handoff in the middle so multibyte history keeps its newest tail", () => {
+  const text = `${"古".repeat(400)}${"新".repeat(400)}`;
+  const bounded = boundedEdges(text, 1200);
+  expect(Buffer.byteLength(bounded, "utf8") <= 1200).toBe(true);
+  expect(bounded.endsWith("新新新")).toBe(true);
+  expect(bounded.startsWith("古古古")).toBe(true);
+  expect(boundedEdges("short", 1200)).toBe("short");
 });

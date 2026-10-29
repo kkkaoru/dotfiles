@@ -2,6 +2,7 @@
   "compilerOptions": {
     "allowImportingTsExtensions": true,
     "exactOptionalPropertyTypes": true,
+    "incremental": true,
     "lib": ["ES2024"],
     "module": "Preserve",
     "moduleDetection": "force",
@@ -11,12 +12,14 @@
     "noImplicitOverride": true,
     "noPropertyAccessFromIndexSignature": true,
     "noUncheckedIndexedAccess": true,
-    "skipLibCheck": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
+    "skipLibCheck": true,
     "strict": true,
     "target": "ES2024",
-    "types": ["node", "vitest/globals"]
+    "tsBuildInfoFile": "node_modules/.cache/tsconfig.tsbuildinfo",
+    "types": ["node", "vitest/globals"],
+    "verbatimModuleSyntax": true
   },
   "include": ["index.ts", "src/**/*.ts", "vitest.config.ts"]
 }

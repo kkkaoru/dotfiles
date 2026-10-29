@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { latestPersistedState, setSessionOverride } from "./session.ts";
+import { countCompaction, latestPersistedState, setSessionOverride } from "./session.ts";
 
 it("restores the latest valid session policy and qualifying compaction count", () => {
   const entries: readonly unknown[] = [
@@ -83,4 +83,19 @@ it("sets and clears validated session overrides", () => {
     "Compaction reset interval must be a positive integer.",
   );
   expect(setSessionOverride({}, "endEffort", "invalid")).toBe("Invalid effort level: invalid.");
+});
+
+it("counts only compactions at the reset effort and resets on every interval-th one", () => {
+  expect(countCompaction({ level: "low", count: 1, effort: "high", interval: 2 })).toStrictEqual({
+    count: 1,
+    reset: false,
+  });
+  expect(countCompaction({ level: "xhigh", count: 1, effort: "high", interval: 2 })).toStrictEqual({
+    count: 2,
+    reset: true,
+  });
+  expect(countCompaction({ level: "high", count: 2, effort: "high", interval: 2 })).toStrictEqual({
+    count: 3,
+    reset: false,
+  });
 });

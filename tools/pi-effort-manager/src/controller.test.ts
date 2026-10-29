@@ -126,7 +126,7 @@ it("resets to baseline after compaction and handles model changes", () => {
 
   controller.beforeAgentStart(context);
   expect(thinking).toBe("medium");
-  controller.turnEnded(context);
+  controller.turnEnded(context, { id: "", results: [] });
   expect(thinking).toBe("xhigh");
   controller.modelSelected(context);
   expect(thinking).toBe("xhigh");
@@ -168,7 +168,7 @@ it("applies session effort boundaries and a session reset interval", () => {
   contextTokenCount = 90;
   controller.beforeAgentStart(context);
   expect(thinking).toBe("low");
-  controller.turnEnded(context);
+  controller.turnEnded(context, { id: "", results: [] });
   expect(thinking).toBe("high");
   controller.beforeCompaction(context);
   expect(thinking).toBe("xhigh");
@@ -297,7 +297,7 @@ it("guards duplicate compaction transitions and restores the original effort on 
   controller.beforeAgentStart(context);
   controller.beforeCompaction(context);
   controller.beforeCompaction(context);
-  controller.turnEnded(context);
+  controller.turnEnded(context, { id: "", results: [] });
   expect(thinking).toBe("max");
   controller.compactionFailed(context);
   expect(thinking).toBe("xhigh");

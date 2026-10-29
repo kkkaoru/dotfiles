@@ -15,7 +15,6 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => ({
 }));
 import contextGuard, {
   guardedCompaction,
-  piCompactionFits,
   providerSessionHeaders,
   type GuardContext,
   type GuardHost,
@@ -92,7 +91,7 @@ it("leaves fitting histories without retained requests to native compaction", as
 
 it("registers the compaction guard", () => {
   const on = vi.fn<GuardHost["on"]>();
-  contextGuard({ on });
+  contextGuard({ getThinkingLevel: () => "max", on });
   expect(on.mock.calls[0]?.[0]).toBe("session_before_compact");
 });
 
@@ -104,15 +103,15 @@ it("keeps Pi's native compaction for small histories and handles no selected mod
   });
   try {
     const complete = vi.fn().mockResolvedValue(RESPONSE);
-    const ctx: GuardContext = {
+    const context: GuardContext = {
       model: MODEL,
       modelRegistry: { complete },
       ui: { notify: vi.fn() },
     };
-    expect(await guardedCompaction({ ...EVENT, reason: "manual" }, ctx)).toHaveProperty(
+    expect(await guardedCompaction({ ...EVENT, reason: "manual" }, context)).toHaveProperty(
       "compaction",
     );
-    expect(await guardedCompaction(EVENT, { ...ctx, model: undefined })).toBeUndefined();
+    expect(await guardedCompaction(EVENT, { ...context, model: undefined })).toBeUndefined();
     expect(compact).toHaveBeenCalledOnce();
     expect(complete).not.toHaveBeenCalled();
   } finally {
@@ -169,14 +168,18 @@ it("uses bounded compaction for overflow and preserves boundary, files, usage, p
   const complete = vi
     .fn<(model: unknown, context: unknown, options?: unknown) => Promise<AssistantMessage>>()
     .mockResolvedValue(RESPONSE);
-  const ctx: GuardContext = { model: MODEL, modelRegistry: { complete }, ui: { notify: vi.fn() } };
+  const context: GuardContext = {
+    model: MODEL,
+    modelRegistry: { complete },
+    ui: { notify: vi.fn() },
+  };
   const result = await guardedCompaction(
     {
       ...EVENT,
       preparation: { ...EVENT.preparation, previousSummary: "old summary" },
       customInstructions: "Keep next steps",
     },
-    ctx,
+    context,
   );
   expect(result).toMatchObject({
     compaction: {
@@ -264,7 +267,11 @@ it("retains requests with native compaction across providers using the configure
 
 it("also guards oversized threshold compaction with split turn prefixes and no previous summary", async () => {
   const complete = vi.fn().mockResolvedValue(RESPONSE);
-  const ctx: GuardContext = { model: MODEL, modelRegistry: { complete }, ui: { notify: vi.fn() } };
+  const context: GuardContext = {
+    model: MODEL,
+    modelRegistry: { complete },
+    ui: { notify: vi.fn() },
+  };
   const result = await guardedCompaction(
     {
       ...EVENT,
@@ -274,7 +281,7 @@ it("also guards oversized threshold compaction with split turn prefixes and no p
         turnPrefixMessages: [{ role: "user", content: "x".repeat(7000), timestamp: 0 }],
       },
     },
-    ctx,
+    context,
   );
   expect(result).toHaveProperty("compaction");
   expect(complete).toHaveBeenCalledTimes(8);
@@ -287,7 +294,11 @@ it("uses Pi's single-call compaction while its summary cap can hold the history"
     tokensBefore: 200_000,
   });
   const complete = vi.fn().mockResolvedValue(RESPONSE);
-  const ctx: GuardContext = { model: MODEL, modelRegistry: { complete }, ui: { notify: vi.fn() } };
+  const context: GuardContext = {
+    model: MODEL,
+    modelRegistry: { complete },
+    ui: { notify: vi.fn() },
+  };
   const result = await guardedCompaction(
     {
       ...EVENT,
@@ -299,7 +310,7 @@ it("uses Pi's single-call compaction while its summary cap can hold the history"
         settings: { enabled: true, reserveTokens: 65_536, keepRecentTokens: 12_000 },
       },
     },
-    { ...ctx, model: { ...MODEL, contextWindow: 600_000, maxTokens: 65_536 } },
+    { ...context, model: { ...MODEL, contextWindow: 600_000, maxTokens: 65_536 } },
   );
   expect(result).toHaveProperty("compaction");
   expect(compact).toHaveBeenCalledOnce();
@@ -328,27 +339,6 @@ it("bounds a fitting window when the model's output exceeds the compaction reser
   );
   expect(result).toHaveProperty("compaction");
   expect(complete).toHaveBeenCalled();
-});
-
-it("keeps Pi's single call only while its output cap can hold the summary", () => {
-  const preparation = {
-    ...EVENT.preparation,
-    settings: { enabled: true, reserveTokens: 65_536, keepRecentTokens: 12_000 },
-  };
-  const model = { ...MODEL, contextWindow: 600_000, maxTokens: 65_536 };
-  // Pi caps the summary at 0.8 * 65_536 = 52_428 tokens, so an 88k history fits with room to spare.
-  expect(piCompactionFits({ ...preparation, tokensBefore: 100_000 }, model)).toBe(true);
-  // A 522k history needs ~10x compression past that cap, exactly how Pi's single call hits it.
-  expect(piCompactionFits({ ...preparation, tokensBefore: 534_464 }, model)).toBe(false);
-  // A model without a declared output limit gets Pi's full reserve share.
-  expect(
-    piCompactionFits({ ...preparation, tokensBefore: 100_000 }, { ...model, maxTokens: 0 }),
-  ).toBe(true);
-  // A 128k window with an 8192-token output cap cannot hold the summary of a 58k-token history:
-  // Pi's single call spends the whole cap and stops at length, failing the whole compaction.
-  const smallCap = { ...MODEL, contextWindow: 128_000, maxTokens: 8192 };
-  expect(piCompactionFits({ ...preparation, tokensBefore: 69_761 }, smallCap)).toBe(false);
-  expect(piCompactionFits({ ...preparation, tokensBefore: 40_000 }, smallCap)).toBe(true);
 });
 
 it("bounds a large-window compaction whose history outgrows Pi's summary cap", async () => {
@@ -486,9 +476,9 @@ it("cancels on provider errors instead of falling back to the unbounded native r
     .mockRejectedValueOnce(new Error("request failed"))
     .mockRejectedValueOnce("network unavailable");
   const notify = vi.fn();
-  const ctx: GuardContext = { model: MODEL, modelRegistry: { complete }, ui: { notify } };
-  expect(await guardedCompaction(EVENT, ctx)).toStrictEqual({ cancel: true });
+  const context: GuardContext = { model: MODEL, modelRegistry: { complete }, ui: { notify } };
+  expect(await guardedCompaction(EVENT, context)).toStrictEqual({ cancel: true });
   expect(notify).toHaveBeenLastCalledWith("request failed", "error");
-  expect(await guardedCompaction(EVENT, ctx)).toStrictEqual({ cancel: true });
+  expect(await guardedCompaction(EVENT, context)).toStrictEqual({ cancel: true });
   expect(notify).toHaveBeenLastCalledWith("network unavailable", "error");
 });

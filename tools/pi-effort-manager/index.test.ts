@@ -18,14 +18,14 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
 });
 
 interface CommandDefinition {
-  handler: (args: string, ctx: ExtensionContext) => Promise<void>;
+  handler: (args: string, context: ExtensionContext) => Promise<void>;
 }
 
 interface ShortcutDefinition {
-  handler: (ctx: ExtensionContext) => void;
+  handler: (context: ExtensionContext) => void;
 }
 
-type EventHandler = (event: unknown, ctx: ExtensionContext) => unknown;
+type EventHandler = (event: unknown, context: ExtensionContext) => unknown;
 
 const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-effort-index-test-"));
 process.env.PI_EFFORT_INDEX_TEST_DIR = directory;
@@ -147,6 +147,12 @@ function exerciseEvents(): void {
     context,
   );
   required(events.get("message_end"), "message_end")({ message: { role: "user" } }, context);
+  expect(
+    required(events.get("tool_result"), "tool_result")(
+      { content: [{ text: "ok", type: "text" }], isError: false },
+      context,
+    ),
+  ).toBeUndefined();
   required(events.get("session_before_compact"), "session_before_compact")({}, context);
   required(events.get("session_compact"), "session_compact")({}, context);
   required(events.get("session_compact_failed"), "session_compact_failed")({}, context);

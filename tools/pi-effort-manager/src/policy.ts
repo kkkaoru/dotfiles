@@ -12,7 +12,7 @@ export const DEFAULT_START_EFFORT: ThinkingLevel = "medium";
 export const DEFAULT_RESET_COMPACTION_EFFORT: ThinkingLevel = "xhigh";
 export const DEFAULT_RESET_COMPACTION_INTERVAL = 1;
 
-const CANONICAL_LEVELS: readonly ThinkingLevel[] = [
+export const CANONICAL_LEVELS: readonly ThinkingLevel[] = [
   "minimal",
   "low",
   "medium",
@@ -20,6 +20,11 @@ const CANONICAL_LEVELS: readonly ThinkingLevel[] = [
   "xhigh",
   "max",
 ];
+// Ranks are read on every turn, so they are a hash lookup built once instead of a scan.
+const CANONICAL_RANKS: ReadonlyMap<ThinkingLevel, number> = new Map(
+  CANONICAL_LEVELS.map((level, rank): [ThinkingLevel, number] => [level, rank]),
+);
+const rankOf = (level: ThinkingLevel): number => CANONICAL_RANKS.get(level) ?? -1;
 
 export interface EffortBoundaries {
   readonly compactionEffort?: ThinkingLevel | undefined;
@@ -56,33 +61,28 @@ function configuredLevel(
   if (exact !== undefined) {
     return exact;
   }
-  const configuredRank = CANONICAL_LEVELS.indexOf(configured);
-  return (
-    supported.find((level): boolean => CANONICAL_LEVELS.indexOf(level) >= configuredRank) ??
-    fallback
-  );
+  const configuredRank = rankOf(configured);
+  return supported.find((level): boolean => rankOf(level) >= configuredRank) ?? fallback;
 }
 
 function buildProfile(
   supported: readonly ThinkingLevel[],
-  boundaries: EffortBoundaries,
+  { startEffort, endEffort, compactionEffort }: EffortBoundaries,
 ): EffortProfile | undefined {
   const deepest = supported.at(-1);
   if (deepest === undefined) {
     return undefined;
   }
   const defaultEnd = supported.at(-2) ?? deepest;
-  const baseline = configuredLevel(supported, boundaries.startEffort, defaultEnd);
+  const baseline = configuredLevel(supported, startEffort, defaultEnd);
   const end =
-    boundaries.endEffort === undefined
-      ? defaultEnd
-      : configuredLevel(supported, boundaries.endEffort, defaultEnd);
+    endEffort === undefined ? defaultEnd : configuredLevel(supported, endEffort, defaultEnd);
   const startIndex = supported.indexOf(baseline);
   const operationalEnd = Math.max(startIndex, supported.indexOf(end));
   const compaction =
-    boundaries.compactionEffort === undefined
+    compactionEffort === undefined
       ? deepest
-      : configuredLevel(supported, boundaries.compactionEffort, deepest);
+      : configuredLevel(supported, compactionEffort, deepest);
   return {
     baseline,
     compaction,
@@ -105,8 +105,10 @@ export function effortProfile(
       distinct.set(effectiveLevelKey(model, level), level);
     }
   }
-  const supported = [...distinct.values()];
-  return buildProfile(supported, configuredBoundaries ?? { startEffort: DEFAULT_START_EFFORT });
+  return buildProfile(
+    [...distinct.values()],
+    configuredBoundaries ?? { startEffort: DEFAULT_START_EFFORT },
+  );
 }
 
 export function compactionLimit(
@@ -121,29 +123,28 @@ export function selectDynamicEffort(input: EffortSelectionInput): ThinkingLevel 
   if (input.forceBaseline === true || profile.operational.length < 2) {
     return profile.baseline;
   }
-  const limit = compactionLimit(input.contextWindow, input.reserveTokens);
-  const ratio = Math.max(0, input.contextTokens) / limit;
+  const ratio =
+    Math.max(0, input.contextTokens) / compactionLimit(input.contextWindow, input.reserveTokens);
   const rampStart = Math.min(0.95, Math.max(0, input.rampStartRatio ?? DEFAULT_RAMP_START_RATIO));
   if (ratio <= rampStart) {
     return profile.baseline;
   }
   const step = (1 - rampStart) / (profile.operational.length - 1);
-  const index = Math.min(
-    profile.operational.length - 1,
-    1 + Math.floor((ratio - rampStart) / Math.max(Number.EPSILON, step)),
+  return (
+    profile.operational[
+      Math.min(
+        profile.operational.length - 1,
+        1 + Math.floor((ratio - rampStart) / Math.max(Number.EPSILON, step)),
+      )
+    ] ?? profile.baseline
   );
-  return profile.operational[index] ?? profile.baseline;
 }
 
 export function effortAtLeast(
   actual: ModelThinkingLevel | undefined,
   threshold: ThinkingLevel,
 ): boolean {
-  return (
-    actual !== undefined &&
-    actual !== "off" &&
-    CANONICAL_LEVELS.indexOf(actual) >= CANONICAL_LEVELS.indexOf(threshold)
-  );
+  return actual !== undefined && actual !== "off" && rankOf(actual) >= rankOf(threshold);
 }
 
 export function shouldResetAfterCompaction(
