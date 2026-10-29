@@ -156,7 +156,7 @@ class ValidationTests(GitFixture):
         with self.assertRaisesRegex(ValueError, "tracked"):
             quality.validate_agents(self.root)
 
-    def test_accepts_jsonc_only_for_zed_settings(self) -> None:
+    def test_accepts_jsonc_only_for_listed_files(self) -> None:
         zed = self.root / ".config/zed"
         zed.mkdir(parents=True)
         (zed / "settings.json").write_text(
@@ -174,6 +174,10 @@ class ValidationTests(GitFixture):
         quality.validate_changed_files(self.root, {".config/zed/settings.json"})
         self.assertEqual(quality.jsonc_loads('{"a": 1} // end'), {"a": 1})
         self.assertEqual(quality.jsonc_loads('{"a": 1} /* end'), {"a": 1})
+        (self.root / "tsconfig.json").write_text(
+            '{\n  // comment\n  "compilerOptions": {},\n}\n', encoding="utf-8"
+        )
+        quality.validate_changed_files(self.root, {"tsconfig.json"})
         (self.root / "data.json").write_text("// not allowed\n{}", encoding="utf-8")
         with self.assertRaises(json.JSONDecodeError):
             quality.validate_changed_files(self.root, {"data.json"})

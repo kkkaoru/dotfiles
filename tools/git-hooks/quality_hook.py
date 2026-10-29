@@ -13,7 +13,8 @@ from pathlib import Path
 from typing import Iterable, TextIO
 
 ZERO_OID = "0" * 40
-JSONC_PATHS = frozenset({".config/zed/settings.json"})
+# TypeScript reads tsconfig.json as JSONC, so its comments are valid there.
+JSONC_PATHS = frozenset({".config/zed/settings.json", "tsconfig.json"})
 
 
 @dataclass(frozen=True)
