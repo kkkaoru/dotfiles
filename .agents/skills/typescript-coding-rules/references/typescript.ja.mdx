@@ -38,24 +38,29 @@ TypeScriptのコーディングルール。全ての項目を同時に常に守�
 
 ## 関数と制御フロー
 
-23. 関数の分割, 正規化, DRY な記述を推奨
+23. 関数の分割, 正規化, DRY な記述を推奨。計算と副作用は分けてください。値を決める関数（`dynamicEffort`、`nextFloor`、`countCompaction`、`withObservation`）は素のデータを受け取って結果を返すだけにし、ホストのオブジェクト（`engine`、`pi`、`context.ui`）を受け取ったり状態に書き込んだりしないでください。それを反映する処理（状態への代入、ホストの呼び出し）は別の小さな関数にします。こうすると、判断を偽のホストなしで素の値だけでテストできます。1 つの関数がイベントを記録しつつ、それをもとに判断もしている場合も同じように分けてください（`recordMainStep` の後に `managedEffort`）。変化したときだけ副作用が必要な場合は、呼び出し側を三項演算子にし、変わらないときは値をそのまま返し、変わったときだけ反映する関数に渡してください：`const sendEffort = (engine, effort): ModelEffort => effort === lastSent ? effort : announceEffort(engine, effort)`。
 24. テストコード以外は最大限DRYにしてください
 25. main関数もしくは run 関数が存在している場合は、これらの関数のステップ数は最小になるように処理を分割するようにしてください。
 26. main関数を作成や定義をする場合は、main 関数のスコープ内の定義は可能な限り減らして関数の定義の分離を行って カバレッジが上がりやすくなるようにして
 27. 関数で3つ以上の引数がある場合は、一つのオブジェクトを引数にするようにして
 28. コールバックや戻り値として使うアロー関数では、return を省略可能なら sugar syntax で省略しろ
-29. 可読性が良い範囲で return と const の定義は最小にして
+29. 可読性が良い範囲で return と const の定義は最小にしてください。1 回しか読まない値を `const` に束縛せず、必要な箇所に式をそのまま書いてください。インライン化して関数の本体が 1 つの `return` だけになったら、`return` を省いた `const` のアロー関数にしてください（ルール40）。例えば `const stuck = recordCall(…); return stuck ? … : result` ではなく `const noteToolResult = (…): R => recordCall(…) ? { …result, context } : result` と書きます。1 回しか使わない値が次の文のメソッド呼び出しの受け手なら、`const` に束縛せずメソッドチェーンでつないでください（`const rounds = messages.filter(…); rounds.slice(-n).forEach(…)` ではなく `messages.filter(…).slice(-n).forEach(…)`）。1 回しか使わないオブジェクトリテラルや呼び出し結果も、そのまま引数に渡してください。1 回しか使わない `const` を残してよいのは、値を変える副作用より前に評価する必要がある場合（例：リングに書き込む前に `ring.items.includes(key)` を読む、確認の前に終える必要がある `await`。この場合は、待った値を確認する関数の引数として渡してください：`replayIfCurrent(generation, await $.session.messages())`。引数は呼び出しの前に評価されるからです。`await` をガードした分岐の中に移すと確認が先に走るので、そうしないでください）、コールバックやループの本体で読むためインライン化すると要素ごとに評価される場合、式だけでは分からない値の意味を名前で説明する場合だけです。
+    状態を読んでから更新するためだけに本体が複数の文になる場合は、本体が 1 つの式になるよう状態の持ち方を変えてください。カンマ演算子は使わないでください（`no-sequences: "error"`）。一度だけ使う条件は、フラグを消す代わりに既にある状態から導いてください（`prefetched` を読んで `prefetched = undefined` を代入するのではなく、`limits.size === 0 && prefetched !== undefined`）。繰り返し出てくる「保存して返す」組（`map.set(key, value); return value`）は、呼び出し側で共有する 1 つの補助関数（`rememberLimit(model, limit)`）にまとめ、それぞれの呼び出し側を `return` のない `const` アロー関数にしてください（`const fetchLimit = async (…): Promise<number> => rememberLimit(model, await sessionLimit($))`）。保存する呼び出しが常に truthy なレシーバー自身を返す場合（`Map#set`、`Set#add`）は、その補助関数自体も 1 つの式にしてください：`const rememberLimit = (model: string, limit: number): number => limits.set(model, limit) && limit`。レシーバーは常に truthy であることを 1 行のコメントで書いてください。一度だけの動作は、2 つ目のキーがその値を使い回さないことなどをテストで確かめてください。
 30. 全てのコードでネスト数を最小にしてください
-31. In computer programming, a guard を使って、ネストの中の処理を簡素化できるとこは guard で定義してください。三項演算子をguard で置換するのは禁止
-32. ternary operator は可能な限り利用しろ
-33. ternary operator をnestして連続で使うことを禁止
+31. In computer programming, a guard を使って、ネストの中の処理を簡素化できるとこは guard で定義してください。三項演算子をguard で置換するのは禁止。`if`、`else`、ループの本体の波括弧は、`if (done) { return value }` のような 1 行の guard でも省略しないでください。機械的に強制してください：oxlint や ESLint の `curly: ["error", "all"]`、または Biome の `style/useBlockStatements: "error"` を `--fix` で適用します。formatter（Oxfmt、Prettier、Biome format）は波括弧を追加できません。
+32. ternary operator は可能な限り利用しろ。ガードしてから状態に代入するだけの関数は、新しい値（変わらないときは現在の値）を返すようにして呼び出し側で代入し、関数を三項演算子にしてください：`runtime.manager.contextTokens = contextAfter(agentId, usage)` と `const contextAfter = (…): number => agentId !== undefined || usage === null ? runtime.manager.contextTokens : …`。
+    三項演算子で値を自分自身に代入し直さないでください（`x = changed ? next : x`、`original = isOwn ? original : level`）。呼び出しのたびに書き込みが起きます。変わったときだけ `if (changed) { x = next }` で代入してください。これは条件付きの書き込みで、ルール31が三項演算子の代わりとして禁じているガードではありません。未設定の値を埋めるときは `x = x ?? y` ではなく論理代入（`original ??= effort`、`||=`、`&&=`）を使ってください。oxlint/ESLint の `logical-assignment-operators: ["error", "always", { "enforceForIfStatements": true }]` で機械的に検出してください。自分自身への三項演算子の代入を検出する lint ルールはないので、レビューで見つけてください。
+    オペランドが 3 つ以上の条件式や、`&&` と `||` が混ざる条件式は、意味を表す名前の判定関数に分けてください（`const inheritsSessionEffort = (agentId: string | undefined): boolean => agentId !== undefined || !runtime.manager.enabled`）。使う側には判断だけを残します（`inheritsCompactionLevel(effort) && inheritsSessionEffort(agentId) ? … : undefined`）。分岐カバレッジはオペランドを 1 つずつ分岐として数えるので、小さな判定関数にすると、未カバーのオペランドを見つけやすく、1 つのテストで埋めやすくなります。呼び出し側がその条件による型の絞り込みに頼る場合は、判定関数を型ガード（`value is T`）にするか、その 1 つの確認だけを呼び出しの隣に残してください。
+33. 三項演算子のネストや連続は、もう一方の分岐の中に書く場合も含めて常に禁止です。判断は名前のある補助関数かガードに分けてください。oxlint/ESLint の `no-nested-ternary: "error"` か Biome の `style/noNestedTernary: "error"` で機械的に検出してください。
 34. for よりも Array.prototype.map を利用して
 35. 単一の関数のスコープ内で forで2重以上のネストを可能な限り避けてください
 36. 複数の if と if else や swtich分は Map オブジェクトでの定義と利用で置き換えられる場合は置き換えてください。
 37. sort関数に渡す関数は個別で定義しろ
-38. 変数を展開するだけの step を追加しないでください（例: `const [first] = items;`）。引数で分割代入するか、必要な箇所で直接使ってください。
-39. 省略形で命名しないでください。`el` ではなく `element`、`doc` ではなく `page` や `document`、`enPhrases` ではなく `englishPhrases` と書いてください。定着した頭字語や単位（`id`、`url`、`css`、`dom`、`ms`、`px`）と、外部 API が決めている名前は使ってかまいません。
-40. function 宣言で定義できる名前付きの関数は、`const name = () => …` ではなく `function` で定義してください。アロー関数は、その場で渡すコールバック、戻り値として返す関数、オブジェクトのプロパティにだけ使ってください。linter で強制してください（oxlint や ESLint の `func-style: ["error", "declaration"]`）。
+38. 変数を展開するだけの step を追加しないでください（例: `const [first] = items;`）。引数で分割代入するか、必要な箇所で直接使ってください。関数がオブジェクトの引数のフィールドを 2 つ以上読む場合は、`param.field` を繰り返したりローカル変数に写したりせず、引数の位置で分割代入してください（`function toolSignature({ text, input, isError }: CallRecord): string`）。引数全体を別の関数にも渡す場合だけ、引数をそのまま受け取ってください。分割代入のパターンに既定値は書かないでください（ルール47）。
+    次の場合も引数をそのまま受け取ってください：引数を通してフィールドに代入する場合（`target.input += input`）、メソッドが `this` を必要とする場合（`controller` や `pi` のようなクラスのインスタンス、文字列のメソッド）、API が素の名前を求める場合（Claude Code の mod の `$`。バリデーターが呼び出しごとに `$.noun.method(…)` と書くことを求めます）。フィールド名が外側の名前を隠す場合は、パターンの中で名前を変えてください（`{ contextTokens: tokens }`）。await した結果を分割代入するだけの文（`const { context } = await $.session.usage(…)`）は書かず、結果をそのまま渡し、受け取る `.then` のコールバックや関数の引数で分割代入してください。
+    呼び出し元が 1 つしかなく、機能オブジェクト（`$`、クライアント、ホストの API）を 1 回呼ぶだけのラッパーは作らないでください（`const setSessionEffort = ($, level) => $.command.run(…)`、`prefetchSession($, generation)`）。呼び出し元はすでにそのオブジェクトを持っているので、必要な箇所で直接呼び、結果は素のデータを受け取る関数に渡してください（`$.session.usage(…).then(({ context }) => prefetchIfCurrent(generation, context))`）。こうした関数は偽のエンジンなしでテストでき、テストしやすくなります。
+39. 省略形で命名しないでください。`el` ではなく `element`、`doc` ではなく `page` や `document`、`enPhrases` ではなく `englishPhrases` と書いてください。定着した頭字語や単位（`id`、`url`、`css`、`dom`、`ms`、`px`）と、外部 API が決めている名前は使ってかまいません。API のドキュメントや例に載っているだけの名前は慣習であり、必須ではありません。Claude Code の mod の `$` は `engine`（バリデーターが求めるのは素の引数名と、呼び出しごとに `engine.noun.method(…)` と書くことだけです）、`e` は `event`、`ctx` は `context`、`R` や `T` のような 1 文字の型引数は説明的な名前（`ToolResult`、`Value`）にしてください。外部 API のメンバー（`vi.fn`、`event.args`）は名前を変えません。名前を変えて衝突する場合は、内側の名前を中身が分かる名前にしてください（`requestContext`）。
+40. 本体が 1 つの式を `return` するだけの名前付き関数は、戻り値の型を明示した `const` のアロー関数で、`return` を省略した sugar syntax で定義してください（`const name = (value: Input): Output => expression`）。それ以外の名前付き関数は `const name = () => { … }` ではなく `function` で定義してください。これらの `const` 関数は関数定義と同じ場所に、モジュール評価時に最初に使われるより前に置いてください。linter で強制してください（oxlint や ESLint の `func-style: ["error", "declaration", { "allowArrowFunctions": true }]`）。
 
 ## 値、I/O、module
 
@@ -104,3 +109,29 @@ TypeScriptのコーディングルール。全ての項目を同時に常に守�
 77. テストコードで、`from bun:test` は常に禁止
 78. テストコードでは、ファイルの読み書き, Webへのリクエストは全て mock を利用してください。テストコードの実行速度を早くするようにしてください。
 79. テストコードは実行速度も重視して、テストコードの実装をしてください。
+
+## コンパイラの性能
+
+TypeScript wiki の「Performance」（https://github.com/microsoft/TypeScript/wiki/Performance）にもとづく。
+
+80. 交差型の型エイリアス（`A & B`）より `interface X extends A, B` を優先してください。interface の関係はコンパイラがキャッシュし、速く検査できます。
+81. export する関数と、戻り値の型が大きい・複雑な関数には、戻り値の型を必ず明記してください。推論させると、使われるたびにコンパイラの負担になります。
+82. 12 個程度を超えるメンバーの union は避け、基底の型とその派生の型で表してください。
+83. 複雑な条件型や mapped type は、戻り値の位置に直接書かず、名前付きの型エイリアスにしてください。コンパイラがキャッシュできます。
+84. `tsconfig.json` の `include` にはソースのフォルダだけを書き、`node_modules`、ビルドの出力、ドットで始まるフォルダを含めないでください（glob が届く場合は `**/node_modules` と `**/.*/` を `exclude` してください）。`types` は明示し、グローバルの型が不要なら `[]` にしてください。
+85. `tsc` を繰り返し実行するなら `incremental` を有効にし、`tsBuildInfoFile` は `node_modules/.cache` のような無視されるフォルダに置いてください。
+86. ファイルを 1 つずつ変換する環境（Bun、esbuild、vitest、プラグインのエンジン）では `verbatimModuleSyntax`（または `isolatedModules`）を有効にし、型は `import type` で読み込んでください。`const enum` と `namespace` は禁止です。
+87. `strict` は有効のままにしてください。`strictFunctionTypes` が含まれ、変性の検査が速くなります。`skipLibCheck` はビルドの速さのためだけに使い、型定義のエラーを隠す目的では使わないでください。
+88. 型チェックが遅いときは、コードを変える前に `tsc --extendedDiagnostics`、`--listFilesOnly`、`--explainFiles`、`--generateTrace` で測ってください。
+89. 大きなワークスペースは、同程度の大きさの project references（5〜20 個程度）に分け、製品コードがテストに依存しないよう、テストは別のプロジェクトにしてください。
+90. trace で、ライブラリのジェネリックなオーバーロードを大きな union に対して推論する呼び出しが重いと分かったら、ライブラリの型を書き換えたり包んだりせず、型引数を明示してください（例：`next<string>(e)`）。変更の前後で計測してください。
+
+## 実行時の性能とメモリ
+
+91. 目的を果たす最も軽い操作を使ってください。生きている状態を置き換えるときは参照を代入し直すか（`runtime.manager = fresh(…)`）、プロパティに代入してください。`Object.assign` でフィールドをコピーしないでください。スプレッドは新しいオブジェクトが必要なときだけ使い、`Object.assign({}, value)` は使わないでください（`prefer-object-spread`）。
+    2 つ以上のフィールドが常に一緒に変わる場合（`sessionLevel` と `pending`）は、1 つの `readonly` なレコードにまとめ、フィールドごとに代入せず 1 回の代入で置き換えてください（`runtime.manager.session = { level, pending: false }`）。フィールド同士が食い違わず、更新も 1 文で済みます。ホットパスでは、フィールドが変わったときだけレコードを置き換え（`if (effort !== session.level) { session = { level: effort, pending: session.pending } }`）、よくある場合にオブジェクトの生成も書き込みもしないでください。更新の頻度が違うフィールドは、すべてを不変にするのではなく頻度で分けてください。ラウンドに 1 回更新する状態（回復の下限）は 1 回の代入で置き換える `readonly` なレコードにし、呼び出しのたびに更新する集計は小さな可変レコードのままその場で変更して、空でないときのリセットでだけ置き換えてください。
+92. 二乗時間になる書き方を禁止します。ループや `reduce` の中で累積値へスプレッドや `concat` すること（`oxc/no-accumulating-spread`）、`Array#reduce`（`unicorn/no-array-reduce`）、固定のコレクションへの `includes`（`Set` か `Map` を使う：`unicorn/prefer-set-has`）、`filter()[0]` や `filter().length > 0`（`find` / `some`：`unicorn/prefer-array-find`、`unicorn/prefer-array-some`）、`map().flat()`（`flatMap`：`unicorn/prefer-array-flat-map`）です。独立した処理は `Promise.all` で待ってください（`no-await-in-loop`）。
+93. ホットパス（ステップごと、ツール呼び出しごと、メッセージごと）では中間配列やコピーを避けてください。インデックスのループ、ジェネレーター、テンプレートリテラルで済むなら、`map` + `includes`、`Object.entries` + `fromEntries`、短い文字列を作るための `[…].join`、`toReversed()` や `[...text]` のコピーを使わないでください。シリアライズする前に入力を制限してください。先に文字列化してから切るのではなく、`JSON.stringify` の replacer で長い文字列を縮めてください。
+94. セッションの長さとともに増える構造は、すべて上限を設けてください（固定長のリング、上限付きの `Map`、追い出し付きのキャッシュ）。入力や出力そのものではなく、上限のあるキー（長さと先頭・末尾）を保存してください。リセット時は保持しているオブジェクトごと置き換え、古い状態をすぐ解放してください。
+95. これらはすべてのパッケージで機械的に有効にしてください。oxlint の `perf` カテゴリ、91 と 92 に挙げたルール、`complexity: ["error", 10]`、`max-depth: ["error", 3]` です。順序や不変性のために例外が必要な場合（順に届く必要がある差分、保存済みの状態を守るコピー）は、その行だけを `// oxlint-disable-next-line <rule> -- <理由>` で抑止してください。
+96. 計算量やメモリの悪化はテストで失敗するようにしてください。ホットパスごとに、(a) ウォームアップの後で n と 10n の実行時間を測り、比が線形の上限（例：`< 25`）未満であることを確かめてください。マシンの速さに依存せずに O(n²) を検出できます。(b) GC を強制し（`node:v8` の `setFlagsFromString('--expose-gc')` の後に `gc()`）、多数回実行しても `getHeapStatistics().used_heap_size` の増加が一定の上限未満であることを確かめてください。(c) 保持する構造や出力の大きさに上限があることを確かめてください（`Buffer.byteLength(output) <= limit`）。比較するのは比と上限で、絶対的なミリ秒ではありません。
