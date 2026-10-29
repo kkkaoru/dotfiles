@@ -1,0 +1,34 @@
+{
+  "ignorePatterns": [".claude-plugin/types"],
+  "categories": {
+    "perf": "error"
+  },
+  "rules": {
+    "curly": ["error", "all"],
+    "func-style": [
+      "error",
+      "declaration",
+      {
+        "allowArrowFunctions": true
+      }
+    ],
+    "no-nested-ternary": "error",
+    "complexity": ["error", 10],
+    "max-depth": ["error", 3],
+    "unicorn/prefer-set-has": "error",
+    "unicorn/no-array-reduce": "error",
+    "unicorn/no-useless-spread": "error",
+    "unicorn/prefer-array-some": "error",
+    "unicorn/prefer-array-find": "error",
+    "unicorn/prefer-string-slice": "error",
+    "prefer-object-spread": "error",
+    "no-sequences": "error",
+    "logical-assignment-operators": [
+      "error",
+      "always",
+      {
+        "enforceForIfStatements": true
+      }
+    ]
+  }
+}

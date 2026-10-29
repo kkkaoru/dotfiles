@@ -25,5 +25,7 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false,
-  }
+  },
+  // The Claude Code mod type-checks with its own tsconfig against the engine's 'claude-code' types.
+  "exclude": ["node_modules", "tools/claude-dynamic-effort"]
 }

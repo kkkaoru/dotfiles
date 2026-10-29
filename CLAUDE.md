@@ -33,6 +33,8 @@ integrations. These instructions apply to agents working here, including pi and 
 - `tools/pi-*/` — Local pi extensions and providers, including persistent goals,
   loops, detached tmux execution, effort management, and oMLX lifecycle management.
 - `tools/claudex-*/` — Claudex adapters and routing/tool policies.
+- `tools/claude-dynamic-effort/` — Claude Code mod porting pi-effort-manager's dynamic
+  work effort (`claude plugin validate|test <dir>`; load with `--plugin-dir`).
 - `tools/dsh-dracula-theme/` — A DeepSeek Harness bundle (no build step) that
   injects the Dracula palette into the Web and Desktop clients. Install it into
   a profile with `dsh plugin --profile <name> add <checkout>/tools/dsh-dracula-theme`.
@@ -109,6 +111,7 @@ Verification is component-specific; the root package does not provide a universa
 - `tools/executor-skills/`: `bun run tsc && bun run lint && bun run test`
 - `tools/pi-goal-extension/`: `bun run check`; `bun run smoke` for offline native SDK/tmux integration
 - `tools/pi-loop-extension/`, `tools/pi-tmux-timeout-extension/`: `bun run check`
+- `tools/claude-dynamic-effort/`: `bun run check` (vitest coverage and `claude plugin validate`)
 - Other components: inspect their `package.json` and README for required checks.
 - Shell changes: check syntax; for all changes, run `git diff --check`.
 
