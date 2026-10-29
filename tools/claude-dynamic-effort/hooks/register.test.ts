@@ -94,14 +94,17 @@ function engine(fake: Fake): unknown {
       },
     },
     store: {
-      get: async (key: string) => (fake.rejectStore ? Promise.reject(new Error('unreadable')) : fake.store.get(key)),
-      set: async (key: string, value: unknown) => {
-        fake.store.set(key, value)
-      },
+      get: async (key: string) => storeResult(fake, () => fake.store.get(key)),
+      set: async (key: string, value: unknown) => storeResult(fake, () => fake.store.set(key, value)),
+      delete: async (key: string) => storeResult(fake, () => fake.store.delete(key)),
+      keys: async () => storeResult(fake, () => [...fake.store.keys()]),
     },
     ui: { status: (text: unknown) => fake.statuses.push(text) },
   }
 }
+
+const storeResult = <Value>(fake: Fake, read: () => Value): Promise<Value> =>
+  fake.rejectStore ? Promise.reject(new Error('unavailable')) : Promise.resolve(read())
 
 function hookFor(fake: Fake, event: string, key?: string): Function {
   const found = fake.hooks.find(
@@ -777,7 +780,7 @@ test('a resumed session keeps its switch, a new session starts on', async () => 
   await start(fake)
   await action(fake, 'off')
   await settle()
-  expect(fake.store.get('offSessions')).toStrictEqual(['session-1'])
+  expect([...fake.store]).toStrictEqual([['off:session-1', true]])
   await sessionStart(fake, 'resume')
   await step(fake, { turnId: 't1', index: 0 })
   fake.sessionId = 'session-2'
@@ -786,27 +789,34 @@ test('a resumed session keeps its switch, a new session starts on', async () => 
   expect(fake.sent).toStrictEqual(['high', 'medium'])
 })
 
-test('switching back on forgets the session, and an unreadable store leaves a session on', async () => {
+test('switching back on forgets only its own session, and an unexpected value leaves a session on', async () => {
   const fake = setup()
-  fake.store.set('offSessions', ['old', 'session-1', 7])
+  fake.store.set('off:old', true)
+  fake.store.set('off:session-1', true)
   await start(fake)
   await action(fake, 'on')
   await settle()
-  expect(fake.store.get('offSessions')).toStrictEqual(['old'])
-  fake.store.set('offSessions', 'corrupt')
+  expect([...fake.store.keys()]).toStrictEqual(['off:old'])
+  fake.store.set('off:session-1', 'corrupt')
   await sessionStart(fake, 'resume')
   await step(fake, { turnId: 't1', index: 0 })
   expect(fake.sent).toStrictEqual(['medium'])
 })
 
-test('the off list keeps only the most recent sessions', async () => {
+test('the off keys keep only the most recent sessions and leave other keys alone', async () => {
   const fake = setup()
-  fake.store.set('offSessions', Array.from({ length: 32 }, (_, index) => `old-${index}`))
+  fake.store.set('other', 1)
+  fake.store.set('off:session-1', true)
+  for (let index = 0; index < 32; index += 1) {
+    fake.store.set(`off:old-${index}`, true)
+  }
   await start(fake)
   await action(fake, 'off')
   await settle()
-  expect(fake.store.get('offSessions')).toHaveLength(32)
-  expect(Array.from(Object(fake.store.get('offSessions'))).at(-1)).toBe('session-1')
+  const keys = [...fake.store.keys()]
+  expect(keys).toHaveLength(33)
+  expect(keys.slice(0, 2)).toStrictEqual(['other', 'off:old-1'])
+  expect(keys.at(-1)).toBe('off:session-1')
 })
 
 test('a store that fails leaves the session on and its switch unsaved', async () => {
@@ -822,14 +832,14 @@ test('a store that fails leaves the session on and its switch unsaved', async ()
   await action(fake, 'off')
   await settle()
   expect(fake.sent).toStrictEqual(['high'])
-  expect(fake.store.has('offSessions')).toBe(false)
+  expect(fake.store.size).toBe(0)
 })
 
 test('a switch read for a reset that a newer one replaced is dropped', async () => {
   const fake = setup()
-  fake.store.set('offSessions', ['session-1'])
+  fake.store.set('off:session-1', true)
   void start(fake)
-  fake.store.set('offSessions', [])
+  fake.store.delete('off:session-1')
   await sessionStart(fake, 'resume')
   await step(fake, { turnId: 't1', index: 0 })
   expect(fake.sent).toStrictEqual(['medium'])

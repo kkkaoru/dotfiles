@@ -162,8 +162,8 @@ flowchart TD
   (`classic.SessionStart` with source `clear`, `resume` or `fork`) resets it too, keeping the
   person's original effort, so the new conversation does not inherit the old context size or
   failure evidence.
-- The on/off switch is kept per session id in the mod's store (`offSessions`, the last 32 sessions
-  switched off). A new session has a new id and starts on; a resumed session keeps its id, so a
+- The on/off switch is kept per session id in the mod's store, one key per session switched off
+  (`off:<session id>`, the newest 32), so sessions switching at once never overwrite each other. A new session has a new id and starts on; a resumed session keeps its id, so a
   session switched off stays off. The start hooks wait for this read, so no step is sent before it
   applies; a store that cannot be read leaves the session on.
 - In the background, a prefetch takes Claude Code's local estimate of the context size and threshold

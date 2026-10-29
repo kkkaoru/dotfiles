@@ -156,10 +156,10 @@ const STUCK_NOTE: string =
 // A resumed session replays this many of its last tool rounds to rebuild the recovery evidence.
 const RESUME_ROUNDS = 8 satisfies number
 const RESUME_TURN: string = 'resume'
-// Sessions switched off with `/dynamic-effort off`, newest last. A resumed session keeps its id and
-// so its switch; a new session's id is not listed, so it starts on. Bounded, so the store does not
-// grow with the number of sessions.
-const OFF_SESSIONS_KEY: string = 'offSessions'
+// Sessions switched off with `/dynamic-effort off`, one store key each, so sessions switching at
+// once never overwrite each other. A resumed session keeps its id and so its key; a new session's
+// id has none, so it starts on. The store lists keys in insertion order, so only the newest are kept.
+const OFF_KEY_PREFIX: string = 'off:'
 const MAX_OFF_SESSIONS = 32 satisfies number
 const RAMP_START_RATIO = 0.6 satisfies number
 const RECOVERY_ROUNDS = 2 satisfies number
@@ -358,25 +358,16 @@ function resetSession(engine: EngineInterface, keepOriginal: boolean): Promise<v
     .then(({ context }) => prefetchIfCurrent(generation, context))
     .then(() => restoreSession(engine, generation))
     .catch(() => undefined)
-  return restoreSwitch(engine, generation)
+  // A store that cannot be read leaves the session on, the default.
+  return restoreSwitch(engine, generation).catch(() => undefined)
 }
 
-// The store is plain JSON any version of the mod may have written, so anything else counts as none.
-const storedSessions = (value: unknown): readonly string[] =>
-  Array.isArray(value) ? value.filter((sessionId): sessionId is string => typeof sessionId === 'string') : []
+const offKey = (sessionId: string): string => `${OFF_KEY_PREFIX}${sessionId}`
 
-const withoutSession = (sessions: readonly string[], sessionId: string): string[] =>
-  sessions.filter(listed => listed !== sessionId)
-
-// The off list after a switch: an off session moves to the end, an on one leaves the list.
-const offSessionsAfter = (sessions: readonly string[], sessionId: string, enabled: boolean): readonly string[] =>
-  enabled ? withoutSession(sessions, sessionId) : [...withoutSession(sessions, sessionId), sessionId].slice(-MAX_OFF_SESSIONS)
-
-// A store that cannot be read leaves the session on, the default.
-const restoreSwitch = (engine: EngineInterface, generation: number): Promise<void> =>
-  Promise.all([engine.session.id(), engine.store.get(OFF_SESSIONS_KEY)])
-    .then(([sessionId, stored]) => applySwitch(engine, { generation, sessionId, off: storedSessions(stored).includes(sessionId) }))
-    .catch(() => undefined)
+async function restoreSwitch(engine: EngineInterface, generation: number): Promise<void> {
+  const sessionId = await engine.session.id()
+  applySwitch(engine, { generation, sessionId, off: (await engine.store.get(offKey(sessionId))) === true })
+}
 
 function applySwitch(engine: EngineInterface, { generation, sessionId, off }: StoredSwitch): void {
   if (runtime.manager.generation !== generation) {
@@ -388,17 +379,29 @@ function applySwitch(engine: EngineInterface, { generation, sessionId, off }: St
   }
 }
 
-// shortcut: two sessions switching at the same instant can lose one write (read, then write);
-// move to a per-session key if that ever matters. A failed write only loses the switch on resume.
+// Deleting first moves a session switched off again to the newest end; the oldest beyond the bound
+// are then dropped, so the store does not grow with the number of sessions.
+const storeOff = (engine: EngineInterface, key: string): Promise<unknown> =>
+  engine.store
+    .delete(key)
+    .then(() => engine.store.set(key, true))
+    .then(() => engine.store.keys())
+    .then(keys =>
+      Promise.all(
+        keys
+          .filter(listed => listed.startsWith(OFF_KEY_PREFIX))
+          .slice(0, -MAX_OFF_SESSIONS)
+          .map(listed => engine.store.delete(listed)),
+      ),
+    )
+
+// A failed write only loses the switch on resume.
 function rememberSwitch(engine: EngineInterface, enabled: boolean): void {
   const sessionId = runtime.manager.sessionId
   if (sessionId === undefined) {
     return
   }
-  void engine.store
-    .get(OFF_SESSIONS_KEY)
-    .then(stored => engine.store.set(OFF_SESSIONS_KEY, offSessionsAfter(storedSessions(stored), sessionId, enabled)))
-    .catch(() => undefined)
+  void (enabled ? engine.store.delete(offKey(sessionId)) : storeOff(engine, offKey(sessionId))).catch(() => undefined)
 }
 
 // `Map#set` returns the map, which is always truthy, so the expression yields `limit`.
