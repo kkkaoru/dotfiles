@@ -13,7 +13,8 @@ Claude Code の mod です。`tools/pi-effort-manager` の dynamic work-effort �
   注記を 1 回だけ付けます。
 - Claude Code 自身の compaction は `max` で実行し、やめた方法を残す指示を 1 つ追加します。
   サブエージェントは本来の effort のままです。
-- `/dynamic-effort on|off|status` で、現在のセッションでの動作を切り替えます。
+- `/dynamic-effort on|off|status` で、現在のセッションでの動作を切り替えます。新しいセッションは
+  on で始まり、再開したセッションは前の on/off を引き継ぎます。
 
 ## effort を dynamic にする理由
 
@@ -158,7 +159,11 @@ flowchart TD
 - `session.start` で状態をリセットします。プロセス内の `/clear`、`/resume`、fork
   （source が `clear`、`resume`、`fork` の `classic.SessionStart`）でもリセットし、ユーザーの元の
   effort は残します。そのため、新しい会話が前の会話のコンテキスト量や失敗の根拠を引き継ぐことは
-  ありません。リセットすると dynamic も on に戻ります。
+  ありません。
+- on/off はセッション ID ごとに mod の store に保存します（`offSessions`、off にした直近 32
+  セッション）。新しいセッションは ID が新しいので on で始まり、再開したセッションは ID が同じなので、
+  off にしていれば off のままです。開始時のフックはこの読み込みを待つので、反映前にステップが
+  送られることはありません。store を読めないときは on のままです。
 - 裏では、先読みで Claude Code のローカルの推定からコンテキスト量と閾値を取り（API 呼び出しなし）、
   すでにプロンプトがあるセッションでは、会話記録の末尾 8 ラウンドのツール呼び出しを読み直して、
   floor と繰り返し判定の記録を復元します。世代のチェックで以前のリセットで始めた処理を捨て、

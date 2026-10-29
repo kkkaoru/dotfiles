@@ -36,6 +36,9 @@ interface Fake {
   transcriptGate: Promise<void>
   messageReads: number
   compactions: number
+  sessionId: string
+  readonly store: Map<string, unknown>
+  rejectStore: boolean
 }
 
 interface Step {
@@ -51,7 +54,7 @@ const OWN = { kind: 'plugin', name: 'dynamic-effort' } satisfies { kind: string;
 const SUMMARY = [{ role: 'user', text: 'summary', toolUses: [] }] satisfies unknown[]
 
 function setup(options?: Readonly<Record<string, string>>): Fake {
-  const fake: Fake = { hooks: [], sent: [], efforts: [], statuses: [], inputs: [], usageCalls: 0, toolCalls: 0, context: { window: 100 }, tokens: undefined, threshold: undefined, rejectRuns: false, rejectUsage: false, estimate: undefined, turns: 0, transcript: [], transcriptGate: Promise.resolve(), messageReads: 0, compactions: 0 }
+  const fake: Fake = { hooks: [], sent: [], efforts: [], statuses: [], inputs: [], usageCalls: 0, toolCalls: 0, context: { window: 100 }, tokens: undefined, threshold: undefined, rejectRuns: false, rejectUsage: false, estimate: undefined, turns: 0, transcript: [], transcriptGate: Promise.resolve(), messageReads: 0, compactions: 0, sessionId: 'session-1', store: new Map(), rejectStore: false }
   const on = (event: unknown, matcher: unknown, hook?: unknown): { readonly catch: () => void } => {
     fake.hooks.push(hook === undefined ? { event, matcher: undefined, hook: matcher } : { event, matcher, hook })
     return { catch: () => undefined }
@@ -78,6 +81,7 @@ function engine(fake: Fake): unknown {
             ? fake.context
             : { ...fake.context, breakdown: { autoCompactThreshold: fake.threshold, totalTokens: fake.estimate } },
       }),
+      id: async () => fake.sessionId,
       turns: async () => fake.turns,
       messages: async () => {
         fake.messageReads += 1
@@ -87,6 +91,12 @@ function engine(fake: Fake): unknown {
       compact: async () => {
         fake.compactions += 1
         return { skip: 'test' }
+      },
+    },
+    store: {
+      get: async (key: string) => (fake.rejectStore ? Promise.reject(new Error('unreadable')) : fake.store.get(key)),
+      set: async (key: string, value: unknown) => {
+        fake.store.set(key, value)
       },
     },
     ui: { status: (text: unknown) => fake.statuses.push(text) },
@@ -760,4 +770,67 @@ test('a prefetch that finishes after the first step leaves the step its own thre
   await step(fake, { turnId: 't1', index: 0 })
   await settle()
   expect(fake.usageCalls).toBe(2)
+})
+
+test('a resumed session keeps its switch, a new session starts on', async () => {
+  const fake = setup()
+  await start(fake)
+  await action(fake, 'off')
+  await settle()
+  expect(fake.store.get('offSessions')).toStrictEqual(['session-1'])
+  await sessionStart(fake, 'resume')
+  await step(fake, { turnId: 't1', index: 0 })
+  fake.sessionId = 'session-2'
+  await sessionStart(fake, 'clear')
+  await step(fake, { turnId: 't2', index: 0 })
+  expect(fake.sent).toStrictEqual(['high', 'medium'])
+})
+
+test('switching back on forgets the session, and an unreadable store leaves a session on', async () => {
+  const fake = setup()
+  fake.store.set('offSessions', ['old', 'session-1', 7])
+  await start(fake)
+  await action(fake, 'on')
+  await settle()
+  expect(fake.store.get('offSessions')).toStrictEqual(['old'])
+  fake.store.set('offSessions', 'corrupt')
+  await sessionStart(fake, 'resume')
+  await step(fake, { turnId: 't1', index: 0 })
+  expect(fake.sent).toStrictEqual(['medium'])
+})
+
+test('the off list keeps only the most recent sessions', async () => {
+  const fake = setup()
+  fake.store.set('offSessions', Array.from({ length: 32 }, (_, index) => `old-${index}`))
+  await start(fake)
+  await action(fake, 'off')
+  await settle()
+  expect(fake.store.get('offSessions')).toHaveLength(32)
+  expect(Array.from(Object(fake.store.get('offSessions'))).at(-1)).toBe('session-1')
+})
+
+test('a store that fails leaves the session on and its switch unsaved', async () => {
+  const fake = setup()
+  fake.rejectStore = true
+  await start(fake)
+  await action(fake, 'off')
+  await step(fake, { turnId: 't1', index: 0 })
+  await action(fake, 'on')
+  fake.rejectStore = false
+  await sessionStart(fake, 'clear')
+  fake.rejectStore = true
+  await action(fake, 'off')
+  await settle()
+  expect(fake.sent).toStrictEqual(['high'])
+  expect(fake.store.has('offSessions')).toBe(false)
+})
+
+test('a switch read for a reset that a newer one replaced is dropped', async () => {
+  const fake = setup()
+  fake.store.set('offSessions', ['session-1'])
+  void start(fake)
+  fake.store.set('offSessions', [])
+  await sessionStart(fake, 'resume')
+  await step(fake, { turnId: 't1', index: 0 })
+  expect(fake.sent).toStrictEqual(['medium'])
 })

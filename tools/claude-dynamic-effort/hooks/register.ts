@@ -58,6 +58,7 @@ interface Manager {
   lastSent: ModelEffort | undefined
   original: ModelEffort | undefined
   session: SessionEffort
+  sessionId: string | undefined
   stepped: boolean
   generation: number
   contextTokens: number
@@ -67,6 +68,13 @@ interface Manager {
   round: Round
   readonly recentCalls: Ring
   readonly failedInputs: Ring
+}
+
+// A switch read back for a session: applied only while no newer reset owns the state.
+interface StoredSwitch {
+  readonly generation: number
+  readonly sessionId: string
+  readonly off: boolean
 }
 
 // One main-agent tool call as recovery evidence: what it asked and what it got back.
@@ -148,6 +156,11 @@ const STUCK_NOTE: string =
 // A resumed session replays this many of its last tool rounds to rebuild the recovery evidence.
 const RESUME_ROUNDS = 8 satisfies number
 const RESUME_TURN: string = 'resume'
+// Sessions switched off with `/dynamic-effort off`, newest last. A resumed session keeps its id and
+// so its switch; a new session's id is not listed, so it starts on. Bounded, so the store does not
+// grow with the number of sessions.
+const OFF_SESSIONS_KEY: string = 'offSessions'
+const MAX_OFF_SESSIONS = 32 satisfies number
 const RAMP_START_RATIO = 0.6 satisfies number
 const RECOVERY_ROUNDS = 2 satisfies number
 const COMPACTION_EFFORT: ModelEffort = 'max'
@@ -227,6 +240,7 @@ const fresh = (generation: number, original: ModelEffort | undefined): Manager =
   lastSent: undefined,
   original,
   session: UNKNOWN_SESSION,
+  sessionId: undefined,
   stepped: false,
   generation,
   contextTokens: 0,
@@ -333,15 +347,57 @@ function replayRounds(messages: readonly SessionMessage[]): void {
   })
 }
 
-// Starts a session's state over, in the background without delaying the start. An in-process
+// Starts a session's state over. The context estimate and the transcript are read in the
+// background; the on/off switch is awaited, so no step is sent before it applies. An in-process
 // `/clear`, `/resume` or fork keeps the person's own effort, which outlives the conversation.
-function resetSession(engine: EngineInterface, keepOriginal: boolean): void {
+function resetSession(engine: EngineInterface, keepOriginal: boolean): Promise<void> {
   const generation = runtime.manager.generation + 1
   runtime.manager = fresh(generation, keepOriginal ? runtime.manager.original : undefined)
   void engine.session
     .usage({ breakdown: 'summary' })
     .then(({ context }) => prefetchIfCurrent(generation, context))
     .then(() => restoreSession(engine, generation))
+    .catch(() => undefined)
+  return restoreSwitch(engine, generation)
+}
+
+// The store is plain JSON any version of the mod may have written, so anything else counts as none.
+const storedSessions = (value: unknown): readonly string[] =>
+  Array.isArray(value) ? value.filter((sessionId): sessionId is string => typeof sessionId === 'string') : []
+
+const withoutSession = (sessions: readonly string[], sessionId: string): string[] =>
+  sessions.filter(listed => listed !== sessionId)
+
+// The off list after a switch: an off session moves to the end, an on one leaves the list.
+const offSessionsAfter = (sessions: readonly string[], sessionId: string, enabled: boolean): readonly string[] =>
+  enabled ? withoutSession(sessions, sessionId) : [...withoutSession(sessions, sessionId), sessionId].slice(-MAX_OFF_SESSIONS)
+
+// A store that cannot be read leaves the session on, the default.
+const restoreSwitch = (engine: EngineInterface, generation: number): Promise<void> =>
+  Promise.all([engine.session.id(), engine.store.get(OFF_SESSIONS_KEY)])
+    .then(([sessionId, stored]) => applySwitch(engine, { generation, sessionId, off: storedSessions(stored).includes(sessionId) }))
+    .catch(() => undefined)
+
+function applySwitch(engine: EngineInterface, { generation, sessionId, off }: StoredSwitch): void {
+  if (runtime.manager.generation !== generation) {
+    return
+  }
+  runtime.manager.sessionId = sessionId
+  if (off) {
+    setEnabled(engine, false)
+  }
+}
+
+// shortcut: two sessions switching at the same instant can lose one write (read, then write);
+// move to a per-session key if that ever matters. A failed write only loses the switch on resume.
+function rememberSwitch(engine: EngineInterface, enabled: boolean): void {
+  const sessionId = runtime.manager.sessionId
+  if (sessionId === undefined) {
+    return
+  }
+  void engine.store
+    .get(OFF_SESSIONS_KEY)
+    .then(stored => engine.store.set(OFF_SESSIONS_KEY, offSessionsAfter(storedSessions(stored), sessionId, enabled)))
     .catch(() => undefined)
 }
 
@@ -436,14 +492,15 @@ const status = (): string =>
     `recoverySteps=${runtime.manager.floor.steps}`,
   ].join(' ')
 
-async function startSession(engine: EngineInterface): Promise<void> {
-  resetSession(engine, false)
-  await engine.command.register({
-    name: COMMAND,
-    description: `Dynamic reasoning effort: ${ACTIONS.join(' | ')}`,
-    argumentHint: ACTION_USAGE,
-  })
-}
+const startSession = (engine: EngineInterface): Promise<unknown> =>
+  Promise.all([
+    resetSession(engine, false),
+    engine.command.register({
+      name: COMMAND,
+      description: `Dynamic reasoning effort: ${ACTIONS.join(' | ')}`,
+      argumentHint: ACTION_USAGE,
+    }),
+  ])
 
 function setEnabled(engine: EngineInterface, enabled: boolean): void {
   runtime.manager.enabled = enabled
@@ -455,6 +512,7 @@ function setEnabled(engine: EngineInterface, enabled: boolean): void {
 function runAction(engine: EngineInterface, action: string): string {
   if (action === ACTION_ON || action === ACTION_OFF) {
     setEnabled(engine, action === ACTION_ON)
+    rememberSwitch(engine, action === ACTION_ON)
   }
   return isAction(action) ? status() : `Usage: /${COMMAND} ${ACTION_USAGE}`
 }

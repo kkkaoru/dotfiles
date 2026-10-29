@@ -13,7 +13,8 @@ evidence gathered during the session. It began as a port of the dynamic work-eff
   note asking the model to change approach.
 - Claude Code's own compaction runs at `max`, with one extra instruction to keep abandoned
   approaches. Subagents keep the effort they would otherwise have.
-- `/dynamic-effort on|off|status` controls the mod for the current session.
+- `/dynamic-effort on|off|status` controls the mod for the current session. A new session starts
+  on; a resumed session keeps the switch it had.
 
 ## Why dynamic effort
 
@@ -160,7 +161,11 @@ flowchart TD
 - `session.start` resets the state. An in-process `/clear`, `/resume` or fork
   (`classic.SessionStart` with source `clear`, `resume` or `fork`) resets it too, keeping the
   person's original effort, so the new conversation does not inherit the old context size or
-  failure evidence. A reset also turns dynamic mode back on.
+  failure evidence.
+- The on/off switch is kept per session id in the mod's store (`offSessions`, the last 32 sessions
+  switched off). A new session has a new id and starts on; a resumed session keeps its id, so a
+  session switched off stays off. The start hooks wait for this read, so no step is sent before it
+  applies; a store that cannot be read leaves the session on.
 - In the background, a prefetch takes Claude Code's local estimate of the context size and threshold
   (no request), and a session that already has prompts replays its last 8 tool rounds from the
   transcript to rebuild the floor and the repeat window. A generation guard drops work from an
