@@ -266,8 +266,10 @@ claude -p --plugin-dir . "/dynamic-effort status"
 `types/claude-code.d.ts` をコピーしてください。リポジトリ直下の `tsconfig.json` は、このフォルダを
 対象から外しています。
 
-すべてのセッションで mod を読み込むには、`.claude/settings.json` の `env` にある
-`CLAUDE_CODE_PLUGIN_DIRS` に、このフォルダの絶対パスを追加してください。
+このリポジトリの `.claude/settings.json`（`~/.claude/settings.json` へリンク）は、`env` の
+`CLAUDE_CODE_PLUGIN_DIRS` でこのフォルダを指定しているので、すべての Claude Code セッションで
+mod が読み込まれます。Claude Code はこの変数をユーザー設定かプロセスの環境変数からだけ読み、
+プロジェクトの設定からは読みません。
 
 ## 参考文献
 

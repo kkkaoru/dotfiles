@@ -265,8 +265,10 @@ enforced. It also guards performance:
 mod lays them there; on a fresh clone, copy the `types/claude-code.d.ts` that the `plugin-authoring`
 skill writes. The repository root `tsconfig.json` excludes this folder.
 
-To load the mod in every session, add its absolute path to `CLAUDE_CODE_PLUGIN_DIRS` in the `env`
-block of `.claude/settings.json`.
+This repository's `.claude/settings.json` (linked to `~/.claude/settings.json`) names the folder in
+`CLAUDE_CODE_PLUGIN_DIRS` in its `env` block, so every Claude Code session loads the mod. Claude Code
+reads that variable only from the user settings or the process environment, never from a project's
+settings.
 
 ## References
 
