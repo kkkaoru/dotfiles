@@ -42,7 +42,9 @@ export async function ensureCursorPlatform(
   apiKey: string | undefined,
   cwd: string,
 ): Promise<CursorAgentPlatform | undefined> {
-  if (!enabled) return undefined;
+  if (!enabled) {
+    return undefined;
+  }
   platformPromise ??= init(apiKey, cwd);
   return platformPromise;
 }

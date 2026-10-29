@@ -136,12 +136,20 @@ interface ExtensionContextLike {
 }
 
 export function textOfContent(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (!Array.isArray(content)) return "";
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return "";
+  }
   return content
     .filter((part): part is { type: "text"; text: string } => {
-      if (typeof part !== "object" || part === null) return false;
-      if (!("type" in part)) return false;
+      if (typeof part !== "object" || part === null) {
+        return false;
+      }
+      if (!("type" in part)) {
+        return false;
+      }
       return part.type === "text" && "text" in part && typeof part.text === "string";
     })
     .map((part) => part.text)
@@ -177,13 +185,17 @@ async function completeWithAbort<T>(
   promise: Promise<T>,
   signal: AbortSignal | undefined,
 ): Promise<T> {
-  if (signal === undefined) return promise;
+  if (signal === undefined) {
+    return promise;
+  }
   const cancelled = Promise.withResolvers<never>();
   const abort = (): void => {
     cancelled.reject(new DOMException("Compaction cancelled", "AbortError"));
   };
   signal.addEventListener("abort", abort, { once: true });
-  if (signal.aborted) abort();
+  if (signal.aborted) {
+    abort();
+  }
   try {
     return await Promise.race([promise, cancelled.promise]);
   } finally {
@@ -199,7 +211,9 @@ export function summarizeWithFallbackChain(
   signal: AbortSignal | undefined,
 ): Promise<{ summary: string; provider: string; modelId: string } | undefined> {
   const resolved = resolveSummaryModel(registry);
-  if (!resolved) return Promise.resolve(undefined);
+  if (!resolved) {
+    return Promise.resolve(undefined);
+  }
   const resolvedIndex = SUMMARY_MODELS.findIndex(
     ({ provider, modelId }) => provider === resolved.provider && modelId === resolved.modelId,
   );
@@ -208,7 +222,9 @@ export function summarizeWithFallbackChain(
     index: number,
   ): Promise<{ summary: string; provider: string; modelId: string } | undefined> => {
     const ref = SUMMARY_MODELS[index];
-    if (!ref) return undefined;
+    if (!ref) {
+      return undefined;
+    }
     const model =
       index === resolvedIndex ? resolved.model : registry.find(ref.provider, ref.modelId);
     if (!model || !registry.hasConfiguredAuth(model)) {
@@ -238,7 +254,9 @@ export function summarizeWithFallbackChain(
         ),
         signal,
       );
-      if (signal?.aborted) return undefined;
+      if (signal?.aborted) {
+        return undefined;
+      }
       if (response.stopReason !== undefined && response.stopReason !== "stop") {
         return attempt(index + 1);
       }
@@ -248,7 +266,9 @@ export function summarizeWithFallbackChain(
       }
       return { summary, provider: ref.provider, modelId: ref.modelId };
     } catch {
-      if (signal?.aborted) return undefined;
+      if (signal?.aborted) {
+        return undefined;
+      }
       return attempt(index + 1);
     }
   };
@@ -260,14 +280,18 @@ export function isCursorModelActive(
   event: SessionBeforeCompactEvent,
   activeModel: Model<Api> | undefined,
 ): boolean {
-  if (activeModel) return activeModel.provider === CURSOR_PROVIDER;
+  if (activeModel) {
+    return activeModel.provider === CURSOR_PROVIDER;
+  }
   // Without a selected model, do not claim sessions with no evidence of Cursor.
   const messages = [
     ...event.preparation.messagesToSummarize,
     ...event.preparation.turnPrefixMessages,
   ];
   const providers = messages.flatMap((message) => {
-    if (message.role !== "assistant") return [];
+    if (message.role !== "assistant") {
+      return [];
+    }
     const provider = (message as unknown as { provider?: string }).provider;
     return typeof provider === "string" ? [provider] : [];
   });
@@ -276,7 +300,9 @@ export function isCursorModelActive(
 
 export function registerCursorCompaction(pi: Pick<ExtensionAPI, "on">): void {
   pi.on("session_before_compact", async (event, ctx) => {
-    if (!isCursorModelActive(event, ctx.model)) return;
+    if (!isCursorModelActive(event, ctx.model)) {
+      return;
+    }
 
     const { preparation, customInstructions, signal } = event;
     const allMessages = [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages];
@@ -289,7 +315,9 @@ export function registerCursorCompaction(pi: Pick<ExtensionAPI, "on">): void {
       (ctx as ExtensionContextLike).modelRegistry,
       signal,
     );
-    if (!result) return undefined;
+    if (!result) {
+      return undefined;
+    }
 
     const compaction: CompactionResult = {
       summary: result.summary + retainedUserRequests(preparation, ctx.model?.contextWindow),

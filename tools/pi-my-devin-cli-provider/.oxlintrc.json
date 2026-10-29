@@ -1,3 +1,11 @@
 {
-  "ignorePatterns": ["coverage", "node_modules"]
+  "ignorePatterns": ["coverage", "node_modules"],
+  "rules": {
+    "curly": ["error", "all"],
+    "no-nested-ternary": "error",
+    "max-depth": ["error", 3]
+  },
+  "categories": {
+    "perf": "error"
+  }
 }

@@ -60,7 +60,9 @@ interface HandleUpdateInput {
 const activeState: ActiveState = { count: 0 };
 
 function prefixEachLine(text: string, prefix: string): string {
-  if (text.length === 0) return "";
+  if (text.length === 0) {
+    return "";
+  }
   const lines = text.split("\n");
   const last = lines[lines.length - 1];
   const trimmed = last?.length === 0 ? lines.slice(0, -1) : lines;
@@ -95,7 +97,9 @@ function numberValue(value: unknown): number | undefined {
 }
 
 function formatUnknown(value: unknown): string {
-  if (typeof value === "string") return value;
+  if (typeof value === "string") {
+    return value;
+  }
   const formatted = JSON.stringify(value, undefined, 2);
   return formatted ?? String(value);
 }
@@ -119,7 +123,9 @@ function patchedUnknown(
 }
 
 function patchedContent(previous: ToolCallContent[], update: AcpToolCall | ToolCallUpdate) {
-  if (!hasProperty(update, "content")) return previous;
+  if (!hasProperty(update, "content")) {
+    return previous;
+  }
   return update.content === null || update.content === undefined ? [] : update.content;
 }
 
@@ -127,8 +133,12 @@ function mergeMetadata(
   previous: Record<string, unknown> | undefined,
   update: AcpToolCall["_meta"] | ToolCallUpdate["_meta"],
 ): Record<string, unknown> {
-  if (update === undefined) return previous ?? {};
-  if (!isRecord(update)) return {};
+  if (update === undefined) {
+    return previous ?? {};
+  }
+  if (!isRecord(update)) {
+    return {};
+  }
   return { ...previous, ...update };
 }
 
@@ -158,29 +168,45 @@ function mergeToolCallState(
 }
 
 function formatContentBlock(content: ContentBlock): string | undefined {
-  if (content.type === "text") return content.text;
+  if (content.type === "text") {
+    return content.text;
+  }
   if (content.type === "resource") {
     return "text" in content.resource
       ? content.resource.text
       : `[binary resource: ${content.resource.mimeType ?? "unknown"}]`;
   }
-  if (content.type === "resource_link") return `Resource: ${content.name} (${content.uri})`;
-  if (content.type === "image") return `[image: ${content.mimeType}]`;
-  if (content.type === "audio") return `[audio: ${content.mimeType}]`;
+  if (content.type === "resource_link") {
+    return `Resource: ${content.name} (${content.uri})`;
+  }
+  if (content.type === "image") {
+    return `[image: ${content.mimeType}]`;
+  }
+  if (content.type === "audio") {
+    return `[audio: ${content.mimeType}]`;
+  }
   return undefined;
 }
 
 function formatToolCallContent(item: ToolCallContent): string | undefined {
-  if (item.type === "diff") return formatDiff(item);
-  if (item.type === "terminal") return `Terminal ID: ${item.terminalId}`;
-  if (item.type === "content") return formatContentBlock(item.content);
+  if (item.type === "diff") {
+    return formatDiff(item);
+  }
+  if (item.type === "terminal") {
+    return `Terminal ID: ${item.terminalId}`;
+  }
+  if (item.type === "content") {
+    return formatContentBlock(item.content);
+  }
   return undefined;
 }
 
 function commandValue(call: ToolCallSnapshot): string | undefined {
   const input = isRecord(call.rawInput) ? call.rawInput : undefined;
   const command = stringValue(input?.["command"]);
-  if (command !== undefined) return command;
+  if (command !== undefined) {
+    return command;
+  }
   const preview = call.content.find(
     (item) =>
       item.type === "content" &&
@@ -212,9 +238,13 @@ function workingDirectoryValue(call: ToolCallSnapshot): string | undefined {
 function formatToolCallInput(call: ToolCallSnapshot): string | undefined {
   const sections: string[] = [];
   const command = commandValue(call);
-  if (command !== undefined) sections.push(`**Command:**\n\`\`\`sh\n${command}\n\`\`\``);
+  if (command !== undefined) {
+    sections.push(`**Command:**\n\`\`\`sh\n${command}\n\`\`\``);
+  }
   const path = pathValue(call);
-  if (path !== undefined) sections.push(`**Path:** \`${path}\``);
+  if (path !== undefined) {
+    sections.push(`**Path:** \`${path}\``);
+  }
   const workingDirectory = workingDirectoryValue(call);
   if (workingDirectory !== undefined) {
     sections.push(`**Working directory:** \`${workingDirectory}\``);
@@ -234,20 +264,30 @@ function formatToolCallBody(call: ToolCallSnapshot): string | undefined {
 }
 
 function formatRawOutput(rawOutput: unknown, contentBody: string | undefined): string | undefined {
-  if (rawOutput === undefined || rawOutput === null) return undefined;
+  if (rawOutput === undefined || rawOutput === null) {
+    return undefined;
+  }
   if (isRecord(rawOutput)) {
     const sections: string[] = [];
     const stdout = stringValue(rawOutput["stdout"]);
     const stderr = stringValue(rawOutput["stderr"]);
     const output = stringValue(rawOutput["output"]);
-    if (stdout !== undefined) sections.push(`**stdout:**\n\`\`\`\n${stdout}\n\`\`\``);
-    if (stderr !== undefined) sections.push(`**stderr:**\n\`\`\`\n${stderr}\n\`\`\``);
+    if (stdout !== undefined) {
+      sections.push(`**stdout:**\n\`\`\`\n${stdout}\n\`\`\``);
+    }
+    if (stderr !== undefined) {
+      sections.push(`**stderr:**\n\`\`\`\n${stderr}\n\`\`\``);
+    }
     if (output !== undefined && output !== contentBody) {
       sections.push(`**Output:**\n\`\`\`\n${output}\n\`\`\``);
     }
-    if (sections.length > 0) return sections.join("\n\n");
+    if (sections.length > 0) {
+      return sections.join("\n\n");
+    }
   }
-  if (typeof rawOutput === "string" && rawOutput === contentBody) return undefined;
+  if (typeof rawOutput === "string" && rawOutput === contentBody) {
+    return undefined;
+  }
   return `**Raw output:**\n\`\`\`json\n${formatUnknown(rawOutput)}\n\`\`\``;
 }
 
@@ -277,17 +317,29 @@ function terminalExit(call: ToolCallSnapshot): TerminalExit | undefined {
 
 function formatTerminalExit(call: ToolCallSnapshot): string | undefined {
   const exit = terminalExit(call);
-  if (!exit) return undefined;
+  if (!exit) {
+    return undefined;
+  }
   const sections: string[] = [];
-  if (exit.exitCode !== undefined) sections.push(`**Exit code:** ${exit.exitCode}`);
-  if (exit.signal !== undefined) sections.push(`**Signal:** ${exit.signal}`);
-  if (exit.terminalId !== undefined) sections.push(`**Terminal:** \`${exit.terminalId}\``);
+  if (exit.exitCode !== undefined) {
+    sections.push(`**Exit code:** ${exit.exitCode}`);
+  }
+  if (exit.signal !== undefined) {
+    sections.push(`**Signal:** ${exit.signal}`);
+  }
+  if (exit.terminalId !== undefined) {
+    sections.push(`**Terminal:** \`${exit.terminalId}\``);
+  }
   return sections.join("\n");
 }
 
 function toolStatusSymbol(status: string | undefined): string {
-  if (status === "completed") return "✓";
-  if (status === "failed" || status === "cancelled") return "✗";
+  if (status === "completed") {
+    return "✓";
+  }
+  if (status === "failed" || status === "cancelled") {
+    return "✗";
+  }
   return "▶";
 }
 
@@ -353,7 +405,9 @@ function handleUpdate({ update, output, toolCalls }: HandleUpdateInput): void {
 }
 
 async function waitUntilIdle(): Promise<void> {
-  if (activeState.count === 0) return;
+  if (activeState.count === 0) {
+    return;
+  }
   await new Promise<void>((resolve) => setImmediate(resolve));
   return waitUntilIdle();
 }

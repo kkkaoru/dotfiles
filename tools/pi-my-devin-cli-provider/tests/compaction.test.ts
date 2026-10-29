@@ -28,6 +28,7 @@ test("registers session compaction hooks that invalidate Devin sessions", async 
     sessionManager: { getSessionId: () => "pi-session-1" },
   };
   for (const run of runners) {
+    // oxlint-disable-next-line no-await-in-loop -- compaction handlers run in registration order.
     await run({ type: "compact" }, ctx);
   }
   expect(mocks.invalidateDevinSessionsForPiSession).toHaveBeenCalledTimes(2);

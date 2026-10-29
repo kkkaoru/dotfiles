@@ -110,14 +110,18 @@ export function runtimeKey(cwd: string, modelId: string, sessionId: string): str
 }
 
 export function invalidateDevinSessionsForPiSession(sessionId: string): void {
-  if (sessionId.length === 0) return;
+  if (sessionId.length === 0) {
+    return;
+  }
   [...poolState.runtimes.values()]
     .filter((runtime) => runtime.key.endsWith(`${KEY_SEPARATOR}${sessionId}`))
     .forEach((runtime) => runtime.stop());
 }
 
 function clearIdleTimer(runtime: SharedRuntime): void {
-  if (!runtime.idleTimer) return;
+  if (!runtime.idleTimer) {
+    return;
+  }
   clearTimeout(runtime.idleTimer);
   runtime.idleTimer = undefined;
 }
@@ -125,7 +129,9 @@ function clearIdleTimer(runtime: SharedRuntime): void {
 function scheduleIdleStop(runtime: SharedRuntime): void {
   clearIdleTimer(runtime);
   runtime.idleTimer = setTimeout(() => {
-    if (runtime.activeJobs === 0) runtime.stop();
+    if (runtime.activeJobs === 0) {
+      runtime.stop();
+    }
   }, poolState.idleTtlMs);
   runtime.idleTimer.unref();
 }
@@ -181,7 +187,9 @@ async function configureSession(
     throw new Error(`Devin rejected model "${modelId}": ${acpFailureDetail(error)}`);
   }
   const bypass = session.modes?.availableModes.find((mode) => mode.id === BYPASS_MODE_ID);
-  if (!bypass) return;
+  if (!bypass) {
+    return;
+  }
   await context
     .request(methods.agent.session.setMode, {
       sessionId: session.sessionId,
@@ -195,7 +203,9 @@ async function consumeUpdates(
   onUpdate: (update: SessionUpdate) => void | Promise<void>,
 ): Promise<void> {
   const message: ActiveSessionMessage = await session.nextUpdate();
-  if (message.kind === "stop") return;
+  if (message.kind === "stop") {
+    return;
+  }
   await onUpdate(message.update);
   return consumeUpdates(session, onUpdate);
 }
@@ -205,9 +215,13 @@ function closeAcpSession(runtime: SharedRuntime): void {
   const context = runtime.context;
   runtime.acpSession = undefined;
   runtime.turnCount = 0;
-  if (!session) return;
+  if (!session) {
+    return;
+  }
   session.dispose();
-  if (!context) return;
+  if (!context) {
+    return;
+  }
   void context
     .request(methods.agent.session.delete, { sessionId: session.sessionId })
     .catch(() => undefined);
@@ -271,8 +285,12 @@ function createQueue(): {
       queued.push(pending);
     },
     take: () => {
-      if (queued.length > 0) return Promise.resolve(queued.shift());
-      if (closed.value) return Promise.resolve(undefined);
+      if (queued.length > 0) {
+        return Promise.resolve(queued.shift());
+      }
+      if (closed.value) {
+        return Promise.resolve(undefined);
+      }
       return new Promise((resolve) => {
         waiting.push(resolve);
       });
@@ -324,14 +342,18 @@ function startSharedRuntime(key: string): SharedRuntime {
   const deferred = createDeferredHandles();
   const stopped: { value: boolean } = { value: false };
   const stop = (): void => {
-    if (stopped.value) return;
+    if (stopped.value) {
+      return;
+    }
     stopped.value = true;
     clearIdleTimer(runtime);
     forgetRuntime(runtime);
     closeAcpSession(runtime);
     queue.close();
     child.stdin.end();
-    if (child.exitCode === null) child.kill();
+    if (child.exitCode === null) {
+      child.kill();
+    }
   };
   const runtime: SharedRuntime = {
     activeJobs: 0,
@@ -360,7 +382,9 @@ function startSharedRuntime(key: string): SharedRuntime {
       deferred.resolve({ context, take: queue.take });
       const processJobs = async (): Promise<void> => {
         const pending = await queue.take();
-        if (!pending) return;
+        if (!pending) {
+          return;
+        }
         try {
           await runJob(runtime, context, pending.job);
           pending.resolve({ error: undefined });
@@ -399,7 +423,9 @@ function acquireRuntime(key: string): SharedRuntime {
 
 function releaseRuntime(runtime: SharedRuntime): void {
   runtime.activeJobs = Math.max(0, runtime.activeJobs - 1);
-  if (runtime.activeJobs > 0) return;
+  if (runtime.activeJobs > 0) {
+    return;
+  }
   if (isPrintMode()) {
     runtime.stop();
     return;
@@ -419,12 +445,16 @@ export async function runDevinJob(job: RuntimeJob): Promise<void> {
     const result: JobResult = await new Promise((resolve) => {
       runtime.push({ job, resolve });
     });
-    if (result.error) throw result.error;
+    if (result.error) {
+      throw result.error;
+    }
   } catch (error) {
     runtime.stop();
     throw error instanceof Error ? error : formatError(error, runtime.errorState.stderr);
   } finally {
-    if (runtime.child.exitCode === null) releaseRuntime(runtime);
+    if (runtime.child.exitCode === null) {
+      releaseRuntime(runtime);
+    }
   }
 }
 

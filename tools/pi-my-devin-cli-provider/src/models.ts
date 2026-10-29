@@ -110,7 +110,8 @@ function restoreModels(context: RefreshModelsContext): ProviderModelConfig[] {
   const stored = context.stored?.models;
   return stored === undefined || stored.length === 0
     ? FALLBACK_DEVIN_MODELS
-    : stored.map((model) => ({ ...model, input: [...model.input] }));
+    : // oxlint-disable-next-line no-map-spread -- a copy, so the stored catalog is never mutated.
+      stored.map((model) => ({ ...model, input: [...model.input] }));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -136,10 +137,14 @@ function parseCost(value: unknown): ModelCost {
 }
 
 function variantToModel(value: unknown): ProviderModelConfig[] {
-  if (!isRecord(value)) return [];
+  if (!isRecord(value)) {
+    return [];
+  }
   const id: string | undefined = stringValue(value["model_uid"]);
   const name: string | undefined = stringValue(value["label"]);
-  if (!id || !name) return [];
+  if (!id || !name) {
+    return [];
+  }
   return [
     modelConfig(
       {
@@ -154,9 +159,13 @@ function variantToModel(value: unknown): ProviderModelConfig[] {
 }
 
 export function parseDevinModelCatalog(value: unknown): ProviderModelConfig[] {
-  if (!isRecord(value) || !Array.isArray(value["families"])) return [];
+  if (!isRecord(value) || !Array.isArray(value["families"])) {
+    return [];
+  }
   return value["families"].flatMap((family): ProviderModelConfig[] => {
-    if (!isRecord(family) || !Array.isArray(family["variants"])) return [];
+    if (!isRecord(family) || !Array.isArray(family["variants"])) {
+      return [];
+    }
     return family["variants"].flatMap(variantToModel);
   });
 }
@@ -183,7 +192,9 @@ export async function refreshDevinModels(
   context: RefreshModelsContext,
 ): Promise<ProviderModelConfig[]> {
   context.signal.throwIfAborted();
-  if (!context.allowNetwork) return restoreModels(context);
+  if (!context.allowNetwork) {
+    return restoreModels(context);
+  }
   const result: CommandResult = await runModelCommand(context.signal);
   context.signal.throwIfAborted();
   const models: ProviderModelConfig[] = parseDevinModelCatalog(JSON.parse(result.stdout));

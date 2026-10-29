@@ -112,8 +112,12 @@ function createChild(stderr: string): FakeChild {
     stderr: new PassThrough(),
     kill: vi.fn(),
     once: vi.fn((event: string, handler: () => void) => {
-      if (event === "exit") listeners.exit = handler;
-      if (event === "error") listeners.error = handler;
+      if (event === "exit") {
+        listeners.exit = handler;
+      }
+      if (event === "error") {
+        listeners.error = handler;
+      }
     }),
     unref: vi.fn(),
   };
@@ -123,7 +127,9 @@ function createChild(stderr: string): FakeChild {
     listeners.exit?.();
     return true;
   });
-  if (stderr.length > 0) queueMicrotask(() => child.stderr.end(stderr));
+  if (stderr.length > 0) {
+    queueMicrotask(() => child.stderr.end(stderr));
+  }
   return child;
 }
 
@@ -186,8 +192,12 @@ function configureAcpMock(): void {
     app.connectWith.mockImplementation(async (_stream, operation) => {
       const scenario = state.scenarios[state.scenarioIndex];
       state.scenarioIndex += 1;
-      if (!scenario) throw new Error("missing scenario");
-      if (scenario.connectError) throw scenario.connectError;
+      if (!scenario) {
+        throw new Error("missing scenario");
+      }
+      if (scenario.connectError) {
+        throw scenario.connectError;
+      }
       const context: FakeContext = {
         request: vi.fn(async (method: string, params: unknown) => {
           if (method === "session/set_config_option" && scenario.setModelError) {
@@ -267,7 +277,9 @@ beforeEach(async () => {
 });
 
 async function waitUntil(predicate: () => boolean): Promise<void> {
-  if (predicate()) return;
+  if (predicate()) {
+    return;
+  }
   await new Promise<void>((resolve) => setImmediate(resolve));
   return waitUntil(predicate);
 }
@@ -642,8 +654,12 @@ test("replaces a dead pooled runtime when the same session key is reused", async
   await runDevinJob(job({ sessionId: "revive", initialPrompt: "first" }));
   const child = state.children[0];
   const exitHandler = child?.once.mock.calls.find((call) => call[0] === "exit")?.[1];
-  if (child) child.exitCode = 0;
-  if (typeof exitHandler === "function") exitHandler();
+  if (child) {
+    child.exitCode = 0;
+  }
+  if (typeof exitHandler === "function") {
+    exitHandler();
+  }
   await runDevinJob(job({ sessionId: "revive", initialPrompt: "second" }));
   expect(mocks.spawn).toHaveBeenCalledTimes(2);
   expect(state.sessions).toHaveLength(2);
@@ -663,7 +679,9 @@ test("stops the runtime when the child process emits an error", async () => {
   const child = state.children[0];
   const errorHandler = child?.once.mock.calls.find((call) => call[0] === "error")?.[1];
   expect(typeof errorHandler).toBe("function");
-  if (typeof errorHandler === "function") errorHandler();
+  if (typeof errorHandler === "function") {
+    errorHandler();
+  }
   expect(devinRuntimeTestApi.isRunning()).toBe(false);
 });
 

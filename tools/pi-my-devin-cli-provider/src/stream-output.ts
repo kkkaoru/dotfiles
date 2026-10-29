@@ -52,14 +52,18 @@ export function createDevinOutput(model: Model<Api>): DevinOutput {
   stream.push({ type: "start", partial });
 
   const endThinking = (): void => {
-    if (state.finished || !state.openThinking) return;
+    if (state.finished || !state.openThinking) {
+      return;
+    }
     const { contentIndex, block } = state.openThinking;
     state.openThinking = undefined;
     stream.push({ type: "thinking_end", contentIndex, content: block.thinking, partial });
   };
 
   const appendText = (delta: string): void => {
-    if (state.finished || delta.length === 0) return;
+    if (state.finished || delta.length === 0) {
+      return;
+    }
     endThinking();
     if (state.openText !== undefined) {
       const previous = partial.content[state.openText];
@@ -78,7 +82,9 @@ export function createDevinOutput(model: Model<Api>): DevinOutput {
   };
 
   const appendTextBlock = (text: string): void => {
-    if (state.finished || text.length === 0) return;
+    if (state.finished || text.length === 0) {
+      return;
+    }
     endThinking();
     state.openText = undefined;
     partial.content.push({ type: "text", text });
@@ -88,7 +94,9 @@ export function createDevinOutput(model: Model<Api>): DevinOutput {
   };
 
   const appendThinking = (delta: string): void => {
-    if (state.finished || delta.length === 0) return;
+    if (state.finished || delta.length === 0) {
+      return;
+    }
     state.openText = undefined;
     if (state.openThinking) {
       state.openThinking.block.thinking += delta;
@@ -109,7 +117,9 @@ export function createDevinOutput(model: Model<Api>): DevinOutput {
   };
 
   const finish = (): void => {
-    if (state.finished) return;
+    if (state.finished) {
+      return;
+    }
     endThinking();
     state.finished = true;
     partial.stopReason = "stop";
@@ -118,7 +128,9 @@ export function createDevinOutput(model: Model<Api>): DevinOutput {
   };
 
   const fail = (error: unknown, aborted: boolean): void => {
-    if (state.finished) return;
+    if (state.finished) {
+      return;
+    }
     endThinking();
     state.finished = true;
     partial.stopReason = aborted ? "aborted" : "error";

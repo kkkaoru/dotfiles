@@ -90,7 +90,9 @@ const SHELL_OUTPUT_KEYS: readonly string[] = ["text", "data", "stdout", "stderr"
 function shellOutputText(event: Record<string, unknown>): string | undefined {
   for (const key of SHELL_OUTPUT_KEYS) {
     const value = event[key];
-    if (typeof value === "string") return value;
+    if (typeof value === "string") {
+      return value;
+    }
   }
   return undefined;
 }
@@ -107,8 +109,12 @@ function formatToolCallArgs(toolCall: ToolCall): string {
 }
 
 function formatToolCallResult(toolCall: ToolCall): string | undefined {
-  if (toolCall.result === undefined) return undefined;
-  if (toolCall.result.status === "error") return `Error: ${String(toolCall.result.error)}`;
+  if (toolCall.result === undefined) {
+    return undefined;
+  }
+  if (toolCall.result.status === "error") {
+    return `Error: ${String(toolCall.result.error)}`;
+  }
   switch (toolCall.type) {
     case "edit": {
       const value = toolCall.result.value;
@@ -167,10 +173,14 @@ function formatToolCallResult(toolCall: ToolCall): string | undefined {
 function formatCursorToolCallUpdate(toolCall: ToolCall, status: string): string | undefined {
   const result = status === "started" ? undefined : formatToolCallResult(toolCall);
   const header = `**${toolCall.type}** (${status})`;
-  if (status === "started") return `${header}\n`;
+  if (status === "started") {
+    return `${header}\n`;
+  }
   const args = formatToolCallArgs(toolCall);
   const sections = [args, result].filter((s): s is string => s !== undefined);
-  if (sections.length === 0) return `${header}\n`;
+  if (sections.length === 0) {
+    return `${header}\n`;
+  }
   return `${header}\n\n${sections.join("\n\n")}\n`;
 }
 
@@ -216,18 +226,24 @@ class CursorSession {
     this.detachOutput();
     this.output = output;
     this.currentSignal = signal;
-    if (!signal) return;
+    if (!signal) {
+      return;
+    }
     const abort = (): void => {
       void this.abort(new Error("Cursor request aborted"));
     };
     signal.addEventListener("abort", abort, { once: true });
     this.abortCleanup = () => signal.removeEventListener("abort", abort);
-    if (signal.aborted) abort();
+    if (signal.aborted) {
+      abort();
+    }
   }
 
   async start(): Promise<void> {
     await claimIndependentSession(this);
-    if (this.disposed) return;
+    if (this.disposed) {
+      return;
+    }
     const customTools = Object.fromEntries(
       getCurrentTools(normalizeContext(this.context).messages).map((tool) => [
         tool.name,
@@ -282,8 +298,12 @@ class CursorSession {
     if (result.status !== "finished") {
       throw new Error(result.error?.message ?? `Cursor run ended with status ${result.status}`);
     }
-    if (this.invocations.size > 0) return;
-    if (result.usage && this.output) updateUsage(this.output, result.usage);
+    if (this.invocations.size > 0) {
+      return;
+    }
+    if (result.usage && this.output) {
+      updateUsage(this.output, result.usage);
+    }
     if (result.result && this.output && this.output.partial.content.length === 0) {
       this.output.appendText(result.result);
     }
@@ -294,7 +314,9 @@ class CursorSession {
   resolveToolResults(toolResults: readonly ToolResultMessage[]): void {
     toolResults.forEach((result) => {
       const invocation = this.invocations.get(result.toolCallId);
-      if (!invocation) return;
+      if (!invocation) {
+        return;
+      }
       this.invocations.delete(result.toolCallId);
       pendingByToolCallId.delete(result.toolCallId);
       invocation.resolve(toolResultToSdk(result));
@@ -326,7 +348,9 @@ class CursorSession {
   }
 
   private scheduleToolBatchFinish(): void {
-    if (this.toolBatchTimer) clearTimeout(this.toolBatchTimer);
+    if (this.toolBatchTimer) {
+      clearTimeout(this.toolBatchTimer);
+    }
     this.toolBatchTimer = setTimeout(() => {
       this.toolBatchTimer = undefined;
       this.output?.finish("toolUse");
@@ -382,21 +406,31 @@ class CursorSession {
 
   private handleShellOutputDelta(update: ShellOutputDeltaUpdate): void {
     const text = shellOutputText(update.event);
-    if (text !== undefined) this.output?.appendTextBlock(text);
+    if (text !== undefined) {
+      this.output?.appendTextBlock(text);
+    }
   }
 
   private handleToolCallStarted(update: { callId: string; toolCall: ToolCall }): void {
-    if (this.startedToolCallIds.has(update.callId)) return;
+    if (this.startedToolCallIds.has(update.callId)) {
+      return;
+    }
     this.startedToolCallIds.add(update.callId);
     const text = formatCursorToolCallUpdate(update.toolCall, "started");
-    if (text !== undefined) this.output?.appendTextBlock(text);
+    if (text !== undefined) {
+      this.output?.appendTextBlock(text);
+    }
   }
 
   private handleToolCallCompleted(update: { callId: string; toolCall: ToolCall }): void {
-    if (this.completedToolCallIds.has(update.callId)) return;
+    if (this.completedToolCallIds.has(update.callId)) {
+      return;
+    }
     this.completedToolCallIds.add(update.callId);
     const text = formatCursorToolCallUpdate(update.toolCall, "completed");
-    if (text !== undefined) this.output?.appendTextBlock(text);
+    if (text !== undefined) {
+      this.output?.appendTextBlock(text);
+    }
   }
 
   private handleToolCallDelta(update: ToolCallDeltaUpdate): void {
@@ -416,7 +450,9 @@ class CursorSession {
   }
 
   private handleTurnEnded(update: TurnEndedUpdate): void {
-    if (!update.usage || !this.output) return;
+    if (!update.usage || !this.output) {
+      return;
+    }
     const { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } = update.usage;
     updateUsage(this.output, {
       inputTokens,
@@ -440,16 +476,22 @@ class CursorSession {
   }
 
   private async dispose(reason = new Error("Cursor session disposed")): Promise<void> {
-    if (this.disposed) return this.settle;
+    if (this.disposed) {
+      return this.settle;
+    }
     this.disposed = true;
-    if (this.toolBatchTimer) clearTimeout(this.toolBatchTimer);
+    if (this.toolBatchTimer) {
+      clearTimeout(this.toolBatchTimer);
+    }
     this.invocations.forEach((invocation) => {
       pendingByToolCallId.delete(invocation.id);
       invocation.reject(reason);
     });
     this.invocations.clear();
     this.detachOutput();
-    if (independentSessionState.active === this) independentSessionState.active = undefined;
+    if (independentSessionState.active === this) {
+      independentSessionState.active = undefined;
+    }
     await this.agent?.[Symbol.asyncDispose]().catch(() => undefined);
     this.resolveSettle();
   }

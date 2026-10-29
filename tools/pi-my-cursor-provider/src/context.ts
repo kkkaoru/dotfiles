@@ -19,11 +19,17 @@ function attachImage(image: ImageContent, state: TranscriptState): string {
 }
 
 function contentText(content: Message["content"], state: TranscriptState): string {
-  if (typeof content === "string") return content;
+  if (typeof content === "string") {
+    return content;
+  }
   return content
     .map((part) => {
-      if (part.type === "text") return part.text;
-      if (part.type === "thinking") return `[thinking]\n${part.thinking}`;
+      if (part.type === "text") {
+        return part.text;
+      }
+      if (part.type === "thinking") {
+        return `[thinking]\n${part.thinking}`;
+      }
       if (part.type === "toolCall") {
         return `[tool call ${part.id}: ${part.name}]\n${JSON.stringify(part.arguments)}`;
       }
@@ -36,8 +42,12 @@ function formatMessage(
   message: Exclude<Message, { role: "system" }>,
   state: TranscriptState,
 ): string {
-  if (message.role === "user") return `USER:\n${contentText(message.content, state)}`;
-  if (message.role === "assistant") return `ASSISTANT:\n${contentText(message.content, state)}`;
+  if (message.role === "user") {
+    return `USER:\n${contentText(message.content, state)}`;
+  }
+  if (message.role === "assistant") {
+    return `ASSISTANT:\n${contentText(message.content, state)}`;
+  }
   const status = message.isError ? "error" : "success";
   return `TOOL RESULT (${message.toolName}, ${message.toolCallId}, ${status}):\n${contentText(message.content, state)}`;
 }
@@ -49,7 +59,9 @@ export function buildCursorMessage(context: Context): SDKUserMessage {
     .filter((message) => message.role !== "system")
     .map((message) => formatMessage(message, state));
   const systemPrompt = getCurrentSystemPrompt(transcript.messages);
-  if (systemPrompt) sections.unshift(`SYSTEM INSTRUCTIONS:\n${systemPrompt}`);
+  if (systemPrompt) {
+    sections.unshift(`SYSTEM INSTRUCTIONS:\n${systemPrompt}`);
+  }
   sections.push("Continue from the transcript above. Follow the latest user request.");
 
   return {
@@ -65,18 +77,26 @@ export function findToolResults(context: Context): ToolResultMessage[] {
 }
 
 export function toSdkJsonValue(value: unknown): SDKJsonValue | undefined {
-  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
-  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : undefined;
+  }
   if (Array.isArray(value)) {
     const converted = value.map(toSdkJsonValue);
     return converted.every((item) => item !== undefined) ? converted : undefined;
   }
-  if (typeof value !== "object") return undefined;
+  if (typeof value !== "object") {
+    return undefined;
+  }
 
   const entries = Object.entries(value).map(
     ([key, item]) => [key, toSdkJsonValue(item)] as [string, SDKJsonValue | undefined],
   );
-  if (entries.some(([, item]) => item === undefined)) return undefined;
+  if (entries.some(([, item]) => item === undefined)) {
+    return undefined;
+  }
   return Object.fromEntries(
     entries.filter((entry): entry is [string, SDKJsonValue] => entry[1] !== undefined),
   );

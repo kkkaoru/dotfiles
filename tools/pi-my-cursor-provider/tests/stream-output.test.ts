@@ -19,7 +19,9 @@ async function collect(
   output: ReturnType<typeof createCursorOutput>,
 ): Promise<AssistantMessageEvent[]> {
   const events: AssistantMessageEvent[] = [];
-  for await (const event of output.stream) events.push(event);
+  for await (const event of output.stream) {
+    events.push(event);
+  }
   return events;
 }
 

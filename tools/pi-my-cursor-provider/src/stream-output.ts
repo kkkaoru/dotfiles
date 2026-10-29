@@ -55,7 +55,9 @@ export function createCursorOutput(model: Model<Api>): CursorOutput {
   stream.push({ type: "start", partial });
 
   const endThinking = (): void => {
-    if (state.finished || !state.openThinking) return;
+    if (state.finished || !state.openThinking) {
+      return;
+    }
     const { contentIndex, block } = state.openThinking;
     state.openThinking = undefined;
     stream.push({
@@ -67,7 +69,9 @@ export function createCursorOutput(model: Model<Api>): CursorOutput {
   };
 
   const appendText = (delta: string): void => {
-    if (state.finished || delta.length === 0) return;
+    if (state.finished || delta.length === 0) {
+      return;
+    }
     endThinking();
     if (state.openText !== undefined) {
       const previous = partial.content[state.openText];
@@ -86,7 +90,9 @@ export function createCursorOutput(model: Model<Api>): CursorOutput {
   };
 
   const appendTextBlock = (text: string): void => {
-    if (state.finished || text.length === 0) return;
+    if (state.finished || text.length === 0) {
+      return;
+    }
     endThinking();
     state.openText = undefined;
     partial.content.push({ type: "text", text });
@@ -96,7 +102,9 @@ export function createCursorOutput(model: Model<Api>): CursorOutput {
   };
 
   const appendThinking = (delta: string): void => {
-    if (state.finished || delta.length === 0) return;
+    if (state.finished || delta.length === 0) {
+      return;
+    }
     state.openText = undefined;
     if (state.openThinking) {
       state.openThinking.block.thinking += delta;
@@ -117,7 +125,9 @@ export function createCursorOutput(model: Model<Api>): CursorOutput {
   };
 
   const appendToolCall = (toolCall: ToolCall): void => {
-    if (state.finished) return;
+    if (state.finished) {
+      return;
+    }
     endThinking();
     state.openText = undefined;
     partial.content.push(toolCall);
@@ -133,7 +143,9 @@ export function createCursorOutput(model: Model<Api>): CursorOutput {
   };
 
   const finish = (reason: "stop" | "toolUse"): void => {
-    if (state.finished) return;
+    if (state.finished) {
+      return;
+    }
     endThinking();
     state.finished = true;
     partial.stopReason = reason;
@@ -142,7 +154,9 @@ export function createCursorOutput(model: Model<Api>): CursorOutput {
   };
 
   const fail = (error: unknown, aborted: boolean): void => {
-    if (state.finished) return;
+    if (state.finished) {
+      return;
+    }
     endThinking();
     state.finished = true;
     partial.stopReason = aborted ? "aborted" : "error";

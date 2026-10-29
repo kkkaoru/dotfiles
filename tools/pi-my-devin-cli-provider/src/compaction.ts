@@ -9,7 +9,9 @@ interface CompactionSessionContext {
 }
 
 export async function handleDevinCompactionEvent(ctx: CompactionSessionContext): Promise<void> {
-  if (ctx.model?.provider !== DEVIN_PROVIDER) return;
+  if (ctx.model?.provider !== DEVIN_PROVIDER) {
+    return;
+  }
   const { invalidateDevinSessionsForPiSession } = await import("./runtime.ts");
   invalidateDevinSessionsForPiSession(ctx.sessionManager.getSessionId());
 }

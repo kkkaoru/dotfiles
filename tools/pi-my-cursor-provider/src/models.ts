@@ -122,7 +122,9 @@ export const FALLBACK_CURSOR_MODELS: ProviderModelConfig[] = FALLBACK_MODELS.map
 
 function parseContextWindow(value: string): number | undefined {
   const match = CONTEXT_SUFFIX.exec(value);
-  if (!match) return undefined;
+  if (!match) {
+    return undefined;
+  }
   const amount = Number(match[1]);
   const multiplier = match[2]?.toLowerCase() === "m" ? 1_000_000 : 1_000;
   return amount * multiplier;
@@ -137,7 +139,9 @@ function contextWindowFor(model: SDKModel): number {
   );
   if (model.id === LUNA_MODEL_ID) {
     const lunaWindow = parseContextWindow(LUNA_CONTEXT_VALUE);
-    if (lunaWindow !== undefined && windows.includes(lunaWindow)) return lunaWindow;
+    if (lunaWindow !== undefined && windows.includes(lunaWindow)) {
+      return lunaWindow;
+    }
   }
   return windows.length > 0 ? Math.max(...windows) : DEFAULT_CONTEXT_WINDOW;
 }
@@ -151,7 +155,9 @@ export function recordCursorCatalog(catalog: readonly SDKModel[]): void {
     const defaults = model.variants?.find(({ isDefault }) => isDefault)?.params ?? [];
     modelDefaults.set(modelId, defaults);
     const parameter = model.parameters?.find(({ id }) => EFFORT_PARAMETER_IDS.has(id));
-    if (!parameter) continue;
+    if (!parameter) {
+      continue;
+    }
     effortCapabilities.set(modelId, {
       defaults,
       parameterId: parameter.id,
@@ -162,7 +168,9 @@ export function recordCursorCatalog(catalog: readonly SDKModel[]): void {
 
 function warnUnsupportedEffort(modelId: string, effort: ThinkingLevel): void {
   const key = `${modelId}:${effort}`;
-  if (warnedUnsupportedEffort.has(key)) return;
+  if (warnedUnsupportedEffort.has(key)) {
+    return;
+  }
   warnedUnsupportedEffort.add(key);
   console.warn(
     `Cursor model ${modelId} does not expose a compatible effort parameter; requested ${effort} was not forwarded.`,
@@ -209,8 +217,12 @@ export async function loadCursorCatalog(): Promise<readonly SDKModel[] | undefin
   try {
     const raw = await readFile(CATALOG_CACHE_PATH, "utf8");
     const parsed = JSON.parse(raw) as CatalogCache;
-    if (parsed.version !== CATALOG_CACHE_VERSION) return undefined;
-    if (Date.now() - parsed.timestamp > CATALOG_CACHE_TTL_MS) return undefined;
+    if (parsed.version !== CATALOG_CACHE_VERSION) {
+      return undefined;
+    }
+    if (Date.now() - parsed.timestamp > CATALOG_CACHE_TTL_MS) {
+      return undefined;
+    }
     return parsed.catalog;
   } catch {
     return undefined;
@@ -218,7 +230,9 @@ export async function loadCursorCatalog(): Promise<readonly SDKModel[] | undefin
 }
 
 async function ensureCursorCatalog(apiKey: string | undefined): Promise<void> {
-  if (catalogState.loaded) return;
+  if (catalogState.loaded) {
+    return;
+  }
   catalogState.load ??= (async () => {
     const cached = await loadCursorCatalog();
     if (cached) {
@@ -242,12 +256,16 @@ export async function cursorModelSelection(
   effort: ThinkingLevel | undefined,
   apiKey?: string,
 ): Promise<ModelSelection> {
-  if (!effort && modelId !== LUNA_MODEL_ID) return { id: modelId };
+  if (!effort && modelId !== LUNA_MODEL_ID) {
+    return { id: modelId };
+  }
   await ensureCursorCatalog(apiKey);
   const capability = effortCapabilities.get(modelId);
   const defaults = modelDefaults.get(modelId) ?? capability?.defaults;
   if (!effort) {
-    if (!defaults) return { id: modelId };
+    if (!defaults) {
+      return { id: modelId };
+    }
     return { id: modelId, params: applyCursorParameterOverrides(modelId, defaults) };
   }
 
@@ -281,7 +299,9 @@ export function cursorCatalogToModels(catalog: readonly SDKModel[]): ProviderMod
 }
 
 function credentialApiKey(credential: Credential | undefined): string | undefined {
-  if (credential?.type === "api_key") return credential.key;
+  if (credential?.type === "api_key") {
+    return credential.key;
+  }
   return credential?.access;
 }
 
@@ -301,7 +321,9 @@ export async function refreshCursorModels(
   const { Cursor } = await import("@cursor/sdk");
   const catalog = await Cursor.models.list({ apiKey });
   context.signal.throwIfAborted();
-  if (catalog.length === 0) return FALLBACK_CURSOR_MODELS;
+  if (catalog.length === 0) {
+    return FALLBACK_CURSOR_MODELS;
+  }
   recordCursorCatalog(catalog);
   await saveCursorCatalog(apiKey, catalog).catch(() => undefined);
   return cursorCatalogToModels(catalog);

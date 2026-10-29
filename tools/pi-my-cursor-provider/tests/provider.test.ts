@@ -99,7 +99,9 @@ function installScenario(scenario: FakeScenario): void {
 
 async function collect(stream: AssistantMessageEventStream): Promise<AssistantMessageEvent[]> {
   const events: AssistantMessageEvent[] = [];
-  for await (const event of stream) events.push(event);
+  for await (const event of stream) {
+    events.push(event);
+  }
   return events;
 }
 
@@ -248,7 +250,9 @@ test("bridges custom tools and continues the same live run with its result", asy
   installScenario({
     async onSend(options, agentOptions) {
       const tool = agentOptions.local?.customTools?.["read"];
-      if (!tool) throw new Error("missing read tool");
+      if (!tool) {
+        throw new Error("missing read tool");
+      }
       const pending = tool.execute({ path: "README.md" }, { toolCallId: "call-1" });
       captured.toolResult = await pending;
       await options?.onDelta?.({ update: { type: "text-delta", text: "done" } });
@@ -558,7 +562,10 @@ test("streams thinking separately from text", async () => {
         { type: "thinking-completed", thinkingDurationMs: 1 },
         { type: "text-delta", text: "answer" },
       ];
-      for (const update of updates) await options?.onDelta?.({ update });
+      for (const update of updates) {
+        // oxlint-disable-next-line no-await-in-loop -- a stream delivers its deltas in order.
+        await options?.onDelta?.({ update });
+      }
       return result("answer");
     },
   });
@@ -822,7 +829,10 @@ test("streams additional Cursor update types", async () => {
           usage: { inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0 },
         },
       ];
-      for (const update of updates) await options?.onDelta?.({ update });
+      for (const update of updates) {
+        // oxlint-disable-next-line no-await-in-loop -- a stream delivers its deltas in order.
+        await options?.onDelta?.({ update });
+      }
       return result("done");
     },
   });

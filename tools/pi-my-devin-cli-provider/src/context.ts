@@ -16,11 +16,17 @@ const COMPACTION_SUMMARY_MARKER: string =
 const SECTION_SEPARATOR: string = "\n\n";
 
 function contentText(content: Message["content"]): string {
-  if (typeof content === "string") return content;
+  if (typeof content === "string") {
+    return content;
+  }
   return content
     .map((part) => {
-      if (part.type === "text") return part.text;
-      if (part.type === "thinking") return `[thinking]\n${part.thinking}`;
+      if (part.type === "text") {
+        return part.text;
+      }
+      if (part.type === "thinking") {
+        return `[thinking]\n${part.thinking}`;
+      }
       if (part.type === "toolCall") {
         return `[tool call ${part.id}: ${part.name}]\n${JSON.stringify(part.arguments)}`;
       }
@@ -30,8 +36,12 @@ function contentText(content: Message["content"]): string {
 }
 
 function formatMessage(message: Exclude<Message, { role: "system" }>): string {
-  if (message.role === "user") return `USER:\n${contentText(message.content)}`;
-  if (message.role === "assistant") return `ASSISTANT:\n${contentText(message.content)}`;
+  if (message.role === "user") {
+    return `USER:\n${contentText(message.content)}`;
+  }
+  if (message.role === "assistant") {
+    return `ASSISTANT:\n${contentText(message.content)}`;
+  }
   const status: string = message.isError ? "error" : "success";
   return `TOOL RESULT (${message.toolName}, ${message.toolCallId}, ${status}):\n${contentText(message.content)}`;
 }
@@ -42,7 +52,9 @@ export function buildDevinTranscript(context: Context): string {
     .filter((message) => message.role !== "system")
     .map(formatMessage);
   const systemPrompt = getCurrentSystemPrompt(transcript.messages);
-  if (systemPrompt) sections.unshift(`SYSTEM INSTRUCTIONS:\n${systemPrompt}`);
+  if (systemPrompt) {
+    sections.unshift(`SYSTEM INSTRUCTIONS:\n${systemPrompt}`);
+  }
   sections.push("Continue from the transcript above. Follow the latest user request.");
   return sections.join(SECTION_SEPARATOR);
 }

@@ -52,7 +52,9 @@ const CONTEXT: Context = {
 
 async function collect(stream: AssistantMessageEventStream): Promise<AssistantMessageEvent[]> {
   const events: AssistantMessageEvent[] = [];
-  for await (const event of stream) events.push(event);
+  for await (const event of stream) {
+    events.push(event);
+  }
   return events;
 }
 
@@ -621,7 +623,9 @@ test("marks aborted jobs on the assistant stream", async () => {
   mocks.runDevinJob.mockImplementation(async (job) => {
     await new Promise<void>((resolve) => setImmediate(resolve));
     controller.abort();
-    if (job.signal?.aborted) throw new Error("cancelled");
+    if (job.signal?.aborted) {
+      throw new Error("cancelled");
+    }
   });
   const { devinProviderTestApi, streamDevin } = await import("../src/provider.ts");
   const stream = streamDevin(MODEL, CONTEXT, { signal: controller.signal });
