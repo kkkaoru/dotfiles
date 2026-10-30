@@ -7,7 +7,7 @@ evidence gathered during the session. It began as a port of the dynamic work-eff
 `tools/pi-effort-manager` and was redesigned from the research cited below.
 
 - Each main request is sent at the higher of two levels: a context ramp and a recovery floor raised
-  by failed tool calls. Levels run from a selectable minimum (default `medium`) up to `xhigh`.
+  by failed tool calls. Levels run from a selectable minimum (default `low`) up to `xhigh`.
 - Repeats and malformed calls hold the floor, a verified fix lowers it at once, and two clean rounds
   lower it one level. After three failing rounds in a row at the cap, the failing result carries one
   note asking the model to change approach.
@@ -63,13 +63,14 @@ flowchart TD
 **Context ramp.** Context size is the input side of the previous main response
 (`input + cache_read + cache_creation` tokens), the figure the status line shows. Up to 60% of the
 auto-compact threshold the level is the minimum; the rest of the range is split evenly into the
-levels above it, up to `xhigh`. With the default `medium`, 60–80% is `high` and above 80% is
-`xhigh`. The threshold is read once per model from Claude Code's local estimate.
+levels above it, up to `xhigh`. With the default `low`, about 60–73% is `medium`, 73–87% `high` and
+above that `xhigh`. The threshold is read once per model from Claude Code's local estimate.
 
 **Minimum.** The plugin's `minEffort` option (a picker in the config menu: `low`, `medium`, `high`,
-`xhigh`) sets the lowest level; an unknown value falls back to `medium`. The default is `medium`
-because too small a token budget can cost more tokens, not fewer (token elasticity)[^tale], and
-all-low steps lose accuracy[^ares].
+`xhigh`) sets the lowest level; an unknown value falls back to `low`. The default is `low`, so
+routine steps start as cheap as they can and the context ramp and failures raise them. Choose
+`medium` if that costs accuracy: too small a token budget can cost more tokens, not fewer (token
+elasticity)[^tale], and all-low steps lose accuracy[^ares].
 
 **Effort sent.** The higher of the ramp level and the recovery floor, never above `xhigh`.
 
@@ -194,7 +195,7 @@ flowchart TD
 | Mechanism | Evidence | Risk it avoids |
 |---|---|---|
 | Decide per step, not per task | Per-step effort selection matched fixed high effort with fewer tokens[^ares]; compute by difficulty beats a fixed budget[^snell]. | Wasting reasoning on routine steps. |
-| `medium` default minimum | Too small a budget can cost more tokens[^tale]; all-low steps lose accuracy[^ares]. | Under-reasoning at critical steps. |
+| `low` default minimum, raised by evidence | Too small a budget can cost more tokens[^tale]; all-low steps lose accuracy[^ares]; failures and context raise the level. | Spending reasoning on routine steps. |
 | Raise on failures | Error-correcting steps need the most effort[^ares]; failure feedback improves agents[^reflexion]. | Retrying a hard step with too little reasoning. |
 | Raise with context | Accuracy degrades as input grows[^contextrot]. | Errors late in long sessions. |
 | `xhigh` cap, quick decay | More reasoning correlates with fewer resolved tasks[^overthinking]; longer reasoning can lower accuracy[^inverse][^chen]. | Overthinking and cost. |
@@ -224,7 +225,7 @@ dynamic=on original=… session=… pending=… last=… min=… end=xhigh level
 ```
 
 The `minEffort` setting is in the plugin's config menu (`low`, `medium`, `high`, `xhigh`; default
-`medium`). The hint line under the prompt (the permission mode's row) ends with
+`low`). The hint line under the prompt (the permission mode's row) ends with
 `effort: <level> (dynamic)`, the level last sent, or `effort: static` while off, so the mod takes no
 row of its own; the spinner line is left as Claude Code draws it. Claude Code's own effort indicator
 shows the session effort, the original outside a compaction.

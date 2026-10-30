@@ -119,10 +119,11 @@ type MissingValue = 'unknown' | 'none'
 // shortcut: Claude Code exposes no per-model level list; the engine silently
 // downgrades a level the model lacks. Read a capability API once one exists.
 const LEVELS: readonly ModelEffort[] = ['low', 'medium', 'high', 'xhigh', 'max']
-// The minimum is the person's choice (`minEffort` in the config menu); `medium`, one above the
-// lowest, is the default because too small a budget can cost more tokens, not fewer (TALE token
-// elasticity, arXiv:2412.18547) and all-low steps lose accuracy (ARES).
-const DEFAULT_START: ModelEffort = 'medium'
+// The minimum is the person's choice (`minEffort` in the config menu); the default is the lowest
+// level, so routine steps start as cheap as they can and evidence raises them. Too small a budget
+// can cost more tokens (TALE token elasticity, arXiv:2412.18547) and all-low steps lose accuracy
+// (ARES), so `medium` stays one pick away.
+const DEFAULT_START: ModelEffort = 'low'
 const END: ModelEffort = 'xhigh'
 const MINIMUMS: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'xhigh'])
 const MIN_EFFORT_OPTION: string = 'minEffort'

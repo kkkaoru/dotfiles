@@ -61,7 +61,8 @@ function setup(options?: Readonly<Record<string, string>>): Fake {
     fake.hooks.push(hook === undefined ? { event, matcher: undefined, hook: matcher } : { event, matcher, hook })
     return { catch: () => undefined }
   }
-  register(on, options ?? {})
+  // Most tests pin the `medium` minimum, so their ladders read the same; the default has its own test.
+  register(on, options ?? { minEffort: 'medium' })
   return fake
 }
 
@@ -794,8 +795,17 @@ test('the chosen minimum sets the floor and the ladder up to xhigh, and an unkno
   const unknown = setup({ minEffort: 'max' })
   await start(unknown)
   expect(await action(unknown, 'status')).toStrictEqual({
-    text: 'dynamic=on original=unknown session=unknown pending=false last=none min=medium end=xhigh levels=medium,high,xhigh compactLimits=unknown context=0 recoverySteps=0',
+    text: 'dynamic=on original=unknown session=unknown pending=false last=none min=low end=xhigh levels=low,medium,high,xhigh compactLimits=unknown context=0 recoverySteps=0',
   })
+})
+
+test('with no choice the ladder starts at the lowest level', async () => {
+  const fake = setup({})
+  await start(fake)
+  fake.tokens = 65
+  await step(fake, { turnId: 't1', index: 0 })
+  await step(fake, { turnId: 't1', index: 1 })
+  expect(fake.sent).toStrictEqual(['low', 'medium'])
 })
 
 const commandTool = (fake: Fake, command: string, isError: boolean): Promise<unknown> =>
