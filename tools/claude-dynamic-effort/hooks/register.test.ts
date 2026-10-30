@@ -22,6 +22,7 @@ interface Fake {
   readonly sent: unknown[]
   readonly efforts: string[]
   readonly toasts: unknown[]
+  readonly logs: unknown[]
   readonly inputs: unknown[]
   usageCalls: number
   toolCalls: number
@@ -40,6 +41,8 @@ interface Fake {
   sessionId: string
   readonly store: Map<string, unknown>
   rejectStore: boolean
+  failingKeys: ReadonlySet<string>
+  registered: number
   settings: unknown
 }
 
@@ -56,7 +59,7 @@ const OWN = { kind: 'plugin', name: 'dynamic-effort' } satisfies { kind: string;
 const SUMMARY = [{ role: 'user', text: 'summary', toolUses: [] }] satisfies unknown[]
 
 function setup(options?: Readonly<Record<string, string>>): Fake {
-  const fake: Fake = { hooks: [], sent: [], efforts: [], toasts: [], inputs: [], usageCalls: 0, toolCalls: 0, context: { window: 100 }, tokens: undefined, threshold: undefined, rejectRuns: false, runGate: Promise.resolve(), rejectUsage: false, estimate: undefined, turns: 0, transcript: [], transcriptGate: Promise.resolve(), messageReads: 0, compactions: 0, sessionId: 'session-1', store: new Map(), rejectStore: false, settings: { effortLevel: 'high', modelSettings: { opus: { effortLevel: 'high' } } } }
+  const fake: Fake = { hooks: [], sent: [], efforts: [], toasts: [], logs: [], inputs: [], usageCalls: 0, toolCalls: 0, context: { window: 100 }, tokens: undefined, threshold: undefined, rejectRuns: false, runGate: Promise.resolve(), rejectUsage: false, estimate: undefined, turns: 0, transcript: [], transcriptGate: Promise.resolve(), messageReads: 0, compactions: 0, sessionId: 'session-1', store: new Map(), rejectStore: false, failingKeys: new Set(), registered: 0, settings: { effortLevel: 'high', modelSettings: { opus: { effortLevel: 'high' } } } }
   const on = (event: unknown, matcher: unknown, hook?: unknown): { readonly catch: () => void } => {
     fake.hooks.push(hook === undefined ? { event, matcher: undefined, hook: matcher } : { event, matcher, hook })
     return { catch: () => undefined }
@@ -69,7 +72,7 @@ function setup(options?: Readonly<Record<string, string>>): Fake {
 function engine(fake: Fake): unknown {
   return {
     command: {
-      register: async () => ({ command: 'dynamic-effort' }),
+      register: async () => ({ command: 'dynamic-effort', count: (fake.registered += 1) }),
       run: async ({ command, args }: { readonly command: string; readonly args: string }) => {
         fake.efforts.push(`${command} ${args}`.trim())
         await fake.runGate
@@ -100,10 +103,11 @@ function engine(fake: Fake): unknown {
     store: {
       get: async (key: string) => storeResult(fake, () => fake.store.get(key)),
       set: async (key: string, value: unknown) => storeResult(fake, () => fake.store.set(key, value)),
-      delete: async (key: string) => storeResult(fake, () => fake.store.delete(key)),
+      delete: async (key: string) =>
+        fake.failingKeys.has(key) ? Promise.reject(new Error(`locked ${key}`)) : storeResult(fake, () => fake.store.delete(key)),
       keys: async () => storeResult(fake, () => [...fake.store.keys()]),
     },
-    ui: { toast: (text: unknown) => fake.toasts.push(text) },
+    ui: { toast: (text: unknown) => fake.toasts.push(text), log: (text: unknown) => fake.logs.push(text) },
     settings: { read: async () => (fake.settings instanceof Error ? Promise.reject(fake.settings) : fake.settings) },
     clock: {
       after: (_ms: number, run: () => void) => {
@@ -299,6 +303,7 @@ test('a session stranded at max goes back to the original, and a dropped restore
   await settle()
   await complete(fake)
   expect(fake.efforts).toStrictEqual(['effort high', 'effort high'])
+  expect(fake.logs).toStrictEqual(['dynamic-effort: /effort high failed: dropped'])
 })
 
 test("an observed max step is not taken as the original, the person's /effort is", async () => {
@@ -408,6 +413,11 @@ test('a refused re-run lets the next /compact through at the session effort, the
   await settle()
   fake.rejectRuns = false
   expect(fake.toasts).toStrictEqual(['dynamic-effort: could not compact at max effort; run /compact again'])
+  expect(fake.logs).toStrictEqual([
+    'dynamic-effort: /effort max failed: dropped',
+    'dynamic-effort: /compact failed: dropped',
+    'dynamic-effort: /effort high failed: dropped',
+  ])
   expect(await compact(fake, { trigger: 'manual' }, { messages: SUMMARY })).toStrictEqual({
     messages: [{ role: 'user', text: 'summary', toolUses: [] }],
   })
@@ -427,7 +437,7 @@ test('no raise is queued when the restore would change the saved default effort'
   fake.settings = { effortLevel: 'high', modelSettings: { opus: { effortLevel: 'low' } } }
   expect(await compact(fake, { trigger: 'manual' }, { messages: SUMMARY })).toStrictEqual({ messages: [{ role: 'user', text: 'summary', toolUses: [] }] })
   fake.settings = new Error('unreadable')
-  expect(await compact(fake, { trigger: 'manual' }, { messages: SUMMARY })).toStrictEqual({ messages: [{ role: 'user', text: 'summary', toolUses: [] }] })
+  await expect(compact(fake, { trigger: 'manual' }, { messages: SUMMARY })).rejects.toThrow('unreadable')
   fake.settings = { effortLevel: 'high', modelSettings: [] }
   await step(fake, { turnId: 't1', index: 1, model: 'sonnet' })
   await complete(fake)
@@ -499,13 +509,20 @@ test('precompute waits for the compaction level and a compaction lets effort fal
   expect(fake.sent).toStrictEqual(['medium', 'xhigh', 'medium', 'xhigh', 'medium', 'xhigh'])
 })
 
-test('the compaction row is hidden and the spinner is left as the engine draws it', async () => {
+test('precompute runs in a session that will never be raised to the compaction level', async () => {
+  const fake = setup()
+  fake.settings = { effortLevel: 'medium' }
+  await start(fake)
+  await step(fake, { turnId: 't1', index: 0 })
+  expect(await compact(fake, { trigger: 'precompute' }, { messages: SUMMARY })).toStrictEqual({
+    messages: [{ role: 'user', text: 'summary', toolUses: [] }],
+  })
+})
+
+test('command rows and the spinner are left as the engine draws them', async () => {
   const fake = setup()
   await start(fake)
-  const render = (event: unknown, key: string): unknown => invoke(fake, 'ui.render', [event, (rendered: unknown) => rendered], key)
-  expect(render({ props: { command: 'effort', args: ' max ' } }, 'CommandOutput')).toStrictEqual({ type: 'Box', children: [] })
-  expect(render({ props: { command: 'effort', args: 'low' } }, 'CommandOutput')).toStrictEqual({ props: { command: 'effort', args: 'low' } })
-  expect(render({ props: { command: 'cost', args: 'max' } }, 'CommandOutput')).toStrictEqual({ props: { command: 'cost', args: 'max' } })
+  expect(() => hookFor(fake, 'ui.render', 'CommandOutput')).toThrow('no hook for ui.render')
   expect(() => hookFor(fake, 'ui.render', 'Spinner')).toThrow('no hook for ui.render')
 })
 
@@ -540,8 +557,10 @@ test('unchanged events are passed on without a copy', async () => {
   const budget = { turnId: 't1', index: 0, model: 'opus', effort: 4096 }
   await drain(invoke(fake, 'turn.step', [budget, (event: unknown) => model(fake, Object(event))]))
   expect(fake.inputs[0]).toBe(budget)
-  const row = { props: { command: 'cost', args: '' } }
-  expect(invoke(fake, 'ui.render', [row, (rendered: unknown) => rendered], 'CommandOutput')).toBe(row)
+  await action(fake, 'off')
+  await action(fake, 'on')
+  const hint = { props: { hint: '? for shortcuts' } }
+  expect(invoke(fake, 'ui.render', [hint, (rendered: unknown) => rendered], 'PromptHint')).toBe(hint)
 })
 
 test('the per-step cost stays constant as a session grows', async () => {
@@ -587,6 +606,7 @@ test('a failed prefetch leaves the first step to fetch the threshold itself', as
   await step(fake, { turnId: 't1', index: 1 })
   expect(fake.usageCalls).toBe(2)
   expect(fake.sent).toStrictEqual(['medium', 'xhigh'])
+  expect(fake.logs).toStrictEqual(['dynamic-effort: reading the session context failed: unavailable'])
 })
 
 test('on a large context a recovered floor drops right away', async () => {
@@ -999,10 +1019,25 @@ test('the off keys keep only the most recent sessions and leave other keys alone
   expect(keys.at(-1)).toBe('off:session-1')
 })
 
-test('a store that fails leaves the session on and its switch unsaved', async () => {
+test('one failed delete of an old switch leaves the other deletes running and is logged', async () => {
+  const fake = setup()
+  fake.store.set('off:old-a', true)
+  fake.store.set('off:old-b', true)
+  fake.store.set('off:old-c', true)
+  Array.from({ length: 31 }, (_, index) => fake.store.set(`off:keep-${index}`, true))
+  fake.failingKeys = new Set(['off:old-a'])
+  await start(fake)
+  await action(fake, 'off')
+  await settle(10)
+  expect([...fake.store.keys()].slice(0, 2)).toStrictEqual(['off:old-a', 'off:keep-0'])
+  expect(fake.logs).toStrictEqual(['dynamic-effort: saving the switch failed: pruning old switches failed: locked off:old-a'])
+})
+
+test('a store that fails rejects the start, leaves the session on and logs the unsaved switch', async () => {
   const fake = setup()
   fake.rejectStore = true
-  await start(fake)
+  await expect(start(fake)).rejects.toThrow('starting the session failed: unavailable')
+  expect(fake.registered).toBe(1)
   await action(fake, 'off')
   await step(fake, { turnId: 't1', index: 0 })
   await action(fake, 'on')
@@ -1013,6 +1048,7 @@ test('a store that fails leaves the session on and its switch unsaved', async ()
   await settle()
   expect(fake.sent).toStrictEqual(['high'])
   expect(fake.store.size).toBe(0)
+  expect(fake.logs).toStrictEqual(['dynamic-effort: saving the switch failed: unavailable'])
 })
 
 test('a switch read for a reset that a newer one replaced is dropped', async () => {

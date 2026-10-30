@@ -168,11 +168,10 @@ flowchart TD
   mod left sessions at `max`; only the person's `/effort max` makes it one. Once the original is
   known, a session left at `max` (a dropped restore) is set back at the next main turn end. A session
   that an earlier version left at `max` has no known original, so start it anew.
-- A `precompute` compaction is skipped unless the session is at `max`, so no summary made at the
-  original effort is reused.
+- A `precompute` compaction is skipped while a raise to `max` is possible and the session is not there
+  yet, so no summary made at the original effort is reused.
 - Each compaction at `max` shows its commands in the transcript: the person's `/compact` as
-  `Not compacted`, then `/effort max`, `/compact` and the restore `/effort <original>`. The mod still
-  hides `/effort max` rows drawn through `CommandOutput`, but the terminal shows them.
+  `Not compacted`, then `/effort max`, `/compact` and the restore `/effort <original>`.
 - Main compactions get one instruction after the person's own `/compact` focus: also list approaches
   that were tried and abandoned, with the error or reason. Losing what failed invites repeating
   it[^mast], and a compression guideline that names what must survive keeps accuracy at fewer
@@ -189,7 +188,13 @@ flowchart TD
 - The on/off switch is kept per session id in the mod's store, one key per session switched off
   (`off:<session id>`, the newest 32), so sessions switching at once never overwrite each other. A new session has a new id and starts on; a resumed session keeps its id, so a
   session switched off stays off. The start hooks wait for this read, so no step is sent before it
-  applies; a store that cannot be read leaves the session on.
+  applies. A store that cannot be read fails the start hook, which Claude Code reports, and the session
+  stays on.
+- Errors are never swallowed. Work a hook awaits (reading the store or the settings, the context
+  estimate at a turn end) rejects, so Claude Code reports the hook and runs as if it were not there:
+  an unreadable settings file leaves the compaction at the session effort. Work no hook awaits (the
+  background prefetch, saving the switch, a queued command) logs `dynamic-effort: <what> failed:
+  <error>` to the transcript.
 - In the background, a prefetch takes Claude Code's local estimate of the context size and threshold
   (no request), and a session that already has prompts replays its last 8 tool rounds from the
   transcript to rebuild the floor and the repeat window. A generation guard drops work from an

@@ -5,7 +5,6 @@ import type {
   PluginOptions,
   PromptOrigin,
   Register,
-  RenderElement,
   SessionCompactInput,
   SessionCompactResult,
   SessionCompactTrigger,
@@ -188,7 +187,6 @@ const MODE_STATIC: EffortMode = 'static'
 const UNKNOWN: MissingValue = 'unknown'
 const NONE: MissingValue = 'none'
 const PLUGIN: string = 'dynamic-effort'
-const EMPTY_ROW: RenderElement = Object.freeze({ type: 'Box', children: [] })
 // The sent effort is drawn at the end of the hint line under the prompt (the permission mode's
 // row), so it takes no row of its own. Hot-path texts are built once per level, not per redraw.
 const HINT_TAILS: ReadonlyMap<ModelEffort, string> = new Map(LEVELS.map(level => [level, `🧠 ${level}`]))
@@ -381,9 +379,10 @@ async function resetSession(engine: EngineInterface, keepOriginal: boolean): Pro
   // A person's `/effort` minimum belongs to the conversation it was chosen in; the next one ramps
   // from its own context, starting at the configured minimum.
   runtime.policy = policyFor(runtime.configured)
-  void prefetchSession(engine, generation).catch(() => undefined)
-  // A store that cannot be read leaves the session on, the default.
-  await restoreSwitch(engine, generation).catch(() => undefined)
+  // A failed prefetch leaves the first step to read the threshold itself.
+  void prefetchSession(engine, generation).catch(reportFailure(engine, 'reading the session context'))
+  // A store that cannot be read fails the start hook, which the engine reports; the session stays on.
+  await restoreSwitch(engine, generation)
 }
 
 // The context estimate first, then the transcript, both in the background of a reset.
@@ -411,13 +410,15 @@ function applySwitch({ generation, sessionId, off }: StoredSwitch): void {
 
 // Deleting first moves a session switched off again to the newest end; the oldest beyond the bound
 // are then dropped, so the store does not grow with the number of sessions.
-const storeOff = (engine: EngineInterface, key: string): Promise<unknown> =>
+// Each old key is deleted on its own, so one failed delete does not stop the others.
+const storeOff = (engine: EngineInterface, key: string): Promise<void> =>
   engine.store
     .delete(key)
     .then(() => engine.store.set(key, true))
     .then(() => engine.store.keys())
     .then(keys =>
-      Promise.all(
+      settleAll(
+        'pruning old switches',
         keys
           .filter(listed => listed.startsWith(OFF_KEY_PREFIX))
           .slice(0, -MAX_OFF_SESSIONS)
@@ -425,13 +426,13 @@ const storeOff = (engine: EngineInterface, key: string): Promise<unknown> =>
       ),
     )
 
-// A failed write only loses the switch on resume.
+// A failed write loses the switch on resume and is logged.
 function rememberSwitch(engine: EngineInterface, enabled: boolean): void {
   const sessionId = runtime.manager.sessionId
   if (sessionId === undefined) {
     return
   }
-  void (enabled ? engine.store.delete(offKey(sessionId)) : storeOff(engine, offKey(sessionId))).catch(() => undefined)
+  void (enabled ? engine.store.delete(offKey(sessionId)) : storeOff(engine, offKey(sessionId))).catch(reportFailure(engine, 'saving the switch'))
 }
 
 // `Map#set` returns the map, which is always truthy, so the expression yields `limit`.
@@ -462,7 +463,16 @@ const strandedAtCompactionLevel = (): boolean => canRaiseSession() && runtime.ma
 // or dropped one leaves it, and the next turn end compares the levels again.
 function queueSessionEffort(engine: EngineInterface, level: ModelEffort): void {
   runtime.manager.session = { level: runtime.manager.session.level, pending: true }
-  void engine.command.run({ command: EFFORT_COMMAND, args: level }).then(() => settleCommand(level), () => settleCommand(runtime.manager.session.level))
+  void engine.command.run({ command: EFFORT_COMMAND, args: level }).then(
+    () => settleCommand(level),
+    (error: unknown) => refuseCommand(engine, `/${EFFORT_COMMAND} ${level}`, error),
+  )
+}
+
+// A refused command leaves the level as it was, so the next main turn end compares them again.
+function refuseCommand(engine: EngineInterface, command: string, error: unknown): void {
+  settleCommand(runtime.manager.session.level)
+  reportFailure(engine, command)(error)
 }
 
 function settleCommand(level: ModelEffort | undefined): void {
@@ -474,8 +484,8 @@ function settleCommand(level: ModelEffort | undefined): void {
 // or reloads meanwhile, still leaves the session at the original once the queue drains.
 function queueCompaction(engine: EngineInterface, original: ModelEffort, instructions: string): void {
   runtime.manager.session = { level: runtime.manager.session.level, pending: true }
-  void engine.command.run({ command: EFFORT_COMMAND, args: COMPACTION_EFFORT }).catch(() => undefined)
-  void engine.command.run({ command: COMPACT_COMMAND, args: instructions }).catch(() => allowManualCompaction(engine))
+  void engine.command.run({ command: EFFORT_COMMAND, args: COMPACTION_EFFORT }).catch(reportFailure(engine, `/${EFFORT_COMMAND} ${COMPACTION_EFFORT}`))
+  void engine.command.run({ command: COMPACT_COMMAND, args: instructions }).catch((error: unknown) => allowManualCompaction(engine, error))
   queueSessionEffort(engine, original)
 }
 
@@ -491,14 +501,15 @@ const modelEffortLevel = (settings: Settings): unknown =>
 const restoreSavesNothing = (settings: Settings): boolean =>
   settings.effortLevel === runtime.manager.original && (modelEffortLevel(settings) ?? runtime.manager.original) === runtime.manager.original
 
-// An unreadable settings file counts as one the restore would change.
-const userSettings = (engine: EngineInterface): Promise<Settings> =>
-  engine.settings.read({ source: 'user' }).catch(() => ({}))
+// An unreadable settings file rejects: the hook that read it fails, the engine reports it, and the
+// compaction runs at the session effort as if the mod were not there.
+const userSettings = (engine: EngineInterface): Promise<Settings> => engine.settings.read({ source: 'user' })
 
 // A refused re-run must not swallow the person's `/compact`: the next one runs at the session effort.
-function allowManualCompaction(engine: EngineInterface): void {
+function allowManualCompaction(engine: EngineInterface, error: unknown): void {
   runtime.manager.manualPasses = true
   engine.ui.toast(REQUEUE_FAILED)
+  reportFailure(engine, `/${COMPACT_COMMAND}`)(error)
 }
 
 const queueIfRaisable = (engine: EngineInterface, instructions: string): void =>
@@ -527,9 +538,37 @@ function completeMainTurn(engine: EngineInterface): Promise<void> | undefined {
     return undefined
   }
   return mayPreempt()
-    ? engine.session.usage({ breakdown: 'summary' }).then(({ context }) => preemptIfDue(engine, context), () => undefined)
+    ? engine.session.usage({ breakdown: 'summary' }).then(({ context }) => preemptIfDue(engine, context))
     : undefined
 }
+
+const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error))
+
+const rejectionOf = (result: PromiseSettledResult<unknown>): unknown[] => (result.status === 'rejected' ? [result.reason] : [])
+
+// Independent tasks all run to the end, so one failure neither stops nor hides another; every
+// failure is then rethrown together, never dropped.
+async function settleAll(action: string, tasks: readonly Promise<unknown>[]): Promise<void> {
+  const failures = (await Promise.allSettled(tasks)).flatMap(rejectionOf)
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `${action} failed: ${failures.map(errorText).join('; ')}`)
+  }
+}
+
+// Work no hook awaits has no engine to report its failure, so each such failure is logged with
+// what failed; work a hook awaits rejects instead, and the engine reports the hook and skips it.
+// No failure is retried on the spot. Every call here goes to the local engine, not a network, so
+// an immediate retry meets the same cause and only repeats the log line; retrying a queued
+// `/compact` or `/effort` could also compact twice or stack effort changes. Each failure is
+// repaired at its next natural point instead: a dropped restore is queued again at the next main
+// turn end, an undeleted old switch is pruned again at the next `/dynamic-effort off`, a failed
+// prefetch is read again by the first step, and a refused `/compact` re-run lets the next one
+// through. Only a failed `/dynamic-effort` registration and a failed save of the off switch stay
+// unrepaired; dynamic effort itself keeps working.
+const reportFailure =
+  (engine: EngineInterface, action: string) =>
+  (error: unknown): void =>
+    engine.ui.log(`${PLUGIN}: ${action} failed: ${errorText(error)}`)
 
 const isOwnEcho = (origin: PromptOrigin): boolean =>
   origin.kind === 'plugin' && origin.name === PLUGIN
@@ -552,25 +591,20 @@ const dynamicTail = (): string | undefined =>
 
 const effortTail = (): string | undefined => (runtime.manager.enabled ? dynamicTail() : STATIC_TAIL)
 
-const joinedTail = (existing: string | undefined, tail: string): string =>
-  existing === undefined ? tail : `${existing}${TAIL_SEPARATOR}${tail}`
+// Joins two parts of the hint line; an absent or empty part adds no separator.
+const joined = (head: string | undefined, tail: string | undefined): string | undefined =>
+  head === undefined || head === '' || tail === undefined ? (tail ?? head) : `${head}${TAIL_SEPARATOR}${tail}`
 
-// Another plugin's tail is kept ahead of this one; a hint without a tail to add passes as it is.
-function withEffortTail<HintRender extends { readonly props: { readonly tail?: string } }>(render: HintRender): HintRender {
-  const tail = effortTail()
-  return tail === undefined ? render : { ...render, props: { ...render.props, tail: joinedTail(render.props.tail, tail) } }
-}
-
-// A rewritten hint replaces the whole line, tail included, so the tails are joined into it.
-const joinedHint = (hint: string, tail: string | undefined): string =>
-  tail === undefined || hint === '' ? (tail ?? hint) : joinedTail(hint, tail)
-
-// Only a line with the key hint is rewritten; any other keeps the engine's line and adds a tail.
+// Another plugin's tail is kept ahead of this one. Only a line with the key hint is rewritten, the
+// tails joined into it since a rewritten hint replaces the whole line; any other keeps the engine's
+// line and gets the tail, and one with no tail to add passes as it is.
 function withShortHint<HintRender extends { readonly props: { readonly hint: string; readonly tail?: string } }>(render: HintRender): HintRender {
   const hint = render.props.hint.replace(CYCLE_HINT, '').replace(LEADING_SEPARATOR, '')
-  return hint === render.props.hint
-    ? withEffortTail(render)
-    : { ...render, props: { ...render.props, hint: joinedHint(hint, withEffortTail(render).props.tail), tail: undefined } }
+  const tail = joined(render.props.tail, effortTail())
+  if (hint !== render.props.hint) {
+    return { ...render, props: { ...render.props, hint: joined(hint, tail) ?? '', tail: undefined } }
+  }
+  return tail === render.props.tail ? render : { ...render, props: { ...render.props, tail } }
 }
 
 // The input side of a main response, as the status line counts the context window; any other
@@ -591,8 +625,10 @@ const status = (): string =>
     `recoverySteps=${runtime.manager.floor.steps}`,
   ].join(' ')
 
-const startSession = (engine: EngineInterface): Promise<unknown> =>
-  Promise.all([
+// Resetting the state and registering the command are independent: a store that cannot be read
+// must not abandon the registration, so both finish before the hook reports a failure.
+const startSession = (engine: EngineInterface): Promise<void> =>
+  settleAll('starting the session', [
     resetSession(engine, false),
     engine.command.register({
       name: COMMAND,
@@ -752,23 +788,17 @@ function managedEffort(engine: EngineInterface, model: string): ModelEffort | Pr
 const planEffort = (engine: EngineInterface, step: TurnStepInput): TurnStepInput['effort'] | Promise<ModelEffort> =>
   step.agentId === undefined ? planMainEffort(engine, step) : step.effort
 
-// The core writes a command's output row while it runs, so the compaction level's row is hidden
-// where drawn. Its one-line echo stays: a UserMessage hook would run for every message redraw.
-// The exact match first skips allocating a trimmed copy for the common case.
-const isCompactionRow = (command: string, args: string): boolean =>
-  command === EFFORT_COMMAND && (args === COMPACTION_EFFORT || args.trim() === COMPACTION_EFFORT)
-
 const completeTurn = (engine: EngineInterface, agentId: string | undefined): Promise<void> | undefined =>
   agentId === undefined ? completeMainTurn(engine) : undefined
 
-// Dynamic mode wants the compaction level, and the session has not reached it yet.
+// Dynamic mode may raise the session to the compaction level, and it is not there yet.
 const compactionLevelPending = (): boolean =>
-  runtime.manager.enabled && runtime.manager.original !== undefined && runtime.manager.session.level !== COMPACTION_EFFORT
+  runtime.manager.enabled && canRaiseSession() && runtime.manager.session.level !== COMPACTION_EFFORT
 
-// A precompute made before the compaction level applies would be reused at the old effort.
-const precomputeSkip = (trigger: SessionCompactTrigger): SessionCompactResult | undefined =>
-  trigger === 'precompute' && compactionLevelPending() ? { skip: PRECOMPUTE_SKIP }
-    : undefined
+// A precompute made below the compaction level would be reused at the old effort; one in a session
+// that will never be raised (the restore would change the saved default) is kept.
+const precomputeSkip = async (engine: EngineInterface, trigger: SessionCompactTrigger): Promise<SessionCompactResult | undefined> =>
+  trigger === 'precompute' && compactionLevelPending() && restoreSavesNothing(await userSettings(engine)) ? { skip: PRECOMPUTE_SKIP } : undefined
 
 // The person's `/compact` focus leads; the guideline follows it. Subagent compactions are left alone.
 const guidedCompaction = (input: SessionCompactInput): SessionCompactInput =>
@@ -858,9 +888,6 @@ export const register: Register = (on, options) => {
   on('command.run', { command: EFFORT_COMMAND }, (_engine, event, next) =>
     after(next(event), () => observeEffortCommand(event.origin, event.args.trim())),
   )
-  on('ui.render', { component: 'CommandOutput' }, (_engine, event, next) =>
-    isCompactionRow(event.props.command, event.props.args) ? EMPTY_ROW : next(event),
-  )
   // The explicit type argument skips inferring a tool name across every tool's input type (the
   // generic overload of `next`), the costliest check in this file; it is erased at runtime.
   on('tool.call', async (_engine, event, next) => noteToolResult(event, await next<string>(event)))
@@ -870,6 +897,6 @@ export const register: Register = (on, options) => {
   // completion settles, without awaiting it.
   on('turn.complete', (engine, event, next) => before(() => completeTurn(engine, event.agentId), () => next(event)))
   on('session.compact', async (engine, event, next) =>
-    precomputeSkip(event.trigger) ?? (await manualSkip(engine, event)) ?? noteCompaction(event, await next(guidedCompaction(event))),
+    (await precomputeSkip(engine, event.trigger)) ?? (await manualSkip(engine, event)) ?? noteCompaction(event, await next(guidedCompaction(event))),
   )
 }
