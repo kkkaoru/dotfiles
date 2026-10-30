@@ -223,8 +223,9 @@ dynamic=on original=… session=… pending=… last=… min=… end=xhigh level
 ```
 
 `minEffort` の設定はプラグインの設定メニューにあります（`low`、`medium`、`high`、`xhigh`。既定は
-`low`）。プロンプト下のヒント行（permission mode の行）の末尾に、最後に送ったレベルを
-`effort: <レベル> (dynamic)`、off の間は `effort: static` と表示するので、mod 専用の行は使いません。
+`low`）。プロンプト下のヒント行（permission mode の行）から `(shift+tab to cycle)` を省き、末尾に
+最後に送ったレベルを `🧠 <レベル>`、off の間は `🧠 static` と表示するので、mod 専用の行は使いません：
+`⏵⏵ bypass permissions on · ← for agents · 🧠 low`。モード名の部分は Claude Code が描くため短くできません。
 Spinner の行には何も追記しません。Claude Code 本体の effort 表示はセッションの effort で、
 compaction の間以外は元の値です。
 

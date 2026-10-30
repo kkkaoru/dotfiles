@@ -248,15 +248,15 @@ test('main steps ramp with context, recover on failures and leave subagents and 
   await start(fake)
   fake.tokens = 90
   await step(fake, { turnId: 't1', index: 0 })
-  expect(hint(fake)).toStrictEqual({ props: { hint: '? for shortcuts', tail: 'effort: medium (dynamic)' } })
+  expect(hint(fake)).toStrictEqual({ props: { hint: '? for shortcuts', tail: '🧠 medium' } })
   fake.tokens = 10
   await step(fake, { turnId: 't1', index: 1 })
-  expect(hint(fake)).toStrictEqual({ props: { hint: '? for shortcuts', tail: 'effort: xhigh (dynamic)' } })
+  expect(hint(fake)).toStrictEqual({ props: { hint: '? for shortcuts', tail: '🧠 xhigh' } })
   await tool(fake, undefined, true)
   await tool(fake, 'agent-1', true)
   await step(fake, { turnId: 't1', index: 2 })
   await step(fake, { turnId: 't1', index: 3, agentId: 'agent-1' })
-  expect(hint(fake, 'other')).toStrictEqual({ props: { hint: '? for shortcuts', tail: 'other · effort: high (dynamic)' } })
+  expect(hint(fake, 'other')).toStrictEqual({ props: { hint: '? for shortcuts', tail: 'other · 🧠 high' } })
   await step(fake, { turnId: 't1', index: 4, effort: 4096 })
   expect(fake.sent).toStrictEqual(['medium', 'xhigh', 'high', 'high', 4096])
   expect(hint(fake)).toStrictEqual({ props: { hint: '? for shortcuts', tail: undefined } })
@@ -433,13 +433,13 @@ test('dynamic mode off sends the session effort and on resumes the ramp', async 
   expect(await action(fake, 'off')).toStrictEqual({
     text: 'dynamic=off original=high session=high pending=false last=none min=medium end=xhigh levels=medium,high,xhigh compactLimits=100 context=0 recoverySteps=0',
   })
-  expect(hint(fake)).toStrictEqual({ props: { hint: '? for shortcuts', tail: 'effort: static' } })
+  expect(hint(fake)).toStrictEqual({ props: { hint: '? for shortcuts', tail: '🧠 static' } })
   await tool(fake, undefined, true)
   await step(fake, { turnId: 't2', index: 0 })
   await action(fake, 'on')
   await step(fake, { turnId: 't2', index: 1 })
   expect(fake.sent).toStrictEqual(['medium', 'high', 'medium'])
-  expect(hint(fake)).toStrictEqual({ props: { hint: '? for shortcuts', tail: 'effort: medium (dynamic)' } })
+  expect(hint(fake)).toStrictEqual({ props: { hint: '? for shortcuts', tail: '🧠 medium' } })
 })
 test('status, the default action and an unknown action answer without changing the mode', async () => {
   const fake = setup()
@@ -806,6 +806,23 @@ test('with no choice the ladder starts at the lowest level', async () => {
   await step(fake, { turnId: 't1', index: 0 })
   await step(fake, { turnId: 't1', index: 1 })
   expect(fake.sent).toStrictEqual(['low', 'medium'])
+})
+
+test('the shift+tab key hint is dropped and the effort joined into the line', async () => {
+  const fake = setup()
+  await start(fake)
+  const render = (hint: string, tail?: string): unknown =>
+    invoke(fake, 'ui.render', [{ props: { hint, tail, isWorking: false } }, (rendered: unknown) => rendered], 'PromptHint')
+  expect(render('(shift+tab to cycle)')).toStrictEqual({ props: { hint: '', tail: undefined, isWorking: false } })
+  await step(fake, { turnId: 't1', index: 0 })
+  expect(render('(shift+tab to cycle) · ← for agents')).toStrictEqual({
+    props: { hint: '← for agents · 🧠 medium', tail: undefined, isWorking: false },
+  })
+  expect(render('auto mode on (shift+tab to cycle) · esc to interrupt', 'other')).toStrictEqual({
+    props: { hint: 'auto mode on · esc to interrupt · other · 🧠 medium', tail: undefined, isWorking: false },
+  })
+  expect(render('(shift+tab to cycle)')).toStrictEqual({ props: { hint: '🧠 medium', tail: undefined, isWorking: false } })
+  expect(render('? for shortcuts')).toStrictEqual({ props: { hint: '? for shortcuts', tail: '🧠 medium', isWorking: false } })
 })
 
 const commandTool = (fake: Fake, command: string, isError: boolean): Promise<unknown> =>

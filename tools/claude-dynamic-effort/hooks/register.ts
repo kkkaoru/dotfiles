@@ -188,8 +188,13 @@ const PLUGIN: string = 'dynamic-effort'
 const EMPTY_ROW: RenderElement = Object.freeze({ type: 'Box', children: [] })
 // The sent effort is drawn at the end of the hint line under the prompt (the permission mode's
 // row), so it takes no row of its own. Hot-path texts are built once per level, not per redraw.
-const HINT_TAILS: ReadonlyMap<ModelEffort, string> = new Map(LEVELS.map(level => [level, `effort: ${level} (${MODE_DYNAMIC})`]))
-const STATIC_TAIL: string = `effort: ${MODE_STATIC}`
+const HINT_TAILS: ReadonlyMap<ModelEffort, string> = new Map(LEVELS.map(level => [level, `🧠 ${level}`]))
+const STATIC_TAIL: string = `🧠 ${MODE_STATIC}`
+// The hint after the permission-mode label starts with `(shift+tab to cycle)`; the mode label itself
+// (`⏵⏵ bypass permissions on`) is the engine's and out of reach. The key hint and the separator it
+// leaves at the start are dropped.
+const CYCLE_HINT = / ?\(shift\+tab to cycle\)/u
+const LEADING_SEPARATOR = /^ ?· /u
 // The engine draws its own separator before the tail; one between tails keeps plugins apart.
 const TAIL_SEPARATOR: string = ' · '
 const PRECOMPUTE_SKIP: string = 'dynamic-effort: compaction effort is not applied yet'
@@ -546,6 +551,18 @@ function withEffortTail<HintRender extends { readonly props: { readonly tail?: s
   return tail === undefined ? render : { ...render, props: { ...render.props, tail: joinedTail(render.props.tail, tail) } }
 }
 
+// A rewritten hint replaces the whole line, tail included, so the tails are joined into it.
+const joinedHint = (hint: string, tail: string | undefined): string =>
+  tail === undefined || hint === '' ? (tail ?? hint) : joinedTail(hint, tail)
+
+// Only a line with the key hint is rewritten; any other keeps the engine's line and adds a tail.
+function withShortHint<HintRender extends { readonly props: { readonly hint: string; readonly tail?: string } }>(render: HintRender): HintRender {
+  const hint = render.props.hint.replace(CYCLE_HINT, '').replace(LEADING_SEPARATOR, '')
+  return hint === render.props.hint
+    ? withEffortTail(render)
+    : { ...render, props: { ...render.props, hint: joinedHint(hint, withEffortTail(render).props.tail), tail: undefined } }
+}
+
 // The input side of a main response, as the status line counts the context window; any other
 // step leaves the count as it was.
 const contextAfter = (agentId: string | undefined, usage: TurnUsage | null): number =>
@@ -832,7 +849,7 @@ export const register: Register = (on, options) => {
   // generic overload of `next`), the costliest check in this file; it is erased at runtime.
   on('tool.call', async (engine, event, next) => noteToolResult(event, await next<string>(event)))
   on('turn.step', stepWithEffort)
-  on('ui.render', { component: 'PromptHint' }, (engine, event, next) => next(withEffortTail(event)))
+  on('ui.render', { component: 'PromptHint' }, (engine, event, next) => next(withShortHint(event)))
   // The queued command runs only once the session is idle, so it is queued before the turn's
   // completion settles, without awaiting it.
   on('turn.complete', (engine, event, next) => before(() => completeTurn(engine, event.agentId), () => next(event)))

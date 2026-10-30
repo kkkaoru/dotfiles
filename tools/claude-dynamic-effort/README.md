@@ -225,9 +225,10 @@ dynamic=on original=… session=… pending=… last=… min=… end=xhigh level
 ```
 
 The `minEffort` setting is in the plugin's config menu (`low`, `medium`, `high`, `xhigh`; default
-`low`). The hint line under the prompt (the permission mode's row) ends with
-`effort: <level> (dynamic)`, the level last sent, or `effort: static` while off, so the mod takes no
-row of its own; the spinner line is left as Claude Code draws it. Claude Code's own effort indicator
+`low`). The hint line under the prompt (the permission mode's row) drops `(shift+tab to cycle)` and
+ends with `🧠 <level>`, the level last sent, or `🧠 static` while off, so the mod takes no row of its
+own: `⏵⏵ bypass permissions on · ← for agents · 🧠 low`. The mode label itself is drawn by Claude
+Code and is not shortened; the spinner line is left as Claude Code draws it. Claude Code's own effort indicator
 shows the session effort, the original outside a compaction.
 
 ## Performance
