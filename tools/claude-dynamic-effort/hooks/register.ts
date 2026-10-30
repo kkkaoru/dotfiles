@@ -375,19 +375,21 @@ function replayRounds(messages: readonly SessionMessage[]): void {
 // background; the on/off switch is awaited, so no step is sent before it applies. An in-process
 // `/clear`, `/resume` or fork keeps the person's own effort, which outlives the conversation, but
 // not the dynamic minimum it set.
-function resetSession(engine: EngineInterface, keepOriginal: boolean): Promise<void> {
+async function resetSession(engine: EngineInterface, keepOriginal: boolean): Promise<void> {
   const generation = runtime.manager.generation + 1
   runtime.manager = fresh(generation, keepOriginal ? runtime.manager.original : undefined)
   // A person's `/effort` minimum belongs to the conversation it was chosen in; the next one ramps
   // from its own context, starting at the configured minimum.
   runtime.policy = policyFor(runtime.configured)
-  void engine.session
-    .usage({ breakdown: 'summary' })
-    .then(({ context }) => prefetchIfCurrent(generation, context))
-    .then(() => restoreSession(engine, generation))
-    .catch(() => undefined)
+  void prefetchSession(engine, generation).catch(() => undefined)
   // A store that cannot be read leaves the session on, the default.
-  return restoreSwitch(engine, generation).catch(() => undefined)
+  await restoreSwitch(engine, generation).catch(() => undefined)
+}
+
+// The context estimate first, then the transcript, both in the background of a reset.
+async function prefetchSession(engine: EngineInterface, generation: number): Promise<void> {
+  prefetchIfCurrent(generation, (await engine.session.usage({ breakdown: 'summary' })).context)
+  await restoreSession(engine, generation)
 }
 
 const offKey = (sessionId: string): string => `${OFF_KEY_PREFIX}${sessionId}`
@@ -853,17 +855,17 @@ export const register: Register = (on, options) => {
     before(() => resetSession(engine, true), () => next(event)),
   )
   on('command.run', { command: COMMAND }, async (engine, event) => ({ text: runAction(engine, event.args.trim() || ACTION_STATUS) }))
-  on('command.run', { command: EFFORT_COMMAND }, (engine, event, next) =>
+  on('command.run', { command: EFFORT_COMMAND }, (_engine, event, next) =>
     after(next(event), () => observeEffortCommand(event.origin, event.args.trim())),
   )
-  on('ui.render', { component: 'CommandOutput' }, (engine, event, next) =>
+  on('ui.render', { component: 'CommandOutput' }, (_engine, event, next) =>
     isCompactionRow(event.props.command, event.props.args) ? EMPTY_ROW : next(event),
   )
   // The explicit type argument skips inferring a tool name across every tool's input type (the
   // generic overload of `next`), the costliest check in this file; it is erased at runtime.
-  on('tool.call', async (engine, event, next) => noteToolResult(event, await next<string>(event)))
+  on('tool.call', async (_engine, event, next) => noteToolResult(event, await next<string>(event)))
   on('turn.step', stepWithEffort)
-  on('ui.render', { component: 'PromptHint' }, (engine, event, next) => next(withShortHint(event)))
+  on('ui.render', { component: 'PromptHint' }, (_engine, event, next) => next(withShortHint(event)))
   // The queued command runs only once the session is idle, so it is queued before the turn's
   // completion settles, without awaiting it.
   on('turn.complete', (engine, event, next) => before(() => completeTurn(engine, event.agentId), () => next(event)))

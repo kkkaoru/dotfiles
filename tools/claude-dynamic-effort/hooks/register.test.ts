@@ -106,7 +106,7 @@ function engine(fake: Fake): unknown {
     ui: { toast: (text: unknown) => fake.toasts.push(text) },
     settings: { read: async () => (fake.settings instanceof Error ? Promise.reject(fake.settings) : fake.settings) },
     clock: {
-      after: (ms: number, run: () => void) => {
+      after: (_ms: number, run: () => void) => {
         queueMicrotask(run)
         return { cancel: () => undefined }
       },
