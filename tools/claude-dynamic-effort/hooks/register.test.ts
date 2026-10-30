@@ -316,7 +316,30 @@ test("an observed max step is not taken as the original, the person's /effort is
   await step(fake, { turnId: 't2', index: 0, effort: 'low' })
   expect(fake.efforts).toStrictEqual([])
   expect(await action(fake, 'status')).toStrictEqual({
-    text: 'dynamic=on original=low session=low pending=false last=medium min=medium end=xhigh levels=medium,high,xhigh compactLimits=100 context=0 recoverySteps=0',
+    text: 'dynamic=on original=low session=low pending=false last=low min=low end=xhigh levels=low,medium,high,xhigh compactLimits=100 context=0 recoverySteps=0',
+  })
+})
+
+test("the person's /effort sets the dynamic minimum for the session and auto returns to the configured one", async () => {
+  const fake = setup()
+  await start(fake)
+  await step(fake, { turnId: 't1', index: 0 })
+  await effortCommand(fake, 'high', PERSON)
+  await step(fake, { turnId: 't1', index: 1 })
+  await tool(fake, undefined, true)
+  await step(fake, { turnId: 't1', index: 2 })
+  await effortCommand(fake, 'max', PERSON)
+  await step(fake, { turnId: 't1', index: 3 })
+  await effortCommand(fake, 'low', OWN)
+  await step(fake, { turnId: 't1', index: 4 })
+  await effortCommand(fake, 'auto', PERSON)
+  await tool(fake, undefined, false)
+  await step(fake, { turnId: 't1', index: 5 })
+  await tool(fake, undefined, false)
+  await step(fake, { turnId: 't1', index: 6 })
+  expect(fake.sent).toStrictEqual(['medium', 'high', 'xhigh', 'max', 'max', 'high', 'medium'])
+  expect(await action(fake, 'status')).toStrictEqual({
+    text: 'dynamic=on original=max session=high pending=false last=medium min=medium end=xhigh levels=medium,high,xhigh compactLimits=100 context=0 recoverySteps=0',
   })
 })
 
@@ -631,6 +654,38 @@ test('a resumed session ramps from the estimated context before its first respon
   await step(fake, { turnId: 't1', index: 0 })
   expect(fake.sent).toStrictEqual(['xhigh'])
   expect(fake.compactions).toBe(0)
+})
+
+test('after /effort auto the level follows the context again', async () => {
+  const fake = setup({})
+  await start(fake)
+  await effortCommand(fake, 'high', PERSON)
+  await step(fake, { turnId: 't1', index: 0 })
+  await effortCommand(fake, 'auto', PERSON)
+  await step(fake, { turnId: 't1', index: 1 })
+  fake.tokens = 65
+  await step(fake, { turnId: 't1', index: 2 })
+  fake.tokens = 95
+  await step(fake, { turnId: 't1', index: 3 })
+  await step(fake, { turnId: 't1', index: 4 })
+  expect(fake.sent).toStrictEqual(['high', 'low', 'low', 'medium', 'xhigh'])
+})
+
+test('an in-process /resume drops the manual minimum and ramps from the resumed context', async () => {
+  const fake = setup({})
+  await start(fake)
+  await effortCommand(fake, 'high', PERSON)
+  await step(fake, { turnId: 't1', index: 0 })
+  fake.turns = 2
+  fake.estimate = 65
+  await sessionStart(fake, 'resume')
+  await settle()
+  await step(fake, { turnId: 't2', index: 0 })
+  fake.estimate = 5
+  await sessionStart(fake, 'resume')
+  await settle()
+  await step(fake, { turnId: 't3', index: 0 })
+  expect(fake.sent).toStrictEqual(['high', 'medium', 'low'])
 })
 
 test('a resumed session rebuilds its floor and failed calls, so a fix after resume is verified', async () => {

@@ -72,7 +72,14 @@ routine steps start as cheap as they can and the context ramp and failures raise
 `medium` if that costs accuracy: too small a token budget can cost more tokens, not fewer (token
 elasticity)[^tale], and all-low steps lose accuracy[^ares].
 
-**Effort sent.** The higher of the ramp level and the recovery floor, never above `xhigh`.
+**Manual choice.** The person's own `/effort <level>` sets the minimum for the session: the ramp and
+the recovery floor rise from that level, `/effort max` sends `max` on every main step, and
+`/effort auto` returns to the configured minimum, so the level follows the context ramp and the
+recovery floor again. A new session, a resumed one (`claude --resume` or an in-process `/resume`),
+`/clear` and a fork also start from the configured minimum and ramp from their own context.
+
+**Effort sent.** The higher of the ramp level and the recovery floor, never above `xhigh` unless the
+person chose `max`.
 
 ## Recovery evidence
 

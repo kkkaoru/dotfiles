@@ -106,6 +106,7 @@ interface Policy {
 }
 
 interface Runtime {
+  configured: ModelEffort
   policy: Policy
   manager: Manager
 }
@@ -126,6 +127,8 @@ const LEVELS: readonly ModelEffort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 const DEFAULT_START: ModelEffort = 'low'
 const END: ModelEffort = 'xhigh'
 const MINIMUMS: ReadonlySet<string> = new Set(['low', 'medium', 'high', 'xhigh'])
+// The person's `/effort auto` (or `unset`) hands the minimum back to the configured one.
+const RESET_ARGS: ReadonlySet<string> = new Set(['auto', 'unset'])
 const MIN_EFFORT_OPTION: string = 'minEffort'
 // Evidence behind the policy (README "Design and evidence"): effort rises on external failure
 // evidence (ARES arXiv:2603.07915; Reflexion arXiv:2303.11366; Huang arXiv:2310.01798) and with
@@ -212,8 +215,9 @@ const ACTION_NAMES: ReadonlySet<string> = new Set(ACTIONS)
 // Failure pressure stops at `last`, what the levels can express, so recovery is two clean rounds
 // per level: holding a raised level after recovery is overthinking (arXiv:2502.08235) and longer
 // reasoning can lower accuracy (inverse scaling, arXiv:2507.14417).
+// A minimum above the work cap (the person's `/effort max`) is a ladder of that one level.
 function policyFor(start: ModelEffort): Policy {
-  const operational = LEVELS.slice(LEVELS.indexOf(start), LEVELS.indexOf(END) + 1)
+  const operational = LEVELS.slice(LEVELS.indexOf(start), Math.max(LEVELS.indexOf(start), LEVELS.indexOf(END)) + 1)
   const last = operational.length - 1
   return {
     start,
@@ -273,7 +277,7 @@ const fresh = (generation: number, original: ModelEffort | undefined): Manager =
 })
 
 // The live state, replaced by reference on a reset or a new minimum: nothing is copied field by field.
-const runtime: Runtime = { policy: policyFor(DEFAULT_START), manager: fresh(0, undefined) }
+const runtime: Runtime = { configured: DEFAULT_START, policy: policyFor(DEFAULT_START), manager: fresh(0, undefined) }
 
 function rampEffort(tokens: number, limit: number): ModelEffort {
   const ratio = Math.max(0, tokens) / Math.max(1, limit)
@@ -369,10 +373,14 @@ function replayRounds(messages: readonly SessionMessage[]): void {
 
 // Starts a session's state over. The context estimate and the transcript are read in the
 // background; the on/off switch is awaited, so no step is sent before it applies. An in-process
-// `/clear`, `/resume` or fork keeps the person's own effort, which outlives the conversation.
+// `/clear`, `/resume` or fork keeps the person's own effort, which outlives the conversation, but
+// not the dynamic minimum it set.
 function resetSession(engine: EngineInterface, keepOriginal: boolean): Promise<void> {
   const generation = runtime.manager.generation + 1
   runtime.manager = fresh(generation, keepOriginal ? runtime.manager.original : undefined)
+  // A person's `/effort` minimum belongs to the conversation it was chosen in; the next one ramps
+  // from its own context, starting at the configured minimum.
+  runtime.policy = policyFor(runtime.configured)
   void engine.session
     .usage({ breakdown: 'summary' })
     .then(({ context }) => prefetchIfCurrent(generation, context))
@@ -605,16 +613,21 @@ function runAction(engine: EngineInterface, action: string): string {
   return isAction(action) ? status() : `Usage: /${COMMAND} ${ACTION_USAGE}`
 }
 
-// Every `/effort` that ran sets the session level; the person's becomes the original. The mod's
-// queue stays pending until its restore settles.
+// Every `/effort` that ran sets the session level. The person's also becomes the original and the
+// dynamic minimum for the session: the ramp and the recovery floor rise from the level they chose,
+// and `auto` returns to the configured minimum. The mod's queue stays pending until its restore settles.
 function observeEffortCommand(origin: PromptOrigin, level: string): void {
+  const isOwn = isOwnEcho(origin)
+  if (!isOwn && RESET_ARGS.has(level)) {
+    runtime.policy = policyFor(runtime.configured)
+  }
   if (!isEffort(level)) {
     return
   }
-  const isOwn = isOwnEcho(origin)
   runtime.manager.session = { level, pending: runtime.manager.session.pending }
   if (!isOwn) {
     runtime.manager.original = level
+    runtime.policy = policyFor(level)
   }
 }
 
@@ -831,7 +844,8 @@ async function after<Value>(result: Promise<Value>, effect: (value: Value) => un
 }
 
 export const register: Register = (on, options) => {
-  runtime.policy = policyFor(minimumOf(options))
+  runtime.configured = minimumOf(options)
+  runtime.policy = policyFor(runtime.configured)
   on('session.start', (engine, event, next) => before(() => startSession(engine), () => next(event)))
   // `session.start` fires once per process; an in-process `/clear`, `/resume` or fork starts a new
   // conversation that must not inherit this one's context size or failure evidence.
