@@ -21,7 +21,7 @@ interface Fake {
   readonly hooks: Hooked[]
   readonly sent: unknown[]
   readonly efforts: string[]
-  readonly statuses: unknown[]
+  readonly toasts: unknown[]
   readonly inputs: unknown[]
   usageCalls: number
   toolCalls: number
@@ -29,6 +29,7 @@ interface Fake {
   tokens: number | undefined
   threshold: number | undefined
   rejectRuns: boolean
+  runGate: Promise<void>
   rejectUsage: boolean
   estimate: number | undefined
   turns: number
@@ -39,6 +40,7 @@ interface Fake {
   sessionId: string
   readonly store: Map<string, unknown>
   rejectStore: boolean
+  settings: unknown
 }
 
 interface Step {
@@ -54,7 +56,7 @@ const OWN = { kind: 'plugin', name: 'dynamic-effort' } satisfies { kind: string;
 const SUMMARY = [{ role: 'user', text: 'summary', toolUses: [] }] satisfies unknown[]
 
 function setup(options?: Readonly<Record<string, string>>): Fake {
-  const fake: Fake = { hooks: [], sent: [], efforts: [], statuses: [], inputs: [], usageCalls: 0, toolCalls: 0, context: { window: 100 }, tokens: undefined, threshold: undefined, rejectRuns: false, rejectUsage: false, estimate: undefined, turns: 0, transcript: [], transcriptGate: Promise.resolve(), messageReads: 0, compactions: 0, sessionId: 'session-1', store: new Map(), rejectStore: false }
+  const fake: Fake = { hooks: [], sent: [], efforts: [], toasts: [], inputs: [], usageCalls: 0, toolCalls: 0, context: { window: 100 }, tokens: undefined, threshold: undefined, rejectRuns: false, runGate: Promise.resolve(), rejectUsage: false, estimate: undefined, turns: 0, transcript: [], transcriptGate: Promise.resolve(), messageReads: 0, compactions: 0, sessionId: 'session-1', store: new Map(), rejectStore: false, settings: { effortLevel: 'high', modelSettings: { opus: { effortLevel: 'high' } } } }
   const on = (event: unknown, matcher: unknown, hook?: unknown): { readonly catch: () => void } => {
     fake.hooks.push(hook === undefined ? { event, matcher: undefined, hook: matcher } : { event, matcher, hook })
     return { catch: () => undefined }
@@ -67,8 +69,9 @@ function engine(fake: Fake): unknown {
   return {
     command: {
       register: async () => ({ command: 'dynamic-effort' }),
-      run: async ({ args }: { readonly args: string }) => {
-        fake.efforts.push(args)
+      run: async ({ command, args }: { readonly command: string; readonly args: string }) => {
+        fake.efforts.push(`${command} ${args}`.trim())
+        await fake.runGate
         return fake.rejectRuns ? Promise.reject(new Error('dropped')) : { text: '' }
       },
     },
@@ -99,7 +102,14 @@ function engine(fake: Fake): unknown {
       delete: async (key: string) => storeResult(fake, () => fake.store.delete(key)),
       keys: async () => storeResult(fake, () => [...fake.store.keys()]),
     },
-    ui: { status: (text: unknown) => fake.statuses.push(text) },
+    ui: { toast: (text: unknown) => fake.toasts.push(text) },
+    settings: { read: async () => (fake.settings instanceof Error ? Promise.reject(fake.settings) : fake.settings) },
+    clock: {
+      after: (ms: number, run: () => void) => {
+        queueMicrotask(run)
+        return { cancel: () => undefined }
+      },
+    },
   }
 }
 
@@ -150,6 +160,9 @@ const step = (fake: Fake, input: Step): Promise<unknown> =>
 
 const complete = (fake: Fake, agentId?: string): unknown =>
   invoke(fake, 'turn.complete', [{ agentId }, async () => ({ text: '' })])
+
+const hint = (fake: Fake, tail?: string): unknown =>
+  invoke(fake, 'ui.render', [{ props: { hint: '? for shortcuts', tail } }, (rendered: unknown) => rendered], 'PromptHint')
 
 const action = (fake: Fake, args: string): unknown => invoke(fake, 'command.run', [{ args }], 'dynamic-effort')
 
@@ -234,15 +247,18 @@ test('main steps ramp with context, recover on failures and leave subagents and 
   await start(fake)
   fake.tokens = 90
   await step(fake, { turnId: 't1', index: 0 })
+  expect(hint(fake)).toStrictEqual({ props: { hint: '? for shortcuts', tail: 'effort: medium (dynamic)' } })
   fake.tokens = 10
   await step(fake, { turnId: 't1', index: 1 })
+  expect(hint(fake)).toStrictEqual({ props: { hint: '? for shortcuts', tail: 'effort: xhigh (dynamic)' } })
   await tool(fake, undefined, true)
   await tool(fake, 'agent-1', true)
   await step(fake, { turnId: 't1', index: 2 })
   await step(fake, { turnId: 't1', index: 3, agentId: 'agent-1' })
+  expect(hint(fake, 'other')).toStrictEqual({ props: { hint: '? for shortcuts', tail: 'other · effort: high (dynamic)' } })
   await step(fake, { turnId: 't1', index: 4, effort: 4096 })
   expect(fake.sent).toStrictEqual(['medium', 'xhigh', 'high', 'high', 4096])
-  expect(fake.statuses).toStrictEqual(['effort: medium (dynamic)', 'effort: xhigh (dynamic)', 'effort: high (dynamic)'])
+  expect(hint(fake)).toStrictEqual({ props: { hint: '? for shortcuts', tail: undefined } })
 })
 
 test('the auto-compact threshold is used when the breakdown reports one', async () => {
@@ -255,72 +271,174 @@ test('the auto-compact threshold is used when the breakdown reports one', async 
   expect(fake.sent).toStrictEqual(['medium', 'xhigh'])
 })
 
-test('the compaction level is queued once, confirmed, and inherited subagent steps get the original', async () => {
+test('turn ends leave the session effort alone and subagent steps keep their own effort', async () => {
   const fake = setup()
   await start(fake)
   await complete(fake)
-  expect(fake.efforts).toStrictEqual([])
   await step(fake, { turnId: 't1', index: 0 })
   await complete(fake, 'agent-1')
   await complete(fake)
-  await complete(fake)
-  await effortCommand(fake, 'max', OWN)
   await step(fake, { turnId: 't2', index: 0, agentId: 'agent-1', effort: 'max' })
   await step(fake, { turnId: 't2', index: 1, agentId: 'agent-1', effort: 'low' })
-  expect(fake.efforts).toStrictEqual(['max'])
-  expect(fake.sent).toStrictEqual(['medium', 'high', 'low'])
+  expect(fake.efforts).toStrictEqual([])
+  expect(fake.sent).toStrictEqual(['medium', 'max', 'low'])
 })
 
-test('a dropped command is queued again at the next turn end', async () => {
-  const fake = setup()
-  fake.rejectRuns = true
-  await start(fake)
-  await step(fake, { turnId: 't1', index: 0 })
-  await complete(fake)
-  await settle()
-  fake.rejectRuns = false
-  await complete(fake)
-  expect(fake.efforts).toStrictEqual(['max', 'max'])
-})
-
-test("the person's /effort becomes the original and other runs change nothing", async () => {
+test('a session stranded at max goes back to the original, and a dropped restore is queued again', async () => {
   const fake = setup()
   await start(fake)
   await step(fake, { turnId: 't1', index: 0 })
-  await complete(fake)
   await effortCommand(fake, 'max', OWN)
-  await effortCommand(fake, 'low', PERSON)
-  await effortCommand(fake, 'auto', PERSON)
-  await complete(fake)
-  await effortCommand(fake, 'max', OWN)
-  await step(fake, { turnId: 't2', index: 0, agentId: 'agent-1', effort: 'max' })
-  expect(fake.efforts).toStrictEqual(['max', 'max'])
-  expect(fake.sent).toStrictEqual(['medium', 'low'])
-})
-
-test('the session effort follows the mode: max while dynamic, the original while off', async () => {
-  const fake = setup()
-  await start(fake)
-  await step(fake, { turnId: 't1', index: 0 })
-  await complete(fake)
-  await effortCommand(fake, 'max', OWN)
-  expect(await action(fake, 'off')).toStrictEqual({
-    text: 'dynamic=off original=high session=max pending=false last=none min=medium end=xhigh levels=medium,high,xhigh compactLimits=100 context=0 recoverySteps=0',
-  })
-  await tool(fake, undefined, true)
-  await step(fake, { turnId: 't2', index: 0, effort: 'max' })
   fake.rejectRuns = true
   await complete(fake)
   await settle()
   fake.rejectRuns = false
   await complete(fake)
   await effortCommand(fake, 'high', OWN)
+  await settle()
+  await complete(fake)
+  expect(fake.efforts).toStrictEqual(['effort high', 'effort high'])
+})
+
+test("an observed max step is not taken as the original, the person's /effort is", async () => {
+  const fake = setup()
+  await start(fake)
+  await step(fake, { turnId: 't1', index: 0, effort: 'max' })
+  await complete(fake)
+  expect(await action(fake, 'status')).toStrictEqual({
+    text: 'dynamic=on original=unknown session=max pending=false last=medium min=medium end=xhigh levels=medium,high,xhigh compactLimits=100 context=0 recoverySteps=0',
+  })
+  await effortCommand(fake, 'auto', PERSON)
+  await effortCommand(fake, 'max', PERSON)
+  await complete(fake)
+  await effortCommand(fake, 'low', PERSON)
+  await step(fake, { turnId: 't2', index: 0, effort: 'low' })
+  expect(fake.efforts).toStrictEqual([])
+  expect(await action(fake, 'status')).toStrictEqual({
+    text: 'dynamic=on original=low session=low pending=false last=medium min=medium end=xhigh levels=medium,high,xhigh compactLimits=100 context=0 recoverySteps=0',
+  })
+})
+
+test('near the auto-compact threshold a turn end queues raise, compact and restore once', async () => {
+  const fake = setup()
+  fake.threshold = 100
+  fake.tokens = 95
+  const queued = { resolve: (): void => undefined }
+  fake.runGate = new Promise<void>(resolve => {
+    queued.resolve = resolve
+  })
+  await start(fake)
+  await step(fake, { turnId: 't1', index: 0 })
+  await complete(fake)
+  await complete(fake)
+  expect(fake.efforts).toStrictEqual(['effort max', 'compact', 'effort high'])
+  await effortCommand(fake, 'max', OWN)
+  expect(await compact(fake, { trigger: 'manual' }, { messages: SUMMARY, tokensAfter: 10 })).toStrictEqual({
+    messages: [{ role: 'user', text: 'summary', toolUses: [] }],
+    tokensAfter: 10,
+  })
+  await effortCommand(fake, 'high', OWN)
+  queued.resolve()
+  await settle()
+  await complete(fake)
+  expect(fake.efforts).toStrictEqual(['effort max', 'compact', 'effort high'])
+})
+
+test('no compaction is queued when auto-compaction is off, dynamic mode is off or the context is small', async () => {
+  const fake = setup()
+  fake.tokens = 95
+  await start(fake)
+  await step(fake, { turnId: 't1', index: 0 })
+  await complete(fake)
+  fake.threshold = 100
+  await action(fake, 'off')
   await complete(fake)
   await action(fake, 'on')
+  fake.tokens = 10
+  await step(fake, { turnId: 't1', index: 1 })
   await complete(fake)
-  expect(fake.efforts).toStrictEqual(['max', 'high', 'high', 'max'])
-  expect(fake.sent).toStrictEqual(['medium', 'high'])
-  expect(fake.statuses).toStrictEqual(['effort: medium (dynamic)', 'effort: static', undefined])
+  expect(fake.efforts).toStrictEqual([])
+})
+
+test("the person's /compact is skipped and run again between the raise and the restore", async () => {
+  const fake = setup()
+  await start(fake)
+  await step(fake, { turnId: 't1', index: 0 })
+  expect(await compact(fake, { trigger: 'manual', instructions: 'Keep the plan' }, { messages: SUMMARY })).toStrictEqual({
+    skip: 'dynamic-effort: compacting again at max effort',
+  })
+  await settle()
+  expect(fake.efforts).toStrictEqual(['effort max', 'compact Keep the plan', 'effort high'])
+  await effortCommand(fake, 'max', OWN)
+  expect(await compact(fake, { trigger: 'manual' }, { messages: SUMMARY })).toStrictEqual({
+    messages: [{ role: 'user', text: 'summary', toolUses: [] }],
+  })
+})
+
+test('a refused re-run lets the next /compact through at the session effort, then re-runs again', async () => {
+  const fake = setup()
+  fake.rejectRuns = true
+  await start(fake)
+  await step(fake, { turnId: 't1', index: 0 })
+  await compact(fake, { trigger: 'manual' }, { messages: SUMMARY })
+  await settle()
+  fake.rejectRuns = false
+  expect(fake.toasts).toStrictEqual(['dynamic-effort: could not compact at max effort; run /compact again'])
+  expect(await compact(fake, { trigger: 'manual' }, { messages: SUMMARY })).toStrictEqual({
+    messages: [{ role: 'user', text: 'summary', toolUses: [] }],
+  })
+  expect(await compact(fake, { trigger: 'manual' }, { messages: SUMMARY })).toStrictEqual({
+    skip: 'dynamic-effort: compacting again at max effort',
+  })
+})
+
+test('no raise is queued when the restore would change the saved default effort', async () => {
+  const fake = setup()
+  fake.threshold = 100
+  fake.tokens = 95
+  fake.settings = { effortLevel: 'medium' }
+  await start(fake)
+  await step(fake, { turnId: 't1', index: 0 })
+  await complete(fake)
+  fake.settings = { effortLevel: 'high', modelSettings: { opus: { effortLevel: 'low' } } }
+  expect(await compact(fake, { trigger: 'manual' }, { messages: SUMMARY })).toStrictEqual({ messages: [{ role: 'user', text: 'summary', toolUses: [] }] })
+  fake.settings = new Error('unreadable')
+  expect(await compact(fake, { trigger: 'manual' }, { messages: SUMMARY })).toStrictEqual({ messages: [{ role: 'user', text: 'summary', toolUses: [] }] })
+  fake.settings = { effortLevel: 'high', modelSettings: [] }
+  await step(fake, { turnId: 't1', index: 1, model: 'sonnet' })
+  await complete(fake)
+  await settle()
+  expect(fake.efforts).toStrictEqual(['effort max', 'compact', 'effort high'])
+})
+
+test('a /compact passes untouched while off, before the original is known, or for a subagent', async () => {
+  const fake = setup()
+  await start(fake)
+  expect(await compact(fake, { trigger: 'manual' }, { messages: SUMMARY })).toStrictEqual({ messages: [{ role: 'user', text: 'summary', toolUses: [] }] })
+  await step(fake, { turnId: 't1', index: 0 })
+  expect(await compact(fake, { trigger: 'manual', agentId: 'agent-1' }, { messages: SUMMARY })).toStrictEqual({
+    messages: [{ role: 'user', text: 'summary', toolUses: [] }],
+  })
+  await action(fake, 'off')
+  expect(await compact(fake, { trigger: 'manual' }, { messages: SUMMARY })).toStrictEqual({ messages: [{ role: 'user', text: 'summary', toolUses: [] }] })
+  await settle()
+  expect(fake.efforts).toStrictEqual([])
+})
+
+test('dynamic mode off sends the session effort and on resumes the ramp', async () => {
+  const fake = setup()
+  await start(fake)
+  await step(fake, { turnId: 't1', index: 0 })
+  expect(await action(fake, 'off')).toStrictEqual({
+    text: 'dynamic=off original=high session=high pending=false last=none min=medium end=xhigh levels=medium,high,xhigh compactLimits=100 context=0 recoverySteps=0',
+  })
+  expect(hint(fake)).toStrictEqual({ props: { hint: '? for shortcuts', tail: 'effort: static' } })
+  await tool(fake, undefined, true)
+  await step(fake, { turnId: 't2', index: 0 })
+  await action(fake, 'on')
+  await step(fake, { turnId: 't2', index: 1 })
+  expect(fake.sent).toStrictEqual(['medium', 'high', 'medium'])
+  expect(hint(fake)).toStrictEqual({ props: { hint: '? for shortcuts', tail: 'effort: medium (dynamic)' } })
 })
 test('status, the default action and an unknown action answer without changing the mode', async () => {
   const fake = setup()
@@ -329,7 +447,7 @@ test('status, the default action and an unknown action answer without changing t
   expect(await action(fake, '')).toStrictEqual({
     text: 'dynamic=on original=unknown session=unknown pending=false last=none min=medium end=xhigh levels=medium,high,xhigh compactLimits=unknown context=0 recoverySteps=0',
   })
-  expect(fake.statuses).toStrictEqual([])
+  expect(hint(fake)).toStrictEqual({ props: { hint: '? for shortcuts', tail: undefined } })
 })
 test('precompute waits for the compaction level and a compaction lets effort fall with the context', async () => {
   const fake = setup()
@@ -357,18 +475,14 @@ test('precompute waits for the compaction level and a compaction lets effort fal
   expect(fake.sent).toStrictEqual(['medium', 'xhigh', 'medium', 'xhigh', 'medium', 'xhigh'])
 })
 
-test('the compaction row is hidden and the spinner shows the sent effort only while dynamic', async () => {
+test('the compaction row is hidden and the spinner is left as the engine draws it', async () => {
   const fake = setup()
   await start(fake)
   const render = (event: unknown, key: string): unknown => invoke(fake, 'ui.render', [event, (rendered: unknown) => rendered], key)
   expect(render({ props: { command: 'effort', args: ' max ' } }, 'CommandOutput')).toStrictEqual({ type: 'Box', children: [] })
   expect(render({ props: { command: 'effort', args: 'low' } }, 'CommandOutput')).toStrictEqual({ props: { command: 'effort', args: 'low' } })
   expect(render({ props: { command: 'cost', args: 'max' } }, 'CommandOutput')).toStrictEqual({ props: { command: 'cost', args: 'max' } })
-  expect(render({ props: { suffix: '…' } }, 'Spinner')).toStrictEqual({ props: { suffix: '…' } })
-  await step(fake, { turnId: 't1', index: 0 })
-  expect(render({ props: { suffix: '…' } }, 'Spinner')).toStrictEqual({ props: { suffix: '… · dynamic medium' } })
-  await action(fake, 'off')
-  expect(render({ props: { suffix: '…' } }, 'Spinner')).toStrictEqual({ props: { suffix: '…' } })
+  expect(() => hookFor(fake, 'ui.render', 'Spinner')).toThrow('no hook for ui.render')
 })
 
 test('two clean tool rounds lower the recovery floor and a repeated step is not counted twice', async () => {
@@ -402,8 +516,6 @@ test('unchanged events are passed on without a copy', async () => {
   const budget = { turnId: 't1', index: 0, model: 'opus', effort: 4096 }
   await drain(invoke(fake, 'turn.step', [budget, (event: unknown) => model(fake, Object(event))]))
   expect(fake.inputs[0]).toBe(budget)
-  const spinner = { props: { suffix: '…' } }
-  expect(invoke(fake, 'ui.render', [spinner, (rendered: unknown) => rendered], 'Spinner')).toBe(spinner)
   const row = { props: { command: 'cost', args: '' } }
   expect(invoke(fake, 'ui.render', [row, (rendered: unknown) => rendered], 'CommandOutput')).toBe(row)
 })
@@ -597,20 +709,6 @@ test('the compaction guideline follows the person\'s focus and leaves subagent c
 const sessionStart = (fake: Fake, source: string): unknown =>
   invoke(fake, 'classic.SessionStart', [{ source }, async () => ({})], source)
 
-test("a person's /effort that ran before the mod's command is kept and released to when off", async () => {
-  const fake = setup()
-  await start(fake)
-  await step(fake, { turnId: 't1', index: 0 })
-  await complete(fake)
-  await effortCommand(fake, 'low', PERSON)
-  await effortCommand(fake, 'max', OWN)
-  await step(fake, { turnId: 't2', index: 0, agentId: 'agent-1', effort: 'max' })
-  await action(fake, 'off')
-  await complete(fake)
-  expect(fake.efforts).toStrictEqual(['max', 'low'])
-  expect(fake.sent).toStrictEqual(['medium', 'low'])
-})
-
 test('an in-process /clear starts the context and failure evidence over but keeps the original', async () => {
   const fake = setup()
   await start(fake)
@@ -623,7 +721,7 @@ test('an in-process /clear starts the context and failure evidence over but keep
   await settle()
   await step(fake, { turnId: 't2', index: 0, effort: 'max' })
   await step(fake, { turnId: 't2', index: 1, agentId: 'agent-1', effort: 'max' })
-  expect(fake.sent).toStrictEqual(['medium', 'xhigh', 'medium', 'high'])
+  expect(fake.sent).toStrictEqual(['medium', 'xhigh', 'medium', 'max'])
 })
 
 test('a replayed call and a live one compare equal whatever order their keys were built in', async () => {

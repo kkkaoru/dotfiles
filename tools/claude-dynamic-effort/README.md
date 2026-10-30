@@ -12,7 +12,8 @@ evidence gathered during the session. It began as a port of the dynamic work-eff
   lower it one level. After three failing rounds in a row at the cap, the failing result carries one
   note asking the model to change approach.
 - Claude Code's own compaction runs at `max`, with one extra instruction to keep abandoned
-  approaches. Subagents keep the effort they would otherwise have.
+  approaches. The session effort is raised only for that one compaction, so subagents and side
+  requests keep the original.
 - `/dynamic-effort on|off|status` controls the mod for the current session. A new session starts
   on; a resumed session keeps the switch it had.
 
@@ -45,21 +46,17 @@ effort, and numeric (budget) efforts pass through unchanged.
 ```mermaid
 flowchart TD
   step["turn.step"] --> agent{"Subagent request?"}
-  agent -- yes --> inherited{"Inherited max while the<br/>session is pinned at max?"}
-  inherited -- yes --> original["Send the original effort"]
-  inherited -- no --> pass["Send the request unchanged"]
+  agent -- yes --> pass["Send the request unchanged"]
   agent -- no --> round["Close the tool round<br/>since the previous step"]
   round --> observe["Record the step's effort as the<br/>session level (first one: the original)"]
-  observe --> mainmax{"Dynamic off and the step<br/>inherited the pinned max?"}
-  mainmax -- yes --> original
-  mainmax -- no --> managed{"Dynamic on and<br/>a named effort level?"}
+  observe --> managed{"Dynamic on and<br/>a named effort level?"}
   managed -- no --> pass
   managed -- yes --> limit{"Threshold cached<br/>for this model?"}
   limit -- no --> fetch["Read the auto-compact<br/>threshold once"]
   limit -- yes --> ramp["Context ramp level"]
   fetch --> ramp
   ramp --> floor["max(ramp level, recovery floor)"]
-  floor --> send["Send that effort;<br/>update status and spinner"]
+  floor --> send["Send that effort;<br/>the hint line shows it"]
   send --> usage["Record the response's input tokens<br/>as the next step's context size"]
 ```
 
@@ -125,30 +122,49 @@ so the note can come again only after another run of failures.
 ## Compaction and subagents
 
 Claude Code's compaction request does not pass through `turn.step`; it runs at the session effort.
-Measured on one conversation, the summary used 934 output tokens at `low` and 1,898 at `max`. Main
-requests are rewritten on every step, so the session effort only reaches compaction and the
-subagents that inherit it. The session effort should therefore be `max` while dynamic and the
-original while off.
+Measured on one conversation, the summary used 934 output tokens at `low` and 1,898 at `max`. No
+hook can set the effort of that request alone, and `/effort` is the only way to change the session
+effort, queued until the session is idle. The session effort also reaches subagents and side
+requests that skip `turn.step`, so it stays at the original and is raised only for the length of one
+compaction.
 
 ```mermaid
 flowchart TD
-  observe["Every main step's effort and every /effort that ran<br/>set the session level"] --> who{"Whose /effort?"}
-  who -- "the person's" --> orig["It becomes the original"]
-  who -- "the mod's" --> clear["Pending cleared"]
-  turnend["Main turn ends"] --> desired["Desired: max while dynamic,<br/>the original while off"]
-  desired --> check{"Original known, nothing pending,<br/>and desired ≠ session level?"}
-  check -- no --> done["Nothing queued"]
-  check -- yes --> queue["Queue /effort desired<br/>(runs when the session is idle)"]
+  manual["The person's /compact"] --> gate{"Dynamic on, original known and below max,<br/>nothing queued, restore saves no new default?"}
+  turnend["Main turn ends with the context at<br/>90% of the auto-compact threshold"] --> gate
+  gate -- no --> plain["Compact at the session effort<br/>(or not at all, for a turn end)"]
+  gate -- yes --> queue["Queue at once: /effort max,<br/>/compact, /effort original"]
+  queue --> runs["The engine runs them in order<br/>once the session is idle"]
 ```
 
+- The three commands are queued together, so the restore is already in the engine's queue before
+  the level rises, and a skipped or failed compaction still ends at the original (verified: the
+  engine runs them in order). That the queue survives the mod stopping or reloading meanwhile is
+  the design's intent, not something tested; a reload also forgets the original, so nothing would
+  repair a dropped restore until the person runs `/effort`. Whether a prompt queued by the person
+  can run between the commands is untested.
+- `/effort <level>` also saves the level as the default for new sessions (only `max` is session-only).
+  The sequence runs only when the user settings already hold the original as `effortLevel` (and as
+  the session model's `modelSettings` entry, when there is one), so the restore changes no saved
+  value. A level from `--effort` or another source compacts at that level instead. The rewrite can
+  reorder keys in `~/.claude/settings.json`.
+- The person's `/compact` is answered with `Not compacted · dynamic-effort: compacting again at max
+  effort` and run again inside the sequence, with the same focus. If the engine refuses the re-run,
+  a toast asks for `/compact` again, and that one runs at the session effort.
+- Auto-compaction inside a turn cannot be reached by `/effort`, so a main turn end compacts ahead of
+  it once the context reaches 90% of the auto-compact threshold. Compaction therefore happens a little
+  earlier than the engine alone would, and only when auto-compaction is on. An auto-compaction that
+  still happens inside a turn runs at the original effort.
 - The original effort is the session effort seen on the first main request, or the person's own
-  later `/effort`. If the person's `/effort` ran first, or a queued command failed, the next main
-  turn end corrects it.
-- While the session is at `max`, a subagent request that inherited it goes back to the original.
-  An explicit subagent `max` cannot be told apart and is restored too.
-- A `precompute` compaction is skipped until the session is at `max`, so no summary made at the old
-  effort is reused.
-- The `/effort max` output row is hidden where it is drawn; its one-line echo stays.
+  later `/effort`. A step at `max` is never taken as the original, since an earlier version of this
+  mod left sessions at `max`; only the person's `/effort max` makes it one. Once the original is
+  known, a session left at `max` (a dropped restore) is set back at the next main turn end. A session
+  that an earlier version left at `max` has no known original, so start it anew.
+- A `precompute` compaction is skipped unless the session is at `max`, so no summary made at the
+  original effort is reused.
+- Each compaction at `max` shows its commands in the transcript: the person's `/compact` as
+  `Not compacted`, then `/effort max`, `/compact` and the restore `/effort <original>`. The mod still
+  hides `/effort max` rows drawn through `CommandOutput`, but the terminal shows them.
 - Main compactions get one instruction after the person's own `/compact` focus: also list approaches
   that were tried and abandoned, with the error or reason. Losing what failed invites repeating
   it[^mast], and a compression guideline that names what must survive keeps accuracy at fewer
@@ -198,8 +214,8 @@ Bedrock and Foundry are unverified.
 | Command | Effect |
 |---|---|
 | `/dynamic-effort` or `/dynamic-effort status` | Prints the status line below. |
-| `/dynamic-effort on` | Resumes dynamic effort; the session effort returns to `max` at the next main turn end. |
-| `/dynamic-effort off` | Sends the original effort, stops collecting recovery evidence, and restores the original as the session effort at the next main turn end. |
+| `/dynamic-effort on` | Resumes dynamic effort and compaction at `max`. |
+| `/dynamic-effort off` | Sends the session effort unchanged, stops collecting recovery evidence, and compacts at the session effort. |
 
 Status output:
 
@@ -208,9 +224,10 @@ dynamic=on original=… session=… pending=… last=… min=… end=xhigh level
 ```
 
 The `minEffort` setting is in the plugin's config menu (`low`, `medium`, `high`, `xhigh`; default
-`medium`). The spinner line appends `· dynamic <level>`; the status entry shows
-`effort: <level> (dynamic)` when the level changes and `effort: static` while off. Claude Code's own
-effort indicator shows the session effort, which is `max` while dynamic.
+`medium`). The hint line under the prompt (the permission mode's row) ends with
+`effort: <level> (dynamic)`, the level last sent, or `effort: static` while off, so the mod takes no
+row of its own; the spinner line is left as Claude Code draws it. Claude Code's own effort indicator
+shows the session effort, the original outside a compaction.
 
 ## Performance
 
@@ -222,8 +239,7 @@ effort indicator shows the session effort, which is `max` while dynamic.
   input took about 0.6 ms instead of 75 ms.
 - The repeat window and failed inputs are fixed rings of 8 bounded signatures; recovery state is one
   mutable object per session. Lookups and per-level texts are built once.
-- Unchanged events (spinner redraws without a tag, unchanged efforts, other command output) are
-  passed on without a copy.
+- Unchanged events (unchanged efforts, other command output) are passed on without a copy.
 - `next<string>(e)` in the `tool.call` hook passes the type argument explicitly, which skips the
   costliest inference in the file during type checking.
 
@@ -234,9 +250,10 @@ effort indicator shows the session effort, which is `max` while dynamic.
 - Claude Code exposes no per-model list of effort levels; the engine silently downgrades a level the
   model lacks.
 - Module state restarts on a hot reload (development only).
-- An explicit subagent `max` is restored to the original.
-- The person's own `/effort max` output row is hidden too.
-- A queued `/effort` runs once the session is idle; a dropped command is retried at the next main
+- Compacting at `max` needs the original saved as the default (see Compaction); otherwise compaction
+  runs at the original effort. An auto-compaction inside a turn also runs at the original effort.
+- The mod compacts at 90% of the auto-compact threshold, a little earlier than the engine would.
+- A queued `/effort` runs once the session is idle; a dropped restore is retried at the next main
   turn end.
 
 Not ported from pi: `Ctrl+Shift+E`, `/fast`, the bounded compaction guard, the compaction reset

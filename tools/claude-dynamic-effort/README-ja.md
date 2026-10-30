@@ -12,7 +12,8 @@ Claude Code の mod です。`tools/pi-effort-manager` の dynamic work-effort �
   2 回続けば 1 段下げます。上限で 3 ラウンド続けて失敗すると、失敗した結果に、方針を変えるよう促す
   注記を 1 回だけ付けます。
 - Claude Code 自身の compaction は `max` で実行し、やめた方法を残す指示を 1 つ追加します。
-  サブエージェントは本来の effort のままです。
+  セッションの effort を上げるのはその compaction の間だけなので、サブエージェントや補助的な
+  リクエストは元の effort のままです。
 - `/dynamic-effort on|off|status` で、現在のセッションでの動作を切り替えます。新しいセッションは
   on で始まり、再開したセッションは前の on/off を引き継ぎます。
 
@@ -45,21 +46,17 @@ effort を固定すると、どちらかの妥協になります。最も難し�
 ```mermaid
 flowchart TD
   step["turn.step"] --> agent{"サブエージェントの<br/>リクエスト？"}
-  agent -- はい --> inherited{"セッションが max の間に<br/>max を継承した？"}
-  inherited -- はい --> original["元の effort で送る"]
-  inherited -- いいえ --> pass["そのまま送る"]
+  agent -- はい --> pass["そのまま送る"]
   agent -- いいえ --> round["前回のステップ以降の<br/>ツールラウンドを締める"]
   round --> observe["ステップの effort をセッションの<br/>レベルとして記録（最初の値が元の effort）"]
-  observe --> mainmax{"dynamic が off で、<br/>固定中の max を継承した？"}
-  mainmax -- はい --> original
-  mainmax -- いいえ --> managed{"dynamic が on で、<br/>名前付きの effort？"}
+  observe --> managed{"dynamic が on で、<br/>名前付きの effort？"}
   managed -- いいえ --> pass
   managed -- はい --> limit{"このモデルの閾値を<br/>キャッシュ済み？"}
   limit -- いいえ --> fetch["自動 compaction の閾値を<br/>一度だけ読む"]
   limit -- はい --> ramp["コンテキストによる段階"]
   fetch --> ramp
   ramp --> floor["max（段階, recovery floor）"]
-  floor --> send["その effort で送り、<br/>status 欄と Spinner を更新"]
+  floor --> send["その effort で送り、<br/>ヒント行に表示"]
   send --> usage["応答の入力トークン数を<br/>次のステップのコンテキスト量として記録"]
 ```
 
@@ -124,30 +121,47 @@ flowchart TD
 ## compaction とサブエージェント
 
 Claude Code の compaction のリクエストは `turn.step` を通らず、セッションの effort で実行されます。
-1 つの会話で測ると、要約の出力は `low` で 934 トークン、`max` で 1,898 トークンでした。main の
-リクエストは毎ステップ書き換えるので、セッションの effort が効くのは compaction と、それを継承する
-サブエージェントだけです。そこで、セッションの effort は dynamic の間は `max`、off の間は元の値に
-します。
+1 つの会話で測ると、要約の出力は `low` で 934 トークン、`max` で 1,898 トークンでした。このリクエスト
+だけの effort を変えるフックはなく、セッションの effort を変える手段は、セッションが空くまで積まれる
+`/effort` だけです。セッションの effort は `turn.step` を通らないサブエージェントや補助的なリクエストにも
+効くので、普段は元の値のままにし、1 回の compaction の間だけ上げます。
 
 ```mermaid
 flowchart TD
-  observe["main の各ステップの effort と、実行された各 /effort が<br/>セッションのレベルになる"] --> who{"誰の /effort？"}
-  who -- "ユーザー" --> orig["元の effort になる"]
-  who -- "mod" --> clear["保留を解除"]
-  turnend["main のターン終了"] --> desired["目標：dynamic の間は max、<br/>off の間は元の effort"]
-  desired --> check{"元の effort が分かっていて、保留がなく、<br/>目標がセッションのレベルと違う？"}
-  check -- いいえ --> done["何も積まない"]
-  check -- はい --> queue["/effort 目標値 を積む<br/>（セッションが空いたときに実行）"]
+  manual["ユーザーの /compact"] --> gate{"dynamic が on、元の effort が分かっていて max 未満、<br/>積んだものがなく、復元で既定値が変わらない？"}
+  turnend["コンテキストが自動 compaction の<br/>閾値の 90% で main のターン終了"] --> gate
+  gate -- いいえ --> plain["セッションの effort で compaction<br/>（ターン終了なら何もしない）"]
+  gate -- はい --> queue["まとめて積む：/effort max、<br/>/compact、/effort 元の値"]
+  queue --> runs["セッションが空いたときに<br/>Claude Code が順に実行"]
 ```
 
+- 3 つのコマンドを同時に積むので、レベルが上がる前に復元のコマンドがすでにキューに入っており、
+  compaction がスキップ・失敗しても元の値で終わります（Claude Code が順に実行することは確認済み）。
+  途中で mod が止まったり再読み込みされたりしてもキューが残るのは設計上の意図で、未検証です。
+  再読み込みでは元の値も忘れるため、復元が破棄されるとユーザーが `/effort` するまで直りません。
+  ユーザーが積んだプロンプトがコマンドの間に入るかどうかも未検証です。
+- `/effort <レベル>` は、新しいセッションの既定値としても保存されます（セッション限りなのは `max`
+  だけ）。そのため、ユーザー設定の `effortLevel`（セッションのモデルに `modelSettings` があればそれも）が
+  元の値と同じときだけこの手順を使い、復元で保存値が変わらないようにします。`--effort` など別の経路の
+  レベルでは、そのレベルのまま compaction します。書き直しで `~/.claude/settings.json` のキーの順序が
+  変わることがあります。
+- ユーザーの `/compact` には `Not compacted · dynamic-effort: compacting again at max effort` と返し、
+  同じ焦点の指示でこの手順の中で実行し直します。Claude Code が再実行を拒んだ場合は、もう一度
+  `/compact` するよう通知し、その 1 回はセッションの effort で実行します。
+- ターン中の自動 compaction には `/effort` が届かないため、コンテキストが自動 compaction の閾値の 90% に
+  達したら、main のターン終了時に先に compaction します。そのため、Claude Code 単体より少し早く
+  compaction します（自動 compaction が on のときだけ）。それでもターン中に起きた自動 compaction は
+  元の effort で実行されます。
 - 元の effort は、最初の main のリクエストで見えたセッションの effort、またはその後にユーザーが
-  実行した `/effort` の値です。ユーザーの `/effort` が先に実行された場合や、積んだコマンドが失敗した
-  場合は、次の main のターン終了時に正します。
-- セッションが `max` の間、それを継承したサブエージェントのリクエストは元の effort に戻して送ります。
-  サブエージェントが明示した `max` は見分けられないため、これも元に戻します。
-- セッションが `max` になるまで、事前計算（`precompute`）の compaction はスキップします。古い effort で
+  実行した `/effort` の値です。以前の版がセッションを `max` のままにしていたため、`max` のステップは
+  元の値として扱わず、ユーザー自身の `/effort max` だけを元の値にします。元の値が分かっていれば、
+  `max` のまま残ったセッション（破棄された復元）は次の main のターン終了時に戻します。以前の版が
+  `max` にしたセッションは元の値が分からないので、新しく始め直してください。
+- セッションが `max` でない間、事前計算（`precompute`）の compaction はスキップします。元の effort で
   作った要約が再利用されないようにするためです。
-- `/effort max` の出力行は描画時に隠します。1 行のエコー行は残ります。
+- `max` での compaction のたびに、トランスクリプトにはコマンドが表示されます：ユーザーの `/compact` が
+  `Not compacted`、続いて `/effort max`、`/compact`、復元の `/effort <元の値>`。mod は `CommandOutput`
+  で描かれる `/effort max` の行を隠しますが、ターミナルでは表示されます。
 - main の compaction には、ユーザー自身の `/compact` の焦点の指示の後ろに、「試してやめた方法を、
   エラーや理由とともに挙げる」指示を 1 つ追加します。失敗を失うと同じことを繰り返しやすく[^mast]、
   圧縮で残すべきものを明示すると少ないトークンで精度を保てるためです[^acon]。
@@ -198,8 +212,8 @@ Bedrock と Foundry は未確認です。
 | コマンド | 動作 |
 |---|---|
 | `/dynamic-effort` または `/dynamic-effort status` | 下記の状態行を表示します。 |
-| `/dynamic-effort on` | dynamic effort を再開します。セッションの effort は次の main のターン終了時に `max` に戻ります。 |
-| `/dynamic-effort off` | 元の effort で送り、回復の根拠の収集を止め、次の main のターン終了時にセッションの effort を元に戻します。 |
+| `/dynamic-effort on` | dynamic effort と `max` での compaction を再開します。 |
+| `/dynamic-effort off` | セッションの effort のまま送り、回復の根拠の収集を止め、compaction もセッションの effort で実行します。 |
 
 状態の出力：
 
@@ -208,9 +222,10 @@ dynamic=on original=… session=… pending=… last=… min=… end=xhigh level
 ```
 
 `minEffort` の設定はプラグインの設定メニューにあります（`low`、`medium`、`high`、`xhigh`。既定は
-`medium`）。Spinner の行末に `· dynamic <レベル>` を追記し、status 欄には、レベルが変わったときに
-`effort: <レベル> (dynamic)`、off の間は `effort: static` を表示します。Claude Code 本体の effort
-表示はセッションの effort で、dynamic の間は `max` になります。
+`medium`）。プロンプト下のヒント行（permission mode の行）の末尾に、最後に送ったレベルを
+`effort: <レベル> (dynamic)`、off の間は `effort: static` と表示するので、mod 専用の行は使いません。
+Spinner の行には何も追記しません。Claude Code 本体の effort 表示はセッションの effort で、
+compaction の間以外は元の値です。
 
 ## 性能
 
@@ -222,8 +237,7 @@ dynamic=on original=… session=… pending=… last=… min=… end=xhigh level
   なりました。
 - 繰り返し判定の記録と失敗した入力の記録は、上限のあるシグネチャ 8 件の固定長リングです。回復の状態は
   セッションごとに 1 つの可変オブジェクトです。参照用の表とレベルごとの文字列は一度だけ作ります。
-- 変更の要らないイベント（追記の無い Spinner の再描画、変わらない effort、他のコマンドの出力）は
-  複製せずにそのまま渡します。
+- 変更の要らないイベント（変わらない effort、他のコマンドの出力）は複製せずにそのまま渡します。
 - `tool.call` フックの `next<string>(e)` は型引数を明示しており、型チェックでこのファイル最大の
   推論を省きます。
 
@@ -235,9 +249,10 @@ dynamic=on original=… session=… pending=… last=… min=… end=xhigh level
 - Claude Code には、モデルごとの effort レベルの一覧を取得する API がありません。モデルが対応して
   いないレベルは、Claude Code 側が黙って下げます。
 - 開発中にホットリロードすると、mod の状態はリセットされます。
-- サブエージェントが明示した `max` も元の effort に戻します。
-- ユーザー自身が実行した `/effort max` の出力行も隠れます。
-- 積んだ `/effort` はセッションが空いたときに実行されます。破棄されたコマンドは、次の main の
+- `max` での compaction には、元の値が既定値として保存されている必要があります（compaction の節を
+  参照）。そうでなければ元の effort で compaction します。ターン中の自動 compaction も元の effort です。
+- mod は自動 compaction の閾値の 90% で compaction するため、Claude Code 単体より少し早くなります。
+- 積んだ `/effort` はセッションが空いたときに実行されます。破棄された復元は、次の main の
   ターン終了時に再試行します。
 
 pi 版から移植していないもの：`Ctrl+Shift+E`、`/fast`、上限付きの compaction の安全機構、

@@ -11,6 +11,7 @@ import type {
   SessionCompactTrigger,
   SessionContextUsage,
   SessionMessage,
+  Settings,
   HookStream,
   TurnStepChunk,
   TurnStepInput,
@@ -43,8 +44,8 @@ interface Ring {
   cursor: number
 }
 
-// The session effort Claude Code holds, and whether the mod's `/effort` is still queued. One
-// immutable record, replaced whole, so both always change together.
+// The session effort Claude Code holds, and whether the mod's queued `/effort` commands have not
+// all run yet. One immutable record, replaced whole, so both always change together.
 interface SessionEffort {
   readonly level: ModelEffort | undefined
   readonly pending: boolean
@@ -64,6 +65,8 @@ interface Manager {
   contextTokens: number
   prefetchedLimit: number | undefined
   readonly limits: Map<string, number>
+  manualPasses: boolean
+  model: string | undefined
   floor: Floor
   round: Round
   readonly recentCalls: Ring
@@ -164,8 +167,13 @@ const MAX_OFF_SESSIONS = 32 satisfies number
 const RAMP_START_RATIO = 0.6 satisfies number
 const RECOVERY_ROUNDS = 2 satisfies number
 const COMPACTION_EFFORT: ModelEffort = 'max'
+// Auto-compaction runs inside a turn at the session effort, where no `/effort` can reach it, so the
+// mod compacts at a main turn end a little before the engine's threshold would.
+// shortcut: the ratio is not tuned; raise it if sessions compact noticeably early.
+const PREEMPT_RATIO = 0.9 satisfies number
 const COMMAND: string = 'dynamic-effort'
 const EFFORT_COMMAND: string = 'effort'
+const COMPACT_COMMAND: string = 'compact'
 const ACTION_ON: DynamicAction = 'on'
 const ACTION_OFF: DynamicAction = 'off'
 const ACTION_STATUS: DynamicAction = 'status'
@@ -177,11 +185,15 @@ const UNKNOWN: MissingValue = 'unknown'
 const NONE: MissingValue = 'none'
 const PLUGIN: string = 'dynamic-effort'
 const EMPTY_ROW: RenderElement = Object.freeze({ type: 'Box', children: [] })
-// Hot-path texts are built once per level, not on every step or spinner redraw.
-const SPINNER_TAGS: ReadonlyMap<ModelEffort, string> = new Map(LEVELS.map(level => [level, ` · ${MODE_DYNAMIC} ${level}`]))
-const STATUS_TEXTS: ReadonlyMap<ModelEffort, string> = new Map(LEVELS.map(level => [level, `effort: ${level} (${MODE_DYNAMIC})`]))
-const STATIC_STATUS: string = `effort: ${MODE_STATIC}`
+// The sent effort is drawn at the end of the hint line under the prompt (the permission mode's
+// row), so it takes no row of its own. Hot-path texts are built once per level, not per redraw.
+const HINT_TAILS: ReadonlyMap<ModelEffort, string> = new Map(LEVELS.map(level => [level, `effort: ${level} (${MODE_DYNAMIC})`]))
+const STATIC_TAIL: string = `effort: ${MODE_STATIC}`
+// The engine draws its own separator before the tail; one between tails keeps plugins apart.
+const TAIL_SEPARATOR: string = ' · '
 const PRECOMPUTE_SKIP: string = 'dynamic-effort: compaction effort is not applied yet'
+const MANUAL_SKIP: string = 'dynamic-effort: compacting again at max effort'
+const REQUEUE_FAILED: string = 'dynamic-effort: could not compact at max effort; run /compact again'
 // Claude Code's summary keeps errors and fixes but not abandoned approaches; losing what failed
 // invites repeating it (step repetition, MAST arXiv:2503.13657), and a compression guideline that
 // names what must survive keeps accuracy at a fraction of the tokens (ACON arXiv:2510.00615).
@@ -246,6 +258,8 @@ const fresh = (generation: number, original: ModelEffort | undefined): Manager =
   contextTokens: 0,
   prefetchedLimit: undefined,
   limits: new Map(),
+  manualPasses: false,
+  model: undefined,
   floor: { steps: 0, successes: 0, lastTurn: '', lastIndex: -1, stuck: 0, nudged: false },
   round: openRound(),
   recentCalls: emptyRing(),
@@ -366,16 +380,16 @@ const offKey = (sessionId: string): string => `${OFF_KEY_PREFIX}${sessionId}`
 
 async function restoreSwitch(engine: EngineInterface, generation: number): Promise<void> {
   const sessionId = await engine.session.id()
-  applySwitch(engine, { generation, sessionId, off: (await engine.store.get(offKey(sessionId))) === true })
+  applySwitch({ generation, sessionId, off: (await engine.store.get(offKey(sessionId))) === true })
 }
 
-function applySwitch(engine: EngineInterface, { generation, sessionId, off }: StoredSwitch): void {
+function applySwitch({ generation, sessionId, off }: StoredSwitch): void {
   if (runtime.manager.generation !== generation) {
     return
   }
   runtime.manager.sessionId = sessionId
   if (off) {
-    setEnabled(engine, false)
+    setEnabled(false)
   }
 }
 
@@ -415,31 +429,23 @@ const cachedLimit = (model: string): number | undefined =>
     ? rememberLimit(model, runtime.manager.prefetchedLimit)
     : undefined)
 
-// Main requests are rewritten per step, so the session effort only reaches compaction and
-// inheriting subagents. It should be the compaction level while dynamic, the original while off,
-// and nothing until an effort is known.
-const desiredSessionLevel = (): ModelEffort | undefined =>
-  runtime.manager.enabled && runtime.manager.original !== undefined ? COMPACTION_EFFORT : runtime.manager.original
+// Main requests are rewritten per step, so the session effort reaches only what does not pass
+// `turn.step`: compaction, subagents and side requests. It stays at the original, and only the
+// mod's compaction sequence raises it to the compaction level for the length of one compaction.
+// A level is known and below the compaction level, and nothing the mod queued is still waiting.
+const canRaiseSession = (): boolean =>
+  runtime.manager.original !== undefined && runtime.manager.original !== COMPACTION_EFFORT && !runtime.manager.session.pending
 
-// A level is known, no command is in flight, and the session is not there yet.
-const needsSessionEffort = (level: ModelEffort | undefined): level is ModelEffort =>
-  level !== undefined && !runtime.manager.session.pending && level !== runtime.manager.session.level
+// The session sits at the compaction level the person did not choose: a restore that was dropped,
+// or a session the earlier always-max version raised.
+const strandedAtCompactionLevel = (): boolean => canRaiseSession() && runtime.manager.session.level === COMPACTION_EFFORT
 
-// `engine.command.run` is refused inside a command hook, so the change is queued at a main turn
-// end; a person's `/effort` that ran first, or a dropped command, is corrected at the next one.
-function syncSessionEffort(engine: EngineInterface): void {
-  const level = desiredSessionLevel()
-  if (needsSessionEffort(level)) {
-    queueSessionEffort(engine, level)
-  }
-}
-
+// `engine.command.run` is refused inside a command hook, so commands are queued at a main turn end
+// or from a timer, and run once the session is idle. A hook's command is never awaited (that would
+// deadlock a turn). A command that ran set the level (observed by the `/effort` hook); a refused
+// or dropped one leaves it, and the next turn end compares the levels again.
 function queueSessionEffort(engine: EngineInterface, level: ModelEffort): void {
   runtime.manager.session = { level: runtime.manager.session.level, pending: true }
-  // Claude Code compacts at the session effort; `/effort` sets it for this session only. A hook's
-  // command is queued until the session is idle, so it is never awaited (that would deadlock a
-  // turn). A command that ran set the level (the next main step's own effort confirms it); a
-  // refused or dropped one leaves it, and the next turn end compares the levels again.
   void engine.command.run({ command: EFFORT_COMMAND, args: level }).then(() => settleCommand(level), () => settleCommand(runtime.manager.session.level))
 }
 
@@ -447,17 +453,67 @@ function settleCommand(level: ModelEffort | undefined): void {
   runtime.manager.session = { level, pending: false }
 }
 
-// While the session sits at the compaction level, a step that inherited it (a subagent, or any
-// step once dynamic mode is off) goes back to the original. An explicit subagent `max` looks the
-// same and is restored too.
-const inheritsCompactionLevel = (effort: ModelEffort | number | undefined): boolean =>
-  effort === COMPACTION_EFFORT && runtime.manager.session.level === COMPACTION_EFFORT && runtime.manager.original !== COMPACTION_EFFORT
+// Raise, compact, restore: three separate commands queued at once, so the restore is already in
+// the engine's queue before the level rises. A skipped or failed compaction, or a mod that stops
+// or reloads meanwhile, still leaves the session at the original once the queue drains.
+function queueCompaction(engine: EngineInterface, original: ModelEffort, instructions: string): void {
+  runtime.manager.session = { level: runtime.manager.session.level, pending: true }
+  void engine.command.run({ command: EFFORT_COMMAND, args: COMPACTION_EFFORT }).catch(() => undefined)
+  void engine.command.run({ command: COMPACT_COMMAND, args: instructions }).catch(() => allowManualCompaction(engine))
+  queueSessionEffort(engine, original)
+}
 
-// Subagents always inherit the session effort; main steps inherit it only while dynamic mode is off.
-const inheritsSessionEffort = (agentId: string | undefined): boolean => agentId !== undefined || !runtime.manager.enabled
+// `/effort <level>` also saves the level as the default (only `max` is session-only), so the
+// restore is used only when it rewrites what the user settings already hold, for the session's
+// model too. A level from `--effort` or another source is never saved by the mod.
+const field = (value: unknown, key: string): unknown =>
+  typeof value === 'object' && value !== null && !Array.isArray(value) ? Reflect.get(value, key) : undefined
 
-const restoredEffort = (agentId: string | undefined, effort: ModelEffort | number | undefined): ModelEffort | undefined =>
-  inheritsCompactionLevel(effort) && inheritsSessionEffort(agentId) ? runtime.manager.original : undefined
+const modelEffortLevel = (settings: Settings): unknown =>
+  runtime.manager.model === undefined ? undefined : field(field(settings.modelSettings, runtime.manager.model), 'effortLevel')
+
+const restoreSavesNothing = (settings: Settings): boolean =>
+  settings.effortLevel === runtime.manager.original && (modelEffortLevel(settings) ?? runtime.manager.original) === runtime.manager.original
+
+// An unreadable settings file counts as one the restore would change.
+const userSettings = (engine: EngineInterface): Promise<Settings> =>
+  engine.settings.read({ source: 'user' }).catch(() => ({}))
+
+// A refused re-run must not swallow the person's `/compact`: the next one runs at the session effort.
+function allowManualCompaction(engine: EngineInterface): void {
+  runtime.manager.manualPasses = true
+  engine.ui.toast(REQUEUE_FAILED)
+}
+
+const queueIfRaisable = (engine: EngineInterface, instructions: string): void =>
+  canRaiseSession() && runtime.manager.original !== undefined ? queueCompaction(engine, runtime.manager.original, instructions) : undefined
+
+// The context is near a threshold the mod knows, checked before any host call.
+const nearThreshold = (): boolean =>
+  [...runtime.manager.limits.values()].some(limit => runtime.manager.contextTokens >= limit * PREEMPT_RATIO)
+
+// Only an engine that auto-compacts is compacted ahead of time; the threshold is a local estimate.
+const autoCompactDue = ({ breakdown }: SessionContextUsage): boolean =>
+  breakdown?.autoCompactThreshold !== undefined && runtime.manager.contextTokens >= breakdown.autoCompactThreshold * PREEMPT_RATIO
+
+const preemptIfSaved = (engine: EngineInterface, settings: Settings): void =>
+  restoreSavesNothing(settings) ? queueIfRaisable(engine, '') : undefined
+
+const preemptIfDue = (engine: EngineInterface, context: SessionContextUsage): Promise<void> | undefined =>
+  autoCompactDue(context) ? userSettings(engine).then(settings => preemptIfSaved(engine, settings)) : undefined
+
+// A dynamic session near the threshold may compact at the compaction level.
+const mayPreempt = (): boolean => runtime.manager.enabled && canRaiseSession() && nearThreshold()
+
+function completeMainTurn(engine: EngineInterface): Promise<void> | undefined {
+  if (strandedAtCompactionLevel() && runtime.manager.original !== undefined) {
+    queueSessionEffort(engine, runtime.manager.original)
+    return undefined
+  }
+  return mayPreempt()
+    ? engine.session.usage({ breakdown: 'summary' }).then(({ context }) => preemptIfDue(engine, context), () => undefined)
+    : undefined
+}
 
 const isOwnEcho = (origin: PromptOrigin): boolean =>
   origin.kind === 'plugin' && origin.name === PLUGIN
@@ -467,14 +523,26 @@ const isOwnEcho = (origin: PromptOrigin): boolean =>
 const dynamicEffort = (limit: number): ModelEffort =>
   withRecovery(rampEffort(runtime.manager.contextTokens, limit), runtime.manager.floor.steps)
 
-// The status line changes only with the level, so a steady session makes no host call.
-const sendEffort = (engine: EngineInterface, effort: ModelEffort): ModelEffort =>
-  effort === runtime.manager.lastSent ? effort : announceEffort(engine, effort)
-
-function announceEffort(engine: EngineInterface, effort: ModelEffort): ModelEffort {
-  engine.ui.status(STATUS_TEXTS.get(effort))
-  runtime.manager.lastSent = effort
+// Written only on a change; the hint line reads it when it is next drawn, with no host call.
+function sendEffort(effort: ModelEffort): ModelEffort {
+  if (effort !== runtime.manager.lastSent) {
+    runtime.manager.lastSent = effort
+  }
   return effort
+}
+
+const dynamicTail = (): string | undefined =>
+  runtime.manager.lastSent === undefined ? undefined : HINT_TAILS.get(runtime.manager.lastSent)
+
+const effortTail = (): string | undefined => (runtime.manager.enabled ? dynamicTail() : STATIC_TAIL)
+
+const joinedTail = (existing: string | undefined, tail: string): string =>
+  existing === undefined ? tail : `${existing}${TAIL_SEPARATOR}${tail}`
+
+// Another plugin's tail is kept ahead of this one; a hint without a tail to add passes as it is.
+function withEffortTail<HintRender extends { readonly props: { readonly tail?: string } }>(render: HintRender): HintRender {
+  const tail = effortTail()
+  return tail === undefined ? render : { ...render, props: { ...render.props, tail: joinedTail(render.props.tail, tail) } }
 }
 
 // The input side of a main response, as the status line counts the context window; any other
@@ -505,29 +573,28 @@ const startSession = (engine: EngineInterface): Promise<unknown> =>
     }),
   ])
 
-function setEnabled(engine: EngineInterface, enabled: boolean): void {
+function setEnabled(enabled: boolean): void {
   runtime.manager.enabled = enabled
   // Steps sent while off carried the session effort, so the next dynamic choice starts unpinned.
   runtime.manager.lastSent = undefined
-  engine.ui.status(enabled ? undefined : STATIC_STATUS)
 }
 
 function runAction(engine: EngineInterface, action: string): string {
   if (action === ACTION_ON || action === ACTION_OFF) {
-    setEnabled(engine, action === ACTION_ON)
+    setEnabled(action === ACTION_ON)
     rememberSwitch(engine, action === ACTION_ON)
   }
   return isAction(action) ? status() : `Usage: /${COMMAND} ${ACTION_USAGE}`
 }
 
-// Every `/effort` that ran sets the session level; the mod's own clears its pending command and
-// the person's becomes the original.
+// Every `/effort` that ran sets the session level; the person's becomes the original. The mod's
+// queue stays pending until its restore settles.
 function observeEffortCommand(origin: PromptOrigin, level: string): void {
   if (!isEffort(level)) {
     return
   }
   const isOwn = isOwnEcho(origin)
-  runtime.manager.session = { level, pending: !isOwn && runtime.manager.session.pending }
+  runtime.manager.session = { level, pending: runtime.manager.session.pending }
   if (!isOwn) {
     runtime.manager.original = level
   }
@@ -604,17 +671,14 @@ const noteToolResult = <ToolResult extends { readonly isError?: boolean; readonl
     ? { ...result, context: [...(result.context ?? []), STUCK_NOTE] }
     : result
 
-// The step is not rewritten: its inherited level is restored, dynamic mode is off, or it carries a budget.
-const keepsStepEffort = (restored: ModelEffort | undefined, effort: TurnStepInput['effort']): boolean =>
-  restored !== undefined || !runtime.manager.enabled || typeof effort !== 'string'
+// The step is not rewritten: dynamic mode is off, or it carries a budget.
+const keepsStepEffort = (effort: TurnStepInput['effort']): boolean => !runtime.manager.enabled || typeof effort !== 'string'
 
-// The effort a main step is sent with: the original for an inherited compaction level, the
-// dynamic level for a managed step, and the step's own effort otherwise. Only a step whose model
-// has no threshold yet returns a promise.
+// The effort a main step is sent with: the dynamic level for a managed step, and the step's own
+// effort otherwise. Only a step whose model has no threshold yet returns a promise.
 function planMainEffort(engine: EngineInterface, step: TurnStepInput): TurnStepInput['effort'] | Promise<ModelEffort> {
   recordMainStep(step)
-  const restored = restoredEffort(undefined, step.effort)
-  return keepsStepEffort(restored, step.effort) ? keepStepEffort(restored ?? step.effort) : managedEffort(engine, step.model)
+  return keepsStepEffort(step.effort) ? keepStepEffort(step.effort) : managedEffort(engine, step.model)
 }
 
 // A main step closes the tool round before it, and its effort is the level the session holds.
@@ -624,11 +688,18 @@ function recordMainStep(step: TurnStepInput): void {
   if (typeof step.effort !== 'string') {
     return
   }
+  if (step.model !== runtime.manager.model) {
+    runtime.manager.model = step.model
+  }
   // Written only on a change, so a main step allocates and writes nothing in the common case.
   if (step.effort !== runtime.manager.session.level) {
     runtime.manager.session = { level: step.effort, pending: runtime.manager.session.pending }
   }
-  runtime.manager.original ??= step.effort
+  // A step at the compaction level may carry a raise the person never chose (an earlier version's),
+  // so only the person's own `/effort max` makes it the original.
+  if (step.effort !== COMPACTION_EFFORT) {
+    runtime.manager.original ??= step.effort
+  }
 }
 
 // A step sent with its own effort pins nothing, so the next dynamic choice announces itself again.
@@ -641,12 +712,12 @@ function managedEffort(engine: EngineInterface, model: string): ModelEffort | Pr
   const limit = cachedLimit(model)
   // The breakdown is a local estimate, so the one lookup per model sends no request.
   return limit === undefined
-    ? engine.session.usage({ breakdown: 'summary' }).then(({ context }) => sendEffort(engine, dynamicEffort(rememberLimit(model, thresholdOf(context)))))
-    : sendEffort(engine, dynamicEffort(limit))
+    ? engine.session.usage({ breakdown: 'summary' }).then(({ context }) => sendEffort(dynamicEffort(rememberLimit(model, thresholdOf(context)))))
+    : sendEffort(dynamicEffort(limit))
 }
 
 const planEffort = (engine: EngineInterface, step: TurnStepInput): TurnStepInput['effort'] | Promise<ModelEffort> =>
-  step.agentId === undefined ? planMainEffort(engine, step) : (restoredEffort(step.agentId, step.effort) ?? step.effort)
+  step.agentId === undefined ? planMainEffort(engine, step) : step.effort
 
 // The core writes a command's output row while it runs, so the compaction level's row is hidden
 // where drawn. Its one-line echo stays: a UserMessage hook would run for every message redraw.
@@ -654,12 +725,8 @@ const planEffort = (engine: EngineInterface, step: TurnStepInput): TurnStepInput
 const isCompactionRow = (command: string, args: string): boolean =>
   command === EFFORT_COMMAND && (args === COMPACTION_EFFORT || args.trim() === COMPACTION_EFFORT)
 
-// Claude Code draws its own effort from the session setting; the spinner suffix adds the sent one.
-const spinnerTag = (): string | undefined =>
-  runtime.manager.enabled && runtime.manager.lastSent !== undefined ? SPINNER_TAGS.get(runtime.manager.lastSent) : undefined
-
-const completeTurn = (engine: EngineInterface, agentId: string | undefined): void =>
-  agentId === undefined ? syncSessionEffort(engine) : undefined
+const completeTurn = (engine: EngineInterface, agentId: string | undefined): Promise<void> | undefined =>
+  agentId === undefined ? completeMainTurn(engine) : undefined
 
 // Dynamic mode wants the compaction level, and the session has not reached it yet.
 const compactionLevelPending = (): boolean =>
@@ -677,6 +744,33 @@ const guidedCompaction = (input: SessionCompactInput): SessionCompactInput =>
     : { ...input, instructions: input.instructions === undefined ? COMPACTION_GUIDELINE : `${input.instructions}\n\n${COMPACTION_GUIDELINE}` }
 
 const isMainCompaction = ({ trigger, agentId }: SessionCompactInput): boolean => trigger !== 'precompute' && agentId === undefined
+
+// The person's `/compact` in a dynamic session below the compaction level is run again inside the
+// mod's sequence; its own re-run arrives at the compaction level, or while the sequence is pending.
+const rerunsManual = ({ trigger, agentId }: SessionCompactInput): boolean =>
+  trigger === 'manual' && agentId === undefined && runtime.manager.enabled && canRaiseSession() && runtime.manager.session.level !== COMPACTION_EFFORT
+
+// A refused re-run lets exactly one later `/compact` through at the session effort.
+const passesManual = (input: SessionCompactInput): boolean => !rerunsManual(input) || consumeManualPass()
+
+function consumeManualPass(): boolean {
+  const passes = runtime.manager.manualPasses
+  runtime.manager.manualPasses = false
+  return passes
+}
+
+// The skip ends the hook, so the timer queues the sequence outside the command the turn waits on.
+function rerunAtCompactionLevel(engine: EngineInterface, instructions: string | undefined): SessionCompactResult {
+  engine.clock.after(0, () => queueIfRaisable(engine, instructions ?? ''))
+  return { skip: MANUAL_SKIP }
+}
+
+// A restore that would change the saved default leaves the person's `/compact` at the session effort.
+const rerunIfSaved = (engine: EngineInterface, input: SessionCompactInput, settings: Settings): SessionCompactResult | undefined =>
+  restoreSavesNothing(settings) ? rerunAtCompactionLevel(engine, input.instructions) : undefined
+
+const manualSkip = async (engine: EngineInterface, input: SessionCompactInput): Promise<SessionCompactResult | undefined> =>
+  passesManual(input) ? undefined : rerunIfSaved(engine, input, await userSettings(engine))
 
 // A compaction that replaced the main transcript resets the context the ramp reads and the repeat
 // window (re-reading what the summary dropped is not a repeat); the recovery floor survives it.
@@ -702,12 +796,6 @@ async function* stepWithEffort(
   const result = yield* next(effort === step.effort ? step : { ...step, effort })
   runtime.manager.contextTokens = contextAfter(step.agentId, result.usage)
   return result
-}
-
-// A redraw without a tag passes the engine's own event on, allocating nothing.
-function withSpinnerTag<SpinnerRender extends { readonly props: { readonly suffix: string } }>(render: SpinnerRender): SpinnerRender {
-  const tag = spinnerTag()
-  return tag === undefined ? render : { ...render, props: { ...render.props, suffix: render.props.suffix + tag } }
 }
 
 // Runs an effect, then the rest of the chain. A synchronous effect continues at once, without the
@@ -743,9 +831,11 @@ export const register: Register = (on, options) => {
   // generic overload of `next`), the costliest check in this file; it is erased at runtime.
   on('tool.call', async (engine, event, next) => noteToolResult(event, await next<string>(event)))
   on('turn.step', stepWithEffort)
-  on('ui.render', { component: 'Spinner' }, (engine, event, next) => next(withSpinnerTag(event)))
+  on('ui.render', { component: 'PromptHint' }, (engine, event, next) => next(withEffortTail(event)))
   // The queued command runs only once the session is idle, so it is queued before the turn's
   // completion settles, without awaiting it.
   on('turn.complete', (engine, event, next) => before(() => completeTurn(engine, event.agentId), () => next(event)))
-  on('session.compact', async (engine, event, next) => precomputeSkip(event.trigger) ?? noteCompaction(event, await next(guidedCompaction(event))))
+  on('session.compact', async (engine, event, next) =>
+    precomputeSkip(event.trigger) ?? (await manualSkip(engine, event)) ?? noteCompaction(event, await next(guidedCompaction(event))),
+  )
 }
