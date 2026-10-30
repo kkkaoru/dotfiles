@@ -87,6 +87,8 @@ fi
 # Top-level dotfiles (stateful agent/config directories are merged below)
 for f in .??*; do
   [ "$f" = ".git" ] && continue
+  [ "$f" = ".gitconfig" ] && continue
+  [ "$f" = ".gitignore_global" ] && continue
   [ "$f" = ".tool-versions" ] && continue
   [ "$f" = ".config" ] && continue
   [ "$f" = ".claude" ] && continue
@@ -95,6 +97,16 @@ for f in .??*; do
   # Serena stores runtime state under ~/.serena; link only its config file below.
   [ "$f" = ".serena" ] && continue
   link_path "${DOTPATH}/${f}" "${HOME}/${f}"
+done
+# Git's cloud safety check rejects global config files that resolve into the checkout.
+# Keep ordinary copies in $HOME instead of linking them back into this repository.
+for f in .gitconfig .gitignore_global; do
+  if [ -L "${HOME}/${f}" ]; then
+    rm -f "${HOME}/${f}"
+  fi
+  if [ ! -e "${HOME}/${f}" ]; then
+    cp "${DOTPATH}/${f}" "${HOME}/${f}"
+  fi
 done
 
 # Serena keeps logs, caches, downloaded language servers, and project metadata
