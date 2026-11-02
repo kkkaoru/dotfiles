@@ -64,8 +64,7 @@ function setup(options?: Readonly<Record<string, string>>): Fake {
     fake.hooks.push(hook === undefined ? { event, matcher: undefined, hook: matcher } : { event, matcher, hook })
     return { catch: () => undefined }
   }
-  // Most tests pin the `medium` minimum, so their ladders read the same; the default has its own test.
-  register(on, options ?? { minEffort: 'medium' })
+  register(on, options ?? {})
   return fake
 }
 
@@ -688,7 +687,7 @@ test('after /effort auto the level follows the context again', async () => {
   fake.tokens = 95
   await step(fake, { turnId: 't1', index: 3 })
   await step(fake, { turnId: 't1', index: 4 })
-  expect(fake.sent).toStrictEqual(['high', 'low', 'low', 'medium', 'xhigh'])
+  expect(fake.sent).toStrictEqual(['high', 'medium', 'medium', 'high', 'xhigh'])
 })
 
 test('an in-process /resume drops the manual minimum and ramps from the resumed context', async () => {
@@ -697,15 +696,15 @@ test('an in-process /resume drops the manual minimum and ramps from the resumed 
   await effortCommand(fake, 'high', PERSON)
   await step(fake, { turnId: 't1', index: 0 })
   fake.turns = 2
-  fake.estimate = 65
-  await sessionStart(fake, 'resume')
-  await settle()
-  await step(fake, { turnId: 't2', index: 0 })
   fake.estimate = 5
   await sessionStart(fake, 'resume')
   await settle()
+  await step(fake, { turnId: 't2', index: 0 })
+  fake.estimate = 95
+  await sessionStart(fake, 'resume')
+  await settle()
   await step(fake, { turnId: 't3', index: 0 })
-  expect(fake.sent).toStrictEqual(['high', 'medium', 'low'])
+  expect(fake.sent).toStrictEqual(['high', 'medium', 'xhigh'])
 })
 
 test('a resumed session rebuilds its floor and failed calls, so a fix after resume is verified', async () => {
@@ -870,17 +869,17 @@ test('the chosen minimum sets the floor and the ladder up to xhigh, and an unkno
   const unknown = setup({ minEffort: 'max' })
   await start(unknown)
   expect(await action(unknown, 'status')).toStrictEqual({
-    text: 'dynamic=on original=unknown session=unknown pending=false last=none min=low end=xhigh levels=low,medium,high,xhigh compactLimits=unknown context=0 recoverySteps=0',
+    text: 'dynamic=on original=unknown session=unknown pending=false last=none min=medium end=xhigh levels=medium,high,xhigh compactLimits=unknown context=0 recoverySteps=0',
   })
 })
 
-test('with no choice the ladder starts at the lowest level', async () => {
+test('with no choice the ladder starts at medium', async () => {
   const fake = setup({})
   await start(fake)
-  fake.tokens = 65
+  fake.tokens = 75
   await step(fake, { turnId: 't1', index: 0 })
   await step(fake, { turnId: 't1', index: 1 })
-  expect(fake.sent).toStrictEqual(['low', 'medium'])
+  expect(fake.sent).toStrictEqual(['medium', 'high'])
 })
 
 test('the shift+tab key hint is dropped and the effort joined into the line', async () => {
