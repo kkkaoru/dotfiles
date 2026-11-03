@@ -35,6 +35,8 @@ integrations. These instructions apply to agents working here, including pi and 
 - `tools/claudex-*/` — Claudex adapters and routing/tool policies.
 - `tools/claude-dynamic-effort/` — Claude Code mod porting pi-effort-manager's dynamic
   work effort (`claude plugin validate|test <dir>`; load with `--plugin-dir`).
+- `tools/claude-goal-pacing/` — Claude Code mod that ends an idle `/goal` continuation instead
+  of re-checking it at once (`bun run check`).
 - `tools/dsh-dracula-theme/` — A DeepSeek Harness bundle (no build step) that
   injects the Dracula palette into the Web and Desktop clients. Install it into
   a profile with `dsh plugin --profile <name> add <checkout>/tools/dsh-dracula-theme`.

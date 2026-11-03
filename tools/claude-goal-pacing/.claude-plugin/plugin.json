@@ -1,0 +1,5 @@
+{
+  "name": "goal-pacing",
+  "version": "0.1.0",
+  "description": "End a /goal continuation that did no work instead of checking the goal again at once"
+}
