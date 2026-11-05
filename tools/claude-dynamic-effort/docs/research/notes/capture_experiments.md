@@ -48,6 +48,22 @@
 - 実行後、dotfiles の作業ツリーに差分はなかった(`/effort` は `this session only` と表示)。
 - settings 経由: `--settings` で `{"autoCompactWindow":200000}` を渡すと、`/context` は Tokens 19.4k / 200k、Autocompact buffer 33k を示した。環境変数 200,000 でも同じ表示。発動は settings 経由では未観測。
 
+## 5. 採用した方式の実機確認(window 200,000)
+effort の段階的な引き上げを廃止し、compact の間だけ max にする方式を実機で確認した。ターン途中の自動 compaction は、mod が skip して `$.turn.abort` でターンを止め、`/effort max`、`/compact`、`/effort 元の値`、続きのプロンプトの順にキューへ積む。リクエストの effort は書き換えず、シーケンス中に max を継承した step だけを元の値で送る。
+
+| 条件 | 発動前の最後のリクエスト | 要約(max) | 直後のコンテキスト | 読み取り順 |
+|---|---|---|---|---|
+| 対話モード、2.1.304、`ENABLE_TOOL_SEARCH=true` | 173,621 | 出力 6,287、約 60 秒 | 65,622 | data1〜7、compact、data8〜9 |
+| `-p`、stream-json | 176,284 | 出力 5,805、56 秒 | 45,283 | data1〜8、compact、data9 |
+
+- どちらも `--settings` の `autoCompactWindow` で発動した。環境変数でなくても動く。
+- 対話モードの終了時は `session=medium pending=false`。max で送られたのは compact のリクエストだけだった。
+- 実行後、dotfiles の作業ツリーに差分はなかった。対話モードの `/effort medium` は `saved as your default` と表示するが、値は同じなので変わらない。
+- **バックグラウンド処理(window 100,000、`-p`):** ターンを止めた後も、`sleep 110; date > bg_bash.txt` と、Agent の subagent が書く `bg_agent.txt` は最後まで完了した。
+- **キューの順序:** 完全な先入れ先出しではない。バックグラウンドの完了通知と、compact 中に入力したプロンプトは、`/compact` と復元の間に実行された。このときのリクエストは medium で送られ、その後に復元が実行された(`session=medium pending=false`)。別の実行では、完了通知の後にプロセスを終了したため、復元の実行を確認できなかった。
+- **閾値が低すぎる場合:** window 100,000 では、compact 後の続きのターンの終了時に 60k を超え、2 回目の compact が走った(出力 12,088、107 秒)。
+- **検証の副作用:** `ANTHROPIC_BASE_URL` を使うと tool search が無効になり、ツール 115 個で開始時のコンテキストが約 122k になった。このとき compact 後も約 144k で、compact が 3 回連続した。`ENABLE_TOOL_SEARCH=true` ではツール 15 個、開始時約 40k で再現しなかった。`/opt/homebrew/bin/claude` は 2.1.295 で、この回はそれが起動していた。最終確認は `~/.local/bin/claude`(2.1.304)で行った。
+
 ## 未確認
 - 回答品質に effort がどう効くか。
 - 1M window を維持して 167k などの高い閾値で同じ動作になるか(window 100k と 200k の `/context`、および 100k の発動のみ確認)。
