@@ -61,9 +61,7 @@ public struct MenuBarContentView: View {
 
   @ViewBuilder private var settingsItem: some View {
     if #available(macOS 14.0, *) {
-      SettingsLink {
-        Text(strings.settings)
-      }
+      FrontmostSettingsButton(title: strings.settings)
     } else {
       Button(strings.settings, action: openLegacySettings)
     }
