@@ -15,6 +15,8 @@
 "settings.behavior" = "Display and Indicator";
 "settings.lid_close_display_sleep" = "Sleep displays when the lid closes";
 "settings.lid_close_display_sleep.description" = "Turns all displays off when the MacBook lid closes and wakes them when it opens.";
+"settings.hot_corner_display_sleep_hold" = "Keep displays off after a hot corner sleeps them";
+"settings.hot_corner_display_sleep_hold.description" = "After a hot corner turns displays off, turns them off again if they wake without keyboard or mouse input.";
 "settings.caps_lock_light" = "Use the Caps Lock light as a sleep-disabled indicator";
 "settings.caps_lock_light.description" = "Lights the built-in keyboard Caps Lock key only while Mac sleep is disabled. Caps Lock itself is not enabled. Input Monitoring permission is required.";
 "settings.battery_sleep" = "Low Battery Sleep";

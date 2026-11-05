@@ -38,6 +38,12 @@ public struct SleepControlSettingsView: View {
       )
       .accessibilityIdentifier("lid-display-sleep-toggle")
       settingToggle(
+        strings.hotCornerDisplaySleepHold,
+        description: strings.hotCornerDisplaySleepHoldDescription,
+        isOn: $settings.isHotCornerDisplaySleepHoldEnabled
+      )
+      .accessibilityIdentifier("hot-corner-display-sleep-hold-toggle")
+      settingToggle(
         strings.capsLockLight,
         description: strings.capsLockLightDescription,
         isOn: $settings.isCapsLockLightEnabled

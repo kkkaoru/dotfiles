@@ -14,6 +14,7 @@ internal struct SleepControlApp: App {
   private let batterySleepEvents = BatterySleepEvents()
   private let capsLockLightController: CapsLockIndicatorController
   private let lidDisplaySleepController: LidDisplaySleepController
+  private let hotCornerDisplaySleepController = HotCornerDisplaySleepController()
 
   internal var body: some Scene {
     WindowGroup("app.name") {
@@ -71,6 +72,12 @@ internal struct SleepControlApp: App {
       .onReceive(shortcutSettings.$isLidDisplaySleepEnabled) { enabled in
         lidDisplaySleepController.setEnabled(enabled)
       }
+      .modifier(
+        HotCornerDisplaySleepObservers(
+          settings: shortcutSettings,
+          controller: hotCornerDisplaySleepController
+        )
+      )
       .onReceive(terminationNotifications) { _ in
         batterySleepEvents.stop()
         capsLockLightController.restoreSystemCapsLockState()

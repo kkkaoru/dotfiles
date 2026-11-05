@@ -21,8 +21,28 @@ system sleep.
 The UI uses positive switch semantics: ON enables Mac sleep and shows the moon;
 OFF disables Mac sleep and shows the sun. Internally, the app still writes the
 inverse `pmset` `disablesleep` value. Settings contains independent switches
-for lid-close display sleep and the Caps Lock indicator, plus the global
-shortcut picker.
+for lid-close display sleep, the hot-corner display hold and the Caps Lock
+indicator, plus the global shortcut picker.
+
+### Keeping displays off after a hot corner
+
+Settings has a switch, on by default, that holds displays off after a hot corner
+assigned to **Put Display to Sleep** turns them off. If they wake without keyboard
+or mouse input, for example through another app's user-activity assertion, the app
+runs `pmset displaysleepnow` again. It is event-driven, with no polling and no extra
+permission: a display sleep starts a hold when the cursor is in such a corner, and a
+wake is compared against the age of the last HID event and the HID idle time.
+
+Input in the first 2 seconds of a hold counts as the hand still settling, so it turns
+displays off again; later input ends the hold, and so does Touch ID at any time, which
+the app recognizes by the biometric event in WindowServer's user-activity assertion name. A sensitive pointer that reports small
+movements counts as input. Opening or closing the lid and system sleep also end the
+hold, because the key press that wakes a sleeping Mac is not always delivered as an
+event. System sleep itself is left to macOS: with displays off, normal idle sleep
+continues unless something else prevents it.
+
+Unlocking the screen, including with Touch ID, always ends the hold and wakes displays,
+whether or not the switch is on. macOS does not say which method unlocked it.
 
 ### Low-battery sleep while the lid is closed
 
@@ -76,7 +96,7 @@ command or `pmset` argument is permitted by this rule.
 `make install` copies `Sleep Control.app` to `~/Applications` and opens it.
 The app itself has no third-party or runtime package dependencies.
 Verification includes strict formatting, all applicable SwiftLint opt-in rules,
-50 dependency-free unit tests, menu-title regression checks, read-only system
+63 dependency-free unit tests, menu-title regression checks, read-only system
 power checks, a 95% core line-coverage gate, and 95% per-file line/function gates
 for battery sleep and the menu workaround, plus English and
 Japanese UI snapshot rendering, strict concurrency, and ad-hoc code-signature

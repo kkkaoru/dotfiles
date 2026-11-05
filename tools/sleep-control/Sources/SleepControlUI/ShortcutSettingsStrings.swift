@@ -8,6 +8,10 @@ public struct SleepControlSettingsStrings: Sendable {
   public let lidDisplaySleep: String
   /// Explanation of lid-close display sleep.
   public let lidDisplaySleepDescription: String
+  /// Label for keeping displays off after a hot-corner display sleep.
+  public let hotCornerDisplaySleepHold: String
+  /// Explanation of keeping displays off after a hot-corner display sleep.
+  public let hotCornerDisplaySleepHoldDescription: String
   /// Label for the Caps Lock light setting.
   public let capsLockLight: String
   /// Explanation of the Caps Lock light setting.
@@ -39,6 +43,11 @@ public struct SleepControlSettingsStrings: Sendable {
     lidDisplaySleep = Self.localized("settings.lid_close_display_sleep", in: bundle)
     lidDisplaySleepDescription = Self.localized(
       "settings.lid_close_display_sleep.description",
+      in: bundle
+    )
+    hotCornerDisplaySleepHold = Self.localized("settings.hot_corner_display_sleep_hold", in: bundle)
+    hotCornerDisplaySleepHoldDescription = Self.localized(
+      "settings.hot_corner_display_sleep_hold.description",
       in: bundle
     )
     capsLockLight = Self.localized("settings.caps_lock_light", in: bundle)

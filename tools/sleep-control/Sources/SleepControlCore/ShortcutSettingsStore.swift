@@ -13,6 +13,9 @@ public final class ShortcutSettingsStore: ObservableObject {
   /// Preference controlling the Caps Lock sleep-status indicator.
   public static let capsLockLightEnabledDefaultsKey = "capsLockLightEnabled"
 
+  /// Preference keeping displays off after a hot-corner display sleep.
+  public static let hotCornerHoldEnabledDefaultsKey = "hotCornerDisplaySleepHoldEnabled"
+
   private static let batterySleepEnabledKey = "batterySleep.enabled"
   private static let batterySleepThresholdKey = "batterySleep.threshold"
 
@@ -37,6 +40,16 @@ public final class ShortcutSettingsStore: ObservableObject {
       defaults.set(
         isCapsLockLightEnabled,
         forKey: Self.capsLockLightEnabledDefaultsKey
+      )
+    }
+  }
+
+  /// Whether displays stay off after a hot-corner display sleep until the user provides input.
+  @Published public var isHotCornerDisplaySleepHoldEnabled: Bool {
+    didSet {
+      defaults.set(
+        isHotCornerDisplaySleepHoldEnabled,
+        forKey: Self.hotCornerHoldEnabledDefaultsKey
       )
     }
   }
@@ -98,6 +111,8 @@ public final class ShortcutSettingsStore: ObservableObject {
       key: Self.capsLockLightEnabledDefaultsKey,
       legacyKey: Self.legacyCapsLockLightDefaultsKey
     )
+    isHotCornerDisplaySleepHoldEnabled =
+      defaults.object(forKey: Self.hotCornerHoldEnabledDefaultsKey) as? Bool ?? true
     shortcut = SleepToggleShortcut(
       modifiers: ShortcutModifiers(
         rawValue: defaults.string(forKey: Self.modifiersDefaultsKey) ?? ""

@@ -19,7 +19,7 @@ internal enum SleepControlCoreTests {
     runShortcutTests()
     runBehaviorSpecTests()
     try await runBatterySleepTests()
-    print("Swift tests: 50 passed")
+    print("Swift tests: 63 passed")
   }
 
   private static func runParserTests() {
@@ -75,5 +75,18 @@ internal enum SleepControlCoreTests {
     testLidDisplaySleepOnlyWakesOwnSleep()
     testLidDisplaySleepIgnoresRepeatedEnableAndDisable()
     testLidDisplaySleepHandlesUnknownState()
+    testHotCornerHoldSleepsDisplaysAgainWithoutInput()
+    testHotCornerHoldIgnoresResidualPointerInput()
+    testHotCornerHoldEndsOnUserInput()
+    testHotCornerHoldKeepsItsStartAcrossRepeatedSleeps()
+    testHotCornerHoldIgnoresOtherDisplaySleeps()
+    testHotCornerHoldRespectsTheSwitch()
+    testHotCornerHoldCanEndExplicitly()
+    testHotCornerHoldRecognizesTouchIDInput()
+    testHotCornerSetupMatchesAssignedCornerOnAnyScreen()
+    testHotCornerSetupCoversEveryCorner()
+    testHotCornerSetupRequiresTheAssignedModifier()
+    testHotCornerSetupWithoutAssignmentNeverMatches()
+    testHotCornerHoldPreferenceDefaultsOnAndPersists()
   }
 }
