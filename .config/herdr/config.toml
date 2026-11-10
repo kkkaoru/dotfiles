@@ -11,3 +11,12 @@ split_horizontal = "prefix+h"
 
 [experimental]
 switch_ascii_input_source_in_prefix = true
+
+[ui.sound]
+enabled = false
+# done_path = "sounds/done.mp3"        # 完了したとき
+# request_path = "sounds/request.mp3"  # 対応が必要なとき
+# path = "sounds/notification.mp3"     # 全部同じ音にするならこれだけ
+
+# [ui.sound.agents]
+# claude = "off"                       # エージェント別に default / on / off

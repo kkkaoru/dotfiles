@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "1.4.0",
+  "lastChangelogVersion": "1.5.2",
   "theme": "dracula",
   "tuiMode": "fullscreen",
   "defaultProvider": "openai-codex",
@@ -42,5 +42,10 @@
     "npm:@ogulcancelik/pi-herdr",
     "git:github.com/DietrichGebert/ponytail",
     "npm:pi-chrome"
-  ]
+  ],
+  "extensionChangelogVersions": {
+    "{\"source\":\"npm:pi-ollama-cloud\",\"scope\":\"user\"}": "0.13.1",
+    "{\"source\":\"npm:pi-web-access@0.37.0\",\"scope\":\"user\"}": "0.37.0",
+    "{\"source\":\"npm:pi-chrome\",\"scope\":\"user\"}": "0.15.57"
+  }
 }

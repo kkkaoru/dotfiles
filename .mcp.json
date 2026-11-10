@@ -1,9 +1,5 @@
 {
   "mcpServers": {
-    "chrome-devtools": {
-      "command": "bunx",
-      "args": ["chrome-devtools-mcp"]
-    },
     "context7": {
       "command": "bunx",
       "args": ["@upstash/context7-mcp"]

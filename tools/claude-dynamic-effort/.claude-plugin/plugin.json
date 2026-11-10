@@ -1,19 +1,5 @@
 {
   "name": "dynamic-effort",
-  "version": "0.1.0",
-  "description": "Ramp main-thread reasoning effort with context usage and tool failures (pi-effort-manager port)",
-  "userConfig": {
-    "minEffort": {
-      "type": "string",
-      "title": "Minimum effort",
-      "description": "The lowest reasoning effort a main request is sent with; the work cap stays xhigh.",
-      "options": [
-        "low",
-        "medium",
-        "high",
-        "xhigh"
-      ],
-      "default": "medium"
-    }
-  }
+  "version": "0.2.0",
+  "description": "Run compaction at max effort and every other request at the effort you chose"
 }
