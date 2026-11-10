@@ -73,7 +73,7 @@
       "effortLevel": "medium"
     }
   },
-  "autoCompactWindow": 200000,
+  "autoCompactWindow": 400000,
   "advisorModel": "opus",
   "tui": "fullscreen",
   "skipDangerousModePermissionPrompt": true,
