@@ -18,7 +18,7 @@ A narrative synthesis of the literature, vendor documentation and direct measure
 The report compares options; these are the choices made after it, so read them over its recommendations.
 
 - The effort ladder and the recovery floor are removed. Requests run at the effort the person chose.
-- `autoCompactWindow` is 200,000.
+- `autoCompactWindow` was set to 200,000, then raised to 400,000 after one session compacted 7 times in 82 minutes; see section 6 of `notes/capture_experiments.md`.
 - Compaction stays at `max`, the person's choice, where the report recommended the session effort.
 - The report treats an auto-compaction inside a turn as out of reach of `max`. Stopping the turn with `$.turn.abort` reaches it; see section 5 of `notes/capture_experiments.md`.
 - The stuck note is removed with the floor it depended on.

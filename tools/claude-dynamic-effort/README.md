@@ -10,7 +10,7 @@ for the reasons in [Why this design](#why-this-design).
 - Your `/compact`, an idle auto-compaction and an auto-compaction inside a turn all run at `max`: your
   effort, then `max` for one compaction, then your effort again.
 - An auto-compaction inside a turn stops the turn, compacts, and resumes the work with a prompt.
-- Compaction happens at the size set by `autoCompactWindow` (200,000 in this repository's
+- Compaction happens at the size set by `autoCompactWindow` (400,000 in this repository's
   `.claude/settings.json`), not at the model's 1M window.
 - `/dynamic-effort on|off|status` controls the mod for the current session. A new session starts on;
   a resumed session keeps the switch it had.
@@ -69,10 +69,12 @@ do not measure answer quality.
   raising effort with context size, and the
   [Opus 5.5 guide](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-opus-5-5)
   reserves `xhigh` and `max` for work with a measured quality gain.
-- **`autoCompactWindow` is 200,000.** The earlier 870k compaction point came from the 1M window, not
+- **`autoCompactWindow` is 400,000.** The earlier 870k compaction point came from the 1M window, not
   from anything about effort. Nobody has measured how many tokens `medium` handles on Opus 5.5, so the
-  facts narrow only the lower side: below about 200,000 the compaction count climbs quickly, and 100,000
-  leaves almost no room after session start. 200,000 was the person's choice from that range.
+  facts narrow only the lower side: 100,000 leaves almost no room after session start. 200,000 was tried
+  first and compacted too often. Context right after a compaction was 86k to 107k, which left only 60k
+  to 81k before the 167k threshold, and one session compacted 7 times in 82 minutes. The 367k threshold
+  of 400,000 stays inside the range the one comparison study covers (up to 380K).
 - **Compaction at `max`** is also the person's choice. No study was found that varies only the
   summarizer's effort and measures what follows, so the benefit is unproven. The cost was measured: at
   about 66k to 69k of context, summaries took 945 to 1,133 output tokens at `medium` and 2,658 at `max`.
@@ -90,8 +92,12 @@ Measured in an interactive session with the window at 200,000:
 | Work | Files read in order 1–7, compaction, 8–9, with none skipped |
 
 - **Threshold.** The 2.1.304 binary computes it as `window − min(maxOutput, 20K) − 13K`, so 1M gives 967k
-  and 200,000 gives 167k. The 90% turn-end point is then about 150k. This comes from one binary version,
-  not from the docs.
+  400,000 gives 367k and 200,000 gives 167k. The turn-end point is 90% of that. This comes from one binary
+  version, not from the docs.
+- **Confirmation dialog.** In a direct session `/effort` can open "Change effort level?" after a finished
+  turn. The queue waits for the answer, and `No, go back` keeps the level, so the queued `/compact` runs
+  at that level. The dialog did not appear through a proxy or with `CLAUDE_CODE_TETHER_LIVE=0`, one run
+  each.
 - **Stopping a turn.** `$.turn.abort` leaves no interruption marker. A background Bash command and a
   background subagent both finished after their turn was stopped.
 - **Queue order.** The engine's queue is not strictly first in, first out. A prompt you type or a
