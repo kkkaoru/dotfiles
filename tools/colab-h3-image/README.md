@@ -5,10 +5,17 @@ A100 80GB (High-RAM) as a MiniMax-API-compatible endpoint, reachable through a C
 
 ```bash
 tools/colab-h3-image/up.sh                    # ~40 min on a fresh VM (135 GB of weights), ~4 min warm
-source ~/.config/colab-h3-image/env           # MINIMAX_API_BASE + MINIMAX_API_KEY (key never printed)
+                                              # writes MINIMAX_API_BASE/MINIMAX_API_KEY to the repo .env
 tools/colab-h3-image/generate.sh "a cat yawning" out.png 2048x2048
+H3_SHARE=1 tools/colab-h3-image/generate.sh ...   # also upload to R2 and print a public URL
+scripts/cf-share-image.sh out.png             # share an existing image
 colab stop -s h3img                           # stop billing (~8.9 compute units/hour)
 ```
+
+Both scripts load the dotfiles `.env` (gitignored) through `scripts/lib/dotfiles-env.sh`, so they work
+from any working directory. `MINIMAX_API_BASE` / `MINIMAX_API_KEY` can also be exported for a single
+run to override it. `cf-share-image.sh` uploads to the public `CF_SHARE_BUCKET` R2 bucket
+(default `portfolio`, served from its `r2.dev` domain) and prints the URL.
 
 ## API
 

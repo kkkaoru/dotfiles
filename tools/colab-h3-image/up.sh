@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Bring up MiniMax-H3-Image on a Colab A100 80GB (High-RAM) as a MiniMax-API-compatible endpoint.
 #   tools/colab-h3-image/up.sh          # ~30-40 min on a fresh VM (135 GB of weights)
-#   source ~/.config/colab-h3-image/env # sets MINIMAX_API_BASE and MINIMAX_API_KEY (key never printed)
 #   tools/colab-h3-image/generate.sh "a cat yawning" out.png
 #   colab stop -s h3img                 # stop billing when done
+# up.sh writes MINIMAX_API_BASE/MINIMAX_API_KEY into the repository .env (gitignored),
+# which generate.sh reads from any working directory.
 set -euo pipefail
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
@@ -45,5 +46,10 @@ url="$(run "$here/serve.py" 150 2>/dev/null | grep -oE 'https://[a-z0-9-]+\.tryc
 # Literal $(cat ...) on purpose: the env file reads the key when sourced instead of embedding it.
 # shellcheck disable=SC2016
 printf 'export MINIMAX_API_BASE=%q\nexport MINIMAX_API_KEY="$(cat %q)"\n' "$url" "$conf/api_key" >"$conf/env"
+# Keep the repository .env current so scripts pick up the new tunnel URL from any directory.
+repo_env="$(cd "$here/../.." && pwd)/.env"
+touch "$repo_env"
+sed -i '' -e '/^MINIMAX_API_BASE=/d' -e '/^MINIMAX_API_KEY=/d' "$repo_env"
+{ echo "MINIMAX_API_BASE=$url"; echo "MINIMAX_API_KEY=$(cat "$conf/api_key")"; } >>"$repo_env"
 echo "endpoint: $url (model loading; first request may take minutes)"
-echo "use: source $conf/env"
+echo "use: tools/colab-h3-image/generate.sh 'a cat yawning' out.png"
