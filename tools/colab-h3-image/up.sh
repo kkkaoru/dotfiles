@@ -14,7 +14,14 @@ conf="$HOME/.config/colab-h3-image"
 mkdir -p "$conf" && chmod 700 "$conf"
 [ -s "$conf/api_key" ] || (umask 077 && openssl rand -hex 32 >"$conf/api_key")
 
-run() { colab exec -s "$s" --timeout "${2:-120}" -f "$1"; }
+# colab exec occasionally stops answering; a local hard timeout keeps the driver moving.
+with_timeout() {
+  local limit=$1
+  shift
+  if command -v gtimeout >/dev/null; then gtimeout -k 5 "$limit" "$@"; else "$@"; fi
+}
+
+run() { with_timeout "$((${2:-120} + 60))" colab exec -s "$s" --timeout "${2:-120}" -f "$1"; }
 colab sessions 2>&1 | grep -q "\[$s\]" || colab new -s "$s" --gpu A100 --high-mem
 
 work="$(mktemp -d)"
@@ -39,7 +46,15 @@ print("READY" if done else "RUNNING" if os.path.exists("/content/h3/download.log
 PY
 # Start install/download once; later runs only wait for the markers.
 if run "$work/ready.py" 60 2>/dev/null | grep -q NONE; then run "$here/install.py" 60 >/dev/null; fi
-until run "$work/ready.py" 60 2>/dev/null | grep -q READY; do sleep 30; done
+# Wait for the install/download markers, but fail instead of polling forever (40 min budget).
+for _ in $(seq 1 80); do
+  run "$work/ready.py" 60 2>/dev/null | grep -q READY && break
+  sleep 30
+done
+run "$work/ready.py" 120 2>/dev/null | grep -q READY || {
+  echo "install/download did not finish; see /content/h3/{install,download}.log" >&2
+  exit 1
+}
 
 url="$(run "$here/serve.py" 150 2>/dev/null | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1)"
 [ -n "$url" ] || { echo "no tunnel url" >&2; exit 1; }

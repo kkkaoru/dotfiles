@@ -8,6 +8,8 @@ tools/colab-h3-image/up.sh                    # ~40 min on a fresh VM (135 GB of
                                               # writes MINIMAX_API_BASE/MINIMAX_API_KEY to the repo .env
 tools/colab-h3-image/generate.sh "a cat yawning" out.png 2048x2048
 H3_SHARE=1 tools/colab-h3-image/generate.sh ...   # also upload to R2 and print a public URL
+tools/colab-h3-image/edit.sh "give the cat a santa hat" /tmp/h3-test.png   # image + text -> image
+SIZE=4096x4096 OUT=big.png tools/colab-h3-image/edit.sh "<prompt>" ref1.png ref2.png
 scripts/cf-share-image.sh out.png             # share an existing image
 colab stop -s h3img                           # stop billing (~8.9 compute units/hour)
 ```
@@ -19,18 +21,24 @@ run to override it. `cf-share-image.sh` uploads to the public `CF_SHARE_BUCKET` 
 
 ## API
 
-All POSTs need `Authorization: Bearer $MINIMAX_API_KEY`; anything else gets 401.
+All POSTs need `Authorization: Bearer $MINIMAX_API_KEY`; anything else gets 401. The shapes follow the
+MiniMax H3 API (`/v1/images/generations`, `/v1/images/edits`), with SGLang underneath.
 
 | Endpoint | Request | Response |
 | --- | --- | --- |
-| `POST /v1/images/generations` | MiniMax H3: `prompt`, `size` (`WxH`), `seed`, … | `data[0].b64_json` (PNG) |
-| `POST /v1/image_generation` | MiniMax classic: `prompt`, `aspect_ratio` or `size`, `n` (≤4), `seed` | `data.image_base64[]`, `base_resp` |
+| `POST /v1/images/generations` | text-to-image: `model`, `prompt`, `size` (`WxH`) or `size:"auto"` + `aspect_ratio` + `area` (`1K`/`2K`/`4K`), `n` (≤4), `seed` | `data[].b64_json`, `data[].size`, `output_format`, `request_id` |
+| `POST /v1/images/edits` | image editing: the same plus 1–16 reference images, as JSON `images:[{"image_url":...}]` (https URL or base64 data URI) or as `multipart/form-data` with `image` file parts (OpenAI `images.edit` shape) | same as above |
+| `POST /v1/image_generation` | MiniMax classic body (`prompt`, `size`/`aspect_ratio`, `n`, `seed`) | `data.image_base64[]`, `base_resp` (kept for older clients) |
 | `GET /health` | — (no auth) | `{"status":"ok"}` |
 
-Generation takes 2–3 minutes (≈45 s text encoding on a cold prompt, ≈2 min denoising at 2048x2048).
-The gateway answers 200 immediately and streams whitespace until the JSON is ready, because the
-quick tunnel drops responses without data after 100 s. Errors therefore arrive as HTTP 200 with
-`base_resp.status_code != 0`.
+`response_format` is always `b64_json` and `output_format` is always `png`, whatever the request asks
+for: SGLang returns PNG base64, so no conversion is done. `size:"auto"` is resolved to `WIDTHxHEIGHT`
+from `aspect_ratio` (default 1:1) and `area` (default 4K, i.e. 4096x4096).
+
+Generation takes 2–3 minutes (≈45 s text encoding on a cold prompt, ≈2 min denoising at 2048x2048;
+more at 4K). The gateway answers 200 immediately and streams whitespace until the JSON is ready,
+because the quick tunnel drops responses without data after 100 s. Errors therefore arrive as HTTP 200
+with `base_resp.status_code != 0` and an `error` object.
 
 ## How it works
 
