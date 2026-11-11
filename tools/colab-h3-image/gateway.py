@@ -11,6 +11,7 @@ Standard library only; one request at a time is enough for a single GPU.
 """
 
 import hmac
+import threading
 import json
 import math
 import sys
@@ -72,15 +73,39 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(body.get("prompt"), str) or not body["prompt"].strip():
             self.send_json(400, {"base_resp": {"status_code": 2013, "status_msg": "prompt is required"}})
             return
+        if self.path not in ("/v1/images/generations", "/v1/image_generation"):
+            self.send_json(404, {"base_resp": {"status_code": 404, "status_msg": "not found"}})
+            return
         started = time.time()
+        result: dict = {}
+        worker = threading.Thread(target=self.generate, args=(body, result), daemon=True)
+        worker.start()
+        # Cloudflare cuts responses with no headers after 100 s (HTTP 524), and generation takes longer.
+        # Send 200 headers now, keep the connection alive with JSON-insignificant spaces, then the body.
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        try:
+            while worker.is_alive():
+                worker.join(15)
+                if worker.is_alive():
+                    self.wfile.write(b" ")
+                    self.wfile.flush()
+            self.wfile.write(json.dumps(result).encode())
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        finally:
+            print(f"{self.path} {time.time() - started:.1f}s", file=sys.stderr, flush=True)
+
+    def generate(self, body: dict, result: dict) -> None:
         try:
             if self.path == "/v1/images/generations":
                 body.setdefault("size", "2048x2048")
                 body.setdefault("generator_device", "cpu")
                 body["response_format"] = "b64_json"
                 body.pop("model", None)
-                self.send_json(200, upstream(body))
-            elif self.path == "/v1/image_generation":
+                result.update(upstream(body))
+            else:
                 n = max(1, min(int(body.get("n", 1)), 4))
                 size = body.get("size") or size_for(body.get("aspect_ratio", "1:1"))
                 images = []
@@ -89,24 +114,22 @@ class Handler(BaseHTTPRequestHandler):
                     if "seed" in body:
                         request["seed"] = int(body["seed"]) + i
                     images.append(upstream(request)["data"][0]["b64_json"])
-                self.send_json(200, {
+                result.update({
                     "id": uuid.uuid4().hex,
                     "data": {"image_base64": images},
                     "metadata": {"success_count": len(images), "failed_count": 0, "size": size},
                     "base_resp": {"status_code": 0, "status_msg": "success"},
                 })
-            else:
-                self.send_json(404, {"base_resp": {"status_code": 404, "status_msg": "not found"}})
         except urllib.error.HTTPError as error:
-            self.send_json(error.code, {"base_resp": {"status_code": error.code, "status_msg": error.read().decode(errors="replace")[:500]}})
-        except Exception as error:  # surface upstream failures instead of hanging the client
-            self.send_json(502, {"base_resp": {"status_code": 1000, "status_msg": f"{type(error).__name__}: {error}"[:500]}})
-        finally:
-            print(f"{self.path} {time.time() - started:.1f}s", file=sys.stderr, flush=True)
+            # Status is already 200 (streamed); the error is reported MiniMax-style in base_resp.
+            result.update({"base_resp": {"status_code": error.code, "status_msg": error.read().decode(errors="replace")[:500]}})
+        except Exception as error:
+            result.update({"base_resp": {"status_code": 1000, "status_msg": f"{type(error).__name__}: {error}"[:500]}})
 
     def log_message(self, *args) -> None:  # requests are logged above without headers (no key leakage)
         pass
 
 
 if __name__ == "__main__":
-    ThreadingHTTPServer(("127.0.0.1", 8080), Handler).serve_forever()
+    # 8080 is taken by Colab's own web proxy on the VM.
+    ThreadingHTTPServer(("127.0.0.1", 18080), Handler).serve_forever()

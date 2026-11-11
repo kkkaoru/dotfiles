@@ -10,7 +10,12 @@ size="${3:-2048x2048}"
 
 body="$(jq -nc --arg p "$prompt" --arg s "$size" '{model:"MiniMax-H3-Image",prompt:$p,size:$s,seed:42,response_format:"b64_json"}')"
 # Key goes via a header file on stdin-free curl config, so it never appears in `ps`.
-curl -fsS --max-time 1800 -K - "${MINIMAX_API_BASE%/}/v1/images/generations" \
-  -H 'Content-Type: application/json' -d "$body" <<<"header = \"Authorization: Bearer $MINIMAX_API_KEY\"" \
-  | jq -er '.data[0].b64_json' | base64 -d >"$out"
+response="$(curl -fsS --max-time 1800 -K - "${MINIMAX_API_BASE%/}/v1/images/generations" \
+  -H 'Content-Type: application/json' -d "$body" <<<"header = \"Authorization: Bearer $MINIMAX_API_KEY\"")"
+# The server streams keep-alive spaces before the JSON; errors arrive as base_resp with HTTP 200.
+if ! jq -e '.data[0].b64_json' >/dev/null <<<"$response"; then
+  jq -c '.base_resp // .' <<<"$response" >&2
+  exit 1
+fi
+jq -r '.data[0].b64_json' <<<"$response" | base64 -d >"$out"
 file "$out"
