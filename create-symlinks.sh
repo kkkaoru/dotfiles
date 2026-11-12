@@ -311,6 +311,13 @@ if [ -d "${DOTPATH}/.config" ]; then
           link_path "${app_path}/config.toml" "${dest}/config.toml"
         fi
         ;;
+      herdr-app)
+        # Herdr.app regenerates its guide, mods and layouts here; link only user files.
+        mkdir -p "${dest}/themes" "${dest}/mods" "${dest}/layouts"
+        for file in keys.json settings.json themes/dracula.json layouts/main-emoji.json mods/prefix mods/spaces-emoji mods/agents-emoji; do
+          link_path "${app_path}/${file}" "${dest}/${file}"
+        done
+        ;;
       *)
         link_path "$app_path" "$dest"
         ;;

@@ -1,0 +1,11 @@
+{
+  "zoom": 1.0,
+  "sounds": {
+    "enabled": true
+  },
+  "font_ligatures": false,
+  "minimum_contrast": 1.0,
+  "theme": "dracula",
+  "font": "UDEV Gothic Thin 35NFLG",
+  "font_size": 13
+}
