@@ -68,13 +68,12 @@ const HEADERLESS = new Set(["sec-2", "sec-1"]);
 // (16x21) repeated to its left to fill the row.
 const NYAN_FRAMES = 12;
 const NYAN_MS = 90;
-// Fur, and poptart frosting with its sprinkles; each pair of them is a variant. The first is the original.
+// Fur, and poptart frosting with its sprinkles. The first of each is the original.
 const FUR = ["#585858", "#d7875f", "#e4e4e4", "#d7d7af", "#5f87af", "#875f00"]; // gray, ginger, white, cream, blue, brown
 const POPTART = [["#d787af", "#d70087"], ["#875f5f", "#ffd7af"], ["#87af5f", "#ffffff"], ["#ffff87", "#ff8700"], ["#87ffd7", "#ff5f87"], ["#ffffff", "#00afff"]]; // strawberry, chocolate, matcha, lemon, mint, vanilla
 // Rainbow palettes baked into the frames: len(RAINBOWS) in the build script.
 const NYAN_RAINBOWS = 6;
-const NYAN_VARIANTS = FUR.length * POPTART.length * NYAN_RAINBOWS;
-// Minutes since an agent's state changed at which its cat moves on to the next fur, poptart and rainbow.
+// Minutes since an agent's state changed at which its cat changes.
 const NYAN_STAGES = [1, 5, 15, 60, 360, 1440];
 const nyanStage = (ms) => NYAN_STAGES.filter((m) => ms >= m * 60000).length;
 const fnv = (s) => {
@@ -82,24 +81,29 @@ const fnv = (s) => {
   for (const ch of s) h = Math.imul(h ^ ch.codePointAt(0), 0x01000193) >>> 0;
   return h;
 };
-// Each agent's fur and poptart: its tab name and address hashed, moved on to the next free variant
-// when another agent has it. Keys go in sorted order, so the same agents get the same cats.
-// Past NYAN_VARIANTS agents cats repeat.
+// Each agent's fur, poptart and rainbow, picked one part at a time: its key (tab name, address and
+// elapsed-time stage) hashed with the part's name, moved on to the next free choice when another
+// agent has it. Keys go in sorted order, so the same agents at the same stages get the same cats.
+// Past as many agents as a part has choices it repeats.
+const NYAN_PARTS = [["fur", FUR.length], ["poptart", POPTART.length], ["rainbow", NYAN_RAINBOWS]];
 function nyanVariants(keys) {
-  const taken = new Set();
-  const out = new Map();
-  for (const [addr, key] of [...keys].sort((x, y) => (x[1] < y[1] ? -1 : x[1] > y[1] ? 1 : 0))) {
-    let v = fnv(key) % NYAN_VARIANTS;
-    for (let i = 0; i < NYAN_VARIANTS && taken.has(v); i++) v = (v + 1) % NYAN_VARIANTS;
-    taken.add(v);
-    if (taken.size === NYAN_VARIANTS) taken.clear();
-    out.set(addr, v);
+  const sorted = [...keys].sort((x, y) => (x[1] < y[1] ? -1 : x[1] > y[1] ? 1 : 0));
+  const out = new Map(sorted.map(([addr]) => [addr, []]));
+  for (const [part, n] of NYAN_PARTS) {
+    const taken = new Set();
+    for (const [addr, key] of sorted) {
+      let v = fnv(`${part}\u0000${key}`) % n;
+      for (let i = 0; i < n && taken.has(v); i++) v = (v + 1) % n;
+      taken.add(v);
+      if (taken.size === n) taken.clear();
+      out.get(addr).push(v);
+    }
   }
   return out;
 }
 {
-  const v = nyanVariants([["t1", "a\u0000t1"], ["t2", "a\u0000t2"], ["t3", "b\u0000t3"]]);
-  if (new Set(v.values()).size !== 3) throw new Error("nyanVariants repeats a cat");
+  const v = [...nyanVariants([["t1", "a\u0000t1\u00000"], ["t2", "a\u0000t2\u00000"], ["t3", "b\u0000t3\u00001"]]).values()];
+  for (const i of [0, 1, 2]) if (new Set(v.map((p) => p[i])).size !== 3) throw new Error(`nyanVariants repeats a ${NYAN_PARTS[i][0]}`);
 }
 
 // The agent's icon from the app's program table: a one-color glyph or a picture.
@@ -203,12 +207,7 @@ export default class Agents extends View {
   nyan(addr, status, h) {
     if (status === "working") this.working.add(addr);
     const f = this.frames.get(addr) ?? 0;
-    const v = this.variants?.get(addr) ?? 0;
-    const at = this.changed[addr]?.at;
-    const stage = at ? nyanStage(Date.now() - at) : 0;
-    const fur = (v % FUR.length + stage) % FUR.length;
-    const taste = (Math.floor(v / FUR.length) % POPTART.length + stage) % POPTART.length;
-    const r = (Math.floor(v / (FUR.length * POPTART.length)) + stage) % NYAN_RAINBOWS;
+    const [fur, taste, r] = this.variants?.get(addr) ?? [0, 0, 0];
     const tails = Math.ceil((find(layout(), "sidebar")?.size?.px ?? 480) / (h * 16 / 21));
     return h_flex().flex_1().min_w(0).h(h).overflow_hidden().rounded(3).bg("#00005f").justify_end()
       .children(Array.from({ length: tails }, () => image(`mods/agents-emoji/nyan/tail-${r}-${f}.svg`).h(h).w(h * 16 / 21).flex_none()))
@@ -310,8 +309,9 @@ export default class Agents extends View {
     list = [...pinned, ...rest];
     setAgentOrder(list.map((a) => a.address));
     // Sub-agents go by their parent's tab.
+    const stage = (addr) => (this.changed[addr] ? nyanStage(now - this.changed[addr].at) : 0);
     this.variants = nyanVariants(list.flatMap((a) => [a, ...this.tree(all, a.address).map((s) => ({ ...s.t, tab_name: a.tab_name }))])
-      .map((a) => [a.address, `${a.tab_name}\u0000${a.address}`]));
+      .map((a) => [a.address, `${a.tab_name}\u0000${a.address}\u0000${stage(a.address)}`]));
 
     const withKids = (a, i) => {
       const subs = collapsed ? [] : this.tree(all, a.address);
