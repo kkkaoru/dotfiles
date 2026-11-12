@@ -81,17 +81,15 @@ const fnv = (s) => {
   for (const ch of s) h = Math.imul(h ^ ch.codePointAt(0), 0x01000193) >>> 0;
   return h;
 };
-// Each agent's fur, poptart and rainbow, picked one part at a time: its key (tab name, address and
-// elapsed-time stage) hashed with the part's name, moved on to the next free choice when another
-// agent has it. Keys go in sorted order, so the same agents at the same stages get the same cats.
-// Past as many agents as a part has choices it repeats.
+// Each agent's fur, poptart and rainbow, picked one part at a time: its key (tab name, address,
+// program, row position and elapsed-time stage) hashed with the part's name, moved on to the next
+// free choice when an agent above has it. Past as many agents as a part has choices it repeats.
 const NYAN_PARTS = [["fur", FUR.length], ["poptart", POPTART.length], ["rainbow", NYAN_RAINBOWS]];
 function nyanVariants(keys) {
-  const sorted = [...keys].sort((x, y) => (x[1] < y[1] ? -1 : x[1] > y[1] ? 1 : 0));
-  const out = new Map(sorted.map(([addr]) => [addr, []]));
+  const out = new Map(keys.map(([addr]) => [addr, []]));
   for (const [part, n] of NYAN_PARTS) {
     const taken = new Set();
-    for (const [addr, key] of sorted) {
+    for (const [addr, key] of keys) {
       let v = fnv(`${part}\u0000${key}`) % n;
       for (let i = 0; i < n && taken.has(v); i++) v = (v + 1) % n;
       taken.add(v);
@@ -308,10 +306,10 @@ export default class Agents extends View {
     const rest = list.filter((a) => !a.pinned);
     list = [...pinned, ...rest];
     setAgentOrder(list.map((a) => a.address));
-    // Sub-agents go by their parent's tab.
+    // Rows in list order, sub-agents under their parent and by its tab.
     const stage = (addr) => (this.changed[addr] ? nyanStage(now - this.changed[addr].at) : 0);
     this.variants = nyanVariants(list.flatMap((a) => [a, ...this.tree(all, a.address).map((s) => ({ ...s.t, tab_name: a.tab_name }))])
-      .map((a) => [a.address, `${a.tab_name}\u0000${a.address}\u0000${stage(a.address)}`]));
+      .map((a, i) => [a.address, [a.tab_name, a.address, a.program?.key ?? "", i, stage(a.address)].join("\u0000")]));
 
     const withKids = (a, i) => {
       const subs = collapsed ? [] : this.tree(all, a.address);
