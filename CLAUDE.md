@@ -13,6 +13,9 @@ integrations. These instructions apply to agents working here, including pi and 
 - `./scripts/executor-cloudflare-auth.sh <cloudflare-integration>` — Start the service's
   OAuth setup and open the authorization page. Login and consent are the user's actions.
 - `./scripts/setup-omlx.sh` — Download Qwen3.8-27B-4bit and DFlash2, then restart oMLX.
+- `./scripts/build-udev-gothic-light.sh [Light|ExtraLight|Thin]` — Build UDEV Gothic <weight> 35NFLG
+  (JetBrains Mono Latin glyphs at that weight; installs fontforge) into `~/Library/Fonts` for Herdr.app's
+  terminal font, which uses Thin.
 - `./init-ssh.sh` — Initialize SSH configuration.
 - `./scripts/cleanup-deepswe-disk.sh` — Remove legacy DeepSWE/Pier images and job directories;
   run only when cleanup is requested.
