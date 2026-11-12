@@ -1,3 +1,36 @@
+# Restart a running server that is too old for the installed client. An
+# incompatible server must go; a merely stale one keeps its pane processes
+# unless the user agrees, because stopping a server exits them.
+function __herdr_cwd_refresh_server --argument-names session
+    set -l session_args
+    set -l stop_cmd server stop
+    if test -n "$session"
+        set session_args --session "$session"
+        set stop_cmd session stop "$session"
+    end
+
+    set -l server_status (command herdr $session_args status server --json 2>/dev/null)
+    set -l verdict (printf '%s\n' "$server_status" | command jq -r '
+        if .running != true then "ok"
+        elif .compatible == false then "incompatible"
+        elif .restart_needed == true or .server_binary_stale == true then "stale"
+        else "ok" end' 2>/dev/null)
+
+    switch "$verdict"
+        case incompatible
+            command herdr $stop_cmd >/dev/null 2>&1
+        case stale
+            set -l server_version (printf '%s\n' "$server_status" | command jq -r '.version // "unknown"')
+            echo "hdr: Herdr server $server_version is older than the installed client" >&2
+            if isatty stdin
+                read -l -P "hdr: stop and restart it? Running pane processes will exit. [y/N] " answer
+                if string match -qi 'y*' -- "$answer"
+                    command herdr $stop_cmd >/dev/null 2>&1
+                end
+            end
+    end
+end
+
 function herdr-cwd --description "Open a Herdr workspace for the current directory path"
     argparse -i 's/sync' 'd/directory-session' -- $argv; or return 2
 
@@ -14,6 +47,7 @@ function herdr-cwd --description "Open a Herdr workspace for the current directo
 
     # Keep the existing persistent, per-directory session as an explicit mode.
     if set -q _flag_directory_session
+        __herdr_cwd_refresh_server "$workspace_label"
         command herdr --session "$workspace_label" $argv
         return $status
     end
@@ -23,6 +57,8 @@ function herdr-cwd --description "Open a Herdr workspace for the current directo
         command herdr $argv
         return $status
     end
+
+    __herdr_cwd_refresh_server
 
     # No option (or --sync) uses the shared default session and its path-based
     # workspaces, matching hdr's behavior before session-mode options existed.
@@ -59,7 +95,11 @@ function herdr-cwd --description "Open a Herdr workspace for the current directo
                     set server_running false
                 end
                 if test "$server_running" != true
-                    command herdr server </dev/null >/dev/null 2>&1 &
+                    # Explicit `herdr server` keeps the caller's launchd context,
+                    # which can lose Mach services after logout (breaks `zed .`).
+                    # Ask for the per-user context herdr's own auto-start uses.
+                    # shortcut: undocumented herdr env, recheck if herdr adds a flag.
+                    env HERDR_MACOS_SERVER_CONTEXT=user herdr server </dev/null >/dev/null 2>&1 &
                     disown $last_pid 2>/dev/null; or true
                 end
             end
