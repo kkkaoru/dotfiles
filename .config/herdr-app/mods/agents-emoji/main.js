@@ -64,13 +64,9 @@ const SECTION_STATUS = { 4: "blocked", 3: "done", 2: "working" };
 // Working and Idle sections are listed without their header row (label and count).
 const HEADERLESS = new Set(["sec-2", "sec-1"]);
 
-function duration(ms) {
-  const m = Math.floor(ms / 60000);
-  if (m < 1) return "<1m";
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
-}
+// Nyan cat frames, cut from klange/nyancat's animation.c around the cat and its rainbow (49x21).
+const NYAN_FRAMES = 12;
+const NYAN_MS = 90;
 
 // The agent's icon from the app's program table: a one-color glyph or a picture.
 function icon(p, size, color) {
@@ -87,7 +83,13 @@ export default class Agents extends View {
     this.pendingPins = JSON.parse(localStorage.getItem("pins") ?? "[]");
     if (!this.pendingPins.length) localStorage.removeItem("pins");
     this.migratingPins = new Set();
-    cx.timer.every(30000, (cx) => cx.notify());
+    // Each agent's nyan cat frame: it advances only while the agent works, so a stop pauses it there.
+    this.frames = new Map();
+    this.working = new Set();
+    cx.timer.every(NYAN_MS, (cx) => {
+      for (const addr of this.working) this.frames.set(addr, ((this.frames.get(addr) ?? 0) + 1) % NYAN_FRAMES);
+      if (this.working.size) cx.notify();
+    });
   }
 
   // Stamps agents whose state changed. Done and idle count as one: looking at a
@@ -161,6 +163,12 @@ export default class Agents extends View {
         .when(s.id === on, (el) => el.child(svg("mods/workspace-chrome/check.svg").size(14).flex_none().text_color(t.foreground)))));
   }
 
+  // Rows drawn this render say which cats run, sub-agents without a pane included.
+  nyan(addr, status, h) {
+    if (status === "working") this.working.add(addr);
+    return image(`mods/agents-emoji/nyan/${this.frames.get(addr) ?? 0}.svg`).h(h).w(h * 49 / 21).flex_none().rounded(3);
+  }
+
   peek(addr) {
     run("terminal.peek", { terminal: addr });
   }
@@ -199,8 +207,9 @@ export default class Agents extends View {
         .when(Boolean(l), el => el.border_l(1.5).border_color(t.input))
         .when(l === "└" || l === "├", el => el.border_b(1.5).rounded_bl(6))))
       .when(Boolean(pic), el => el.child(div().mr(8).child(pic)))
-      .child(div().flex_1().truncate().text_color(on ? t.foreground : t.muted).child(k.name || k.template || k.program?.name || k.address))
-      .child(this.status(t, { status: st }, compact));
+      .tooltip(k.name || k.template || k.program?.name || k.address)
+      .child(div().flex_1().min_w(0).child(this.nyan(k.address, st, 18)))
+      .when(st !== "working", (el) => el.child(this.status(t, { status: st }, true)));
   }
 
   // compact: a ! for blocked where a header already says "Needs you".
@@ -221,6 +230,7 @@ export default class Agents extends View {
     const sort = sortOf();
     let list = agents();
     this.listed = new Map(list.map((a) => [a.address, a.status]));
+    this.working = new Set();
     const all = terminals();
     this.migratePins(all);
     const shown = focused()?.agent;
@@ -311,8 +321,6 @@ export default class Agents extends View {
           .child(div().flex_1().min_w(0).whitespace_nowrap().text_right().text_color(t.muted).child(String(i + 1)))
           .child(h_flex().w(14).flex_none().items_center().justify_center().child(this.status(t, a, true)));
       }
-      const when = this.since(a);
-      const idle = a.status === "idle" && !a.focused;
       const isPinned = a.pinned;
       const pin = div()
         .id(`pin-${a.address}`)
@@ -358,14 +366,14 @@ export default class Agents extends View {
             this.folded.has(a.address) ? this.folded.delete(a.address) : this.folded.add(a.address);
             cx.notify();
           })).child(pic)))
+        .tooltip(full && more ? `${name} \u00b7 ${more}` : name)
         .child(h_flex().flex_1().min_w(0).gap(5).items_center()
-          .child(full && a.space_name ? spaceAvatar(a.space, a.space_name, t) : div().min_w(0).max_w(full && more ? 120 : 200).truncate().text_color(idle ? t.muted : t.foreground).child(name))
-          .when(full && Boolean(more), el => el.child(div().flex_1().min_w(0).truncate().text_color(t.dim).child(`\u00b7 ${more}`))))
+          .when(full && Boolean(a.space_name), el => el.child(spaceAvatar(a.space, a.space_name, t)))
+          .child(this.nyan(a.address, a.status, 22)))
         .when(Boolean(machine), el => el.child(div().text_size(10).text_color(t.dim).child(machine)))
         .when(subs.length > 0, el => el.child(fold(a, subs)))
         .when(this.hovered === a.address, el => el.child(pin))
-        .when(this.hovered !== a.address && Boolean(when), el => el.child(div().flex_none().text_size(11).text_color(t.dim).child(duration(now - when))))
-        .child(this.status(t, a, byPriority && !isPinned));
+        .when(a.status !== "working", el => el.child(this.status(t, a, true)));
     };
 
     // Groups in list order: spaces (grouped) or priority sections. Agents of a
