@@ -3,9 +3,8 @@
 
 Usage: scripts/build-nyancat-frames.py <nyancat>/src/animation.c
 Writes .config/herdr-app/mods/agents-emoji/nyan/<layer>-<frame>.svg for each frame:
-- cat: the cat with one rainbow period, without its rainbow and the cells the mod colors;
+- cat-<palette>: the cat with one rainbow period in one of RAINBOWS, without the cells the mod colors;
 - fur, frosting, sprinkles: one-color masks of those cells, which the mod tints with `svg()`;
-- rainbow-<palette>: the rainbow cells of `cat` in one of RAINBOWS;
 - trail-<palette>: TAIL_PERIODS more rainbow periods that the mod repeats to fill a row; wide, so a
   row needs few images (NYAN_TAIL in the mod is their width).
 The mod's NYAN_RAINBOWS must match len(RAINBOWS).
@@ -78,9 +77,9 @@ def rainbow_only(frame):
 out = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../.config/herdr-app/mods/agents-emoji/nyan')
 os.makedirs(out, exist_ok=True)
 for i, f in enumerate(frames):
-    open(f'{out}/cat-{i}.svg', 'w').write(svg(f, TAIL[0], right, {k: c for k, c in COLORS.items() if k not in BANDS + ''.join(MASKS.values())}))
+    base = {k: c for k, c in COLORS.items() if k not in MASKS.values()}
     for r, bands in enumerate(RAINBOWS):
-        open(f'{out}/rainbow-{r}-{i}.svg', 'w').write(svg(f, TAIL[0], right, dict(zip(BANDS, bands)), sky=False))
+        open(f'{out}/cat-{r}-{i}.svg', 'w').write(svg(f, TAIL[0], right, {**base, **dict(zip(BANDS, bands))}))
         open(f'{out}/trail-{r}-{i}.svg', 'w').write(svg(rainbow_only(f), *TAIL, {**COLORS, **dict(zip(BANDS, bands))}, repeat=TAIL_PERIODS))
     for name, cell in MASKS.items():
         open(f'{out}/{name}-{i}.svg', 'w').write(svg(f, TAIL[0], right, {cell: '#000000'}, sky=False))

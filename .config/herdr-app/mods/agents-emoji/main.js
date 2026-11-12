@@ -116,8 +116,7 @@ function nyanStrip({ h, fur, taste, r, width }, f) {
   return h_flex().flex_1().min_w(0).h(h).overflow_hidden().rounded(3).bg("#00005f").justify_end()
     .children(Array.from({ length: Math.ceil(width / tw) }, () => image(`mods/agents-emoji/nyan/trail-${r}-${f}.svg`).h(h).w(tw).flex_none()))
     .child(div().relative().w(w).h(h).flex_none()
-      .child(layer(image(`mods/agents-emoji/nyan/cat-${f}.svg`)))
-      .child(layer(image(`mods/agents-emoji/nyan/rainbow-${r}-${f}.svg`)))
+      .child(layer(image(`mods/agents-emoji/nyan/cat-${r}-${f}.svg`)))
       .child(layer(svg(`mods/agents-emoji/nyan/fur-${f}.svg`)).text_color(FUR[fur]))
       .child(layer(svg(`mods/agents-emoji/nyan/frosting-${f}.svg`)).text_color(frosting))
       .child(layer(svg(`mods/agents-emoji/nyan/sprinkles-${f}.svg`)).text_color(sprinkles)));
@@ -133,10 +132,10 @@ class NyanCat extends View {
     this.schedule();
   }
 
-  // One wake per frame, none in between: 90 ms while working, a second while stopped.
+  // One wake per frame, none in between: 90 ms while working with the window in front, else a second.
   schedule() {
     this.tick?.cancel();
-    this.tick = this.timer.after(this.p.working ? NYAN_MS : NYAN_RESTING_MS, (cx) => {
+    this.tick = this.timer.after(this.p.working && window()?.active ? NYAN_MS : NYAN_RESTING_MS, (cx) => {
       this.f = (this.f + 1) % NYAN_FRAMES;
       cx.notify();
       this.schedule();
