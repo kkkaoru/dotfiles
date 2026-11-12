@@ -64,7 +64,8 @@ const SECTION_STATUS = { 4: "blocked", 3: "done", 2: "working" };
 // Working and Idle sections are listed without their header row (label and count).
 const HEADERLESS = new Set(["sec-2", "sec-1"]);
 
-// Nyan cat frames, cut from klange/nyancat's animation.c around the cat and its rainbow (49x21).
+// Nyan cat frames from scripts/build-nyancat-frames.py: the cat (47x21) and a rainbow tail
+// (16x21) repeated to its left to fill the row.
 const NYAN_FRAMES = 12;
 const NYAN_MS = 90;
 
@@ -166,7 +167,11 @@ export default class Agents extends View {
   // Rows drawn this render say which cats run, sub-agents without a pane included.
   nyan(addr, status, h) {
     if (status === "working") this.working.add(addr);
-    return image(`mods/agents-emoji/nyan/${this.frames.get(addr) ?? 0}.svg`).h(h).w(h * 49 / 21).flex_none().rounded(3);
+    const f = this.frames.get(addr) ?? 0;
+    const tails = Math.ceil((find(layout(), "sidebar")?.size?.px ?? 480) / (h * 16 / 21));
+    return h_flex().flex_1().min_w(0).h(h).overflow_hidden().rounded(3).bg("#00005f").justify_end()
+      .children(Array.from({ length: tails }, () => image(`mods/agents-emoji/nyan/tail-${f}.svg`).h(h).w(h * 16 / 21).flex_none()))
+      .child(image(`mods/agents-emoji/nyan/cat-${f}.svg`).h(h).w(h * 47 / 21).flex_none());
   }
 
   peek(addr) {
@@ -208,7 +213,7 @@ export default class Agents extends View {
         .when(l === "└" || l === "├", el => el.border_b(1.5).rounded_bl(6))))
       .when(Boolean(pic), el => el.child(div().mr(8).child(pic)))
       .tooltip(k.name || k.template || k.program?.name || k.address)
-      .child(div().flex_1().min_w(0).child(this.nyan(k.address, st, 18)))
+      .child(this.nyan(k.address, st, 18))
       .when(st !== "working", (el) => el.child(this.status(t, { status: st }, true)));
   }
 
