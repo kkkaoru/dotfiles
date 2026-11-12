@@ -15,6 +15,8 @@ integrations. These instructions apply to agents working here, including pi and 
 - `./scripts/setup-omlx.sh` — Download Qwen3.8-27B-4bit and DFlash2, then restart oMLX.
 - `./scripts/setup-plamo-translate.sh` — Install mlx-lm and convert PLaMo 3 Translate 0.8B to MLX 4-bit
   for `tools/claude-plamo-translate` (run once per Mac; the model is not in Git).
+- `./scripts/setup-herdr-app.sh` — After `./create-symlinks.sh`, set up Herdr.app: build the font
+  `settings.json` names (if missing) and switch the open window to the `main-emoji` layout.
 - `./scripts/build-udev-gothic-light.sh [Light|ExtraLight|Thin]` — Build UDEV Gothic <weight> 35NFLG
   (JetBrains Mono Latin glyphs at that weight; installs fontforge) into `~/Library/Fonts` for Herdr.app's
   terminal font, which uses Thin.
