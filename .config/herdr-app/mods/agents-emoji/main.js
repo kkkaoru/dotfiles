@@ -68,6 +68,31 @@ const HEADERLESS = new Set(["sec-2", "sec-1"]);
 // (16x21) repeated to its left to fill the row.
 const NYAN_FRAMES = 12;
 const NYAN_MS = 90;
+const NYAN_VARIANTS = 6;
+const fnv = (s) => {
+  let h = 0x811c9dc5;
+  for (const ch of s) h = Math.imul(h ^ ch.codePointAt(0), 0x01000193) >>> 0;
+  return h;
+};
+// Each agent's fur and poptart: its tab name and address hashed, moved on to the next free variant
+// when another agent has it. Keys go in sorted order, so the same agents get the same cats.
+// shortcut: past NYAN_VARIANTS agents cats repeat; add variants to the build script if that bites.
+function nyanVariants(keys) {
+  const taken = new Set();
+  const out = new Map();
+  for (const [addr, key] of [...keys].sort((x, y) => (x[1] < y[1] ? -1 : x[1] > y[1] ? 1 : 0))) {
+    let v = fnv(key) % NYAN_VARIANTS;
+    for (let i = 0; i < NYAN_VARIANTS && taken.has(v); i++) v = (v + 1) % NYAN_VARIANTS;
+    taken.add(v);
+    if (taken.size === NYAN_VARIANTS) taken.clear();
+    out.set(addr, v);
+  }
+  return out;
+}
+{
+  const v = nyanVariants([["t1", "a\u0000t1"], ["t2", "a\u0000t2"], ["t3", "b\u0000t3"]]);
+  if (new Set(v.values()).size !== 3) throw new Error("nyanVariants repeats a cat");
+}
 
 // The agent's icon from the app's program table: a one-color glyph or a picture.
 function icon(p, size, color) {
@@ -171,7 +196,7 @@ export default class Agents extends View {
     const tails = Math.ceil((find(layout(), "sidebar")?.size?.px ?? 480) / (h * 16 / 21));
     return h_flex().flex_1().min_w(0).h(h).overflow_hidden().rounded(3).bg("#00005f").justify_end()
       .children(Array.from({ length: tails }, () => image(`mods/agents-emoji/nyan/tail-${f}.svg`).h(h).w(h * 16 / 21).flex_none()))
-      .child(image(`mods/agents-emoji/nyan/cat-${f}.svg`).h(h).w(h * 47 / 21).flex_none());
+      .child(image(`mods/agents-emoji/nyan/cat-${this.variants?.get(addr) ?? 0}-${f}.svg`).h(h).w(h * 47 / 21).flex_none());
   }
 
   peek(addr) {
@@ -255,6 +280,9 @@ export default class Agents extends View {
     const rest = list.filter((a) => !a.pinned);
     list = [...pinned, ...rest];
     setAgentOrder(list.map((a) => a.address));
+    // Sub-agents go by their parent's tab.
+    this.variants = nyanVariants(list.flatMap((a) => [a, ...this.tree(all, a.address).map((s) => ({ ...s.t, tab_name: a.tab_name }))])
+      .map((a) => [a.address, `${a.tab_name}\u0000${a.address}`]));
 
     const withKids = (a, i) => {
       const subs = collapsed ? [] : this.tree(all, a.address);
