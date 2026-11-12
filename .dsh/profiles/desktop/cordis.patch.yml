@@ -41,23 +41,6 @@
         models:
           - id: deepseek-v4.1-flash:1017
             name: deepseek-v4.1-flash:1017
-      anthropic:
-        apiKeyEnv: ANTHROPIC_API_KEY
-        models:
-          - id: claude-opus-5-5
-            name: Claude Opus 5.5
-            contextWindow: 1000000
-            maxTokens: 128000
-            input:
-              - text
-              - image
-          - id: claude-sonnet-5-5
-            name: Claude Sonnet 5.5
-            contextWindow: 1000000
-            maxTokens: 128000
-            input:
-              - text
-              - image
 - id: permission
   name: "@deepseek-ai/dsh-permission-presets"
   config:
