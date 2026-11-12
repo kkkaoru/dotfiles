@@ -71,7 +71,9 @@ const NYAN_MS = 90;
 // Fur, and poptart frosting with its sprinkles; each pair of them is a variant. The first is the original.
 const FUR = ["#585858", "#d7875f", "#e4e4e4", "#d7d7af", "#5f87af", "#875f00"]; // gray, ginger, white, cream, blue, brown
 const POPTART = [["#d787af", "#d70087"], ["#875f5f", "#ffd7af"], ["#87af5f", "#ffffff"], ["#ffff87", "#ff8700"], ["#87ffd7", "#ff5f87"], ["#ffffff", "#00afff"]]; // strawberry, chocolate, matcha, lemon, mint, vanilla
-const NYAN_VARIANTS = FUR.length * POPTART.length;
+// Rainbow palettes baked into the frames: len(RAINBOWS) in the build script.
+const NYAN_RAINBOWS = 6;
+const NYAN_VARIANTS = FUR.length * POPTART.length * NYAN_RAINBOWS;
 const fnv = (s) => {
   let h = 0x811c9dc5;
   for (const ch of s) h = Math.imul(h ^ ch.codePointAt(0), 0x01000193) >>> 0;
@@ -196,19 +198,22 @@ export default class Agents extends View {
   nyan(addr, status, h) {
     if (status === "working") this.working.add(addr);
     const f = this.frames.get(addr) ?? 0;
+    const v = this.variants?.get(addr) ?? 0;
+    const r = Math.floor(v / (FUR.length * POPTART.length));
     const tails = Math.ceil((find(layout(), "sidebar")?.size?.px ?? 480) / (h * 16 / 21));
     return h_flex().flex_1().min_w(0).h(h).overflow_hidden().rounded(3).bg("#00005f").justify_end()
-      .children(Array.from({ length: tails }, () => image(`mods/agents-emoji/nyan/tail-${f}.svg`).h(h).w(h * 16 / 21).flex_none()))
-      .child(this.cat(this.variants?.get(addr) ?? 0, f, h));
+      .children(Array.from({ length: tails }, () => image(`mods/agents-emoji/nyan/tail-${r}-${f}.svg`).h(h).w(h * 16 / 21).flex_none()))
+      .child(this.cat(v, r, f, h));
   }
 
-  // The cat's frame with its variant's fur and poptart tinted over it.
-  cat(v, f, h) {
-    const [frosting, sprinkles] = POPTART[Math.floor(v / FUR.length)];
+  // The cat's frame with its variant's rainbow, fur and poptart over it.
+  cat(v, r, f, h) {
+    const [frosting, sprinkles] = POPTART[Math.floor(v / FUR.length) % POPTART.length];
     const w = h * 47 / 21;
     const layer = (el) => el.absolute().top_0().left_0().w(w).h(h);
     return div().relative().w(w).h(h).flex_none()
       .child(layer(image(`mods/agents-emoji/nyan/cat-${f}.svg`)))
+      .child(layer(image(`mods/agents-emoji/nyan/rainbow-${r}-${f}.svg`)))
       .child(layer(svg(`mods/agents-emoji/nyan/fur-${f}.svg`)).text_color(FUR[v % FUR.length]))
       .child(layer(svg(`mods/agents-emoji/nyan/frosting-${f}.svg`)).text_color(frosting))
       .child(layer(svg(`mods/agents-emoji/nyan/sprinkles-${f}.svg`)).text_color(sprinkles));
