@@ -6,7 +6,8 @@ Writes .config/herdr-app/mods/agents-emoji/nyan/<layer>-<frame>.svg for each fra
 - cat: the cat with one rainbow period, without its rainbow and the cells the mod colors;
 - fur, frosting, sprinkles: one-color masks of those cells, which the mod tints with `svg()`;
 - rainbow-<palette>: the rainbow cells of `cat` in one of RAINBOWS;
-- tail-<palette>: one more rainbow period (16 columns) that the mod repeats to fill a row.
+- trail-<palette>: TAIL_PERIODS more rainbow periods that the mod repeats to fill a row; wide, so a
+  row needs few images (NYAN_TAIL in the mod is their width).
 The mod's NYAN_RAINBOWS must match len(RAINBOWS).
 """
 import os
@@ -43,6 +44,7 @@ RAINBOWS = [
 MASKS = {'fur': '*', 'frosting': '$', 'sprinkles': '-'}
 # The rainbow repeats every 16 columns from column 2; the cat starts at column 18 in every frame.
 TAIL = (2, 18)
+TAIL_PERIODS = 8
 
 frames = [re.findall(r'"([^"]*)"', body) for body in re.findall(r'frame\d+\[\] = \{(.*?)\};', open(sys.argv[1]).read(), re.S)]
 assert len(frames) == 12, len(frames)
@@ -52,11 +54,11 @@ top, bottom = min(y for y, _, _ in drawn) - 1, max(y for y, _, _ in drawn) + 1
 right = max(x for _, x, _ in drawn) + 2
 
 
-def svg(frame, x0, x1, colors=COLORS, sky=True):
-    w, h = x1 - x0, bottom - top + 1
+def svg(frame, x0, x1, colors=COLORS, sky=True, repeat=1):
+    w, h = (x1 - x0) * repeat, bottom - top + 1
     rects = []
     for y in range(top, bottom + 1):
-        row, x = frame[y][x0:x1], 0
+        row, x = frame[y][x0:x1] * repeat, 0
         while x < len(row):
             n = len(row[x:]) - len(row[x:].lstrip(row[x]))
             if row[x] != ',' and row[x] in colors:
@@ -72,7 +74,7 @@ for i, f in enumerate(frames):
     open(f'{out}/cat-{i}.svg', 'w').write(svg(f, TAIL[0], right, {k: c for k, c in COLORS.items() if k not in BANDS + ''.join(MASKS.values())}))
     for r, bands in enumerate(RAINBOWS):
         open(f'{out}/rainbow-{r}-{i}.svg', 'w').write(svg(f, TAIL[0], right, dict(zip(BANDS, bands)), sky=False))
-        open(f'{out}/tail-{r}-{i}.svg', 'w').write(svg(f, *TAIL, {**COLORS, **dict(zip(BANDS, bands))}))
+        open(f'{out}/trail-{r}-{i}.svg', 'w').write(svg(f, *TAIL, {**COLORS, **dict(zip(BANDS, bands))}, repeat=TAIL_PERIODS))
     for name, cell in MASKS.items():
         open(f'{out}/{name}-{i}.svg', 'w').write(svg(f, TAIL[0], right, {cell: '#000000'}, sky=False))
-print(f'cat {right - TAIL[0]}x{bottom - top + 1}, tail {TAIL[1] - TAIL[0]}x{bottom - top + 1}')
+print(f'cat {right - TAIL[0]}x{bottom - top + 1}, trail {(TAIL[1] - TAIL[0]) * TAIL_PERIODS}x{bottom - top + 1}')

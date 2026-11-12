@@ -65,7 +65,8 @@ const SECTION_STATUS = { 4: "blocked", 3: "done", 2: "working" };
 const HEADERLESS = new Set(["sec-2", "sec-1"]);
 
 // Nyan cat frames from scripts/build-nyancat-frames.py: the cat (47x21) and a rainbow tail
-// (16x21) repeated to its left to fill the row.
+// (NYAN_TAIL x 21) repeated to its left to fill the row.
+const NYAN_TAIL = 128;
 const NYAN_FRAMES = 12;
 const NYAN_MS = 90;
 // A stopped agent's cat creeps on at 1 FPS.
@@ -106,6 +107,54 @@ function nyanVariants(keys) {
   for (const i of [0, 1, 2]) if (new Set(v.map((p) => p[i])).size !== 3) throw new Error(`nyanVariants repeats a ${NYAN_PARTS[i][0]}`);
 }
 
+// One frame of a cat: its rainbow tail, then the cat with its rainbow, fur and poptart over it.
+function nyanStrip({ h, fur, taste, r, width }, f) {
+  const [frosting, sprinkles] = POPTART[taste];
+  const w = h * 47 / 21;
+  const tw = h * NYAN_TAIL / 21;
+  const layer = (el) => el.absolute().top_0().left_0().w(w).h(h);
+  return h_flex().flex_1().min_w(0).h(h).overflow_hidden().rounded(3).bg("#00005f").justify_end()
+    .children(Array.from({ length: Math.ceil(width / tw) }, () => image(`mods/agents-emoji/nyan/trail-${r}-${f}.svg`).h(h).w(tw).flex_none()))
+    .child(div().relative().w(w).h(h).flex_none()
+      .child(layer(image(`mods/agents-emoji/nyan/cat-${f}.svg`)))
+      .child(layer(image(`mods/agents-emoji/nyan/rainbow-${r}-${f}.svg`)))
+      .child(layer(svg(`mods/agents-emoji/nyan/fur-${f}.svg`)).text_color(FUR[fur]))
+      .child(layer(svg(`mods/agents-emoji/nyan/frosting-${f}.svg`)).text_color(frosting))
+      .child(layer(svg(`mods/agents-emoji/nyan/sprinkles-${f}.svg`)).text_color(sprinkles)));
+}
+
+// One agent's cat as its own view, so a frame redraws the cat and not the whole list. It runs
+// while the agent works and creeps while it's stopped, going on from where it was.
+class NyanCat extends View {
+  init(p, cx) {
+    this.p = p;
+    this.f = 0;
+    this.timer = cx.timer;
+    this.schedule();
+  }
+
+  // One wake per frame, none in between: 90 ms while working, a second while stopped.
+  schedule() {
+    this.tick?.cancel();
+    this.tick = this.timer.after(this.p.working ? NYAN_MS : NYAN_RESTING_MS, (cx) => {
+      this.f = (this.f + 1) % NYAN_FRAMES;
+      cx.notify();
+      this.schedule();
+    });
+  }
+
+  update(p) {
+    const started = p.working && !this.p.working;
+    this.p = p;
+    // A cat that starts running shouldn't wait out its resting second.
+    if (started) this.schedule();
+  }
+
+  render() {
+    return nyanStrip(this.p, this.f);
+  }
+}
+
 // The agent's icon from the app's program table: a one-color glyph or a picture.
 function icon(p, size, color) {
   if (!p?.icon) return null;
@@ -121,17 +170,34 @@ export default class Agents extends View {
     this.pendingPins = JSON.parse(localStorage.getItem("pins") ?? "[]");
     if (!this.pendingPins.length) localStorage.removeItem("pins");
     this.migratingPins = new Set();
-    // Each agent's nyan cat frame: it runs while the agent works and creeps while it's stopped,
-    // going on from where it was. The resting tick also redraws elapsed-time stages.
-    this.frames = new Map();
-    this.working = new Set();
-    this.resting = new Set();
-    const step = (cats, cx) => {
-      for (const addr of cats) this.frames.set(addr, ((this.frames.get(addr) ?? 0) + 1) % NYAN_FRAMES);
-      if (cats.size) cx.notify();
-    };
-    cx.timer.every(NYAN_MS, (cx) => step(this.working, cx));
-    cx.timer.every(NYAN_RESTING_MS, (cx) => step(this.resting, cx));
+    // Each agent's cat view, and the props its row asked for last render. Views can't be made
+    // while rendering, so a task makes, updates and drops them; until then a row draws a still cat.
+    this.cats = new Map();
+    this.wanted = new Map();
+    cx.timer.every(NYAN_MS, (cx) => {
+      if (!this.dirty) return;
+      this.dirty = false;
+      let made = false;
+      for (const [addr, p] of this.wanted) {
+        const cat = this.cats.get(addr);
+        if (!cat) {
+          this.cats.set(addr, { entity: cx.new(NyanCat, p), key: JSON.stringify(p) });
+          made = true;
+        } else if (cat.key !== JSON.stringify(p)) {
+          cat.entity.set_props(p);
+          cat.key = JSON.stringify(p);
+        }
+      }
+      for (const [addr, cat] of this.cats) {
+        if (this.wanted.has(addr)) continue;
+        cat.entity.release();
+        this.cats.delete(addr);
+        made = true;
+      }
+      if (made) cx.notify();
+    });
+    // Elapsed-time stages pick new cats.
+    cx.timer.every(30000, (cx) => cx.notify());
   }
 
   // Stamps agents whose state changed. Done and idle count as one: looking at a
@@ -205,28 +271,13 @@ export default class Agents extends View {
         .when(s.id === on, (el) => el.child(svg("mods/workspace-chrome/check.svg").size(14).flex_none().text_color(t.foreground)))));
   }
 
-  // Rows drawn this render say which cats run, sub-agents without a pane included.
+  // A row's cat: its view once the task has made it, a still cat until then. Rows drawn this
+  // render say which cats the task keeps, sub-agents without a pane included.
   nyan(addr, status, h) {
-    (status === "working" ? this.working : this.resting).add(addr);
-    const f = this.frames.get(addr) ?? 0;
     const [fur, taste, r] = this.variants?.get(addr) ?? [0, 0, 0];
-    const tails = Math.ceil((find(layout(), "sidebar")?.size?.px ?? 480) / (h * 16 / 21));
-    return h_flex().flex_1().min_w(0).h(h).overflow_hidden().rounded(3).bg("#00005f").justify_end()
-      .children(Array.from({ length: tails }, () => image(`mods/agents-emoji/nyan/tail-${r}-${f}.svg`).h(h).w(h * 16 / 21).flex_none()))
-      .child(this.cat(fur, taste, r, f, h));
-  }
-
-  // The cat's frame with its rainbow, fur and poptart over it.
-  cat(fur, taste, r, f, h) {
-    const [frosting, sprinkles] = POPTART[taste];
-    const w = h * 47 / 21;
-    const layer = (el) => el.absolute().top_0().left_0().w(w).h(h);
-    return div().relative().w(w).h(h).flex_none()
-      .child(layer(image(`mods/agents-emoji/nyan/cat-${f}.svg`)))
-      .child(layer(image(`mods/agents-emoji/nyan/rainbow-${r}-${f}.svg`)))
-      .child(layer(svg(`mods/agents-emoji/nyan/fur-${f}.svg`)).text_color(FUR[fur]))
-      .child(layer(svg(`mods/agents-emoji/nyan/frosting-${f}.svg`)).text_color(frosting))
-      .child(layer(svg(`mods/agents-emoji/nyan/sprinkles-${f}.svg`)).text_color(sprinkles));
+    const p = { h, fur, taste, r, width: this.width, working: status === "working" };
+    this.wanted.set(addr, p);
+    return this.cats.get(addr)?.entity ?? nyanStrip(p, 0);
   }
 
   peek(addr) {
@@ -290,8 +341,9 @@ export default class Agents extends View {
     const sort = sortOf();
     let list = agents();
     this.listed = new Map(list.map((a) => [a.address, a.status]));
-    this.working = new Set();
-    this.resting = new Set();
+    this.wanted = new Map();
+    this.dirty = true;
+    this.width = find(layout(), "sidebar")?.size?.px ?? 480;
     const all = terminals();
     this.migratePins(all);
     const shown = focused()?.agent;
