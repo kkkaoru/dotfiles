@@ -68,13 +68,20 @@ def svg(frame, x0, x1, colors=COLORS, sky=True, repeat=1):
             f'shape-rendering="crispEdges">{f'<rect width="{w}" height="{h}" fill="{COLORS[","]}"/>' if sky else ""}{"".join(rects)}</svg>\n')
 
 
+def rainbow_only(frame):
+    """The frame with anything but sky and rainbow (the cat's tail reaches column 17 in some frames)
+    taken from one period to its left, so a repeated period has no bits of cat."""
+    period = TAIL[1] - TAIL[0]
+    return [''.join(c if c in ',.' + BANDS or x < period else r[x - period] for x, c in enumerate(r)) for r in frame]
+
+
 out = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../.config/herdr-app/mods/agents-emoji/nyan')
 os.makedirs(out, exist_ok=True)
 for i, f in enumerate(frames):
     open(f'{out}/cat-{i}.svg', 'w').write(svg(f, TAIL[0], right, {k: c for k, c in COLORS.items() if k not in BANDS + ''.join(MASKS.values())}))
     for r, bands in enumerate(RAINBOWS):
         open(f'{out}/rainbow-{r}-{i}.svg', 'w').write(svg(f, TAIL[0], right, dict(zip(BANDS, bands)), sky=False))
-        open(f'{out}/trail-{r}-{i}.svg', 'w').write(svg(f, *TAIL, {**COLORS, **dict(zip(BANDS, bands))}, repeat=TAIL_PERIODS))
+        open(f'{out}/trail-{r}-{i}.svg', 'w').write(svg(rainbow_only(f), *TAIL, {**COLORS, **dict(zip(BANDS, bands))}, repeat=TAIL_PERIODS))
     for name, cell in MASKS.items():
         open(f'{out}/{name}-{i}.svg', 'w').write(svg(f, TAIL[0], right, {cell: '#000000'}, sky=False))
 print(f'cat {right - TAIL[0]}x{bottom - top + 1}, trail {(TAIL[1] - TAIL[0]) * TAIL_PERIODS}x{bottom - top + 1}')
