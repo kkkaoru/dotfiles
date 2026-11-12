@@ -74,6 +74,9 @@ const POPTART = [["#d787af", "#d70087"], ["#875f5f", "#ffd7af"], ["#87af5f", "#f
 // Rainbow palettes baked into the frames: len(RAINBOWS) in the build script.
 const NYAN_RAINBOWS = 6;
 const NYAN_VARIANTS = FUR.length * POPTART.length * NYAN_RAINBOWS;
+// Minutes since an agent's state changed at which its cat moves on to the next fur, poptart and rainbow.
+const NYAN_STAGES = [1, 5, 15, 60, 360, 1440];
+const nyanStage = (ms) => NYAN_STAGES.filter((m) => ms >= m * 60000).length;
 const fnv = (s) => {
   let h = 0x811c9dc5;
   for (const ch of s) h = Math.imul(h ^ ch.codePointAt(0), 0x01000193) >>> 0;
@@ -117,6 +120,8 @@ export default class Agents extends View {
     // Each agent's nyan cat frame: it advances only while the agent works, so a stop pauses it there.
     this.frames = new Map();
     this.working = new Set();
+    // Stages go by elapsed time, idle agents included.
+    cx.timer.every(30000, (cx) => cx.notify());
     cx.timer.every(NYAN_MS, (cx) => {
       for (const addr of this.working) this.frames.set(addr, ((this.frames.get(addr) ?? 0) + 1) % NYAN_FRAMES);
       if (this.working.size) cx.notify();
@@ -199,22 +204,26 @@ export default class Agents extends View {
     if (status === "working") this.working.add(addr);
     const f = this.frames.get(addr) ?? 0;
     const v = this.variants?.get(addr) ?? 0;
-    const r = Math.floor(v / (FUR.length * POPTART.length));
+    const at = this.changed[addr]?.at;
+    const stage = at ? nyanStage(Date.now() - at) : 0;
+    const fur = (v % FUR.length + stage) % FUR.length;
+    const taste = (Math.floor(v / FUR.length) % POPTART.length + stage) % POPTART.length;
+    const r = (Math.floor(v / (FUR.length * POPTART.length)) + stage) % NYAN_RAINBOWS;
     const tails = Math.ceil((find(layout(), "sidebar")?.size?.px ?? 480) / (h * 16 / 21));
     return h_flex().flex_1().min_w(0).h(h).overflow_hidden().rounded(3).bg("#00005f").justify_end()
       .children(Array.from({ length: tails }, () => image(`mods/agents-emoji/nyan/tail-${r}-${f}.svg`).h(h).w(h * 16 / 21).flex_none()))
-      .child(this.cat(v, r, f, h));
+      .child(this.cat(fur, taste, r, f, h));
   }
 
-  // The cat's frame with its variant's rainbow, fur and poptart over it.
-  cat(v, r, f, h) {
-    const [frosting, sprinkles] = POPTART[Math.floor(v / FUR.length) % POPTART.length];
+  // The cat's frame with its rainbow, fur and poptart over it.
+  cat(fur, taste, r, f, h) {
+    const [frosting, sprinkles] = POPTART[taste];
     const w = h * 47 / 21;
     const layer = (el) => el.absolute().top_0().left_0().w(w).h(h);
     return div().relative().w(w).h(h).flex_none()
       .child(layer(image(`mods/agents-emoji/nyan/cat-${f}.svg`)))
       .child(layer(image(`mods/agents-emoji/nyan/rainbow-${r}-${f}.svg`)))
-      .child(layer(svg(`mods/agents-emoji/nyan/fur-${f}.svg`)).text_color(FUR[v % FUR.length]))
+      .child(layer(svg(`mods/agents-emoji/nyan/fur-${f}.svg`)).text_color(FUR[fur]))
       .child(layer(svg(`mods/agents-emoji/nyan/frosting-${f}.svg`)).text_color(frosting))
       .child(layer(svg(`mods/agents-emoji/nyan/sprinkles-${f}.svg`)).text_color(sprinkles));
   }
