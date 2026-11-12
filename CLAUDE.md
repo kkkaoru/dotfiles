@@ -13,6 +13,8 @@ integrations. These instructions apply to agents working here, including pi and 
 - `./scripts/executor-cloudflare-auth.sh <cloudflare-integration>` — Start the service's
   OAuth setup and open the authorization page. Login and consent are the user's actions.
 - `./scripts/setup-omlx.sh` — Download Qwen3.8-27B-4bit and DFlash2, then restart oMLX.
+- `./scripts/setup-plamo-translate.sh` — Install mlx-lm and convert PLaMo 3 Translate 0.8B to MLX 4-bit
+  for `tools/claude-plamo-translate` (run once per Mac; the model is not in Git).
 - `./scripts/build-udev-gothic-light.sh [Light|ExtraLight|Thin]` — Build UDEV Gothic <weight> 35NFLG
   (JetBrains Mono Latin glyphs at that weight; installs fontforge) into `~/Library/Fonts` for Herdr.app's
   terminal font, which uses Thin.
@@ -41,6 +43,8 @@ integrations. These instructions apply to agents working here, including pi and 
   `--plugin-dir`).
 - `tools/claude-goal-pacing/` — Claude Code mod that ends an idle `/goal` continuation instead
   of re-checking it at once (`bun run check`).
+- `tools/claude-plamo-translate/` — Claude Code mod that translates prompts (default en) and the
+  text Claude shows you (default ja) with PLaMo 3 Translate on a local `mlx_lm.server` (`bun run check`).
 - `tools/dsh-dracula-theme/` — A DeepSeek Harness bundle (no build step) that
   injects the Dracula palette into the Web and Desktop clients. Install it into
   a profile with `dsh plugin --profile <name> add <checkout>/tools/dsh-dracula-theme`.
@@ -118,6 +122,7 @@ Verification is component-specific; the root package does not provide a universa
 - `tools/pi-goal-extension/`: `bun run check`; `bun run smoke` for offline native SDK/tmux integration
 - `tools/pi-loop-extension/`, `tools/pi-tmux-timeout-extension/`: `bun run check`
 - `tools/claude-dynamic-effort/`: `bun run check` (vitest coverage and `claude plugin validate`)
+- `tools/claude-plamo-translate/`: `bun run check`
 - Other components: inspect their `package.json` and README for required checks.
 - Shell changes: check syntax; for all changes, run `git diff --check`.
 

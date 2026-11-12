@@ -1,0 +1,26 @@
+{
+  "name": "plamo-translate",
+  "version": "0.1.0",
+  "description": "Translate prompts before the model reads them and Claude's text and questions before you read them, with PLaMo 3 Translate on mlx-lm",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "replyLanguage": {
+      "type": "string",
+      "title": "Reply language",
+      "description": "Language Claude's text and questions are shown in (PLaMo code such as ja, en, zh-hans). off: show replies as written.",
+      "default": "ja"
+    },
+    "promptLanguage": {
+      "type": "string",
+      "title": "Prompt language",
+      "description": "Language your prompts are translated into before the model reads them. off: send prompts as typed.",
+      "default": "en"
+    },
+    "port": {
+      "type": "number",
+      "title": "mlx-lm server port",
+      "description": "Local port of the mlx_lm.server that serves PLaMo; started on demand when nothing listens there.",
+      "default": 18555
+    }
+  }
+}
