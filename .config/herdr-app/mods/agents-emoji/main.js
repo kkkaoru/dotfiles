@@ -72,7 +72,7 @@ const NYAN_MS = 90;
 const FUR = ["#585858", "#d7875f", "#e4e4e4", "#d7d7af", "#5f87af", "#875f00"]; // gray, ginger, white, cream, blue, brown
 const POPTART = [["#d787af", "#d70087"], ["#875f5f", "#ffd7af"], ["#87af5f", "#ffffff"], ["#ffff87", "#ff8700"], ["#87ffd7", "#ff5f87"], ["#ffffff", "#00afff"]]; // strawberry, chocolate, matcha, lemon, mint, vanilla
 // Rainbow palettes baked into the frames: len(RAINBOWS) in the build script.
-const NYAN_RAINBOWS = 6;
+const NYAN_RAINBOWS = 12;
 // Minutes since an agent's state changed at which its cat changes.
 const NYAN_STAGES = [1, 5, 15, 60, 360, 1440];
 const nyanStage = (ms) => NYAN_STAGES.filter((m) => ms >= m * 60000).length;
