@@ -32,6 +32,12 @@ RAINBOWS = [
     ('#5fffaf', '#00ffd7', '#00d7ff', '#5f87ff', '#875fff', '#d75fff'),  # aurora
     ('#ff00ff', '#ff0087', '#00ffff', '#00ff87', '#ffff00', '#5f00ff'),  # neon
     ('#ffffd7', '#ffd787', '#d7af5f', '#af875f', '#875f5f', '#5f3a3a'),  # coffee
+    ('#ffffff', '#ffd7ff', '#ffafd7', '#ff87af', '#d75f87', '#af5f87'),  # sakura
+    ('#ffffff', '#d7ffff', '#afffff', '#87d7ff', '#5fafff', '#5f87d7'),  # ice
+    ('#ffd700', '#ff8700', '#ff0000', '#af0000', '#5f0000', '#262626'),  # lava
+    ('#ffd75f', '#ff875f', '#d75f00', '#af5f00', '#875f00', '#5f3a00'),  # autumn
+    ('#ffffff', '#d7afff', '#af5fff', '#5f00ff', '#3a00af', '#00005f'),  # galaxy
+    ('#00ff00', '#00d700', '#00af00', '#008700', '#005f00', '#003a00'),  # matrix
 ]
 # The cells the mod tints: fur, frosting, sprinkles.
 MASKS = {'fur': '*', 'frosting': '$', 'sprinkles': '-'}
