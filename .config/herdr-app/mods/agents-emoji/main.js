@@ -68,6 +68,8 @@ const HEADERLESS = new Set(["sec-2", "sec-1"]);
 // (16x21) repeated to its left to fill the row.
 const NYAN_FRAMES = 12;
 const NYAN_MS = 90;
+// A stopped agent's cat creeps on at 1 FPS.
+const NYAN_RESTING_MS = 1000;
 // Fur, and poptart frosting with its sprinkles. The first of each is the original.
 const FUR = ["#585858", "#d7875f", "#e4e4e4", "#d7d7af", "#5f87af", "#875f00"]; // gray, ginger, white, cream, blue, brown
 const POPTART = [["#d787af", "#d70087"], ["#875f5f", "#ffd7af"], ["#87af5f", "#ffffff"], ["#ffff87", "#ff8700"], ["#87ffd7", "#ff5f87"], ["#ffffff", "#00afff"]]; // strawberry, chocolate, matcha, lemon, mint, vanilla
@@ -119,15 +121,17 @@ export default class Agents extends View {
     this.pendingPins = JSON.parse(localStorage.getItem("pins") ?? "[]");
     if (!this.pendingPins.length) localStorage.removeItem("pins");
     this.migratingPins = new Set();
-    // Each agent's nyan cat frame: it advances only while the agent works, so a stop pauses it there.
+    // Each agent's nyan cat frame: it runs while the agent works and creeps while it's stopped,
+    // going on from where it was. The resting tick also redraws elapsed-time stages.
     this.frames = new Map();
     this.working = new Set();
-    // Stages go by elapsed time, idle agents included.
-    cx.timer.every(30000, (cx) => cx.notify());
-    cx.timer.every(NYAN_MS, (cx) => {
-      for (const addr of this.working) this.frames.set(addr, ((this.frames.get(addr) ?? 0) + 1) % NYAN_FRAMES);
-      if (this.working.size) cx.notify();
-    });
+    this.resting = new Set();
+    const step = (cats, cx) => {
+      for (const addr of cats) this.frames.set(addr, ((this.frames.get(addr) ?? 0) + 1) % NYAN_FRAMES);
+      if (cats.size) cx.notify();
+    };
+    cx.timer.every(NYAN_MS, (cx) => step(this.working, cx));
+    cx.timer.every(NYAN_RESTING_MS, (cx) => step(this.resting, cx));
   }
 
   // Stamps agents whose state changed. Done and idle count as one: looking at a
@@ -203,7 +207,7 @@ export default class Agents extends View {
 
   // Rows drawn this render say which cats run, sub-agents without a pane included.
   nyan(addr, status, h) {
-    if (status === "working") this.working.add(addr);
+    (status === "working" ? this.working : this.resting).add(addr);
     const f = this.frames.get(addr) ?? 0;
     const [fur, taste, r] = this.variants?.get(addr) ?? [0, 0, 0];
     const tails = Math.ceil((find(layout(), "sidebar")?.size?.px ?? 480) / (h * 16 / 21));
@@ -287,6 +291,7 @@ export default class Agents extends View {
     let list = agents();
     this.listed = new Map(list.map((a) => [a.address, a.status]));
     this.working = new Set();
+    this.resting = new Set();
     const all = terminals();
     this.migratePins(all);
     const shown = focused()?.agent;
