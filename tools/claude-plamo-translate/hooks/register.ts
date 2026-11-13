@@ -29,9 +29,16 @@ interface CompletionBody {
 
 const OFF: string = 'off'
 const HOST: string = 'http://127.0.0.1'
-// Written by scripts/setup-plamo-translate.sh.
-const SERVER_BIN: string = '.local/bin/mlx_lm.server'
-const MODEL_DIR: string = '.local/share/plamo-translate/plamo-3-translate-0.8b-mlx-4bit'
+// Written by scripts/setup-plamo-translate.sh: mlx-lm on a Mac, llama.cpp on Linux and Windows.
+const MLX_SERVER: string = '.local/bin/mlx_lm.server'
+const MLX_MODEL: string = '.local/share/plamo-translate/plamo-3-translate-0.8b-mlx-4bit'
+const LLAMA_SERVER: string = '.local/share/plamo-translate/llama.cpp/llama-server'
+const GGUF_MODEL: string = '.local/share/plamo-translate/plamo-3-translate-0.8b-Q4_K_M.gguf'
+// Input and output together, as the GGUF model card runs llama-server.
+const LLAMA_CONTEXT: string = '16384'
+const WINDOWS: string = 'Windows_NT'
+// PLaMo's own markers end a translation; llama-server does not stop on them by itself.
+const STOP: readonly string[] = ['<|plamo:tag|>', '<|plamo:bos|>']
 const READY_TIMEOUT_MS: number = 60_000
 const READY_POLL_MS: number = 500
 // Every text block of the session's responses, the ones between tool calls included.
@@ -84,12 +91,36 @@ async function waitReady(engine: EngineInterface, port: number, deadline: number
   return waitReady(engine, port, deadline)
 }
 
+const mlxArgv = (home: string, port: number): string[] => [
+  `${home}/${MLX_SERVER}`,
+  '--model',
+  `${home}/${MLX_MODEL}`,
+  '--port',
+  String(port),
+  '--trust-remote-code',
+]
+
+const llamaArgv = (home: string, port: number, os: string | undefined): string[] => [
+  `${home}/${LLAMA_SERVER}${os === WINDOWS ? '.exe' : ''}`,
+  '-m',
+  `${home}/${GGUF_MODEL}`,
+  '-c',
+  LLAMA_CONTEXT,
+  '--port',
+  String(port),
+]
+
+// Windows has no HOME unless Git Bash started the session.
+async function serverArgv(engine: EngineInterface, port: number): Promise<string[]> {
+  const home = `${(await engine.env.get('HOME')) ?? (await engine.env.get('USERPROFILE'))}`
+  return (await engine.fs.exists(`${home}/${MLX_SERVER}`))
+    ? mlxArgv(home, port)
+    : llamaArgv(home, port, await engine.env.get('OS'))
+}
+
 // The child lives as long as this loop: it ends with the session or a reload of the mod.
 async function runServer(engine: EngineInterface, port: number): Promise<void> {
-  const home = await engine.env.get('HOME')
-  const stream = engine.process.spawn({
-    argv: [`${home}/${SERVER_BIN}`, '--model', `${home}/${MODEL_DIR}`, '--port', String(port), '--trust-remote-code'],
-  })
+  const stream = engine.process.spawn({ argv: await serverArgv(engine, port) })
   // oxlint-disable-next-line no-await-in-loop -- the child's output arrives in order, one piece at a time
   for await (const chunk of stream) {
     engine.ui.log(`plamo-translate server: ${chunk.text.trim()}`, { to: 'debug' })
@@ -100,7 +131,7 @@ async function runServer(engine: EngineInterface, port: number): Promise<void> {
 async function startServer(engine: EngineInterface, port: number): Promise<boolean> {
   void runServer(engine, port).catch((error: unknown) => {
     server.starting = null
-    engine.ui.log(`plamo-translate: starting mlx_lm.server failed: ${String(error)}`, { to: 'debug' })
+    engine.ui.log(`plamo-translate: starting the PLaMo server failed: ${String(error)}`, { to: 'debug' })
   })
   server.failed = !(await waitReady(engine, port, (await engine.clock.now()) + READY_TIMEOUT_MS))
   return !server.failed
@@ -129,7 +160,7 @@ async function complete(engine: EngineInterface, port: number, prompt: string, t
   const response = await engine.http.fetch(`${HOST}:${port}/v1/completions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ prompt, max_tokens: maxTokens(text), temperature: 0 }),
+    body: JSON.stringify({ prompt, max_tokens: maxTokens(text), temperature: 0, stop: STOP }),
   })
   return response.ok ? completionText(JSON.parse(response.text)) : null
 }

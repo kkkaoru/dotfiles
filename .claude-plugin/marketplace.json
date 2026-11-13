@@ -15,7 +15,7 @@
     {
       "name": "plamo-translate",
       "source": "./tools/claude-plamo-translate",
-      "description": "Translate prompts and displayed text with PLaMo 3 Translate on a local mlx_lm.server"
+      "description": "Translate prompts and displayed text with PLaMo 3 Translate on a local mlx_lm.server or llama-server"
     }
   ]
 }

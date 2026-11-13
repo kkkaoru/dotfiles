@@ -19,6 +19,8 @@ interface Fake {
   readonly spawned: string[][]
   readonly toasts: string[]
   readonly logs: string[]
+  readonly env: Record<string, string>
+  readonly files: Set<string>
   dialogs: Record<string, string> | undefined
   healthy: boolean
   healOnSleep: boolean
@@ -42,6 +44,8 @@ async function setup(options: Record<string, string | number>): Promise<Fake> {
     spawned: [],
     toasts: [],
     logs: [],
+    env: { HOME: '/Users/me' },
+    files: new Set(['/Users/me/.local/bin/mlx_lm.server']),
     dialogs: undefined,
     healthy: true,
     healOnSleep: false,
@@ -85,7 +89,8 @@ const engine = (fake: Fake): Record<string, unknown> => ({
       fake.healthy ||= fake.healOnSleep
     },
   },
-  env: { get: async () => '/Users/me' },
+  env: { get: async (name: string) => fake.env[name] },
+  fs: { exists: async (path: string) => fake.files.has(path) },
   process: { spawn: ({ argv }: { argv: string[] }) => serverOutput(fake, argv) },
   ui: {
     toast: (text: string) => fake.toasts.push(text),
@@ -152,6 +157,7 @@ test('a Japanese prompt reaches the model in English', async () => {
       '<|plamo:tag|>dataset<|plamo:msg|>translation<|plamo:tag|>input<|plamo:msg|>タブを追加するショートカットを教えて<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>en<|plamo:msg|>',
     max_tokens: 136,
     temperature: 0,
+    stop: ['<|plamo:tag|>', '<|plamo:bos|>'],
   })
 })
 
@@ -206,6 +212,46 @@ test('a stopped server is started once and the prompt is translated when it is r
   ])
 })
 
+test('without mlx-lm the llama.cpp server is started with the GGUF model', async () => {
+  const fake = await setup(OPTIONS)
+  fake.healthy = false
+  fake.healOnSleep = true
+  fake.files.clear()
+  await call(fake, 'prompt.submit', prompt('日本語'))
+  expect(fake.spawned).toStrictEqual([
+    [
+      '/Users/me/.local/share/plamo-translate/llama.cpp/llama-server',
+      '-m',
+      '/Users/me/.local/share/plamo-translate/plamo-3-translate-0.8b-Q4_K_M.gguf',
+      '-c',
+      '16384',
+      '--port',
+      '18555',
+    ],
+  ])
+})
+
+test('on Windows the llama.cpp server is found under USERPROFILE with its .exe', async () => {
+  const fake = await setup(OPTIONS)
+  fake.healthy = false
+  fake.healOnSleep = true
+  fake.files.clear()
+  delete fake.env.HOME
+  Object.assign(fake.env, { USERPROFILE: 'C:\\Users\\me', OS: 'Windows_NT' })
+  await call(fake, 'prompt.submit', prompt('日本語'))
+  expect(fake.spawned).toStrictEqual([
+    [
+      'C:\\Users\\me/.local/share/plamo-translate/llama.cpp/llama-server.exe',
+      '-m',
+      'C:\\Users\\me/.local/share/plamo-translate/plamo-3-translate-0.8b-Q4_K_M.gguf',
+      '-c',
+      '16384',
+      '--port',
+      '18555',
+    ],
+  ])
+})
+
 test('a server that never answers leaves the prompt as typed and warns once', async () => {
   const fake = await setup(OPTIONS)
   fake.healthy = false
@@ -230,7 +276,7 @@ test('a server that cannot start is logged', async () => {
       },
     } }
   await Reflect.apply(hookFor(fake, 'prompt.submit').hook, undefined, [broken, prompt('日本語'), (value: unknown) => value])
-  expect(fake.logs[0]?.startsWith('plamo-translate: starting mlx_lm.server failed')).toBe(true)
+  expect(fake.logs[0]?.startsWith('plamo-translate: starting the PLaMo server failed')).toBe(true)
 })
 
 test('session start warms the server', async () => {

@@ -1,7 +1,7 @@
 {
   "name": "plamo-translate",
   "version": "0.1.0",
-  "description": "Translate prompts before the model reads them and Claude's text and questions before you read them, with PLaMo 3 Translate on mlx-lm",
+  "description": "Translate prompts before the model reads them and Claude's text and questions before you read them, with PLaMo 3 Translate on mlx-lm or llama.cpp",
   "types": "./types/index.d.ts",
   "userConfig": {
     "replyLanguage": {
@@ -18,8 +18,8 @@
     },
     "port": {
       "type": "number",
-      "title": "mlx-lm server port",
-      "description": "Local port of the mlx_lm.server that serves PLaMo; started on demand when nothing listens there.",
+      "title": "PLaMo server port",
+      "description": "Local port of the mlx_lm.server or llama-server that serves PLaMo; started on demand when nothing listens there.",
       "default": 18555
     }
   }

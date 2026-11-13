@@ -13,8 +13,9 @@ integrations. These instructions apply to agents working here, including pi and 
 - `./scripts/executor-cloudflare-auth.sh <cloudflare-integration>` — Start the service's
   OAuth setup and open the authorization page. Login and consent are the user's actions.
 - `./scripts/setup-omlx.sh` — Download Qwen3.8-27B-4bit and DFlash2, then restart oMLX.
-- `./scripts/setup-plamo-translate.sh` — Install mlx-lm and convert PLaMo 3 Translate 0.8B to MLX 4-bit
-  for `tools/claude-plamo-translate` (run once per Mac; the model is not in Git).
+- `./scripts/setup-plamo-translate.sh` — Set up PLaMo 3 Translate 0.8B for `tools/claude-plamo-translate`
+  (run once per machine; the model is not in Git): mlx-lm + MLX 4-bit on macOS, llama.cpp's Vulkan
+  build + the official GGUF on Linux and Windows (Git Bash).
 - `./scripts/setup-herdr-app.sh` — After `./create-symlinks.sh`, set up Herdr.app: build the font
   `settings.json` names (if missing) and switch the open window to the `main-emoji` layout.
 - `./scripts/build-udev-gothic-light.sh [Light|ExtraLight|Thin]` — Build UDEV Gothic <weight> 35NFLG
@@ -49,7 +50,8 @@ integrations. These instructions apply to agents working here, including pi and 
 - `tools/claude-goal-pacing/` — Claude Code mod that ends an idle `/goal` continuation instead
   of re-checking it at once (`bun run check`).
 - `tools/claude-plamo-translate/` — Claude Code mod that translates prompts (default en) and the
-  text Claude shows you (default ja) with PLaMo 3 Translate on a local `mlx_lm.server` (`bun run check`).
+  text Claude shows you (default ja) with PLaMo 3 Translate on a local `mlx_lm.server` or llama.cpp
+  `llama-server` (`bun run check`).
 - `tools/dsh-dracula-theme/` — A DeepSeek Harness bundle (no build step) that
   injects the Dracula palette into the Web and Desktop clients. Install it into
   a profile with `dsh plugin --profile <name> add <checkout>/tools/dsh-dracula-theme`.
