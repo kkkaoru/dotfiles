@@ -93,6 +93,60 @@ test('fenced blocks are marked, tildes included, and a backtick fence inside til
   ])
 })
 
+test('a code span of two backticks holding one is sent as a slot', async () => {
+  const sent: string[] = []
+  const out = await translateProse('use ``a ` b`` here', async text => {
+    sent.push(text)
+    return 'USE {{0}} HERE'
+  })
+  expect(sent).toStrictEqual(['use {{0}} here'])
+  expect(out).toBe('USE ``a ` b`` HERE')
+})
+
+test('a code span of two backticks holding only a space is sent as a slot', async () => {
+  const sent: string[] = []
+  await translateProse('empty `` `` here', async text => {
+    sent.push(text)
+    return text
+  })
+  expect(sent).toStrictEqual(['empty {{0}} here'])
+})
+
+test('backticks of different lengths do not close a code span', async () => {
+  const sent: string[] = []
+  await translateProse('run `a``b` now', async text => {
+    sent.push(text)
+    return text
+  })
+  expect(sent).toStrictEqual(['run {{0}} now'])
+})
+
+test('a lone backtick is translated as text', async () => {
+  expect(await translateProse("it`s fine", upper)).toBe("IT`S FINE")
+})
+
+test('a shorter backtick fence inside a longer one does not close it', () => {
+  expect(fencedLines(['````md', '```', 'inner', '```', 'still code', '````', 'after'])).toStrictEqual([
+    true,
+    true,
+    true,
+    true,
+    true,
+    true,
+    false,
+  ])
+})
+
+test('a fence with an info string does not close an open block', () => {
+  expect(fencedLines(['```', '```js', 'code', '```', 'after'])).toStrictEqual([true, true, true, true, false])
+})
+
+test('a fenced block inside a quote stays untranslated', async () => {
+  expect(await translateMarkdown(['> ```', '> quoted code', '> ```', '> after'].join('\n'), upper)).toBe(
+    ['> ```', '> quoted code', '> ```', '> AFTER'].join('\n'),
+  )
+})
+
 test('markdown keeps markers, blank lines, code blocks and table rules', async () => {
   const source = [
     '## Title',

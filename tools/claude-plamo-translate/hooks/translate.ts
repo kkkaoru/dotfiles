@@ -9,10 +9,12 @@ interface FenceScan {
   readonly inside: boolean[]
 }
 
-const FENCE: RegExp = /^(```|~~~)/
+// A fence run and the rest of its line; a fence inside `> ` quotes is read without them.
+const FENCE: RegExp = /^(?:>\s*)*(`{3,}|~{3,})(.*)$/
 const TABLE_RULE: RegExp = /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?$/
-// Inline code, autolinks, bare URLs and link targets survive translation as {{n}} slots.
-const PROTECTED: RegExp = /`[^`\n]+`|<https?:\/\/[^>\s]+>|\]\([^)\s]+\)|https?:\/\/[^\s)>\]]+/g
+// Inline code (a run of backticks up to the next run of the same length, as CommonMark reads it),
+// autolinks, bare URLs and link targets survive translation as {{n}} slots.
+const PROTECTED: RegExp = /(?<!`)(`+)(?!`).+?(?<!`)\1(?!`)|<https?:\/\/[^>\s]+>|\]\([^)\s]+\)|https?:\/\/[^\s)>\]]+/g
 const SLOT: RegExp = /\{\{(\d+)\}\}/g
 // Leading list/heading/quote markers stay as written; only the text after them is sent.
 const MARKER: RegExp = /^(\s*(?:[-*+]\s+|\d+[.)]\s+|#{1,6}\s+|>\s*)*)(.*)$/
@@ -88,17 +90,21 @@ async function translateLine(line: string, translate: Translator): Promise<strin
   return body.trim() === '' ? line : `${marker}${await translateProse(body, translate)}`
 }
 
-// A closing fence must match the opener: ``` inside ~~~ stays code.
-const closeFence = (open: string, opener: string): string | null => (open === opener ? null : open)
+// A fence closes on the same character, at least as long and with nothing after it (CommonMark):
+// ``` inside ~~~ or inside ```` stays code, and so does ```js inside ```.
+const closes = (open: string, run: string, rest: string): boolean =>
+  run[0] === open[0] && run.length >= open.length && rest.trim() === ''
 
-const nextFence = (open: string | null, opener: string): string | null =>
-  open === null ? opener : closeFence(open, opener)
+const closeFence = (open: string, run: string, rest: string): string | null => (closes(open, run, rest) ? null : open)
+
+const nextFence = (open: string | null, run: string, rest: string): string | null =>
+  open === null ? run : closeFence(open, run, rest)
 
 function scanLine(scan: FenceScan, line: string): FenceScan {
-  const opener = FENCE.exec(line.trimStart())?.[1]
-  scan.inside.push(scan.open !== null || opener !== undefined)
-  if (opener !== undefined) {
-    scan.open = nextFence(scan.open, opener)
+  const [, run, rest = ''] = FENCE.exec(line.trimStart()) ?? []
+  scan.inside.push(scan.open !== null || run !== undefined)
+  if (run !== undefined) {
+    scan.open = nextFence(scan.open, run, rest)
   }
   return scan
 }
