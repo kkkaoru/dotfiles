@@ -41,7 +41,8 @@ integrations. These instructions apply to agents working here, including pi and 
   loops, detached tmux execution, effort management, and oMLX lifecycle management.
 - `tools/claudex-*/` — Claudex adapters and routing/tool policies.
 - `.claude-plugin/marketplace.json` — The `dotfiles` plugin marketplace that lists the `tools/claude-*`
-  mods. User settings register it and enable each mod as `<name>@dotfiles`; the mods are read in place.
+  mods. `./create-symlinks.sh` registers the checkout where it is cloned (in the ignored
+  `.claude/settings.local.json`); user settings enable each mod as `<name>@dotfiles`, read in place.
 - `tools/claude-dynamic-effort/` — Deprecated: kept as code but disabled in user settings. Claude Code
   mod that runs every compaction at xhigh effort and every other request at the effort you chose
   (`claude plugin validate|test <dir>`).

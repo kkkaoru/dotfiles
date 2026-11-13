@@ -66,12 +66,6 @@
         "source": "github",
         "repo": "DietrichGebert/ponytail"
       }
-    },
-    "dotfiles": {
-      "source": {
-        "source": "directory",
-        "path": "/Users/kaoru/dotfiles"
-      }
     }
   },
   "alwaysThinkingEnabled": true,

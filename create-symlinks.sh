@@ -159,6 +159,14 @@ for name in agents commands hooks rules skills; do
     link_tree "${DOTPATH}/.claude/${name}" "${HOME}/.claude/${name}"
   fi
 done
+# Register this checkout as the `dotfiles` plugin marketplace where it is cloned. The declaration
+# goes to the ignored .claude/settings.local.json, since the path differs per Mac.
+if command -v claude >/dev/null 2>&1; then
+  claude plugin marketplace add "${DOTPATH}" --scope local
+  for plugin in goal-pacing plamo-translate; do
+    claude plugin install "${plugin}@dotfiles"
+  done
+fi
 
 # Cursor keeps runtime state beside user skills, so merge only skills.
 if [ -L "${HOME}/.cursor" ]; then
