@@ -47,5 +47,6 @@
     "{\"source\":\"npm:pi-ollama-cloud\",\"scope\":\"user\"}": "0.13.1",
     "{\"source\":\"npm:pi-web-access@0.37.0\",\"scope\":\"user\"}": "0.37.0",
     "{\"source\":\"npm:pi-chrome\",\"scope\":\"user\"}": "0.15.57"
-  }
+  },
+  "hideThinkingBlock": true
 }
