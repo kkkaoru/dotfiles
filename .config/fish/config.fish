@@ -1,4 +1,11 @@
 eval (/opt/homebrew/bin/brew shellenv)
+
+# A terminal server (Herdr, tmux) started from a Claude Code Bash tool hands that session's markers
+# to every new pane, so `claude` there turns off transcript saving. Claude's own tools run non-interactive shells.
+if status is-interactive
+    set -e CLAUDECODE CLAUDE_PID CLAUDE_CODE_CHILD_SESSION CLAUDE_CODE_SESSION_ID CLAUDE_CODE_SESSION_ATTENDED \
+        CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_EXECPATH CLAUDE_CODE_MESSAGING_SOCKET CLAUDE_CODE_MESSAGING_TOKEN
+end
 fish_add_path --move /opt/homebrew/bin /opt/homebrew/sbin
 
 source (dirname (status -f))/aliases.fish
