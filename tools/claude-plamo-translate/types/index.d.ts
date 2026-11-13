@@ -1,5 +1,5 @@
-// AskUserQuestion dialogs seen this session: JSON of the tool's questions -> the translated questions.
-export type Dialogs = Record<string, unknown[]>
+// AskUserQuestion dialog texts seen this session: a question, header, label or description -> its translation.
+export type Dialogs = Record<string, string>
 
 declare module 'claude-code' {
   interface PluginState {

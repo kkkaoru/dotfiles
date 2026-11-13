@@ -19,7 +19,7 @@ interface Fake {
   readonly spawned: string[][]
   readonly toasts: string[]
   readonly logs: string[]
-  dialogs: Record<string, unknown[]> | undefined
+  dialogs: Record<string, string> | undefined
   healthy: boolean
   healOnSleep: boolean
   gets: number
@@ -365,7 +365,7 @@ test('a question dialog is translated when the tool is called and drawn translat
     tool: 'AskUserQuestion',
     questions: QUESTIONS,
   })
-  await vi.waitFor(() => expect(Object.keys(fake.dialogs ?? {}).length).toBe(1))
+  await vi.waitFor(() => expect(Object.keys(fake.dialogs ?? {}).length).toBe(6))
   expect(
     await call(fake, 'ui.render', { component: 'AskUserQuestion', props: { tool: 'AskUserQuestion', questions: QUESTIONS } }),
   ).toStrictEqual({
@@ -384,6 +384,37 @@ test('a question dialog is translated when the tool is called and drawn translat
         },
       ],
     },
+  })
+})
+
+// The model writes multiSelect before options and may leave it out; the dialog draws the input as
+// the tool's schema parsed it, with its keys in schema order and the default filled in.
+test('a dialog is drawn translated though its drawn questions differ from the call in key order', async () => {
+  const fake = await setup(OPTIONS)
+  fake.translation = '訳'
+  const asCalled = [{ question: 'Which one?', header: 'Pick', options: [{ label: 'First', description: 'The first one.' }] }]
+  await call(fake, 'tool.call', { tool: 'AskUserQuestion', questions: asCalled })
+  await vi.waitFor(() => expect(Object.keys(fake.dialogs ?? {}).length).toBe(4))
+  const asDrawn = [{ question: 'Which one?', header: 'Pick', options: [{ label: 'First', description: 'The first one.' }], multiSelect: false }]
+  expect(
+    await call(fake, 'ui.render', { component: 'AskUserQuestion', props: { tool: 'AskUserQuestion', questions: asDrawn } }),
+  ).toStrictEqual({
+    component: 'AskUserQuestion',
+    props: {
+      tool: 'AskUserQuestion',
+      questions: [{ question: '訳', header: '訳', options: [{ label: '訳', description: '訳' }], multiSelect: false }],
+    },
+  })
+})
+
+test('a drawn text with no stored translation stays as asked', async () => {
+  const fake = await setup(OPTIONS)
+  fake.dialogs = { Font: '書体' }
+  expect(
+    await call(fake, 'ui.render', { component: 'AskUserQuestion', props: { tool: 'AskUserQuestion', questions: QUESTIONS } }),
+  ).toStrictEqual({
+    component: 'AskUserQuestion',
+    props: { tool: 'AskUserQuestion', questions: [{ ...QUESTIONS[0], header: '書体' }] },
   })
 })
 
@@ -419,12 +450,12 @@ test('a failing dialog translation is logged', async () => {
   await vi.waitFor(() => expect(fake.logs).toStrictEqual(['plamo-translate: translating the question failed: Error: state down']))
 })
 
-test('only the newest ten dialogs are kept', async () => {
+test('only the newest 200 dialog texts are kept', async () => {
   const fake = await setup(OPTIONS)
-  fake.dialogs = Object.fromEntries(Array.from({ length: 10 }, (_value, index) => [`old ${index}`, []]))
+  fake.dialogs = Object.fromEntries(Array.from({ length: 200 }, (_value, index) => [`old ${index}`, '古']))
   await call(fake, 'tool.call', { tool: 'AskUserQuestion', questions: QUESTIONS })
   await vi.waitFor(() => expect(fake.gets).toBe(1))
-  expect(Object.keys(fake.dialogs ?? {}).length).toBe(10)
+  expect(Object.keys(fake.dialogs ?? {}).length).toBe(200)
   expect(fake.dialogs?.['old 0']).toBe(undefined)
 })
 

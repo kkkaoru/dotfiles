@@ -36,7 +36,8 @@ const READY_TIMEOUT_MS: number = 60_000
 const READY_POLL_MS: number = 500
 // Every text block of the session's responses, the ones between tool calls included.
 const MAX_REPLIES: number = 200
-const MAX_DIALOGS: number = 10
+// Every question, header, label and description of the session's newest dialogs.
+const MAX_DIALOG_TEXTS: number = 200
 const TOKENS_PER_CHAR: number = 4
 const MIN_TOKENS: number = 64
 const MAX_TOKENS: number = 4096
@@ -158,9 +159,9 @@ const translationOf = (engine: EngineInterface, settings: Settings, source: stri
 const wantsReply = (text: string, isSummary: true | undefined, settings: Settings): boolean =>
   isSummary === undefined && needsTranslation(text, settings.replyLanguage)
 
-// Keeps the newest dialogs only: the map lives as long as the session.
-const withDialog = (dialogs: Dialogs, key: string, translated: unknown[]): Dialogs =>
-  Object.fromEntries([...Object.entries(dialogs), [key, translated]].slice(-MAX_DIALOGS))
+// Keeps the newest texts only: the map lives as long as the session.
+const withTexts = (dialogs: Dialogs, translated: Dialogs): Dialogs =>
+  Object.fromEntries([...Object.entries(dialogs), ...Object.entries(translated)].slice(-MAX_DIALOG_TEXTS))
 
 const textTranslator =
   (engine: EngineInterface, settings: Settings) =>
@@ -169,11 +170,20 @@ const textTranslator =
       ? translateMarkdown(text, translatorFor(engine, settings.port, settings.replyLanguage))
       : text
 
+// Stored by source text, not by the whole questions: the dialog draws the input as the tool's
+// schema parsed it (keys reordered, defaults added), which never equals the call's JSON.
 async function rememberDialog(engine: EngineInterface, settings: Settings, questions: readonly unknown[]): Promise<void> {
-  const translated = await translateQuestions(questions, textTranslator(engine, settings))
+  const translate = textTranslator(engine, settings)
+  const pairs: [string, string][] = []
+  await translateQuestions(questions, async text => {
+    const translation = await translate(text)
+    pairs.push([text, translation])
+    return translation
+  })
+  const translated = Object.fromEntries(pairs.filter(([text, translation]) => text !== translation))
   const { value } = await engine.state.get(DIALOGS)
-  if (JSON.stringify(translated) !== JSON.stringify(questions)) {
-    await engine.state.set(DIALOGS, withDialog(value ?? {}, JSON.stringify(questions), translated))
+  if (Object.keys(translated).length > 0) {
+    await engine.state.set(DIALOGS, withTexts(value ?? {}, translated))
   }
 }
 
@@ -227,8 +237,12 @@ export const register: Register = (on, options) => {
   // The answer comes back with the labels as drawn, so the model reads the translated choice.
   on('ui.render', { component: 'AskUserQuestion' }, async (engine, event, next) => {
     const { value } = await engine.state.get(DIALOGS)
-    const translated = value?.[JSON.stringify(event.props.questions)]
-    return next(translated === undefined ? event : { ...event, props: { ...event.props, questions: translated } })
+    return value === undefined
+      ? next(event)
+      : next({
+          ...event,
+          props: { ...event.props, questions: await translateQuestions(event.props.questions, async text => value[text] ?? text) },
+        })
   })
 
   // Draws each text block translated; the transcript keeps the original (ctrl+o).
