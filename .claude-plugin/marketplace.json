@@ -5,7 +5,7 @@
     {
       "name": "dynamic-effort",
       "source": "./tools/claude-dynamic-effort",
-      "description": "Run every compaction at max effort and every other request at the effort you chose"
+      "description": "Run every compaction at xhigh effort and every other request at the effort you chose"
     },
     {
       "name": "goal-pacing",
