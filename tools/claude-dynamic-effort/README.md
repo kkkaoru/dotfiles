@@ -2,13 +2,13 @@
 
 [日本語](README-ja.md)
 
-A Claude Code mod that runs every compaction at `max` effort while every other request stays at the
+A Claude Code mod that runs every compaction at `xhigh` effort while every other request stays at the
 effort you chose. It used to raise effort with context size and tool failures; that ladder is gone,
 for the reasons in [Why this design](#why-this-design).
 
 - Normal requests run at your effort, set with `/effort` or `effortLevel`. The mod does not change it.
-- Your `/compact`, an idle auto-compaction and an auto-compaction inside a turn all run at `max`: your
-  effort, then `max` for one compaction, then your effort again.
+- Your `/compact`, an idle auto-compaction and an auto-compaction inside a turn all run at `xhigh`: your
+  effort, then `xhigh` for one compaction, then your effort again.
 - An auto-compaction inside a turn stops the turn, compacts, and resumes the work with a prompt.
 - Compaction happens at the size set by `autoCompactWindow` (400,000 in this repository's
   `.claude/settings.json`), not at the model's 1M window.
@@ -28,14 +28,14 @@ flowchart TD
   idle["Auto-compaction while idle"] --> gate
   inturn["Auto-compaction inside a turn"] --> gate
   turnend["Main turn ends at 90%<br/>of the auto-compact threshold"] --> gate
-  gate{"Dynamic on, your level known and below max,<br/>nothing queued, restore saves no new default?"}
+  gate{"Dynamic on, your level known and below xhigh,<br/>nothing queued, restore saves no new default?"}
   gate -- no --> plain["Compact at the session effort<br/>(or not at all, for a turn end)"]
   gate -- yes --> stop{"Inside a turn?"}
   stop -- yes --> abort["Skip it and stop the turn"]
   stop -- no --> skip["Skip it"]
   abort --> queue
   skip --> queue
-  queue["Queue /effort max, /compact,<br/>/effort your level"]
+  queue["Queue /effort xhigh, /compact,<br/>/effort your level"]
   queue --> resume{"Turn was stopped?"}
   resume -- yes --> prompt["Queue a prompt to continue the task"]
   resume -- no --> done["Idle"]
@@ -43,11 +43,11 @@ flowchart TD
 
 | Compaction | What the mod does | Effort |
 |---|---|---|
-| Your `/compact` | Answers `Not compacted · dynamic-effort: compacting again at max effort` and reruns it with the same focus | `max` |
-| Auto-compaction inside a turn | Stops the turn, reruns it, then submits a prompt to continue | `max` |
-| Auto-compaction while idle | Reruns it | `max` |
-| Main turn ends at 90% of the threshold | Compacts ahead of the threshold, which saves stopping the next turn | `max` |
-| `precompute` | Skipped while a raise is possible, so no summary made below `max` is reused | not run |
+| Your `/compact` | Answers `Not compacted · dynamic-effort: compacting again at xhigh effort` and reruns it with the same focus | `xhigh` |
+| Auto-compaction inside a turn | Stops the turn, reruns it, then submits a prompt to continue | `xhigh` |
+| Auto-compaction while idle | Reruns it | `xhigh` |
+| Main turn ends at 90% of the threshold | Compacts ahead of the threshold, which saves stopping the next turn | `xhigh` |
+| `precompute` | Skipped while a raise is possible, so no summary made below `xhigh` is reused | not run |
 | A subagent's own compaction | Left alone | the subagent's |
 
 Main compactions also get one instruction after your own `/compact` focus: list approaches that were
@@ -75,7 +75,8 @@ do not measure answer quality.
   first and compacted too often. Context right after a compaction was 86k to 107k, which left only 60k
   to 81k before the 167k threshold, and one session compacted 7 times in 82 minutes. The 367k threshold
   of 400,000 stays inside the range the one comparison study covers (up to 380K).
-- **Compaction at `max`** is also the person's choice. No study was found that varies only the
+- **Compaction at `xhigh`** is also the person's choice (it was `max` until 2026-11; the measurements
+  below were taken then). No study was found that varies only the
   summarizer's effort and measures what follows, so the benefit is unproven. The cost was measured: at
   about 66k to 69k of context, summaries took 945 to 1,133 output tokens at `medium` and 2,658 at `max`.
 
@@ -102,17 +103,19 @@ Measured in an interactive session with the window at 200,000:
   background subagent both finished after their turn was stopped.
 - **Queue order.** The engine's queue is not strictly first in, first out. A prompt you type or a
   background notification can run between `/compact` and the restore, while the session is still at
-  `max`. Any step that inherits `max` during the sequence is sent at your level, and the restore runs
+  `xhigh`. Any step that inherits `xhigh` during the sequence is sent at your level, and the restore runs
   once the queue is clear (measured). The hint line keeps showing your level.
 - **Saved default.** `/effort <level>` also saves the level as the default (only `max` is session-only).
+  So the raise saves `xhigh` as the default until the restore runs; a session killed in between leaves it
+  saved, and a session started meanwhile starts at `xhigh`.
   The sequence runs only when the user settings already hold your level as `effortLevel`, and as the
   session model's `modelSettings` entry when there is one, so the restore changes no saved value. A level
   from `--effort` or another source compacts at that level instead.
-- **Your level.** It is the session effort of the first main step, any later main step below `max`, or
-  your own `/effort`. A step at `max` becomes your level only through your own `/effort max`. A session left
-  at `max` by a dropped restore is set back at the next main turn end.
-- **`/effort max`.** Every request and compaction runs at `max`, with no sequence.
-- **What you see.** Each compaction shows its commands in the transcript: `/effort max`, `/compact` and
+- **Your level.** It is the session effort of the first main step, any later main step not at `xhigh`, or
+  your own `/effort`. A step at `xhigh` becomes your level only through your own `/effort xhigh`. A session left
+  at `xhigh` by a dropped restore is set back at the next main turn end.
+- **`/effort xhigh` or `/effort max`.** Every request and compaction runs at that level, with no sequence.
+- **What you see.** Each compaction shows its commands in the transcript: `/effort xhigh`, `/compact` and
   `/effort <level>`, plus `Not compacted` for your own `/compact` and the continue prompt for a stopped turn.
 
 ## Commands, settings and display
@@ -120,7 +123,7 @@ Measured in an interactive session with the window at 200,000:
 | Command | Effect |
 |---|---|
 | `/dynamic-effort` or `/dynamic-effort status` | Prints the status line below. |
-| `/dynamic-effort on` | Resumes compaction at `max`. |
+| `/dynamic-effort on` | Resumes compaction at `xhigh`. |
 | `/dynamic-effort off` | Compacts at the session effort, like Claude Code without the mod. |
 
 ```text
@@ -152,14 +155,14 @@ sent, or `🧠 static` while off, so the mod takes no row of its own.
 
 - A compaction before the first main step of a process runs at the session effort, because your level is
   not known yet.
-- A side request that skips `turn.step` during the sequence inherits `max`.
-- A subagent that asks for `max` itself is lowered if it steps during the sequence, since a step cannot
-  tell that from an inherited `max`.
+- A side request that skips `turn.step` during the sequence inherits `xhigh`.
+- A subagent that asks for `xhigh` itself is lowered if it steps during the sequence, since a step cannot
+  tell that from an inherited `xhigh`.
 - When the context right after a compaction sits close to the threshold, compactions repeat, each taking
-  about a minute at `max`. It happened only in a test that raised the session's base context to about 120k.
+  about a minute at `max` (measured before the change to `xhigh`). It happened only in a test that raised the session's base context to about 120k.
   Local sessions measured 89k at most after compacting, though only from 200k or more. Raise the window if
   your base context is large.
-- Compacting at `max` needs your level saved as the default (see [Saved default](#compaction-details)).
+- Compacting at `xhigh` needs your level saved as the default (see [Saved default](#compaction-details)).
 - Not tested: the effect on answer quality, `/goal` during a stopped turn, pressing Esc during the
   sequence, and how a lowered window reaches other models and subagents.
 - The 90% ratio is not tuned.

@@ -2,13 +2,13 @@
 
 [English](README.md)
 
-compaction だけを `max` effort で実行し、それ以外のリクエストは指定した effort のままにする Claude Code の
+compaction だけを `xhigh` effort で実行し、それ以外のリクエストは指定した effort のままにする Claude Code の
 mod です。以前はコンテキスト量とツールの失敗に応じて effort を上げていましたが、その段階的な引き上げは
 [この設計の理由](#この設計の理由)にある根拠から廃止しました。
 
 - 通常のリクエストは、`/effort` や `effortLevel` で指定した effort で実行します。mod は変更しません。
-- 手動の `/compact`、放置後の自動 compaction、ターン途中の自動 compaction は、いずれも `max` で実行します。
-  指定の effort → compaction の間だけ `max` → 指定の effort に戻る、という動きです。
+- 手動の `/compact`、放置後の自動 compaction、ターン途中の自動 compaction は、いずれも `xhigh` で実行します。
+  指定の effort → compaction の間だけ `xhigh` → 指定の effort に戻る、という動きです。
 - ターン途中の自動 compaction では、ターンを止めて compaction し、プロンプトで作業を再開します。
 - compaction の発動点は、モデルの 1M window ではなく `autoCompactWindow`（このリポジトリの
   `.claude/settings.json` で 400,000）で決まります。
@@ -28,14 +28,14 @@ flowchart TD
   idle["放置後の自動 compaction"] --> gate
   inturn["ターン途中の自動 compaction"] --> gate
   turnend["main のターンが自動 compaction の<br/>閾値の 90% で終了"] --> gate
-  gate{"mod が on、指定の effort が判明済みで max 未満、<br/>キューが空、復元で既定値が変わらない？"}
+  gate{"mod が on、指定の effort が判明済みで xhigh 未満、<br/>キューが空、復元で既定値が変わらない？"}
   gate -- いいえ --> plain["セッションの effort で compaction<br/>（ターン終了時は実行しない）"]
   gate -- はい --> stop{"ターンの途中？"}
   stop -- はい --> abort["skip してターンを止める"]
   stop -- いいえ --> skip["skip する"]
   abort --> queue
   skip --> queue
-  queue["/effort max、/compact、<br/>/effort 指定の値 をキューに積む"]
+  queue["/effort xhigh、/compact、<br/>/effort 指定の値 をキューに積む"]
   queue --> resume{"ターンを止めた？"}
   resume -- はい --> prompt["作業を続けるプロンプトをキューに積む"]
   resume -- いいえ --> done["待機"]
@@ -43,11 +43,11 @@ flowchart TD
 
 | compaction | mod の動作 | effort |
 |---|---|---|
-| 手動の `/compact` | `Not compacted · dynamic-effort: compacting again at max effort` と返し、同じ指示で再実行 | `max` |
-| ターン途中の自動 compaction | ターンを止めて再実行し、続きのプロンプトを送信 | `max` |
-| 放置後の自動 compaction | 再実行 | `max` |
-| main のターンが閾値の 90% で終了 | 閾値の手前で compaction し、次のターンを止めずに済ませる | `max` |
-| `precompute` | 引き上げが可能な間は skip し、`max` 未満で作った要約を再利用しない | 実行しない |
+| 手動の `/compact` | `Not compacted · dynamic-effort: compacting again at xhigh effort` と返し、同じ指示で再実行 | `xhigh` |
+| ターン途中の自動 compaction | ターンを止めて再実行し、続きのプロンプトを送信 | `xhigh` |
+| 放置後の自動 compaction | 再実行 | `xhigh` |
+| main のターンが閾値の 90% で終了 | 閾値の手前で compaction し、次のターンを止めずに済ませる | `xhigh` |
+| `precompute` | 引き上げが可能な間は skip し、`xhigh` 未満で作った要約を再利用しない | 実行しない |
 | subagent 自身の compaction | 変更しない | subagent の値 |
 
 main の compaction には、`/compact` の指示の後に 1 つ指示を加えます。試して捨てた方法を、エラーや理由とともに
@@ -72,7 +72,7 @@ main の compaction には、`/compact` の指示の後に 1 つ指示を加え�
   セッション開始後の余裕がほとんどありません。最初に試した 200,000 は compaction が多すぎました。compaction
   直後のコンテキストが 86k〜107k あり、閾値の 167k まで 60k〜81k しか空かず、1 つのセッションで 82 分に 7 回
   発生しました。400,000 の閾値 367k は、唯一の比較研究の範囲（380K まで）に収まります。
-- **compaction は `max`。** これも利用者の選択です。要約の effort だけを変えて、その後の成否を測った研究は
+- **compaction は `xhigh`。** これも利用者の選択です（2026-11 までは `max` で、以下の測定値はその時点のものです）。要約の effort だけを変えて、その後の成否を測った研究は
   見つからず、効果は未証明です。費用は測定しました。コンテキスト約 66k〜69k で、要約の出力は `medium` が
   945〜1,133 token、`max` が 2,658 token でした。
 
@@ -97,18 +97,20 @@ main の compaction には、`/compact` の指示の後に 1 つ指示を加え�
 - **ターンの停止。** `$.turn.abort` は中断マーカーを残しません。バックグラウンドの Bash コマンドと subagent は、
   ターンを止めた後も最後まで完了しました。
 - **キューの順序。** エンジンのキューは完全な先入れ先出しではありません。入力したプロンプトやバックグラウンドの
-  完了通知は、`/compact` と復元の間に、セッションが `max` のまま実行されることがあります。この間に `max` を継承した
+  完了通知は、`/compact` と復元の間に、セッションが `xhigh` のまま実行されることがあります。この間に `xhigh` を継承した
   step は指定の effort で送り、復元はキューが空いた後に実行されます（測定済み）。ヒント行は指定の effort を
   表示したままです。
 - **保存される既定値。** `/effort <level>` はその値を既定値としても保存します（`max` だけはセッション限定）。
+  そのため引き上げで `xhigh` が既定値として保存され、復元まで残ります。その間にセッションが終了すると `xhigh` が
+  残り、その間に開始したセッションは `xhigh` で始まります。
   このためシーケンスは、ユーザー設定の `effortLevel`（セッションのモデルに `modelSettings` があればそれも）が指定の
   effort と一致するときだけ実行し、復元で保存値が変わらないようにしています。`--effort` など別の経路で指定した値の
   場合は、その effort で compaction します。
-- **指定の effort の判定。** 最初の main step のセッション effort、それ以降の `max` 未満の main step、または自分で
-  実行した `/effort` です。`max` の step が指定の effort になるのは、自分で `/effort max` を実行したときだけです。
-  復元が失われて `max` のまま残ったセッションは、次の main のターン終了時に元に戻します。
-- **`/effort max`。** すべてのリクエストと compaction が `max` で実行され、シーケンスは使いません。
-- **画面の表示。** compaction のたびに `/effort max`、`/compact`、`/effort <level>` が transcript に表示されます。
+- **指定の effort の判定。** 最初の main step のセッション effort、それ以降の `xhigh` 以外の main step、または自分で
+  実行した `/effort` です。`xhigh` の step が指定の effort になるのは、自分で `/effort xhigh` を実行したときだけです。
+  復元が失われて `xhigh` のまま残ったセッションは、次の main のターン終了時に元に戻します。
+- **`/effort xhigh` と `/effort max`。** すべてのリクエストと compaction がその effort で実行され、シーケンスは使いません。
+- **画面の表示。** compaction のたびに `/effort xhigh`、`/compact`、`/effort <level>` が transcript に表示されます。
   手動の `/compact` では `Not compacted`、ターンを止めたときは続きのプロンプトも表示されます。
 
 ## コマンド、設定、表示
@@ -116,7 +118,7 @@ main の compaction には、`/compact` の指示の後に 1 つ指示を加え�
 | コマンド | 動作 |
 |---|---|
 | `/dynamic-effort` または `/dynamic-effort status` | 下の状態行を表示します。 |
-| `/dynamic-effort on` | compaction を `max` で実行する動作に戻します。 |
+| `/dynamic-effort on` | compaction を `xhigh` で実行する動作に戻します。 |
 | `/dynamic-effort off` | mod がないときと同じく、セッションの effort で compaction します。 |
 
 ```text
@@ -146,12 +148,12 @@ off の間は `🧠 static` です。mod が専用の行を使うことはあり
 ## 制限
 
 - プロセスの最初の main step より前の compaction は、指定の effort がまだ不明なので、セッションの effort で実行します。
-- シーケンスの間に `turn.step` を通らない補助リクエストは `max` を継承します。
-- 自身で `max` を指定した subagent も、シーケンスの間の step は下がります。step からは継承した `max` と区別できません。
-- compaction 直後のコンテキストが閾値に近いと compaction が繰り返され、`max` で 1 回あたり約 1 分かかります。発生したのは、
+- シーケンスの間に `turn.step` を通らない補助リクエストは `xhigh` を継承します。
+- 自身で `xhigh` を指定した subagent も、シーケンスの間の step は下がります。step からは継承した `xhigh` と区別できません。
+- compaction 直後のコンテキストが閾値に近いと compaction が繰り返され、`max` で 1 回あたり約 1 分かかりました（`xhigh` に変える前の測定）。発生したのは、
   セッションの基本コンテキストが約 120k に増えた検証だけです。ローカルのセッションでは compaction 後は最大 89k でした
   （ただし 200k 以上からの compaction のみの値）。基本コンテキストが大きい場合は window を上げてください。
-- `max` での compaction には、指定の effort が既定値として保存されている必要があります（[compaction の詳細](#compaction-の詳細)を参照）。
+- `xhigh` での compaction には、指定の effort が既定値として保存されている必要があります（[compaction の詳細](#compaction-の詳細)を参照）。
 - 未検証: 回答の品質への影響、ターンを止めたときの `/goal`、シーケンス中の Esc、下げた window の他モデルと subagent への影響。
 - 90% という比率は調整していません。
 - Claude Code には、モデルごとの effort レベルの一覧を取得する API がありません。モデルが対応していないレベルは、

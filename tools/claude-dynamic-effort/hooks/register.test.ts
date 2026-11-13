@@ -241,10 +241,10 @@ test('at 90% of the threshold a turn end queues raise, compact and restore once'
   await complete(fake)
   await complete(fake)
   await settle()
-  expect(fake.efforts).toStrictEqual(['effort max', 'compact', 'effort high'])
+  expect(fake.efforts).toStrictEqual(['effort xhigh', 'compact', 'effort high'])
   expect(fake.aborted).toStrictEqual([])
   expect(fake.prompts).toStrictEqual([])
-  await effortCommand(fake, 'max', OWN)
+  await effortCommand(fake, 'xhigh', OWN)
   expect(await compact(fake, { trigger: 'manual' })).toStrictEqual(COMPACTED)
   await effortCommand(fake, 'high', OWN)
   queued.resolve()
@@ -252,7 +252,7 @@ test('at 90% of the threshold a turn end queues raise, compact and restore once'
   fake.tokens = 10
   await complete(fake)
   await settle()
-  expect(fake.efforts).toStrictEqual(['effort max', 'compact', 'effort high'])
+  expect(fake.efforts).toStrictEqual(['effort xhigh', 'compact', 'effort high'])
   expect(await action(fake, 'status')).toStrictEqual({ text: 'dynamic=on original=high session=high pending=false last=high' })
 })
 
@@ -264,7 +264,7 @@ test('the turn end falls back to the estimate when the status line has no count'
   await step(fake, { turnId: 't1', index: 0 })
   await complete(fake)
   await settle()
-  expect(fake.efforts).toStrictEqual(['effort max', 'compact', 'effort high'])
+  expect(fake.efforts).toStrictEqual(['effort xhigh', 'compact', 'effort high'])
 })
 
 test('no compaction is queued when auto-compaction or dynamic mode is off', async () => {
@@ -303,10 +303,10 @@ test('an auto-compaction inside a turn stops the turn, runs the sequence and res
   await turnStart(fake, 'main-1')
   await step(fake, { turnId: 'main-1', index: 0, effort: 'medium' })
   fake.settings = { effortLevel: 'medium' }
-  expect(await compact(fake, { trigger: 'auto' })).toStrictEqual({ skip: 'dynamic-effort: compacting again at max effort' })
+  expect(await compact(fake, { trigger: 'auto' })).toStrictEqual({ skip: 'dynamic-effort: compacting again at xhigh effort' })
   await settle()
   expect(fake.aborted).toStrictEqual(['main-1'])
-  expect(fake.efforts).toStrictEqual(['effort max', 'compact', 'effort medium'])
+  expect(fake.efforts).toStrictEqual(['effort xhigh', 'compact', 'effort medium'])
   expect(fake.prompts).toStrictEqual(['The conversation was compacted while you were working. Continue the task from where you stopped.'])
 })
 
@@ -316,10 +316,10 @@ test('an auto-compaction with the session idle runs the sequence and resumes not
   await turnStart(fake, 'main-1')
   await step(fake, { turnId: 'main-1', index: 0 })
   await complete(fake)
-  expect(await compact(fake, { trigger: 'auto' })).toStrictEqual({ skip: 'dynamic-effort: compacting again at max effort' })
+  expect(await compact(fake, { trigger: 'auto' })).toStrictEqual({ skip: 'dynamic-effort: compacting again at xhigh effort' })
   await settle()
   expect(fake.aborted).toStrictEqual([])
-  expect(fake.efforts).toStrictEqual(['effort max', 'compact', 'effort high'])
+  expect(fake.efforts).toStrictEqual(['effort xhigh', 'compact', 'effort high'])
   expect(fake.prompts).toStrictEqual([])
 })
 
@@ -342,7 +342,7 @@ test('a refused resume is logged after the sequence is queued', async () => {
   await step(fake, { turnId: 'main-1', index: 0 })
   await compact(fake, { trigger: 'auto' })
   await settle()
-  expect(fake.efforts).toStrictEqual(['effort max', 'compact', 'effort high'])
+  expect(fake.efforts).toStrictEqual(['effort xhigh', 'compact', 'effort high'])
   expect(fake.logs).toStrictEqual(['dynamic-effort: resuming the turn failed: refused'])
 })
 
@@ -355,14 +355,14 @@ test("the person's /compact is skipped and run again with its focus between the 
   await start(fake)
   await step(fake, { turnId: 't1', index: 0 })
   expect(await compact(fake, { trigger: 'manual', instructions: 'Keep the plan' })).toStrictEqual({
-    skip: 'dynamic-effort: compacting again at max effort',
+    skip: 'dynamic-effort: compacting again at xhigh effort',
   })
   await settle()
-  expect(fake.efforts).toStrictEqual(['effort max', 'compact Keep the plan', 'effort high'])
+  expect(fake.efforts).toStrictEqual(['effort xhigh', 'compact Keep the plan', 'effort high'])
   expect(await compact(fake, { trigger: 'manual', instructions: 'Keep the plan' })).toStrictEqual(COMPACTED)
   queued.resolve()
   await settle()
-  expect(await compact(fake, { trigger: 'manual' })).toStrictEqual({ skip: 'dynamic-effort: compacting again at max effort' })
+  expect(await compact(fake, { trigger: 'manual' })).toStrictEqual({ skip: 'dynamic-effort: compacting again at xhigh effort' })
 })
 
 test('a refused re-run lets the next compaction through at the session effort, then re-runs again', async () => {
@@ -372,15 +372,15 @@ test('a refused re-run lets the next compaction through at the session effort, t
   fake.rejectRuns = true
   await compact(fake, { trigger: 'manual' })
   await settle()
-  expect(fake.toasts).toStrictEqual(['dynamic-effort: could not compact at max effort; run /compact again'])
+  expect(fake.toasts).toStrictEqual(['dynamic-effort: could not compact at xhigh effort; run /compact again'])
   expect(fake.logs).toStrictEqual([
-    'dynamic-effort: /effort max failed: dropped',
+    'dynamic-effort: /effort xhigh failed: dropped',
     'dynamic-effort: /compact failed: dropped',
     'dynamic-effort: /effort high failed: dropped',
   ])
   fake.rejectRuns = false
   expect(await compact(fake, { trigger: 'manual' })).toStrictEqual(COMPACTED)
-  expect(await compact(fake, { trigger: 'manual' })).toStrictEqual({ skip: 'dynamic-effort: compacting again at max effort' })
+  expect(await compact(fake, { trigger: 'manual' })).toStrictEqual({ skip: 'dynamic-effort: compacting again at xhigh effort' })
 })
 
 test('a compaction stays at the session effort when the restore would change the saved default', async () => {
@@ -404,7 +404,7 @@ test("the restore also compares the session model's saved level, and a model wit
   await step(fake, { turnId: 't1', index: 0 })
   expect(await compact(fake, { trigger: 'manual' })).toStrictEqual(COMPACTED)
   fake.settings = { effortLevel: 'high', modelSettings: 'corrupt' }
-  expect(await compact(fake, { trigger: 'manual' })).toStrictEqual({ skip: 'dynamic-effort: compacting again at max effort' })
+  expect(await compact(fake, { trigger: 'manual' })).toStrictEqual({ skip: 'dynamic-effort: compacting again at xhigh effort' })
 })
 
 test('an unreadable settings file rejects the compaction hook', async () => {
@@ -428,13 +428,25 @@ test('a compaction passes untouched while off, before the level is known, or for
   expect(fake.efforts).toStrictEqual([])
 })
 
-test("the person's /effort max compacts at max with no sequence", async () => {
+test("the person's /effort max compacts at max with no sequence, even with max saved", async () => {
   const fake = setup()
   await start(fake)
   await effortCommand(fake, 'max', PERSON)
+  fake.settings = { effortLevel: 'max' }
   await step(fake, { turnId: 't1', index: 0, effort: 'max' })
   expect(await compact(fake, { trigger: 'auto' })).toStrictEqual(COMPACTED)
   expect(fake.sent).toStrictEqual(['max'])
+  expect(fake.efforts).toStrictEqual([])
+})
+
+test("the person's /effort xhigh compacts at xhigh with no sequence", async () => {
+  const fake = setup()
+  await start(fake)
+  await effortCommand(fake, 'xhigh', PERSON)
+  fake.settings = { effortLevel: 'xhigh' }
+  await step(fake, { turnId: 't1', index: 0, effort: 'xhigh' })
+  expect(await compact(fake, { trigger: 'auto' })).toStrictEqual(COMPACTED)
+  expect(fake.sent).toStrictEqual(['xhigh'])
   expect(fake.efforts).toStrictEqual([])
 })
 
@@ -443,7 +455,7 @@ test('precompute waits for the compaction level, unless the session will never b
   await start(fake)
   await step(fake, { turnId: 't1', index: 0 })
   expect(await compact(fake, { trigger: 'precompute' })).toStrictEqual({ skip: 'dynamic-effort: compaction effort is not applied yet' })
-  await effortCommand(fake, 'max', OWN)
+  await effortCommand(fake, 'xhigh', OWN)
   expect(await compact(fake, { trigger: 'precompute' })).toStrictEqual(COMPACTED)
   await effortCommand(fake, 'high', OWN)
   fake.settings = { effortLevel: 'low' }
@@ -461,8 +473,8 @@ test('a step that inherits the raised level is sent at the person level', async 
   fake.settings = { effortLevel: 'medium' }
   await compact(fake, { trigger: 'manual' })
   await settle()
-  await step(fake, { turnId: 'a1', index: 0, effort: 'max', agentId: 'agent-1' })
-  await step(fake, { turnId: 't2', index: 0, effort: 'max' })
+  await step(fake, { turnId: 'a1', index: 0, effort: 'xhigh', agentId: 'agent-1' })
+  await step(fake, { turnId: 't2', index: 0, effort: 'xhigh' })
   expect(fake.sent).toStrictEqual(['medium', 'medium', 'medium'])
   expect(hint(fake)).toStrictEqual({ props: { hint: '? for shortcuts', tail: '🧠 medium' } })
   queued.resolve()
@@ -479,11 +491,11 @@ test('outside the sequence a subagent keeps its own effort', async () => {
   expect(await action(fake, 'status')).toStrictEqual({ text: 'dynamic=on original=medium session=medium pending=false last=medium' })
 })
 
-test('a session stranded at max goes back to the level at the next turn end, and a dropped restore is queued again', async () => {
+test('a session stranded at xhigh goes back to the level at the next turn end, and a dropped restore is queued again', async () => {
   const fake = setup()
   await start(fake)
   await step(fake, { turnId: 't1', index: 0 })
-  await effortCommand(fake, 'max', OWN)
+  await effortCommand(fake, 'xhigh', OWN)
   fake.rejectRuns = true
   await complete(fake)
   await settle()
@@ -496,15 +508,15 @@ test('a session stranded at max goes back to the level at the next turn end, and
   expect(await action(fake, 'status')).toStrictEqual({ text: 'dynamic=on original=high session=high pending=false last=high' })
 })
 
-test('a session at max with no known level is sent at max and left there', async () => {
+test('a session at xhigh with no known level is sent at xhigh and left there', async () => {
   const fake = setup()
   fake.threshold = 100
   fake.tokens = 95
   await start(fake)
-  await step(fake, { turnId: 't1', index: 0, effort: 'max' })
+  await step(fake, { turnId: 't1', index: 0, effort: 'xhigh' })
   await complete(fake)
   await settle()
-  expect(fake.sent).toStrictEqual(['max'])
+  expect(fake.sent).toStrictEqual(['xhigh'])
   expect(fake.efforts).toStrictEqual([])
 })
 
@@ -529,7 +541,7 @@ test('a level chosen another way is taken from the step', async () => {
   fake.settings = { effortLevel: 'low' }
   await compact(fake, { trigger: 'manual' })
   await settle()
-  expect(fake.efforts).toStrictEqual(['effort max', 'compact', 'effort low'])
+  expect(fake.efforts).toStrictEqual(['effort xhigh', 'compact', 'effort low'])
 })
 
 test('an unknown /effort argument and an own echo leave the original', async () => {
@@ -539,8 +551,8 @@ test('an unknown /effort argument and an own echo leave the original', async () 
   await effortCommand(fake, 'nonsense', PERSON)
   await effortCommand(fake, 'nonsense', OWN)
   await effortCommand(fake, 'auto', OWN)
-  await effortCommand(fake, 'max', OWN)
-  expect(await action(fake, 'status')).toStrictEqual({ text: 'dynamic=on original=medium session=max pending=false last=medium' })
+  await effortCommand(fake, 'xhigh', OWN)
+  expect(await action(fake, 'status')).toStrictEqual({ text: 'dynamic=on original=medium session=xhigh pending=false last=medium' })
 })
 
 test('the default and an unknown action answer without changing the mode', async () => {

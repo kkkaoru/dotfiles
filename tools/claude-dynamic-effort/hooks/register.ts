@@ -56,7 +56,9 @@ const LEVELS: readonly ModelEffort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 const RESET_ARGS: ReadonlySet<string> = new Set(['auto', 'unset'])
 // Compaction runs at the session effort and no hook can set the effort of that request alone, so
 // the session rises to this level for the length of one compaction (README "How it works").
-const COMPACTION_EFFORT: ModelEffort = 'max'
+const COMPACTION_EFFORT: ModelEffort = 'xhigh'
+// Only a level below it is raised: a person at `max` already compacts higher.
+const RAISABLE: ReadonlySet<ModelEffort> = new Set(LEVELS.slice(0, LEVELS.indexOf(COMPACTION_EFFORT)))
 // `/effort` is queued until the session is idle, so the mod compacts at a main turn end a little
 // before the engine's threshold, which saves stopping the next turn.
 // shortcut: the ratio is not tuned; raise it if sessions compact noticeably early.
@@ -91,7 +93,7 @@ const LEADING_SEPARATOR = /^ ?· /u
 // The engine draws its own separator before the tail; one between tails keeps plugins apart.
 const TAIL_SEPARATOR: string = ' · '
 const PRECOMPUTE_SKIP: string = 'dynamic-effort: compaction effort is not applied yet'
-const RERUN_SKIP: string = 'dynamic-effort: compacting again at max effort'
+const RERUN_SKIP: string = `dynamic-effort: compacting again at ${COMPACTION_EFFORT} effort`
 const CONTINUE_PROMPT: string = 'The conversation was compacted while you were working. Continue the task from where you stopped.'
 // Claude Code's summary keeps errors and fixes but not abandoned approaches; losing what failed
 // invites repeating it (step repetition, MAST arXiv:2503.13657), and a compression guideline that
@@ -100,7 +102,7 @@ const COMPACTION_GUIDELINE: string =
   'Also list approaches that were tried and abandoned, with the error or reason, so they are not repeated.'
 const EFFORT_NAMES: ReadonlySet<string> = new Set(LEVELS)
 const ACTION_NAMES: ReadonlySet<string> = new Set(ACTIONS)
-const REQUEUE_FAILED: string = 'dynamic-effort: could not compact at max effort; run /compact again'
+const REQUEUE_FAILED: string = `dynamic-effort: could not compact at ${COMPACTION_EFFORT} effort; run /compact again`
 const RERUN_TRIGGERS: ReadonlySet<SessionCompactTrigger> = new Set<SessionCompactTrigger>(['manual', 'auto'])
 const UNKNOWN_SESSION: SessionEffort = { level: undefined, pending: false }
 
@@ -203,7 +205,7 @@ function settleCommand(level: ModelEffort | undefined): void {
 
 // A level is known and below the compaction level, and nothing the mod queued is still waiting.
 const canRaiseSession = (): boolean =>
-  runtime.manager.original !== undefined && runtime.manager.original !== COMPACTION_EFFORT && !runtime.manager.session.pending
+  runtime.manager.original !== undefined && RAISABLE.has(runtime.manager.original) && !runtime.manager.session.pending
 
 // The session sits at the compaction level the person did not choose: a restore that was dropped.
 const strandedAtCompactionLevel = (): boolean => canRaiseSession() && runtime.manager.session.level === COMPACTION_EFFORT
@@ -217,8 +219,8 @@ function queueCompaction(engine: EngineInterface, original: ModelEffort, instruc
   queueSessionEffort(engine, original)
 }
 
-// `/effort <level>` also saves the level as the default (only `max` is session-only), so the
-// restore is used only when it rewrites what the user settings already hold, for the session's
+// `/effort <level>` also saves the level as the default (only `max` is session-only), so the raise
+// saves the compaction level until the restore puts the original back. The sequence is used only when it rewrites what the user settings already hold, for the session's
 // model too. A level from `--effort` or another source is never saved by the mod.
 const field = (value: unknown, key: string): unknown =>
   typeof value === 'object' && value !== null && !Array.isArray(value) ? Reflect.get(value, key) : undefined
@@ -329,7 +331,7 @@ const startSession = (engine: EngineInterface): Promise<void> =>
     resetSession(engine, false),
     engine.command.register({
       name: COMMAND,
-      description: `Compaction at max, every other request at your effort: ${ACTIONS.join(' | ')}`,
+      description: `Compaction at ${COMPACTION_EFFORT}, every other request at your effort: ${ACTIONS.join(' | ')}`,
       argumentHint: ACTION_USAGE,
     }),
   ])
@@ -359,7 +361,7 @@ function observeEffortCommand(origin: PromptOrigin, level: string): void {
 }
 
 // A main step's effort is the level the session holds. Any level below the compaction level is the
-// person's, however it was set; the compaction level is theirs only through `/effort max`, since the
+// person's, however it was set; the compaction level is theirs only through `/effort xhigh`, since the
 // mod raises the session to it. Each field is written only on a change, so a step allocates nothing.
 function recordMainStep({ model, effort }: TurnStepInput): void {
   if (typeof effort !== 'string') {
@@ -389,8 +391,8 @@ function noteSent(effort: TurnStepInput['effort']): void {
 const isRaised = ({ session }: Manager): boolean => session.pending || session.level === COMPACTION_EFFORT
 
 // Only the compaction runs at the raised level: a step that inherits it, such as a background
-// subagent's during the sequence, is sent at the person's level. `/effort max` makes that level max,
-// and outside the sequence an agent keeps a max of its own.
+// subagent's during the sequence, is sent at the person's level. `/effort xhigh` makes that level xhigh,
+// and outside the sequence an agent keeps an xhigh of its own.
 const sentEffort = (effort: TurnStepInput['effort']): TurnStepInput['effort'] =>
   effort === COMPACTION_EFFORT && isRaised(runtime.manager) ? (runtime.manager.original ?? effort) : effort
 

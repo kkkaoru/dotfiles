@@ -1,5 +1,5 @@
 {
   "name": "dynamic-effort",
   "version": "0.2.0",
-  "description": "Run compaction at max effort and every other request at the effort you chose"
+  "description": "Run compaction at xhigh effort and every other request at the effort you chose"
 }
