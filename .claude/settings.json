@@ -50,7 +50,7 @@
     "gopls-lsp@claude-plugins-official": true,
     "swift-lsp@claude-plugins-official": true,
     "ponytail@ponytail": true,
-    "dynamic-effort@dotfiles": true,
+    "dynamic-effort@dotfiles": false,
     "goal-pacing@dotfiles": true,
     "plamo-translate@dotfiles": true
   },

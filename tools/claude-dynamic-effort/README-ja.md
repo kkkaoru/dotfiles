@@ -2,6 +2,11 @@
 
 [English](README.md)
 
+> **非推奨 (deprecated)。** この mod はデフォルトでは有効化しません（`.claude/settings.json` の
+> `dynamic-effort@dotfiles` は `false`）。compaction 前に effort を上げると、Claude Code が compaction の
+> たびにキャッシュを無効にする effort 変更の確認ダイアログを出し、mod の API ではそれを省けないためです。
+> コードは残しています。再び使うときはこの項目を `true` にしてください。
+
 compaction だけを `xhigh` effort で実行し、それ以外のリクエストは指定した effort のままにする Claude Code の
 mod です。以前はコンテキスト量とツールの失敗に応じて effort を上げていましたが、その段階的な引き上げは
 [この設計の理由](#この設計の理由)にある根拠から廃止しました。

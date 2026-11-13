@@ -2,6 +2,11 @@
 
 [日本語](README-ja.md)
 
+> **Deprecated.** This mod is no longer enabled by default (`dynamic-effort@dotfiles` is `false` in
+> `.claude/settings.json`). Raising effort before a compaction makes Claude Code ask to confirm the
+> cache-breaking effort change on every compaction, and no mod API can skip that dialog. The code is kept;
+> set the entry to `true` to use it again.
+
 A Claude Code mod that runs every compaction at `xhigh` effort while every other request stays at the
 effort you chose. It used to raise effort with context size and tool failures; that ladder is gone,
 for the reasons in [Why this design](#why-this-design).
