@@ -11,5 +11,6 @@ without running the check again, and shows a toast. The goal stays set: the next
 the work and the check runs again. Continuations that used a tool are checked as before, and
 subagent tool calls do not count as work of the main turn.
 
-Loaded in every session through `CLAUDE_CODE_PLUGIN_DIRS` in `.claude/settings.json`. Check with
+Loaded in every session as `goal-pacing@dotfiles`, enabled in `.claude/settings.json` from the repository's
+`.claude-plugin/marketplace.json`. Check with
 `bun install && bun run check`.

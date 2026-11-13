@@ -1,0 +1,21 @@
+{
+  "name": "dotfiles",
+  "owner": { "name": "kkkaoru" },
+  "plugins": [
+    {
+      "name": "dynamic-effort",
+      "source": "./tools/claude-dynamic-effort",
+      "description": "Run every compaction at max effort and every other request at the effort you chose"
+    },
+    {
+      "name": "goal-pacing",
+      "source": "./tools/claude-goal-pacing",
+      "description": "End an idle /goal continuation instead of re-checking it at once"
+    },
+    {
+      "name": "plamo-translate",
+      "source": "./tools/claude-plamo-translate",
+      "description": "Translate prompts and displayed text with PLaMo 3 Translate on a local mlx_lm.server"
+    }
+  ]
+}

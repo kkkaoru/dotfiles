@@ -21,7 +21,8 @@ them, or the server is unreachable, the original text is used.
 ```
 
 The model is not stored in Git. The mod starts `~/.local/bin/mlx_lm.server` on port 18555 when
-nothing answers there. It is loaded through `CLAUDE_CODE_PLUGIN_DIRS` in `.claude/settings.json`.
+nothing answers there. It is loaded as `plamo-translate@dotfiles`, enabled in `.claude/settings.json` from the
+repository's `.claude-plugin/marketplace.json`.
 
 ## Options
 

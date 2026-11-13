@@ -128,9 +128,8 @@ dynamic=on original=… session=… pending=… last=…
 ```
 
 `autoCompactWindow` sits in this repository's `.claude/settings.json`, linked to
-`~/.claude/settings.json`. That file also names this folder in `CLAUDE_CODE_PLUGIN_DIRS`, so every Claude
-Code session loads the mod. Claude Code reads that variable only from the user settings or the process
-environment.
+`~/.claude/settings.json`. That file also enables `dynamic-effort@dotfiles` from the repository's `.claude-plugin/marketplace.json`,
+so every Claude Code session loads the mod.
 
 The hint line under the prompt drops `(shift+tab to cycle)` and ends with `🧠 <level>`, the level last
 sent, or `🧠 static` while off, so the mod takes no row of its own.

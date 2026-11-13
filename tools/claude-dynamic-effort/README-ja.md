@@ -124,8 +124,8 @@ dynamic=on original=… session=… pending=… last=…
 ```
 
 `autoCompactWindow` は、このリポジトリの `.claude/settings.json`（`~/.claude/settings.json` にリンク）にあります。
-同じファイルの `CLAUDE_CODE_PLUGIN_DIRS` にこのフォルダを指定しているので、すべての Claude Code セッションが
-mod を読み込みます。この変数は、ユーザー設定かプロセスの環境変数からのみ読み込まれます。
+同じファイルでリポジトリの `.claude-plugin/marketplace.json` から `dynamic-effort@dotfiles` を有効にしているので、
+すべての Claude Code セッションが mod を読み込みます。
 
 プロンプト下のヒント行からは `(shift+tab to cycle)` を除き、末尾に最後に送った effort を `🧠 <level>` で表示します。
 off の間は `🧠 static` です。mod が専用の行を使うことはありません。

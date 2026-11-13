@@ -40,9 +40,10 @@ integrations. These instructions apply to agents working here, including pi and 
 - `tools/pi-*/` — Local pi extensions and providers, including persistent goals,
   loops, detached tmux execution, effort management, and oMLX lifecycle management.
 - `tools/claudex-*/` — Claudex adapters and routing/tool policies.
+- `.claude-plugin/marketplace.json` — The `dotfiles` plugin marketplace that lists the `tools/claude-*`
+  mods. User settings register it and enable each mod as `<name>@dotfiles`; the mods are read in place.
 - `tools/claude-dynamic-effort/` — Claude Code mod that runs every compaction at max effort and
-  every other request at the effort you chose (`claude plugin validate|test <dir>`; load with
-  `--plugin-dir`).
+  every other request at the effort you chose (`claude plugin validate|test <dir>`).
 - `tools/claude-goal-pacing/` — Claude Code mod that ends an idle `/goal` continuation instead
   of re-checking it at once (`bun run check`).
 - `tools/claude-plamo-translate/` — Claude Code mod that translates prompts (default en) and the
