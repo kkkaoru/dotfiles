@@ -35,5 +35,8 @@ function __claudex_export_home_env --argument-names env_name
     end
   end
 end
+# pi-antigravity keeps only the last discovery endpoint's Recommended list, which drops
+# Gemini 4 Hydrogen. Pin the daily endpoint (its default) so the full CLI catalog is visible.
+set -gx ANTIGRAVITY_BASE_URL https://daily-cloudcode-pa.googleapis.com
 __claudex_export_home_env SAKANA_AI_PRO_API_KEY
 __claudex_export_home_env EXA_API_KEY

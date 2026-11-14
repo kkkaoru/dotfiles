@@ -41,7 +41,8 @@
     "./packages/executor-skills",
     "npm:@ogulcancelik/pi-herdr",
     "git:github.com/DietrichGebert/ponytail",
-    "npm:pi-chrome"
+    "npm:pi-chrome",
+    "npm:pi-antigravity"
   ],
   "extensionChangelogVersions": {
     "{\"source\":\"npm:pi-ollama-cloud\",\"scope\":\"user\"}": "0.13.1",
