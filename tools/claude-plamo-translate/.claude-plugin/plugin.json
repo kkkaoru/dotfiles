@@ -21,6 +21,12 @@
       "title": "PLaMo server port",
       "description": "Local port of the mlx_lm.server or llama-server that serves PLaMo; started on demand when nothing listens there.",
       "default": 18555
+    },
+    "toastSeconds": {
+      "type": "number",
+      "title": "Progress toast seconds",
+      "description": "How long each progress toast for a reply translation still running after two seconds stays up; a toast cannot be closed early, so it may outlast the translation by this much.",
+      "default": 5
     }
   }
 }

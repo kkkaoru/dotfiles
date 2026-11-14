@@ -18,6 +18,7 @@ interface Fake {
   readonly fetched: Fetched[]
   readonly spawned: string[][]
   readonly toasts: string[]
+  readonly toastTimeouts: (number | undefined)[]
   readonly logs: string[]
   readonly env: Record<string, string>
   readonly files: Set<string>
@@ -27,13 +28,23 @@ interface Fake {
   gets: number
   now: number
   translation: string
+  failures: number
+  failure: string
+  refusal: string
+  invalidated: number
+  // Completions wait for this while set; the status timer's sleeps wait to be released one by one.
+  hold: Promise<void> | null
+  readonly statusSleeps: (() => void)[]
+  // The prompt box as read, and every text filled into it.
+  box: string
+  readonly fills: string[]
 }
 
 interface FetchInit {
   readonly body?: string
 }
 
-const OPTIONS = { replyLanguage: 'ja', promptLanguage: 'en', port: 18555 }
+const OPTIONS = { replyLanguage: 'ja', promptLanguage: 'en', port: 18555, toastSeconds: 30 }
 
 async function setup(options: Record<string, string | number>): Promise<Fake> {
   vi.resetModules()
@@ -43,6 +54,7 @@ async function setup(options: Record<string, string | number>): Promise<Fake> {
     fetched: [],
     spawned: [],
     toasts: [],
+    toastTimeouts: [],
     logs: [],
     env: { HOME: '/Users/me' },
     files: new Set(['/Users/me/.local/bin/mlx_lm.server']),
@@ -52,6 +64,14 @@ async function setup(options: Record<string, string | number>): Promise<Fake> {
     gets: 0,
     now: 0,
     translation: 'TRANSLATED',
+    failures: 0,
+    failure: 'ui.render: superseded',
+    refusal: 'ECONNREFUSED',
+    invalidated: 0,
+    hold: null,
+    statusSleeps: [],
+    box: '',
+    fills: [],
   }
   const on = (event: string, matcherOrHook: unknown, maybeHook?: Function): unknown => {
     const hooked: Hooked = {
@@ -70,10 +90,18 @@ async function setup(options: Record<string, string | number>): Promise<Fake> {
 function respond(fake: Fake, url: string, init: FetchInit | undefined): unknown {
   fake.fetched.push({ url, body: init?.body })
   if (url.endsWith('/v1/models')) {
-    return fake.healthy ? { ok: true, text: '{}' } : Promise.reject(new Error('ECONNREFUSED'))
+    return fake.healthy ? { ok: true, text: '{}' } : Promise.reject(new Error(fake.refusal))
   }
-  return { ok: true, text: JSON.stringify({ choices: [{ text: fake.translation }] }) }
+  if (fake.failures > 0) {
+    fake.failures -= 1
+    return Promise.reject(new Error(fake.failure))
+  }
+  const answer = { ok: true, text: JSON.stringify({ choices: [{ text: fake.translation }] }) }
+  return fake.hold === null ? answer : fake.hold.then(() => answer)
 }
+
+// The status timer's sleep: pending until the test releases it (other tests never do).
+const STATUS_SLEEP_MS = 2000
 
 async function* serverOutput(fake: Fake, argv: string[]): AsyncGenerator<{ text: string }> {
   fake.spawned.push(argv)
@@ -85,6 +113,9 @@ const engine = (fake: Fake): Record<string, unknown> => ({
   clock: {
     now: async () => fake.now,
     sleep: async (ms: number) => {
+      if (ms === STATUS_SLEEP_MS) {
+        return new Promise<void>(resolve => fake.statusSleeps.push(resolve))
+      }
       fake.now += ms
       fake.healthy ||= fake.healOnSleep
     },
@@ -93,8 +124,22 @@ const engine = (fake: Fake): Record<string, unknown> => ({
   fs: { exists: async (path: string) => fake.files.has(path) },
   process: { spawn: ({ argv }: { argv: string[] }) => serverOutput(fake, argv) },
   ui: {
-    toast: (text: string) => fake.toasts.push(text),
+    toast: (text: string, options?: { timeoutMs?: number }) => {
+      fake.toasts.push(text)
+      fake.toastTimeouts.push(options?.timeoutMs)
+    },
+    invalidate: () => {
+      fake.invalidated += 1
+    },
     log: (text: string) => fake.logs.push(text),
+  },
+  prompt: {
+    read: async () => ({ text: fake.box, cursor: fake.box.length }),
+    fill: async ({ text }: { text: string }) => {
+      fake.fills.push(text)
+      fake.box = text
+      return { isFilled: true, text, cursor: text.length }
+    },
   },
   state: {
     get: async ({ key }: { key: string }) => {
@@ -293,7 +338,7 @@ test('session start leaves the server alone when both directions are off', async
 
 const completions = (fake: Fake): number => fake.fetched.filter(({ url }) => url.endsWith('/v1/completions')).length
 
-const block = (text: string, extra: Record<string, unknown> = {}): unknown => ({
+const block = (text: string, extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   component: 'AssistantMessage',
   props: { text, isFirstOfReply: true, ...extra },
 })
@@ -535,4 +580,267 @@ test('with reply translation off the system prompt is left as it is', async () =
   expect(await call(fake, 'prompt.compose', {}, () => sections)).toStrictEqual({
     sections: [{ id: 'intro', text: 'You are Claude.', scope: 'shared' }],
   })
+})
+
+test('a block off screen is drawn as written without asking the server', async () => {
+  const fake = await setup(OPTIONS)
+  expect(await call(fake, 'ui.render', block('Older reply.', { onScreen: null }))).toStrictEqual(
+    block('Older reply.', { onScreen: null }),
+  )
+  expect(completions(fake)).toBe(0)
+})
+
+test('in the fullscreen terminal a block is translated once it is laid out on screen', async () => {
+  const fake = await setup(OPTIONS)
+  fake.translation = '古い返信です。'
+  const fullscreen = { viewport: { columns: 120, rows: 40, isFullscreen: true } }
+  expect(await call(fake, 'ui.render', { ...block('Older reply.'), ...fullscreen })).toStrictEqual({
+    ...block('Older reply.'),
+    ...fullscreen,
+  })
+  expect(completions(fake)).toBe(0)
+  const shown = { first: 0, last: 2, of: 3 }
+  expect(await call(fake, 'ui.render', { ...block('Older reply.', { onScreen: shown }), ...fullscreen })).toStrictEqual({
+    ...block('古い返信です。', { onScreen: { first: 0, last: 2, of: 3 } }),
+    ...fullscreen,
+  })
+  expect(completions(fake)).toBe(1)
+})
+
+test('a block off screen is drawn translated once its started translation has finished', async () => {
+  const fake = await setup(OPTIONS)
+  fake.translation = '新しい返信です。'
+  await step(fake, 'New reply.')
+  expect(await call(fake, 'ui.render', block('New reply.', { onScreen: null }))).toStrictEqual(
+    block('New reply.', { onScreen: null }),
+  )
+  await vi.waitFor(() => expect(completions(fake)).toBe(1))
+  await vi.waitFor(async () =>
+    expect(await call(fake, 'ui.render', block('New reply.', { onScreen: null }))).toStrictEqual(
+      block('新しい返信です。', { onScreen: null }),
+    ),
+  )
+  expect(completions(fake)).toBe(1)
+})
+
+test('a block whose translation failed with a superseded render asks once more and is drawn translated', async () => {
+  const fake = await setup(OPTIONS)
+  fake.translation = '返信です。'
+  fake.failures = 1
+  expect(await call(fake, 'ui.render', block('A reply.'))).toStrictEqual(block('返信です。'))
+  expect(completions(fake)).toBe(2)
+})
+
+test('a block whose translation fails twice reports the failure', async () => {
+  const fake = await setup(OPTIONS)
+  fake.failures = 2
+  await expect(call(fake, 'ui.render', block('A reply.'))).rejects.toThrow('superseded')
+})
+
+test('a render superseded while checking the server starts no server and draws once asked again', async () => {
+  const fake = await setup(OPTIONS)
+  fake.healthy = false
+  fake.refusal = 'ui.render: superseded'
+  await expect(call(fake, 'ui.render', block('A reply.'))).rejects.toThrow('ui.render: superseded')
+  expect(fake.spawned).toStrictEqual([])
+  fake.healthy = true
+  expect(await call(fake, 'ui.render', block('A reply.'))).toStrictEqual(block('TRANSLATED'))
+})
+
+test('with the worker running a block on screen is drawn as written, then translated and redrawn', async () => {
+  const fake = await setup(OPTIONS)
+  fake.translation = '返信です。'
+  await call(fake, 'session.start', { source: 'resume' })
+  expect(await call(fake, 'ui.render', block('A reply.'))).toStrictEqual(block('A reply.'))
+  await vi.waitFor(() => expect(fake.invalidated).toBe(1))
+  expect(await call(fake, 'ui.render', block('A reply.'))).toStrictEqual(block('返信です。'))
+  expect(completions(fake)).toBe(1)
+})
+
+test('the worker translates the newest block asked for first and skips one gone off screen', async () => {
+  const fake = await setup(OPTIONS)
+  await call(fake, 'session.start', { source: 'resume' })
+  await Promise.all([
+    call(fake, 'ui.render', block('First reply.')),
+    call(fake, 'ui.render', block('Second reply.')),
+    call(fake, 'ui.render', block('Third reply.')),
+    call(fake, 'ui.render', block('Second reply.', { onScreen: null })),
+  ])
+  await vi.waitFor(() => expect(fake.invalidated).toBe(2))
+  expect(
+    fake.fetched
+      .filter(({ url }) => url.endsWith('/v1/completions'))
+      .map(({ body }) => JSON.parse(body ?? '{}').prompt.split('<|plamo:msg|>')[2].split('<|plamo:tag|>')[0]),
+  ).toStrictEqual(['Third reply.', 'First reply.'])
+})
+
+test('a live reply whose translation fails is drawn as written and handed to the worker', async () => {
+  const fake = await setup(OPTIONS)
+  fake.translation = '返信です。'
+  await call(fake, 'session.start', { source: 'startup' })
+  fake.failures = 1
+  await step(fake, 'A reply.')
+  expect(await call(fake, 'ui.render', block('A reply.'))).toStrictEqual(block('A reply.'))
+  await vi.waitFor(() => expect(fake.invalidated).toBe(1))
+  expect(await call(fake, 'ui.render', block('A reply.'))).toStrictEqual(block('返信です。'))
+})
+
+test('a failing worker translation is logged and the worker goes on', async () => {
+  const fake = await setup(OPTIONS)
+  fake.translation = '二つ目です。'
+  await call(fake, 'session.start', { source: 'resume' })
+  fake.failures = 1
+  fake.failure = 'server down'
+  await call(fake, 'ui.render', block('First reply.'))
+  await vi.waitFor(() => expect(fake.logs.some(log => log.startsWith('plamo-translate: translating a block failed'))).toBe(true))
+  await call(fake, 'ui.render', block('Second reply.'))
+  await vi.waitFor(() => expect(fake.invalidated).toBe(1))
+})
+
+test('the worker asks again when the translation it joined failed with a superseded render', async () => {
+  const fake = await setup(OPTIONS)
+  fake.translation = '返信です。'
+  await call(fake, 'session.start', { source: 'resume' })
+  fake.failures = 1
+  await call(fake, 'ui.render', block('A reply.'))
+  await vi.waitFor(() => expect(fake.invalidated).toBe(1))
+  expect(await call(fake, 'ui.render', block('A reply.'))).toStrictEqual(block('返信です。'))
+})
+
+interface Release {
+  readonly hold: Promise<void>
+  readonly release: () => void
+}
+
+function held(): Release {
+  const opener: { release: () => void } = { release: () => undefined }
+  const hold = new Promise<void>(resolve => {
+    opener.release = resolve
+  })
+  return { hold, release: () => opener.release() }
+}
+
+test('a slow reply translation toasts its progress again only once the last toast is gone', async () => {
+  const fake = await setup(OPTIONS)
+  const { hold, release } = held()
+  fake.hold = hold
+  const drawn = call(fake, 'ui.render', block('First line.\nSecond line.'))
+  await vi.waitFor(() => expect(fake.statusSleeps.length).toBe(1))
+  fake.statusSleeps.shift()?.()
+  await vi.waitFor(() => expect(fake.toasts).toStrictEqual(['PLaMo: translating… 0/2 lines']))
+  expect(fake.toastTimeouts).toStrictEqual([30000])
+  await vi.waitFor(() => expect(fake.statusSleeps.length).toBe(1))
+  fake.now += 29999
+  fake.statusSleeps.shift()?.()
+  await vi.waitFor(() => expect(fake.statusSleeps.length).toBe(1))
+  expect(fake.toasts).toStrictEqual(['PLaMo: translating… 0/2 lines'])
+  fake.now += 1
+  fake.statusSleeps.shift()?.()
+  await vi.waitFor(() => expect(fake.toasts).toStrictEqual(['PLaMo: translating… 0/2 lines', 'PLaMo: translating… 0/2 lines']))
+  release()
+  await drawn
+  await vi.waitFor(() => expect(fake.statusSleeps.length).toBe(1))
+  fake.statusSleeps.shift()?.()
+  await vi.waitFor(() => expect(fake.statusSleeps.length).toBe(0))
+  expect(fake.toasts).toStrictEqual(['PLaMo: translating… 0/2 lines', 'PLaMo: translating… 0/2 lines'])
+})
+
+test('a run that ends before two seconds shows no toast, and its timer stays quiet for the next run', async () => {
+  const fake = await setup(OPTIONS)
+  await call(fake, 'ui.render', block('Quick line.'))
+  const { hold, release } = held()
+  fake.hold = hold
+  const drawn = call(fake, 'ui.render', block('Slow line.'))
+  await vi.waitFor(() => expect(fake.statusSleeps.length).toBe(2))
+  fake.statusSleeps.shift()?.()
+  await vi.waitFor(() => expect(fake.statusSleeps.length).toBe(1))
+  expect(fake.toasts).toStrictEqual([])
+  fake.statusSleeps.shift()?.()
+  await vi.waitFor(() => expect(fake.toasts).toStrictEqual(['PLaMo: translating… 0/1 lines']))
+  release()
+  await drawn
+})
+
+test('a prompt translation shows no progress however long it takes', async () => {
+  const fake = await setup(OPTIONS)
+  const { hold, release } = held()
+  fake.hold = hold
+  const submitted = call(fake, 'prompt.submit', prompt('長い日本語の文です。'))
+  await vi.waitFor(() => expect(completions(fake)).toBe(1))
+  expect(fake.statusSleeps).toStrictEqual([])
+  release()
+  await submitted
+  expect(fake.toasts).toStrictEqual([])
+})
+
+// Sends `count` more prompts one after another, each with its own translation.
+async function submitInTurn(fake: Fake, count: number): Promise<void> {
+  if (count === 0) {
+    return
+  }
+  fake.translation = `Prompt ${count}`
+  await call(fake, 'prompt.submit', prompt(`プロンプト${count}`))
+  return submitInTurn(fake, count - 1)
+}
+
+const recall = (text: string): unknown => ({ text, cursor: text.length, origin: { kind: 'history' } })
+
+test('a prompt recalled from history comes back exactly as typed, without asking the server', async () => {
+  const fake = await setup(OPTIONS)
+  fake.translation = 'Add a tab'
+  await call(fake, 'prompt.submit', prompt('タブを追加して'))
+  const asked = fake.fetched.length
+  fake.box = 'Add a tab'
+  expect(await call(fake, 'prompt.change', recall('Add a tab'))).toStrictEqual(recall('Add a tab'))
+  expect(fake.fills).toStrictEqual(['タブを追加して'])
+  expect(fake.fetched.length).toBe(asked)
+})
+
+test('a recalled prompt this session did not send is translated into the reply language', async () => {
+  const fake = await setup(OPTIONS)
+  fake.translation = 'タブを追加して'
+  fake.box = 'Add a tab'
+  await call(fake, 'prompt.change', recall('Add a tab'))
+  expect(fake.fills).toStrictEqual(['タブを追加して'])
+  expect(JSON.parse(fake.fetched[1]?.body ?? '{}').prompt).toBe(
+    '<|plamo:tag|>dataset<|plamo:msg|>translation<|plamo:tag|>input<|plamo:msg|>Add a tab<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>ja<|plamo:key|>form<|plamo:val|>polite<|plamo:msg|>',
+  )
+})
+
+test('a recall the person moved on from while it was translated leaves the box alone', async () => {
+  const fake = await setup(OPTIONS)
+  fake.translation = 'タブを追加して'
+  fake.box = 'Close the tab'
+  await call(fake, 'prompt.change', recall('Add a tab'))
+  expect(fake.fills).toStrictEqual([])
+})
+
+test('a recalled slash command, an empty box or a prompt already in the reply language is left alone', async () => {
+  const fake = await setup(OPTIONS)
+  fake.box = '/reload-plugins'
+  await call(fake, 'prompt.change', recall('/reload-plugins'))
+  fake.box = ''
+  await call(fake, 'prompt.change', recall(''))
+  fake.box = 'タブを追加して'
+  await call(fake, 'prompt.change', recall('タブを追加して'))
+  expect(fake.fills).toStrictEqual([])
+  expect(fake.fetched).toStrictEqual([])
+})
+
+test('a recall is left alone when replies are not translated', async () => {
+  const fake = await setup({ ...OPTIONS, replyLanguage: 'off' })
+  fake.box = 'Add a tab'
+  await call(fake, 'prompt.change', recall('Add a tab'))
+  expect(fake.fills).toStrictEqual([])
+})
+
+test('only the latest prompts are remembered for recall', async () => {
+  const fake = await setup(OPTIONS)
+  fake.translation = 'First'
+  await call(fake, 'prompt.submit', prompt('最初'))
+  await submitInTurn(fake, 200)
+  fake.translation = 'さいしょ'
+  fake.box = 'First'
+  await call(fake, 'prompt.change', recall('First'))
+  expect(fake.fills).toStrictEqual(['さいしょ'])
 })
