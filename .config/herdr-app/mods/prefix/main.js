@@ -38,7 +38,9 @@ const BY_KEY = new Map(KEYS.filter((k) => k[2]).map((k) => [k[0], k]));
 
 const sendLiteralPrefix = () => {
   const terminal = focused()?.terminal;
-  if (terminal) hc(["keys", terminal, "ctrl+b"]);
+  if (terminal) {
+    hc(["keys", terminal, "ctrl+b"]);
+  }
 };
 
 export default class Prefix extends View {
@@ -47,7 +49,12 @@ export default class Prefix extends View {
     this.handle.focus();
     // ctrl-b while armed comes through keys.json's mod:prefix section.
     cx.spawn(async () => {
-      for (;;) if ((await nextCommand()) === "literal") this.finish(sendLiteralPrefix);
+      for (;;) {
+        // oxlint-disable-next-line no-await-in-loop -- commands arrive one at a time, in order
+        if ((await nextCommand()) === "literal") {
+          this.finish(sendLiteralPrefix);
+        }
+      }
     });
   }
 
@@ -58,21 +65,30 @@ export default class Prefix extends View {
 
   key(e) {
     const stroke = e.keystroke === "?" ? "shift-/" : e.keystroke;
-    if (/^[1-9]$/.test(stroke)) return () => run("tab.select", { index: Number(stroke) });
+    if (/^[1-9]$/.test(stroke)) {
+      return () => run("tab.select", { index: Number(stroke) });
+    }
     const hit = BY_KEY.get(stroke);
     return hit && (() => run(hit[2], hit[3] ?? {}));
   }
 
   render(_cx) {
     const t = theme();
-    const label = (k) => k.replace("shift-/", "?").replace(/^shift-(.)$/, (_, c) => c.toUpperCase());
+    const label = (k) =>
+      k.replace("shift-/", "?").replace(/^shift-(.)$/, (_, c) => c.toUpperCase());
     const hint = ([k, what]) =>
-      h_flex().w(130).gap(6).child(div().w(40).text_color(t.accent).child(label(k))).child(div().text_color(t.muted).child(what));
+      h_flex()
+        .w(130)
+        .gap(6)
+        .child(div().w(40).text_color(t.accent).child(label(k)))
+        .child(div().text_color(t.muted).child(what));
     return v_flex()
       .id("prefix")
       .track_focus(this.handle)
       .on_key_down((e, cx) => {
-        if (["shift", "control", "alt", "platform", "function"].includes(e.key)) return;
+        if (["shift", "control", "alt", "platform", "function"].includes(e.key)) {
+          return;
+        }
         cx.stop_propagation();
         this.finish(e.key === "escape" ? null : this.key(e));
       })
@@ -86,11 +102,27 @@ export default class Prefix extends View {
         h_flex()
           .gap(8)
           .items_center()
-          .child(div().px(8).py(2).rounded(5).bg(t.accent).text_color(t.accent_foreground).font_semibold().child("PREFIX"))
+          .child(
+            div()
+              .px(8)
+              .py(2)
+              .rounded(5)
+              .bg(t.accent)
+              .text_color(t.accent_foreground)
+              .font_semibold()
+              .child("PREFIX"),
+          )
           .child(div().text_color(t.foreground).child("ctrl-b"))
           .child(div().flex_1())
-          .child(div().text_size(11).text_color(t.dim).child("Esc to cancel · ctrl-b sends ctrl-b")),
+          .child(
+            div().text_size(11).text_color(t.dim).child("Esc to cancel · ctrl-b sends ctrl-b"),
+          ),
       )
-      .child(h_flex().flex_wrap().gap_y(4).children(KEYS.filter((k) => k[1]).map(hint)));
+      .child(
+        h_flex()
+          .flex_wrap()
+          .gap_y(4)
+          .children(KEYS.filter((k) => k[1]).map(hint)),
+      );
   }
 }
