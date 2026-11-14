@@ -1,0 +1,20 @@
+{
+  "name": "@kkkaoru/herdr-app-mods",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "cd ../.. && oxlint -c tools/herdr-app-mods/.oxlintrc.json .config/herdr-app/mods tools/herdr-app-mods",
+    "format": "cd ../.. && oxfmt -c tools/herdr-app-mods/.oxfmtrc.json --ignore-path tools/herdr-app-mods/.oxfmtignore --write .config/herdr-app/mods tools/herdr-app-mods",
+    "format:check": "cd ../.. && oxfmt -c tools/herdr-app-mods/.oxfmtrc.json --ignore-path tools/herdr-app-mods/.oxfmtignore --check .config/herdr-app/mods tools/herdr-app-mods",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "check": "bun run lint && bun run format:check && bun run test:coverage"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "4.1.11",
+    "oxfmt": "0.63.0",
+    "oxlint": "1.78.0",
+    "vitest": "4.1.11"
+  }
+}

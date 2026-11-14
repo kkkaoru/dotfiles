@@ -326,6 +326,12 @@ def checks(root: Path, event: str, paths: set[str]) -> list[Check]:
         if touches(paths, f"tools/{project}/"):
             target = "verify" if event == "pre-push" else "lint"
             selected.append(Check(f"tools/{project}", ("make", target)))
+    if touches(paths, ".config/herdr-app/mods/", "tools/herdr-app-mods/"):
+        mods = "tools/herdr-app-mods"
+        tests = "test:coverage" if event == "pre-push" else "test"
+        selected.extend(
+            Check(mods, ("bun", "run", script)) for script in ("lint", "format:check", tests)
+        )
     if paths & {"package.json", "bun.lock"}:
         selected.append(
             Check(

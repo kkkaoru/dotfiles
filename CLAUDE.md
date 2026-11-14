@@ -52,6 +52,8 @@ integrations. These instructions apply to agents working here, including pi and 
 - `tools/claude-plamo-translate/` — Claude Code mod that translates prompts (default en) and the
   text Claude shows you (default ja) with PLaMo 3 Translate on a local `mlx_lm.server` or llama.cpp
   `llama-server` (`bun run check`).
+- `tools/herdr-app-mods/` — Tests, oxlint and oxfmt for the Herdr.app mods in
+  `.config/herdr-app/mods/` (host modules mocked); every mod file keeps >=95% coverage.
 - `tools/dsh-dracula-theme/` — A DeepSeek Harness bundle (no build step) that
   injects the Dracula palette into the Web and Desktop clients. Install it into
   a profile with `dsh plugin --profile <name> add <checkout>/tools/dsh-dracula-theme`.
@@ -130,6 +132,7 @@ Verification is component-specific; the root package does not provide a universa
 - `tools/pi-loop-extension/`, `tools/pi-tmux-timeout-extension/`: `bun run check`
 - `tools/claude-dynamic-effort/`: `bun run check` (vitest coverage and `claude plugin validate`)
 - `tools/claude-plamo-translate/`: `bun run check`
+- `.config/herdr-app/mods/`: `bun run check` in `tools/herdr-app-mods/` (lint, format, per-file 95% coverage)
 - Other components: inspect their `package.json` and README for required checks.
 - Shell changes: check syntax; for all changes, run `git diff --check`.
 

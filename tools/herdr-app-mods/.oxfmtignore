@@ -1,0 +1,7 @@
+# Paths are relative to the repository root, where the scripts run.
+**/*.d.ts
+**/jsconfig.json
+**/mod.json
+tools/herdr-app-mods/node_modules
+tools/herdr-app-mods/coverage
+tools/herdr-app-mods/bun.lock

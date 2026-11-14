@@ -234,6 +234,21 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(swift[0].command, ("make", "verify"))
         self.assertFalse(quality.touches({"README.md"}, "tools/"))
 
+    def test_herdr_app_mods_lint_format_and_test_with_coverage_on_push(self) -> None:
+        commit = quality.checks(
+            Path("/repo"), "pre-commit", {".config/herdr-app/mods/agents-emoji/nyan.js"}
+        )
+        self.assertEqual(
+            [(check.directory, check.command) for check in commit],
+            [
+                ("tools/herdr-app-mods", ("bun", "run", "lint")),
+                ("tools/herdr-app-mods", ("bun", "run", "format:check")),
+                ("tools/herdr-app-mods", ("bun", "run", "test")),
+            ],
+        )
+        push = quality.checks(Path("/repo"), "pre-push", {"tools/herdr-app-mods/nyan.test.js"})
+        self.assertEqual(push[-1].command, ("bun", "run", "test:coverage"))
+
     def test_skips_the_fmt_gate_but_still_lints_when_only_docs_change(self) -> None:
         selected = quality.checks(
             Path("/repo"), "pre-commit", {"tools/claudex-agent-adapter/README.md"}
