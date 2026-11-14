@@ -1,7 +1,7 @@
 {
   "zoom": 1.0,
   "sounds": {
-    "enabled": true
+    "enabled": false
   },
   "font_ligatures": false,
   "minimum_contrast": 1.0,
