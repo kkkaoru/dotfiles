@@ -19,6 +19,7 @@ const defaults = () => ({
     active: true,
   },
   layout: null,
+  settings: { zoom: 1 },
   exec: async () => ({ code: 0, stdout: "", stderr: "" }),
   hc: async () => ({ code: 0, stdout: "", stderr: "" }),
   run: async () => ({}),
@@ -51,6 +52,7 @@ export const shared = (key) => host.shared[key];
 export const props = () => host.props;
 export const window = () => host.window;
 export const layout = () => host.layout;
+export const settings = () => host.settings;
 export function setShared(key, value) {
   host.shared[key] = value;
   return record("setShared", [key, value], null);

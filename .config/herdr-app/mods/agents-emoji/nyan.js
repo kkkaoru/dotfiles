@@ -45,7 +45,8 @@ const SHADOW = [
   [3, 0.3],
   [2, 0.6],
 ];
-// Rainbow palettes baked into the frames: len(RAINBOWS) in the build script.
+// Rainbow palettes the agents choose from: the build script's first 18 (its AGENT_RAINBOWS). The
+// rest are the tab bar clock's (tabs-clock/clock.js); counting them here would recolor every cat.
 const NYAN_RAINBOWS = 18;
 const fnv = (s) => {
   let h = 0x811c9dc5;

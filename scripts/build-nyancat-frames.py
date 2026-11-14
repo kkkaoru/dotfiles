@@ -7,7 +7,9 @@ Writes .config/herdr-app/mods/agents-emoji/nyan/<layer>-<frame>.svg for each fra
 - fur, frosting, sprinkles: one-color masks of those cells, which the mod tints with `svg()`;
 - trail-<palette>: TAIL_PERIODS more rainbow periods that the mod repeats to fill a row; wide, so a
   row needs few images (NYAN_TAIL in the mod is their width).
-The mod's NYAN_RAINBOWS must match len(RAINBOWS).
+The Agents mod's cats use the first NYAN_RAINBOWS (18). The tab bar clock (tabs-clock/clock.js) picks
+24 of them, one per hour, from its own copies of all of them in .config/herdr-app/mods/tabs-clock/nyan:
+the same layers without the night sky or its stars, so the cat runs over the bar itself.
 """
 import os
 import re
@@ -38,7 +40,19 @@ RAINBOWS = [
     ('#ffd75f', '#ff875f', '#d75f00', '#af5f00', '#875f00', '#5f3a00'),  # autumn
     ('#ffffff', '#d7afff', '#af5fff', '#5f00ff', '#3a00af', '#00005f'),  # galaxy
     ('#00ff00', '#00d700', '#00af00', '#008700', '#005f00', '#003a00'),  # matrix
+    ('#d7fff5', '#87ffd7', '#5fd7af', '#00af87', '#008787', '#005f5f'),  # mint
+    ('#ffff00', '#ffaf00', '#ff5f87', '#d75fd7', '#00d7ff', '#00af87'),  # tropical
+    ('#ffd7af', '#ffaf87', '#d787af', '#875faf', '#5f5f87', '#3a3a5f'),  # twilight
+    ('#ffafaf', '#ff5f5f', '#d70000', '#af0000', '#870000', '#5f0000'),  # ruby
+    ('#ffff87', '#ffd700', '#d7af00', '#af8700', '#875f00', '#5f3a00'),  # gold
+    ('#ff8700', '#ffd700', '#5fd75f', '#00afaf', '#5f87d7', '#875faf'),  # retro
+    ('#ff00af', '#ff5f00', '#ffd700', '#00ff87', '#00afff', '#875fff'),  # electric
+    ('#ff5fd7', '#ff5f87', '#ffaf5f', '#5fd7ff', '#5f87ff', '#af5fff'),  # synthwave
+    ('#ffff00', '#afff00', '#ff8700', '#ff005f', '#d700af', '#5f00d7'),  # citrus-berry
+    ('#00ffaf', '#00d7d7', '#0087ff', '#5f5fff', '#af00ff', '#ff00d7'),  # peacock
 ]
+# The Agents mod's cats: the first 18 (its NYAN_RAINBOWS).
+AGENT_RAINBOWS = 18
 # The cells the mod tints: fur, frosting, sprinkles.
 MASKS = {'fur': '*', 'frosting': '$', 'sprinkles': '-'}
 # The rainbow repeats every 16 columns from column 2; the cat starts at column 18 in every frame.
@@ -74,13 +88,17 @@ def rainbow_only(frame):
     return [''.join(c if c in ',.' + BANDS or x < period else r[x - period] for x, c in enumerate(r)) for r in frame]
 
 
-out = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../.config/herdr-app/mods/agents-emoji/nyan')
-os.makedirs(out, exist_ok=True)
-for i, f in enumerate(frames):
-    base = {k: c for k, c in COLORS.items() if k not in MASKS.values()}
-    for r, bands in enumerate(RAINBOWS):
-        open(f'{out}/cat-{r}-{i}.svg', 'w').write(svg(f, TAIL[0], right, {**base, **dict(zip(BANDS, bands))}))
-        open(f'{out}/trail-{r}-{i}.svg', 'w').write(svg(rainbow_only(f), *TAIL, {**COLORS, **dict(zip(BANDS, bands))}, repeat=TAIL_PERIODS))
-    for name, cell in MASKS.items():
-        open(f'{out}/{name}-{i}.svg', 'w').write(svg(f, TAIL[0], right, {cell: '#000000'}, sky=False))
+mods = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../.config/herdr-app/mods')
+# (folder, with the night sky and its stars)
+for out, sky, rainbows in ((f'{mods}/agents-emoji/nyan', True, RAINBOWS[:AGENT_RAINBOWS]),
+                           (f'{mods}/tabs-clock/nyan', False, RAINBOWS)):
+    os.makedirs(out, exist_ok=True)
+    colors = COLORS if sky else {k: c for k, c in COLORS.items() if k != '.'}
+    for i, f in enumerate(frames):
+        base = {k: c for k, c in colors.items() if k not in MASKS.values()}
+        for r, bands in enumerate(rainbows):
+            open(f'{out}/cat-{r}-{i}.svg', 'w').write(svg(f, TAIL[0], right, {**base, **dict(zip(BANDS, bands))}, sky))
+            open(f'{out}/trail-{r}-{i}.svg', 'w').write(svg(rainbow_only(f), *TAIL, {**colors, **dict(zip(BANDS, bands))}, sky, TAIL_PERIODS))
+        for name, cell in MASKS.items():
+            open(f'{out}/{name}-{i}.svg', 'w').write(svg(f, TAIL[0], right, {cell: '#000000'}, sky=False))
 print(f'cat {right - TAIL[0]}x{bottom - top + 1}, trail {(TAIL[1] - TAIL[0]) * TAIL_PERIODS}x{bottom - top + 1}')
