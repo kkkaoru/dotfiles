@@ -23,15 +23,13 @@ const POPTART = [
 ]; // strawberry, chocolate, matcha, lemon, mint, vanilla
 // The night sky behind the cat (nyancat.c's ",").
 const SKY = "#00005f";
-// Letter color on each rainbow: black, or white on the two whose middle bands are dark (lava,
-// galaxy). Chosen by WCAG contrast against the two bands the letters sit on (bands 3 and 4).
-const LIGHT_INK = new Set([14, 16]);
-export const nyanInk = (r) => (LIGHT_INK.has(r) ? "#ffffff" : "#000000");
-// The letters' outline, the other of black and white: whatever band is behind, each letter sits
-// on its own outline at 21:1, past WCAG AA's 4.5:1.
-export const nyanHalo = (r) => (LIGHT_INK.has(r) ? "#000000" : "#ffffff");
+// Letters are white on a black outline over a soft black shadow, the same on every rainbow: 21:1
+// against their own edge (past WCAG AA's 4.5:1), and the shadow lifts them off bright and pale
+// bands alike.
+export const NYAN_INK = "#ffffff";
+export const NYAN_OUTLINE = "#000000";
 // The outline is the letter stamped 1px off in each of eight directions under the ink copy.
-const HALO = [
+const AROUND = [
   [-1, -1],
   [0, -1],
   [1, -1],
@@ -41,9 +39,12 @@ const HALO = [
   [0, 1],
   [1, 1],
 ];
-// A white outline gets a black one 2px out around it, so it keeps its edge on light bands too.
-const RIM = HALO.map(([dx, dy]) => [dx * 2, dy * 2]);
-const rimOf = (r) => (LIGHT_INK.has(r) ? [] : RIM);
+// The shadow: the letter in black rings further out, the outer one fainter, all dropped 1px so
+// it reads as lit from above ([radius px, opacity]).
+const SHADOW = [
+  [3, 0.3],
+  [2, 0.6],
+];
 // Rainbow palettes baked into the frames: len(RAINBOWS) in the build script.
 const NYAN_RAINBOWS = 18;
 const fnv = (s) => {
@@ -131,11 +132,11 @@ export function fitLabel(text, room) {
 }
 
 // What a cat's letters need: they change only with the label, its room or the wave's phase.
-export function lettersOf({ h, width, r, name, since }, f, now) {
+export function lettersOf({ h, width, name, since }, f, now) {
   const seg = (SEGMENT_CELLS * h) / 21;
   const room = Math.max(Math.floor((width - ROW_CHROME - (h * 47) / 21) / seg), 0);
   const letters = name ? fitLabel(nyanLabel({ name, since }, now), room) : [];
-  return { h, r, letters, phase: Math.floor(f / 2) % 2 };
+  return { h, letters, phase: Math.floor(f / 2) % 2 };
 }
 
 // One copy of a letter over its whole segment, `dx`/`dy` px off center.
@@ -153,7 +154,18 @@ const glyph = (letter, color, size, [dx, dy]) =>
     .font_weight(900)
     .child(letter);
 
-export function rainbowLetters({ h, r, letters, phase }) {
+const shadowRing = (letter, size, [radius, alpha]) =>
+  div()
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
+    .opacity(alpha)
+    .children(
+      AROUND.map(([dx, dy]) => glyph(letter, NYAN_OUTLINE, size, [dx * radius, dy * radius + 1])),
+    );
+
+export function rainbowLetters({ h, letters, phase }) {
   const cell = h / 21;
   const size = h < 20 ? 9 : 11;
   return h_flex()
@@ -169,9 +181,9 @@ export function rainbowLetters({ h, r, letters, phase }) {
           .h(h)
           .flex_none()
           .when(!segmentUp(letters.length - 1 - i, phase * 2), (el) => el.mt(cell))
-          .children(rimOf(r).map((at) => glyph(letter, "#000000", size, at)))
-          .children(HALO.map((at) => glyph(letter, nyanHalo(r), size, at)))
-          .child(glyph(letter, nyanInk(r), size, [0, 0])),
+          .children(SHADOW.map((ring) => shadowRing(letter, size, ring)))
+          .children(AROUND.map((at) => glyph(letter, NYAN_OUTLINE, size, at)))
+          .child(glyph(letter, NYAN_INK, size, [0, 0])),
       ),
     );
 }

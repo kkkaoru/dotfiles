@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
@@ -10,8 +10,6 @@ import {
   ago,
   fitLabel,
   lettersOf,
-  nyanHalo,
-  nyanInk,
   nyanLabel,
   nyanStrip,
   nyanVariants,
@@ -275,21 +273,48 @@ test("each letter rides one segment, ending at the cat, lowered on the segments 
     ["right", 47],
     ["h", 21],
   ]);
-  // Each segment holds its letter 17 times: a black rim 2px out, the white outline 1px out, then
-  // the ink on top.
-  expect(letters.kids.map((l) => l.kids.map((g) => g.kids[0]))).toStrictEqual(
-    [..."ab·0s"].map((letter) => Array.from({ length: 17 }, () => letter)),
-  );
-  expect(
-    letters.kids[0].kids.map((g) => g.calls.find(([k]) => k === "text_color")[1]),
-  ).toStrictEqual([
-    ...Array.from({ length: 8 }, () => "#000000"),
-    ...Array.from({ length: 8 }, () => "#ffffff"),
-    "#000000",
+  // Each segment holds its letter as two black shadow rings (3px out at 30%, 2px at 60%, both
+  // dropped 1px), a black outline 1px out, then the white ink on top.
+  const [outer, inner, ...edge] = letters.kids[0].kids;
+  expect([outer, inner].map((ring) => ring.calls.find(([k]) => k === "opacity")[1])).toStrictEqual([
+    0.3, 0.6,
   ]);
-  expect(letters.kids[0].kids.slice(0, 2).map((g) => g.calls.slice(0, 3))).toStrictEqual([
-    [["absolute"], ["top", -2], ["left", -2]],
-    [["absolute"], ["top", -2], ["left", 0]],
+  expect([outer, inner].map((ring) => ring.kids[0].calls.slice(1, 3))).toStrictEqual([
+    [
+      ["top", -2],
+      ["left", -3],
+    ],
+    [
+      ["top", -1],
+      ["left", -2],
+    ],
+  ]);
+  expect(outer.kids.map((g) => g.calls.find(([k]) => k === "text_color")[1])).toStrictEqual(
+    Array.from({ length: 8 }, () => "#000000"),
+  );
+  expect(letters.kids.map((l) => l.kids.slice(2).map((g) => g.kids[0]))).toStrictEqual(
+    [..."ab·0s"].map((letter) => Array.from({ length: 9 }, () => letter)),
+  );
+  const pick = (g) =>
+    g.calls.filter(([k]) => ["top", "left", "text_color", "text_size", "font_weight"].includes(k));
+  expect(edge.slice(0, 8).map((g) => pick(g).map(([, v]) => v))).toStrictEqual(
+    [
+      [-1, -1],
+      [-1, 0],
+      [-1, 1],
+      [0, -1],
+      [0, 1],
+      [1, -1],
+      [1, 0],
+      [1, 1],
+    ].map(([top, left]) => [top, left, "#000000", 11, 900]),
+  );
+  expect(pick(edge[8])).toStrictEqual([
+    ["top", 0],
+    ["left", 0],
+    ["text_color", "#ffffff"],
+    ["text_size", 11],
+    ["font_weight", 900],
   ]);
   // From the cat: s is segment 0 (down), 0 is 1 (up), and so on.
   expect(letters.kids.map((l) => l.calls.some(([k]) => k === "mt"))).toStrictEqual([
@@ -300,51 +325,11 @@ test("each letter rides one segment, ending at the cat, lowered on the segments 
     true,
   ]);
   expect(letters.kids[0].calls.find(([k]) => k === "w")).toStrictEqual(["w", 8]);
-  const pick = (g) =>
-    g.calls.filter(([k]) => ["top", "left", "text_color", "text_size", "font_weight"].includes(k));
-  expect(pick(letters.kids[0].kids[8])).toStrictEqual([
-    ["top", -1],
-    ["left", -1],
-    ["text_color", "#ffffff"],
-    ["text_size", 11],
-    ["font_weight", 900],
-  ]);
-  expect(
-    letters.kids[0].kids.slice(8, 16).map((g) =>
-      pick(g)
-        .slice(0, 2)
-        .map(([, v]) => v),
-    ),
-  ).toStrictEqual([
-    [-1, -1],
-    [-1, 0],
-    [-1, 1],
-    [0, -1],
-    [0, 1],
-    [1, -1],
-    [1, 0],
-    [1, 1],
-  ]);
-  expect(pick(letters.kids[0].kids[16])).toStrictEqual([
-    ["top", 0],
-    ["left", 0],
-    ["text_color", "#000000"],
-    ["text_size", 11],
-    ["font_weight", 900],
-  ]);
-});
-
-test("a black outline on a dark rainbow gets no rim", () => {
-  const lava = rainbowLetters(lettersOf({ h: 21, r: 14, width: 300, name: "a" }, 0, 0));
-  expect(lava.kids[0].kids.map((g) => g.calls.find(([k]) => k === "text_color")[1])).toStrictEqual([
-    ...Array.from({ length: 8 }, () => "#000000"),
-    "#ffffff",
-  ]);
 });
 
 test("a small cat's letters are smaller, and a row too narrow for any gets none", () => {
   const small = rainbowLetters(lettersOf({ h: 18, r: 0, width: 300, name: "k" }, 0, 0));
-  expect(small.kids[0].kids[16].calls.find(([k]) => k === "text_size")).toStrictEqual([
+  expect(small.kids[0].kids[10].calls.find(([k]) => k === "text_size")).toStrictEqual([
     "text_size",
     9,
   ]);
@@ -374,7 +359,7 @@ test("a cat's letters redraw only when the wave flips or the label changes", () 
     working: true,
   });
   expect(cat.letters).toBeInstanceOf(NyanLetters);
-  expect(cat.letters.render().kids.map((l) => l.kids[16].kids[0])).toStrictEqual([..."ab·0s"]);
+  expect(cat.letters.render().kids.map((l) => l.kids[10].kids[0])).toStrictEqual([..."ab·0s"]);
   const set = vi.spyOn(cat.letters, "set_props");
   fire(timer);
   expect(set).not.toHaveBeenCalled();
@@ -384,43 +369,6 @@ test("a cat's letters redraw only when the wave flips or the label changes", () 
   Date.now.mockReturnValue(5000);
   fire(timer);
   expect(cat.letters.p.letters.join("")).toBe("ab·5s");
-});
-
-// The build script's palettes decide the ink: black unless white reads better on both middle bands.
-test("each rainbow's ink is the one with more contrast on the bands its letters sit on", () => {
-  const script = readFileSync(
-    new URL("../../scripts/build-nyancat-frames.py", import.meta.url),
-    "utf8",
-  );
-  const block = script.slice(
-    script.indexOf("RAINBOWS = ["),
-    script.indexOf("]\n", script.indexOf("RAINBOWS = [")),
-  );
-  const palettes = block
-    .split("\n")
-    .filter((line) => line.trim().startsWith("("))
-    .map((line) => line.match(/#[0-9a-f]{6}/g));
-  const channel = (hex, i) => {
-    const c = Number.parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16) / 255;
-    return c <= 0.039_28 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-  };
-  const luminance = (hex) =>
-    0.2126 * channel(hex, 0) + 0.7152 * channel(hex, 1) + 0.0722 * channel(hex, 2);
-  const contrast = (a, b) =>
-    (Math.max(luminance(a), luminance(b)) + 0.05) / (Math.min(luminance(a), luminance(b)) + 0.05);
-  const best = (bands) =>
-    Math.min(...bands.map((band) => contrast("#ffffff", band))) >
-    Math.min(...bands.map((band) => contrast("#000000", band)))
-      ? "#ffffff"
-      : "#000000";
-  expect(palettes.length).toBe(18);
-  expect(palettes.map((_, r) => nyanInk(r))).toStrictEqual(
-    palettes.map((bands) => best(bands.slice(2, 4))),
-  );
-  // The outline guarantees WCAG AA (4.5:1) for the letters on every rainbow.
-  expect(palettes.map((_, r) => contrast(nyanInk(r), nyanHalo(r)) >= 4.5)).toStrictEqual(
-    palettes.map(() => true),
-  );
 });
 
 test("agents keep their cats when their rows move, and a new one takes the least used", () => {
