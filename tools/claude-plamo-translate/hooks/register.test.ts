@@ -423,8 +423,8 @@ test('a question dialog is translated when the tool is called and drawn translat
           question: '訳',
           header: '訳',
           options: [
-            { label: '訳', description: '訳' },
-            { label: '訳', description: '訳' },
+            { label: 'Keep UDEV Gothic', description: '訳 — 訳' },
+            { label: 'Switch', description: '訳 — 訳' },
           ],
           multiSelect: false,
         },
@@ -448,7 +448,7 @@ test('a dialog is drawn translated though its drawn questions differ from the ca
     component: 'AskUserQuestion',
     props: {
       tool: 'AskUserQuestion',
-      questions: [{ question: '訳', header: '訳', options: [{ label: '訳', description: '訳' }], multiSelect: false }],
+      questions: [{ question: '訳', header: '訳', options: [{ label: 'First', description: '訳 — 訳' }], multiSelect: false }],
     },
   })
 })

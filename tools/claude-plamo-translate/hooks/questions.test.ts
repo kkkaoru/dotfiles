@@ -5,7 +5,7 @@ import { translateQuestions } from './questions'
 
 const bracket = async (text: string): Promise<string> => `[${text}]`
 
-test('question, header, option labels and descriptions are translated; other fields are kept', async () => {
+test('question, header and descriptions are translated, the label leading its description; other fields are kept', async () => {
   expect(
     await translateQuestions(
       [
@@ -22,7 +22,7 @@ test('question, header, option labels and descriptions are translated; other fie
     {
       question: '[Pick one?]',
       header: '[Pick]',
-      options: [{ label: '[A]', description: '[First]', preview: 'code' }],
+      options: [{ label: 'A', description: '[A] — [First]', preview: 'code' }],
       multiSelect: true,
     },
   ])
@@ -36,8 +36,16 @@ test('a header translated past twelve characters keeps the source', async () => 
 
 test('absent fields stay absent', async () => {
   expect(await translateQuestions([{ question: 'Q', options: [{ label: 'A' }] }], bracket)).toStrictEqual([
-    { question: '[Q]', options: [{ label: '[A]' }] },
+    { question: '[Q]', options: [{ label: 'A' }] },
   ])
+})
+
+test('a label that stays as it is does not lead its description', async () => {
+  expect(
+    await translateQuestions([{ question: 'Q', options: [{ label: 'OK', description: 'Fine' }] }], async text =>
+      text === 'OK' ? 'OK' : `[${text}]`,
+    ),
+  ).toStrictEqual([{ question: '[Q]', options: [{ label: 'OK', description: '[Fine]' }] }])
 })
 
 test('values that are not objects pass through', async () => {

@@ -9,7 +9,8 @@ locally: MLX 4-bit on `mlx_lm.server` on a Mac, the official GGUF on llama.cpp's
   in that language pass through unchanged.
 - **Every text block** Claude writes, the ones between tool calls included, and the
   AskUserQuestion dialog's questions and options are shown in `replyLanguage` (default `ja`).
-  Tool rows ("Ran …"), tool output and logs stay as written. Only the drawing changes: the
+  Option labels stay as written (Claude Code draws the original dialog when a mod relabels an
+  option), so each translated label leads its option's description. Tool rows ("Ran …"), tool output and logs stay as written. Only the drawing changes: the
   model and the transcript keep the original (ctrl+o).
 
 Code blocks, inline code and URLs are never sent for translation. If a translation drops one of

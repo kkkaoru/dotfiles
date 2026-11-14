@@ -8,6 +8,9 @@ type Fields = Record<string, unknown>
 
 // The tool's schema caps a header at 12 characters: a longer translation keeps the source.
 const HEADER_LIMIT: number = 12
+// The engine draws the original dialog when a rewrite changes an option's label, so a
+// translated label leads its description instead.
+const LABEL_SEPARATOR: string = ' — '
 const QUESTION_KEYS: readonly string[] = ['question', 'header']
 const OPTION_KEYS: readonly string[] = ['label', 'description']
 
@@ -26,8 +29,14 @@ const fitHeader = (translated: Fields, source: Fields): Fields =>
     ? { ...translated, header: source.header }
     : translated
 
+const labelled = (label: unknown, description: string, source: unknown): string =>
+  typeof label === 'string' && label !== source ? `${label}${LABEL_SEPARATOR}${description}` : description
+
+const withDescription = (option: Fields, { label, description }: Fields): Fields =>
+  typeof description === 'string' ? { ...option, description: labelled(label, description, option.label) } : option
+
 const translateOption = async (option: unknown, translate: TextTranslator): Promise<unknown> =>
-  isFields(option) ? { ...option, ...(await translateKeys(option, OPTION_KEYS, translate)) } : option
+  isFields(option) ? withDescription(option, await translateKeys(option, OPTION_KEYS, translate)) : option
 
 const translateOptions = async (question: Fields, translate: TextTranslator): Promise<Fields> =>
   Array.isArray(question.options)
@@ -45,6 +54,6 @@ async function translateQuestion(question: unknown, translate: TextTranslator): 
   return { ...question, ...fitHeader(text, question), ...options }
 }
 
-/** The dialog's questions with their text, header and option labels and descriptions translated. */
+/** The dialog's questions with their text, header and option descriptions (led by the label) translated. */
 export const translateQuestions = (questions: readonly unknown[], translate: TextTranslator): Promise<unknown[]> =>
   Promise.all(questions.map(question => translateQuestion(question, translate)))
