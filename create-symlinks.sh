@@ -322,9 +322,13 @@ if [ -d "${DOTPATH}/.config" ]; then
       herdr-app)
         # Herdr.app regenerates its guide, mods and layouts here; link only user files.
         mkdir -p "${dest}/themes" "${dest}/mods" "${dest}/layouts"
-        for file in keys.json settings.json themes/dracula.json layouts/main-emoji.json mods/prefix mods/spaces-emoji mods/agents-emoji; do
+        for file in keys.json settings.json themes/dracula.json layouts/main-emoji.json; do
           link_path "${app_path}/${file}" "${dest}/${file}"
         done
+        # Mods are copied, not linked: Herdr misses edits behind a linked mod folder until a restart.
+        if [ "$(uname)" = "Darwin" ]; then
+          "${DOTPATH}/scripts/herdr-app-mods-sync.sh" --install
+        fi
         ;;
       *)
         link_path "$app_path" "$dest"
