@@ -14,6 +14,7 @@ integrations. These instructions apply to agents working here, including pi and 
   OAuth setup and open the authorization page. Login and consent are the user's actions.
 - `./scripts/setup-omlx.sh` — Download Qwen3.8-27B-4bit and DFlash2, then restart oMLX.
 - `./scripts/setup-plamo-translate.sh` — Set up PLaMo 3 Translate 0.8B for `tools/claude-plamo-translate`
+  and `tools/pi-plamo-translate`
   (run once per machine; the model is not in Git): mlx-lm + MLX 4-bit on macOS, llama.cpp's Vulkan
   build + the official GGUF on Linux and Windows (Git Bash).
 - `./scripts/setup-herdr-app.sh` — After `./create-symlinks.sh`, set up Herdr.app: build the font
@@ -52,6 +53,8 @@ integrations. These instructions apply to agents working here, including pi and 
 - `tools/claude-plamo-translate/` — Claude Code mod that translates prompts (default en) and the
   text Claude shows you (default ja) with PLaMo 3 Translate on a local `mlx_lm.server` or llama.cpp
   `llama-server` (`bun run check`).
+- `tools/pi-plamo-translate/` — pi package with the same server: you see Japanese, typed Japanese
+  becomes English, and the agent reads and writes English (`bun run check`).
 - `tools/herdr-app-mods/` — Tests, oxlint and oxfmt for the Herdr.app mods in
   `.config/herdr-app/mods/` (host modules mocked); every mod file keeps >=95% coverage.
 - `tools/dsh-dracula-theme/` — A DeepSeek Harness bundle (no build step) that
@@ -132,6 +135,7 @@ Verification is component-specific; the root package does not provide a universa
 - `tools/pi-loop-extension/`, `tools/pi-tmux-timeout-extension/`: `bun run check`
 - `tools/claude-dynamic-effort/`: `bun run check` (vitest coverage and `claude plugin validate`)
 - `tools/claude-plamo-translate/`: `bun run check`
+- `tools/pi-plamo-translate/`: `bun run check`
 - `.config/herdr-app/mods/`: `bun run check` in `tools/herdr-app-mods/` (lint, format, per-file 95% coverage)
 - Other components: inspect their `package.json` and README for required checks.
 - Shell changes: check syntax; for all changes, run `git diff --check`.

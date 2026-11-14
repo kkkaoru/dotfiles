@@ -1,5 +1,5 @@
 #!/bin/bash
-# Set up PLaMo 3 Translate 0.8B for the tools/claude-plamo-translate mod. Safe to run again:
+# Set up PLaMo 3 Translate 0.8B for tools/claude-plamo-translate and tools/pi-plamo-translate. Safe to run again:
 # finished steps are skipped.
 #   macOS:              mlx-lm, the model converted to MLX 4-bit
 #   Linux, Windows:     llama.cpp's Vulkan build (GeForce and Radeon alike) and the official GGUF
