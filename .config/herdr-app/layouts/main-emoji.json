@@ -157,14 +157,44 @@
           "gap": 8
         },
         {
-          "id": "status",
-          "type": "block",
-          "content": {
-            "mod": "workspace-status"
-          },
+          "id": "status-row",
+          "type": "row",
+          "children": [
+            {
+              "id": "status",
+              "type": "block",
+              "content": {
+                "mod": "workspace-status"
+              },
+              "size": {
+                "weight": 1
+              }
+            },
+            {
+              "id": "agent-limits",
+              "type": "block",
+              "content": {
+                "mod": "agent-limits"
+              },
+              "size": {
+                "px": 400
+              }
+            },
+            {
+              "id": "system-stats",
+              "type": "block",
+              "content": {
+                "mod": "system-stats"
+              },
+              "size": {
+                "px": 480
+              }
+            }
+          ],
           "size": {
             "px": 28
-          }
+          },
+          "resizable": false
         }
       ],
       "resizable": false
