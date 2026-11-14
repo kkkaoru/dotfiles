@@ -52,6 +52,24 @@ export function parseLimits(stdout) {
     }));
 }
 
+/** `codexbar usage --provider antigravity --json` -> its quota pools' windows as
+ *  `{ label, used }`, the one closest to running out first, or null on an error. Antigravity splits
+ *  quota into Gemini, Claude/GPT and Argon pools, so a single number can only show the tightest. */
+export function parseAntigravity(stdout) {
+  const [entry] = JSON.parse(stdout);
+  if (entry.error) {
+    return null;
+  }
+  return (entry.usage?.extraRateWindows ?? [])
+    .map(({ window }) => window)
+    .filter((window) => window && !window.isSyntheticPlaceholder)
+    .map((window) => ({
+      label: windowLabel(window.windowMinutes),
+      used: Math.round(window.usedPercent),
+    }))
+    .sort((left, right) => right.used - left.used);
+}
+
 /** Ollama's `/api/balance` -> its session (5h) and weekly windows as `{ label, used }`, or null
  *  when curl got no answer (a rejected key or a server error). */
 export function parseOllamaBalance(stdout) {
@@ -84,6 +102,7 @@ const PROVIDERS = [
   ["icons/ollama.svg", true, "ollama", ["sh", ["-c", OLLAMA_BALANCE]], parseOllamaBalance],
   ["icons/opencode.svg", true, "opencodego", codexbar("opencodego", "api"), parseLimits],
   ["icons/grok.svg", true, "grok", codexbar("grok", "auto"), parseLimits],
+  ["icons/antigravity.svg", true, "antigravity", codexbar("antigravity", "auto"), parseAntigravity],
 ];
 
 export default class AgentLimits extends View {

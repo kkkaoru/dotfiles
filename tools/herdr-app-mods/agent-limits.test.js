@@ -2,6 +2,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { host, reset } from "./mocks/herdr.js";
 import AgentLimits, {
+  parseAntigravity,
   parseLimits,
   parseOllamaBalance,
   shownWindows,
@@ -38,8 +39,38 @@ const GO_ERROR = JSON.stringify([
     error: { code: 1, kind: "provider", message: "OpenCode Go API error: HTTP 500" },
   },
 ]);
+// Antigravity's quota pools, trimmed from real `codexbar usage --provider antigravity --json`:
+// Gemini and Claude/GPT each have a 5h and a weekly window, Argon only a weekly one.
+const antigravityWindow = (title, windowMinutes, usedPercent) => ({
+  title,
+  id: `antigravity-quota-summary-${title}`,
+  window: { windowMinutes, usedPercent, resetsAt: "2026-11-21T14:59:37Z" },
+});
+const ANTIGRAVITY = JSON.stringify([
+  {
+    provider: "antigravity",
+    usage: {
+      primary: { windowMinutes: 300, usedPercent: 12.4 },
+      secondary: { windowMinutes: 300, usedPercent: 0 },
+      tertiary: null,
+      extraRateWindows: [
+        antigravityWindow("gemini-5h", 300, 12.4),
+        antigravityWindow("gemini-weekly", 10080, 87.6),
+        antigravityWindow("3p-5h", 300, 0),
+        antigravityWindow("3p-weekly", 10080, 40.2),
+        antigravityWindow("gemini-argon-wtu-weekly", 10080, 60),
+      ],
+    },
+  },
+]);
 
-const ANSWERS = { claude: CLAUDE, ollama: OLLAMA, opencodego: GO_ERROR, grok: GROK };
+const ANSWERS = {
+  claude: CLAUDE,
+  ollama: OLLAMA,
+  opencodego: GO_ERROR,
+  grok: GROK,
+  antigravity: ANTIGRAVITY,
+};
 
 // Answers exec by the provider asked for; a cx whose spawned tasks and timer a test runs by hand.
 function newLimits(answers) {
@@ -93,6 +124,35 @@ test("parseLimits is null when the provider answered with an error", () => {
   expect(parseLimits(GO_ERROR)).toBe(null);
 });
 
+test("parseAntigravity reads every quota pool's window, closest to running out first", () => {
+  expect(parseAntigravity(ANTIGRAVITY)).toStrictEqual([
+    { label: "7d", used: 88 },
+    { label: "7d", used: 60 },
+    { label: "7d", used: 40 },
+    { label: "5h", used: 12 },
+    { label: "5h", used: 0 },
+  ]);
+});
+
+test("parseAntigravity leaves a placeholder window out and is null on an error", () => {
+  const placeholder = JSON.stringify([
+    {
+      usage: {
+        extraRateWindows: [
+          { title: "gemini-5h", window: { windowMinutes: 300, isSyntheticPlaceholder: true } },
+          { title: "gemini-weekly", window: { windowMinutes: 10080, usedPercent: 30 } },
+        ],
+      },
+    },
+  ]);
+  expect(parseAntigravity(placeholder)).toStrictEqual([{ label: "7d", used: 30 }]);
+  expect(parseAntigravity(GO_ERROR)).toBe(null);
+});
+
+test("parseAntigravity has no windows when the account reported no pools", () => {
+  expect(parseAntigravity(JSON.stringify([{ usage: {} }]))).toStrictEqual([]);
+});
+
 test("parseLimits throws on output that is not CodexBar's JSON", () => {
   expect(() => parseLimits("Segmentation fault")).toThrow();
 });
@@ -112,12 +172,13 @@ test("init asks each provider once, Ollama from its balance API and OpenCode Go 
     ],
     ["exec", "codexbar", ["usage", "--provider", "opencodego", "--source", "api", "--json"]],
     ["exec", "codexbar", ["usage", "--provider", "grok", "--source", "auto", "--json"]],
+    ["exec", "codexbar", ["usage", "--provider", "antigravity", "--source", "auto", "--json"]],
   ]);
-  expect(cx.notify).toHaveBeenCalledTimes(4);
+  expect(cx.notify).toHaveBeenCalledTimes(5);
   expect(timers.map(([ms]) => ms)).toStrictEqual([300000]);
   timers[0][1](cx);
   await Promise.all(tasks);
-  expect(host.calls.length).toBe(8);
+  expect(host.calls.length).toBe(10);
 });
 
 test("render shows each provider's windows, a dash for one that failed or has not answered", async () => {
@@ -127,6 +188,7 @@ test("render shows each provider's windows, a dash for one that failed or has no
     ["icons/ollama.svg", "—"],
     ["icons/opencode.svg", "—"],
     ["icons/grok.svg", "—"],
+    ["icons/antigravity.svg", "—"],
   ]);
   await Promise.all(tasks);
   expect(drawn(view)).toStrictEqual([
@@ -134,6 +196,7 @@ test("render shows each provider's windows, a dash for one that failed or has no
     ["icons/ollama.svg", "5h 12%"],
     ["icons/opencode.svg", "—"],
     ["icons/grok.svg", "7d 0%"],
+    ["icons/antigravity.svg", "7d 88%"],
   ]);
 });
 
