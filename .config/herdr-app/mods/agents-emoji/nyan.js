@@ -46,9 +46,6 @@ const RIM = HALO.map(([dx, dy]) => [dx * 2, dy * 2]);
 const rimOf = (r) => (LIGHT_INK.has(r) ? [] : RIM);
 // Rainbow palettes baked into the frames: len(RAINBOWS) in the build script.
 const NYAN_RAINBOWS = 18;
-// Minutes since an agent's state changed at which its cat changes.
-const NYAN_STAGES = [1, 5, 15, 60, 360, 1440];
-export const nyanStage = (ms) => NYAN_STAGES.filter((m) => ms >= m * 60000).length;
 const fnv = (s) => {
   let h = 0x811c9dc5;
   for (const ch of s) {
@@ -56,34 +53,42 @@ const fnv = (s) => {
   }
   return h;
 };
-// Each agent's fur, poptart and rainbow, picked one part at a time: its key (tab name, address,
-// program, row position and elapsed-time stage) hashed with the part's name, moved on to the next
-// free choice when an agent above has it. Past as many agents as a part has choices it repeats.
+// Each agent's fur, poptart and rainbow. An agent keeps the cat it was given, wherever its row
+// moves; a new one picks each part by its key (tab name, address and program) hashed with the
+// part's name, moved on to the next choice the fewest listed agents have.
 const NYAN_PARTS = [
   ["fur", FUR.length],
   ["poptart", POPTART.length],
   ["rainbow", NYAN_RAINBOWS],
 ];
-// The choice at `start`, or the next one no agent above has taken (one is always free: a full set is cleared).
-const freeChoice = (taken, n, start) =>
-  Array.from({ length: n }, (_, i) => (start + i) % n).find((v) => !taken.has(v));
-
-// One part's choice for each agent in list order; once every choice is taken they start over.
-function partChoices(keys, part, n) {
-  const taken = new Set();
-  return keys.map(([, key]) => {
-    const v = freeChoice(taken, n, fnv(`${part}\u0000${key}`) % n);
-    taken.add(v);
-    if (taken.size === n) {
-      taken.clear();
-    }
-    return v;
-  });
+// The choice at `start`, or the next one used least (unused while any is free).
+function leastUsed(used, n, start) {
+  const fewest = Math.min(...Array.from({ length: n }, (_, v) => used[v] ?? 0));
+  return Array.from({ length: n }, (_, i) => (start + i) % n).find(
+    (v) => (used[v] ?? 0) === fewest,
+  );
 }
 
-export function nyanVariants(keys) {
-  const parts = NYAN_PARTS.map(([part, n]) => partChoices(keys, part, n));
-  return new Map(keys.map(([addr], i) => [addr, parts.map((choices) => choices[i])]));
+// `kept`: the previous result, whose listed agents keep their cats.
+export function nyanVariants(keys, kept = new Map()) {
+  const variants = new Map(
+    keys.filter(([addr]) => kept.has(addr)).map(([addr]) => [addr, kept.get(addr)]),
+  );
+  const used = NYAN_PARTS.map(() => []);
+  for (const parts of variants.values()) {
+    parts.forEach((v, p) => (used[p][v] = (used[p][v] ?? 0) + 1));
+  }
+  for (const [addr, key] of keys) {
+    if (variants.has(addr)) {
+      continue;
+    }
+    const parts = NYAN_PARTS.map(([part, n], p) =>
+      leastUsed(used[p], n, fnv(`${part}\u0000${key}`) % n),
+    );
+    parts.forEach((v, p) => (used[p][v] = (used[p][v] ?? 0) + 1));
+    variants.set(addr, parts);
+  }
+  return variants;
 }
 
 // How long ago, in its largest whole unit: 45s, 12m, 3h, 2d.

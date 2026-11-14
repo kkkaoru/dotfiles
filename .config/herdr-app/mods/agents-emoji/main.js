@@ -3,7 +3,7 @@
 import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { spaceAvatar } from "./avatar.js";
-import { NYAN_MS, NyanCat, nyanStage, nyanStrip, nyanVariants } from "./nyan.js";
+import { NYAN_MS, NyanCat, nyanStrip, nyanVariants } from "./nyan.js";
 import {
   agents,
   terminals,
@@ -252,8 +252,6 @@ export default class Agents extends View {
         cx.notify();
       }
     });
-    // Elapsed-time stages pick new cats.
-    cx.timer.every(30000, (cx) => cx.notify());
   }
 
   // Stamps agents whose state changed. Done and idle count as one: looking at a
@@ -515,16 +513,16 @@ export default class Agents extends View {
     list = [...list.filter((a) => a.pinned), ...list.filter((a) => !a.pinned)];
     setAgentOrder(list.map((a) => a.address));
     // Rows in list order, sub-agents under their parent and by its tab.
-    const stage = (addr) => (this.changed[addr] ? nyanStage(now - this.changed[addr].at) : 0);
     this.variants = nyanVariants(
       list
         .flatMap((a) =>
           [[a, a.tab_name]].concat(this.tree(all, a.address).map((s) => [s.t, a.tab_name])),
         )
-        .map(([a, tabName], i) => [
+        .map(([a, tabName]) => [
           a.address,
-          [tabName, a.address, a.program?.key ?? "", i, stage(a.address)].join("\u0000"),
+          [tabName, a.address, a.program?.key ?? ""].join("\u0000"),
         ]),
+      this.variants,
     );
     return { list, rankOf };
   }
