@@ -13,7 +13,7 @@ SCRIPT="${DOTPATH}/scripts/herdr-app-mods-sync.sh"
 SRC="${DOTPATH}/.config/herdr-app/mods"
 DEST="${HERDR_APP_HOME:-${HOME}/.config/herdr-app}/mods"
 LOG="${HOME}/Library/Logs/herdr-app-mods-sync.log"
-MODS=(prefix spaces-emoji agents-emoji)
+MODS=(prefix spaces-emoji agents-emoji system-stats)
 
 # A link left by an older create-symlinks.sh points back here: rsync would write through it into
 # the repository, so it is replaced by a folder first.

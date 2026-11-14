@@ -31,6 +31,9 @@
 !.config/herdr-app/mods/agents-emoji
 .config/herdr-app/mods/agents-emoji/gpui-kit.d.ts
 .config/herdr-app/mods/agents-emoji/jsconfig.json
+!.config/herdr-app/mods/system-stats
+.config/herdr-app/mods/system-stats/gpui-kit.d.ts
+.config/herdr-app/mods/system-stats/jsconfig.json
 !.config/herdr-app/layouts
 .config/herdr-app/layouts/*
 !.config/herdr-app/layouts/main-emoji.json
