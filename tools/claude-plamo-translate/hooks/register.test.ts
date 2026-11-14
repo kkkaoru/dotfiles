@@ -513,3 +513,26 @@ test('a failing dialog hook still opens the dialog', async () => {
     questions: QUESTIONS,
   })
 })
+
+test('the system prompt tells the model that only code spans and fenced blocks stay untranslated', async () => {
+  const fake = await setup(OPTIONS)
+  const intro = { id: 'intro', text: 'You are Claude.', scope: 'shared' }
+  expect(await call(fake, 'prompt.compose', {}, () => ({ sections: [intro] }))).toStrictEqual({
+    sections: [
+      intro,
+      {
+        id: 'plamo-translate:untranslated',
+        text: 'Your text and AskUserQuestion dialogs are shown to the user machine-translated into `ja`. Only inline code (`...`) and fenced code blocks (```) are left exactly as written. Put anything the user must read or copy verbatim in one of them: commands, file paths, identifiers, option and flag names, literal values, error messages and quoted UI text. Do not wrap ordinary prose.',
+        scope: 'session',
+      },
+    ],
+  })
+})
+
+test('with reply translation off the system prompt is left as it is', async () => {
+  const fake = await setup({ ...OPTIONS, replyLanguage: 'off' })
+  const sections = { sections: [{ id: 'intro', text: 'You are Claude.', scope: 'shared' }] }
+  expect(await call(fake, 'prompt.compose', {}, () => sections)).toStrictEqual({
+    sections: [{ id: 'intro', text: 'You are Claude.', scope: 'shared' }],
+  })
+})

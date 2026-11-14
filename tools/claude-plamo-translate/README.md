@@ -14,7 +14,9 @@ locally: MLX 4-bit on `mlx_lm.server` on a Mac, the official GGUF on llama.cpp's
   model and the transcript keep the original (ctrl+o).
 
 Code blocks, inline code and URLs are never sent for translation. If a translation drops one of
-them, or the server is unreachable, the original text is used.
+them, or the server is unreachable, the original text is used. While replies are translated, a
+`plamo-translate:untranslated` section of the system prompt tells Claude so, and asks it to put
+anything you must read or copy verbatim (commands, paths, identifiers, error messages) in them.
 
 ## Setup (once per machine)
 

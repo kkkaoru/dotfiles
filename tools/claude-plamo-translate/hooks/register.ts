@@ -1,5 +1,5 @@
 // This TypeScript file is executed by the Claude Code mod engine (and with Bun under vitest).
-import type { EngineInterface, PluginOptions, PromptSubmitInput, Register } from 'claude-code'
+import type { EngineInterface, PluginOptions, PromptComposeResult, PromptSubmitInput, Register } from 'claude-code'
 
 import type { Dialogs } from '../types'
 import { translateQuestions } from './questions'
@@ -52,6 +52,7 @@ const USER_ORIGINS: ReadonlySet<string> = new Set(['composer', 'bridge'])
 const DIALOGS = { plugin: 'plamo-translate', key: 'dialogs' } satisfies { plugin: 'plamo-translate'; key: 'dialogs' }
 const SETUP_HINT: string =
   'plamo-translate: the PLaMo server is not reachable; run scripts/setup-plamo-translate.sh. Text is passed through untranslated.'
+const UNTRANSLATED_ID: string = 'plamo-translate:untranslated'
 
 const server: Server = { starting: null, warned: false, failed: false }
 // Source text -> its translation, newest last. The terminal never redraws a row it has printed,
@@ -169,6 +170,14 @@ function translatorFor(engine: EngineInterface, port: number, lang: string): Tra
   return async text => ((await ensureServer(engine, port)) ? complete(engine, port, plamoPrompt(text, lang), text) : warnOnce(engine))
 }
 
+// Tells the model what survives translation, so it marks text the person must read exactly.
+const untranslatedRule = (lang: string): string =>
+  `Your text and AskUserQuestion dialogs are shown to the user machine-translated into \`${lang}\`. Only inline code (\`...\`) and fenced code blocks (\`\`\`) are left exactly as written. Put anything the user must read or copy verbatim in one of them: commands, file paths, identifiers, option and flag names, literal values, error messages and quoted UI text. Do not wrap ordinary prose.`
+
+const withRule = ({ sections }: PromptComposeResult, lang: string): PromptComposeResult => ({
+  sections: [...sections, { id: UNTRANSLATED_ID, text: untranslatedRule(lang), scope: 'session' }],
+})
+
 const isUserPrompt = (event: PromptSubmitInput): boolean =>
   event.command === undefined && event.isMeta === undefined && USER_ORIGINS.has(event.origin.kind)
 
@@ -230,6 +239,10 @@ export const register: Register = (on, options) => {
     }
     return started
   })
+
+  on('prompt.compose', async (_engine, event, next) =>
+    settings.replyLanguage === OFF ? next(event) : withRule(await next(event), settings.replyLanguage),
+  )
 
   // The model reads the translation; the person's own text is not kept for it. A failed
   // translation must not eat the prompt, so the catch sends it as typed.
