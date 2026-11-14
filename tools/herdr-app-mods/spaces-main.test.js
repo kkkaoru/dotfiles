@@ -2,7 +2,12 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import { element } from "./mocks/gpui-kit.js";
 import { host, reset } from "./mocks/herdr.js";
-import Spaces, { glyph, tone } from "../../.config/herdr-app/mods/spaces-emoji/main.js";
+import Spaces, {
+  glyph,
+  parseGpuPercent,
+  parseMemoryPercent,
+  tone,
+} from "../../.config/herdr-app/mods/spaces-emoji/main.js";
 
 const T = Object.fromEntries(
   [
@@ -179,7 +184,7 @@ test("init restores machine repairs and folds, loads machines and starts both ti
   });
   expect([...view.folded]).toStrictEqual(["box"]);
   expect(view.machines).toStrictEqual([{ name: "box", state: "connected" }]);
-  expect(cx.everies.map((e) => e.ms)).toStrictEqual([15000, 250]);
+  expect(cx.everies.map((e) => e.ms)).toStrictEqual([15000, 60000, 250]);
   expect(cx.notify).toHaveBeenCalledTimes(1);
   cx.everies[0].fn(cx);
   await flush();
@@ -875,4 +880,108 @@ test("a failed connect shows why and can be tried again without removing twice",
   expect(texts(head)).toStrictEqual(["fresh", "plain", "Connect"]);
   const button = byId(head, "machine-connect-fresh");
   expect([arg(button, "text_color"), arg(button, "tooltip")]).toStrictEqual(["blocked", "plain"]);
+});
+
+const ENGINE = (pid, eng, type) =>
+  `\\\\PC\\GPU Engine(pid_${pid}_luid_0x00000000_0x0000B2B1_phys_0_eng_${eng}_engtype_${type})\\Utilization Percentage`;
+const TYPEPERF = [
+  `"(PDH-CSV 4.0)","${[
+    ENGINE(1, 0, "3D"),
+    ENGINE(1, 3, "Compute 1"),
+    ENGINE(2, 3, "Compute 1"),
+    ENGINE(2, 1, "Copy"),
+  ].join('","')}"`,
+  '"11/14/2026 17:28:15.267","12.400000","20.100000","22.600000","30.000000"',
+  "Exiting, please wait...",
+].join("\r\n");
+
+test("the busiest engine, summed over its processes, is the load, capped at 100", () => {
+  expect(parseGpuPercent(TYPEPERF)).toBe(43);
+  expect(
+    parseGpuPercent(
+      `"(PDH-CSV 4.0)","${ENGINE(1, 3, "Compute 1")}","${ENGINE(2, 3, "Compute 1")}"\n"1","80","70"`,
+    ),
+  ).toBe(100);
+  expect(parseGpuPercent('"(PDH-CSV 4.0)","odd counter"\n"1","7"')).toBe(7);
+  expect(parseGpuPercent("Error: no valid counters.")).toBeNull();
+});
+
+test("memory in use is the part of the total not available", () => {
+  expect(parseMemoryPercent("33482480 25063216\r\n")).toBe(25);
+  expect(parseMemoryPercent("")).toBeNull();
+  expect(parseMemoryPercent("0 0")).toBeNull();
+});
+
+const windowsHost =
+  (gpu, memory) =>
+  async (cmd, _args, { on }) => {
+    if (on === "linux") {
+      throw new Error(`${cmd}: not found`);
+    }
+    return cmd === "typeperf" ? gpu() : memory();
+  };
+const said = (stdout) => () => Promise.resolve({ code: 0, stdout, stderr: "" });
+
+test("a connected Windows machine shows its GPU and memory load beside its icon as soon as it is listed", async () => {
+  machinesHost([
+    { name: "win", state: "connected" },
+    { name: "linux", state: "connected" },
+    { name: "away", state: "unreachable" },
+  ]);
+  host.machines = [{ name: null, layout: "ready" }];
+  host.exec = windowsHost(said(TYPEPERF), said("100 40"));
+  const { view, cx } = mount();
+  await flush();
+  const asks = () => named("exec").map(([cmd, , o]) => [cmd, o.on]);
+  expect(asks()).toStrictEqual([
+    ["typeperf", "win"],
+    ["powershell", "win"],
+    ["typeperf", "linux"],
+    ["powershell", "linux"],
+  ]);
+  expect(view.load).toStrictEqual({
+    win: { gpu: 43, memory: 60 },
+    linux: { gpu: null, memory: null },
+  });
+  const win = texts(byId(view.render(cx), "machine-win"));
+  expect(win.slice(win.indexOf("🎮 43%"), win.indexOf("🎮 43%") + 2)).toStrictEqual([
+    "🎮 43%",
+    "🐏 60%",
+  ]);
+  expect(texts(byId(view.render(cx), "machine-linux")).join()).not.toMatch(/🎮|🐏/);
+  // The rail has no room for them.
+  host.layout = { id: "root", children: [{ id: "sidebar", size: { px: 60 } }] };
+  expect(texts(byId(view.render(cx), "machine-win")).join()).not.toMatch(/🎮|🐏/);
+
+  // A new machine list asks only machines not read yet.
+  host.calls.length = 0;
+  cx.everies[0].fn(cx);
+  await flush();
+  expect(asks()).toStrictEqual([]);
+
+  // The minute asks all again, failed ones too; an unchanged load doesn't redraw.
+  cx.notify.mockClear();
+  host.calls.length = 0;
+  const loadTick = cx.everies.find((e) => e.ms === 60000).fn;
+  loadTick(cx);
+  await flush();
+  expect(asks()).toHaveLength(4);
+  expect(cx.notify).not.toHaveBeenCalled();
+
+  // A read still running isn't started twice; a failed code clears that reading only.
+  host.calls.length = 0;
+  let answer;
+  host.exec = windowsHost(() => new Promise((r) => (answer = r)), said("100 50"));
+  loadTick(cx);
+  loadTick(cx);
+  expect(asks().filter(([, on]) => on === "win")).toHaveLength(2);
+  answer({ code: 1, stdout: "", stderr: "no counter" });
+  await flush();
+  expect(view.load.win).toStrictEqual({ gpu: null, memory: 50 });
+  expect(cx.notify).toHaveBeenCalled();
+
+  // Leaving "connected" forgets the reading.
+  view.machines = [{ name: "win", state: "unreachable" }];
+  loadTick(cx);
+  expect(view.load).toStrictEqual({ linux: { gpu: null, memory: null } });
 });

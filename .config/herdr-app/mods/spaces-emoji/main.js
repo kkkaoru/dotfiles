@@ -56,6 +56,15 @@ const FALLBACK = 60000;
 const busyNow = (p) => p.status === "working" || !(p.program?.shell || p.program?.agent);
 const repoName = (repo) =>
   repo.endsWith("/.git") ? base(repo.slice(0, -5)) : base(repo).replace(/\.git$/, "");
+// Windows' own counter for every GPU engine, per process; other systems have no typeperf, so
+// their reading fails and stays unset. All engines: compute work (a Radeon running a model)
+// never shows on 3D.
+const GPU_COUNTER = "\\GPU Engine(*)\\Utilization Percentage";
+// Windows' physical memory, total and available, in KiB.
+const MEMORY_SCRIPT =
+  '$o = Get-CimInstance Win32_OperatingSystem; "$($o.TotalVisibleMemorySize) $($o.FreePhysicalMemory)"';
+// typeperf over every engine takes about nine seconds; a read in flight is not started again.
+const LOAD_MS = 60000;
 const stateName = (machine) => (machine?.state ?? "asleep").replace(/_/g, " ");
 
 function machineTip(m, { login, connected, machine }) {
@@ -85,6 +94,42 @@ export function glyph(status) {
   return status === "blocked" || status === "done" ? "●" : "·";
 }
 
+const csvCells = (line) => line.replace(/^"|"$/g, "").split('","').slice(1);
+
+/** `typeperf -sc 1` CSV -> the busiest engine's percent, as Task Manager counts it: each engine
+ *  (adapter and number, from the header) summed over its processes. Null without a sample. */
+export function parseGpuPercent(csv) {
+  const lines = csv.split(/\r?\n/);
+  const header = lines.find((l) => l.startsWith('"(PDH-CSV'));
+  const row = lines.find((l) => /^"\d/.test(l));
+  if (!header || !row) {
+    return null;
+  }
+  const engines = {};
+  const values = csvCells(row);
+  csvCells(header).forEach((name, i) => {
+    const engine = name.match(/luid_(\w+?_eng_\d+)/)?.[1] ?? name;
+    engines[engine] = (engines[engine] ?? 0) + Number(values[i]);
+  });
+  return Math.min(100, Math.round(Math.max(0, ...Object.values(engines))));
+}
+
+/** `"<total KiB> <available KiB>"` -> percent of physical memory in use, null if unreadable. */
+export function parseMemoryPercent(text) {
+  const [total, free] = text.trim().split(/\s+/).map(Number);
+  return total > 0 && free >= 0 ? Math.round((1 - free / total) * 100) : null;
+}
+
+// One Windows reading, parsed from what the command printed; null when it couldn't be read.
+async function readOn(on, command, args, parse) {
+  try {
+    const r = await exec(command, args, { on, timeout: 30000 });
+    return r.code === 0 ? parse(r.stdout) : null;
+  } catch {
+    return null;
+  }
+}
+
 export function tone(t, status) {
   return t[status] ?? t.unknown;
 }
@@ -111,8 +156,11 @@ export default class Spaces extends View {
       state.busy = false;
     }
     this.folded = new Set(JSON.parse(localStorage.getItem("machines.folded") ?? "[]"));
+    this.load = {}; // machine -> { gpu, memory } in percent, each null without a reading
+    this.loadAsking = new Set();
     this.refreshMachines(cx);
     cx.timer.every(15000, (cx) => this.refreshMachines(cx));
+    cx.timer.every(LOAD_MS, (cx) => this.refreshLoad(cx));
     // Refresh only when the refs could have changed (see `due`).
     cx.timer.every(250, (cx) => this.checkNew(cx));
   }
@@ -213,10 +261,38 @@ export default class Spaces extends View {
         const r = await hc(["machine", "ls", "--json"]);
         if (r.code === 0) {
           this.machines = (JSON.parse(r.stdout).machines ?? []).filter((m) => !m.temporary);
+          this.refreshLoad(cx, true);
         }
       } catch {}
       cx.notify();
     });
+  }
+
+  // Connected machines' GPU and memory load, one read per machine at a time. `fresh`: only
+  // machines not read yet, so one that just connected shows its load without waiting a minute.
+  refreshLoad(cx, fresh = false) {
+    for (const { name, state } of this.machines) {
+      if (state !== "connected") {
+        delete this.load[name];
+        continue;
+      }
+      if ((fresh && name in this.load) || this.loadAsking.has(name)) {
+        continue;
+      }
+      this.loadAsking.add(name);
+      cx.spawn(async (cx) => {
+        const [gpu, memory] = await Promise.all([
+          readOn(name, "typeperf", ["-sc", "1", GPU_COUNTER], parseGpuPercent),
+          readOn(name, "powershell", ["-NoProfile", "-Command", MEMORY_SCRIPT], parseMemoryPercent),
+        ]);
+        this.loadAsking.delete(name);
+        const last = this.load[name];
+        this.load[name] = { gpu, memory };
+        if ((last?.gpu ?? null) !== gpu || (last?.memory ?? null) !== memory) {
+          cx.notify();
+        }
+      });
+    }
   }
 
   rebuilt(machine) {
@@ -592,6 +668,7 @@ export default class Spaces extends View {
         cx.notify();
       })
       .when(!collapsed, (el) => el.child(icon))
+      .when(!collapsed && Boolean(this.load[m]), (el) => el.child(this.loadText(this.load[m])))
       .when(collapsed, (el) =>
         el.child(
           div()
@@ -602,6 +679,15 @@ export default class Spaces extends View {
         ),
       )
       .when(!collapsed, (el) => this.machineDetails(el, m, state, t));
+  }
+
+  // GPU and memory load, held closer together than the header's other parts.
+  loadText({ gpu, memory }) {
+    return h_flex()
+      .flex_none()
+      .gap(3)
+      .when(gpu !== null, (el) => el.child(`🎮 ${gpu}%`))
+      .when(memory !== null, (el) => el.child(`🐏 ${memory}%`));
   }
 
   // The header's text and buttons beside the full sidebar's icon.
