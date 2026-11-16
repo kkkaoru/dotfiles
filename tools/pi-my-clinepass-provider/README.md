@@ -6,8 +6,8 @@ authentication and uses pi's built-in OpenAI Chat Completions transport.
 
 This implementation is based on the MIT-licensed
 [`jellydn/pi-clinepass-provider`](https://github.com/jellydn/pi-clinepass-provider)
-and follows the development layout and quality settings of the local
-`tools/pi-agmsg-extension` package.
+and follows the development layout and quality settings of the other local
+`tools/pi-*` packages.
 
 ## Why this exists
 

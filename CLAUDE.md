@@ -66,7 +66,7 @@ integrations. These instructions apply to agents working here, including pi and 
 - `tools/dsh-workspace/` — TypeScript CLI (`bun`, `bun run check`) that registers a
   directory idempotently through the Harness `workspace/create` RPC. Linked to
   `~/.local/bin/dsh-workspace`.
-- `tools/executor-skills/` — Read-only skills MCP, agmsg MCP adapter, and pi routing package.
+- `tools/executor-skills/` — Read-only skills MCP and its pi guidance package.
 - `.omlx/` — oMLX configuration; `~/.omlx` is a repository symlink.
 
 `~/.pi` is also linked into this repository. Changing these files can affect running agents.
@@ -95,10 +95,9 @@ Do not install a duplicate Executor runtime or `pi-executor` sidecar.
   Executor retains its catalog, credentials and policies; no duplicate registrations or OAuth
   token copies are needed. `.mcp.json` remains the other clients' Context7/Chrome DevTools config.
   Cloudflare and MotherDuck registrations are defined in `tools/executor-skills/integrations.json`.
-  The setup script also registers `local-skills`, `agmsg`, and the official `ctx mcp serve`.
-- Model-initiated ctx searches go through Executor. The agmsg skill and pi extension were
-  removed from this repository; an Executor `agmsg` MCP registration and any remaining agmsg
-  commands, hooks or copies in other agents are no longer maintained here.
+  The setup script also registers `local-skills` and the official `ctx mcp serve`.
+- Model-initiated ctx searches go through Executor. agmsg was removed from this repository and
+  from its Executor registration: no agmsg command, hook, adapter or copy remains.
 - ctx searches use the existing local index. Supply explicit workspace/session filters and
   inspect source events before relying on prior history. Report missing index coverage.
 - Registration is not OAuth authentication. Check actual tool results; CLI exit zero can mean

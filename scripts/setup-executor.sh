@@ -107,7 +107,6 @@ register "$(jq -nc --arg command "$bun" --arg entry "$repo/tools/executor-skills
 
 # These are executable integrations, separate from the read-only skill catalog.
 register "$(jq -nc --arg command "$ctx" '{transport:"stdio",slug:"ctx",name:"ctx Local Agent History",command:$command,args:["mcp","serve"]}')" none
-register "$(jq -nc --arg command "$bun" --arg entry "$repo/tools/executor-skills/agmsg-cli.mjs" --arg scripts "$HOME/.agents/skills/agmsg/scripts" '{transport:"stdio",slug:"agmsg",name:"agmsg Pi Messaging",command:$command,args:[$entry,$scripts]}')" none
 
 while IFS= read -r payload; do
   register "$payload" none
@@ -121,4 +120,5 @@ done < <(jq -c '.remote[]' "$repo/tools/executor-skills/integrations.json")
 
 "$executor" tools integrations
 printf '\nCloudflare login: ./scripts/executor-cloudflare-auth.sh cloudflare-api\n'
+# shellcheck disable=SC2016  # backticks are literal text for the user
 printf 'Use `executor web` for connection status, policies, and other integrations.\n'

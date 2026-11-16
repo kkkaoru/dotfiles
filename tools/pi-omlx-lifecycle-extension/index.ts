@@ -34,7 +34,7 @@ export interface OmlxContext {
  * Narrow view of pi's ExtensionAPI: only what this extension needs.
  * A real ExtensionAPI (from "@earendil-works/pi-coding-agent") structurally satisfies this,
  * so pi's extension loader can call this module's default export directly. `on` mirrors the
- * loop/agmsg extensions' pattern of one union-typed signature with an untyped `event`, because
+ * loop extension's pattern of one union-typed signature with an untyped `event`, because
  * pi's own event-specific overloads are not assignable to a differently-shaped overload set here.
  */
 export interface OmlxLifecycleHost {

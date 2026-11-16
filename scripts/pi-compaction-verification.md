@@ -25,7 +25,7 @@ The reported problem session `01a04a5e-558d-70fa-a827-3ef5c4f83a42` was verified
 ## Operational notes
 
 - Startup patches apply to newly started `pi` processes; restart an existing process to load changes.
-- User settings remain `compactionEffort=max` and agmsg polling every 60 seconds.
+- User settings remain `compactionEffort=max`.
 - Large-session max-effort summaries can take minutes. That latency alone is not a deadlock.
 - Conciseness is a model instruction, not a guaranteed word limit. The original generation budget is preserved to avoid truncating reasoning and summaries.
 - Validation establishes the tested paths and version; it does not guarantee that future provider or Pi releases cannot introduce other failures.

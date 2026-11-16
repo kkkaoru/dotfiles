@@ -602,7 +602,7 @@ test("caches footer rendering until visible session state changes", () => {
   assert.deepEqual(footer.render(120), ["render:120:1"]);
   assert.equal(footer.renderCalls, 1);
 
-  footer.statuses.set("agmsg", "agmsg: alice");
+  footer.statuses.set("demo", "demo: alice");
   assert.deepEqual(footer.render(120), ["render:120:2"]);
   footer.leafId = "leaf-2";
   assert.deepEqual(footer.render(120), ["render:120:3"]);
@@ -621,9 +621,9 @@ test("skips unchanged extension status and absent widget removals", () => {
   assert.equal(installExtensionUiRenderDedupe(InteractiveMode), "already-installed");
   const mode = new InteractiveMode();
 
-  mode.setExtensionStatus("agmsg", undefined);
-  mode.setExtensionStatus("agmsg", "agmsg: alice");
-  mode.setExtensionStatus("agmsg", "agmsg: alice");
+  mode.setExtensionStatus("demo", undefined);
+  mode.setExtensionStatus("demo", "demo: alice");
+  mode.setExtensionStatus("demo", "demo: alice");
   assert.equal(mode.statusCalls, 1);
 
   mode.setExtensionWidget("loop", undefined);

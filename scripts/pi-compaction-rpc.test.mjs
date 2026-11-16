@@ -23,8 +23,6 @@ const COMPACT_CUSTOMIZATION_FLAGS = [
   join(repo, "tools/pi-loop-extension"),
   "--extension",
   join(repo, "tools/pi-tmux-timeout-extension"),
-  "--extension",
-  join(repo, "tools/pi-agmsg-extension"),
 ];
 
 test("compact customization packages exist on the shipped path", () => {
@@ -32,7 +30,6 @@ test("compact customization packages exist on the shipped path", () => {
   assert.equal(existsSync(join(repo, "tools/pi-my-cursor-provider/src/compaction.ts")), true);
   assert.equal(existsSync(join(repo, "tools/pi-loop-extension/index.ts")), true);
   assert.equal(existsSync(join(repo, "tools/pi-tmux-timeout-extension/index.ts")), true);
-  assert.equal(existsSync(join(repo, "tools/pi-agmsg-extension/index.ts")), true);
 });
 
 test("real fullscreen terminal handles compact and queued input", { timeout: 45000 }, async (t) => {

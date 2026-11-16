@@ -6,7 +6,6 @@
 pi（native MCP / codemode + 案内 Skill 1件）
   └─ ~/.local/bin/executor mcp --elicitation-mode browser → Executor Desktop
        ├─ local-skills：既存 Skills の検索・本文・参照資料取得（読み取り専用）
-       ├─ agmsg：公式スクリプト経由の明示的なメッセージ操作
        ├─ ctx：公式 `ctx mcp serve` によるローカル履歴検索
        ├─ Context7 / Chrome DevTools
        ├─ Cloudflare Docs / Agents SDK Docs
@@ -40,7 +39,7 @@ Mac ごとに独立した Executor を起動し、OAuth は各 Mac で本人が�
 この変更と `scripts/`・`tools/executor-skills/` の関連ファイルをコミット・push してから、
 別 Mac で clone / pull してください。ユーザー名や checkout パスは同じでなくて構いません。
 Executor Desktop（`brew install --cask executor`）、Bun / bunx、jq、ctx CLI、
-共通の `~/.agents/skills`（agmsg を含む）と、選択式の `~/.agents/skills-stroage` を用意します。
+共通の `~/.agents/skills` と、選択式の `~/.agents/skills-stroage` を用意します。
 Executor の npm グローバル版は追加インストールしません。
 
 ### 2. Executor home をリンク
@@ -202,7 +201,7 @@ Docs、Agents SDK Docs、local-skills、Context7、Chrome DevTools は OAuth 不
 既存の会話に含まれる長い一覧・取得結果は消えません。
 
 共通の `~/.agents/skills` には Python/Rust/Swift/TypeScript 規約、Git commit、
-find-skills、project-skills、agmsg/history の案内を置きます。agmsg/history は引き続き
+find-skills、project-skills、history の案内を置きます。history は引き続き
 Executor 経由で遅延読み込みし、案内 Skill は pi パッケージから読み込みます。
 Cloudflare、MotherDuck、GPUI 等は `~/.agents/skills-stroage` に保管し、project-skills
 で選んだものだけ対象プロジェクトの `.agents/skills` にコピーします。保管庫全体を
@@ -225,25 +224,14 @@ executor call cloudflare-docs user default search_cloudflare_documentation \
 正確なパスを使ってください。stdio サーバー登録時に Executor が自動作成する
 `org.default` 接続が検索結果にも出る場合があります。両方を呼ぶ必要はありません。
 
-## agmsg / ctx の実行
+## ctx の実行
 
-スキル本文は `local-skills`、実際の操作は別の `agmsg` / `ctx` integration を利用します。
-ctx は公式 MCP サーバーをそのまま使用し、agmsg はこのパッケージの薄い MCP アダプターから
-公式スクリプトだけを実行します。新しい常時許可ポリシーは追加しません。
+スキル本文は `local-skills`、実際の操作は `ctx` integration を利用します。
+ctx は公式 MCP サーバーをそのまま使用します。新しい常時許可ポリシーは追加しません。
 
 ```bash
-executor tools search agmsg_whoami --namespace agmsg --limit 2
-executor call agmsg user default agmsg_whoami '{"project":"/absolute/path/to/project"}'
 executor tools search search --namespace ctx --limit 3
 ```
-
-- 共有 Executor は pi の現在の送信者を推測できません。ルーターが pi の既存セッション情報から
-  選択済みの名前・チームと元のプロジェクトを最小限の案内として渡し、`whoami` の結果と照合します。
-  選択済み情報がなく複数候補がある場合は `/agmsg whoami` でユーザーに確認し、勝手に選びません。
-- 送信・履歴・受信箱には `project` / `team` / `agent` が必要です。公式 `identities.sh` で
-  そのプロジェクトの `pi` 登録を検証してから実行します。SQL・チーム設定への直接アクセスはしません。
-- モデル用の直接 `agmsg` ツールは無効化しますが、既存 pi 拡張の自動受信とユーザー用
-  `/agmsg` コマンドは維持します。自動受信を Executor 経由で二重にポーリングしません。
 - ctx の検索には元のワークスペース／セッション条件を明示してください。既存インデックスを
   利用し、登録だけで再取り込みや履歴公開はしません。インデックスの不足は別途報告します。
 
@@ -256,13 +244,11 @@ bun run lint
 bun run test
 ```
 
-`bun run test` は Skills MCP・agmsg MCP・pi ルーティングのユニットテストと、Executor／ブラウザをモックした
+`bun run test` は Skills MCP のユニットテストと、Executor／ブラウザをモックした
 OAuth スクリプトのオフラインテストを実行します。ライブ認証には触れません。
 
 軽量化を戻すには `.pi/agent/settings.json` から今回の `skills` 除外配列を削除します。
 案内 Skill も不要なら packages の `./packages/executor-skills` を削除します。
-agmsg の直接ツールだけ戻すなら、その packages エントリーをオブジェクト形式にして
-`{"source":"./packages/executor-skills","extensions":[]}` とし、pi を再読み込みします。
 Executor のデータ／資格情報は `~/.executor` のリンク先（この checkout の `.executor`）に残り、Git 管理しません。
 連携を削除する場合は Executor UI から個別に削除してください。
 
