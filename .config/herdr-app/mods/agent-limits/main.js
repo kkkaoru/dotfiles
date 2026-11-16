@@ -72,19 +72,15 @@ export function formatResetRemaining(resetsAt, now = Date.now()) {
   return `${totalMinutes}m`;
 }
 
-const withReset = (label, used, resetsAt, compact) => ({
-  label,
-  used,
-  ...(resetsAt ? { resetsAt } : {}),
-  ...(compact ? { compact: true } : {}),
-});
+const withReset = (label, used, resetsAt) =>
+  resetsAt ? { label, used, resetsAt } : { label, used };
 
 /** The windows worth showing for a provider. Multi-pool providers (like Antigravity) already
  *  return one entry per pool; single-pool providers return their windows shortest-first so we pick
  *  the longest used-up one, else the shortest. */
 export function shownWindows(windows) {
   if (windows.some(({ keep }) => keep)) {
-    return windows.map(({ label, used, resetsAt }) => withReset(label, used, resetsAt, true));
+    return windows.map(({ label, used, resetsAt }) => withReset(label, used, resetsAt));
   }
   const full = windows.findLast(({ used }) => used >= FULL_PERCENT);
   return full ? [full] : windows.slice(0, 1);
@@ -137,7 +133,7 @@ export function parseAntigravity(stdout) {
     const picked = full ?? [...matching].sort((left, right) => right.used - left.used)[0];
     return [
       {
-        label: tag,
+        label: picked.label ? `${tag}${picked.label}` : tag,
         used: picked.used,
         ...(picked.resetsAt ? { resetsAt: picked.resetsAt } : {}),
         keep: true,
@@ -205,13 +201,12 @@ export default class AgentLimits extends View {
 
   render(_cx) {
     const t = theme();
-    const windowText = ({ label, used, resetsAt, compact }) => {
+    const windowText = ({ label, used, resetsAt }) => {
       const remaining = used >= FULL_PERCENT ? formatResetRemaining(resetsAt) : null;
       const value = remaining ?? `${used}%`;
-      const separator = compact ? "" : " ";
       return div()
         .text_color(used >= WARN_PERCENT ? t.blocked : t.foreground)
-        .child(label ? `${label}${separator}${value}` : value);
+        .child(label ? `${label}${value}` : value);
     };
     // As agents-emoji draws an agent's icon from Herdr's program table.
     const icon = (path, tint) =>
@@ -221,15 +216,15 @@ export default class AgentLimits extends View {
     const provider = ([path, tint, name]) => {
       const windows = this.limits.get(name);
       return h_flex()
-        .gap(5)
+        .gap(2)
         .items_center()
         .child(icon(path, tint))
         .children(windows?.length ? windows.map(windowText) : [div().text_color(t.dim).child("—")]);
     };
     return h_flex()
       .size_full()
-      .px(14)
-      .gap(14)
+      .px(8)
+      .gap(8)
       .items_center()
       .justify_end()
       .bg(t.chrome)
