@@ -233,7 +233,7 @@ it("declares tools via parametersJsonSchema and replays images, assistant calls,
     { functionResponse: { name: "read", response: { error: "boom\n[image]" }, id: "c2" } },
   ]);
 
-  // Replaying an unsigned Claude/GPT-OSS tool call on Gemini 4 Argon degrades to plain text instead of 400ing.
+  // Replaying an unsigned Claude/GPT-OSS tool call on Gemini 4 Argon sends `skip_thought_signature_validator` on native `functionCall`.
   const argonReplay = buildGenerateBody({
     project: "aicode-consumers",
     publicModelId: "gemini-4-argon",
@@ -266,11 +266,16 @@ it("declares tools via parametersJsonSchema and replays images, assistant calls,
   });
   expect(argonReplay.request.contents[1]).toStrictEqual({
     role: "model",
-    parts: [{ text: '(called bash with {"command":"pwd"})' }],
+    parts: [
+      {
+        functionCall: { name: "bash", args: { command: "pwd" } },
+        thoughtSignature: "skip_thought_signature_validator",
+      },
+    ],
   });
   expect(argonReplay.request.contents[2]).toStrictEqual({
     role: "user",
-    parts: [{ text: "(result of bash: /tmp)" }],
+    parts: [{ functionResponse: { name: "bash", response: { output: "/tmp" } } }],
   });
 
   // Legacy mimicked "[Tool call ...]" assistant text blocks are omitted from replay.
@@ -294,7 +299,10 @@ it("declares tools via parametersJsonSchema and replays images, assistant calls,
       { role: "user", content: "continue", timestamp: 2 },
       {
         role: "assistant",
-        content: [{ type: "text", text: '[Tool call read({"path":"/tmp/a"})]' }],
+        content: [
+          { type: "text", text: '[Tool call read({"path":"/tmp/a"})]' },
+          { type: "text", text: '(called read with {"path":"/tmp/b"})' },
+        ],
         api: "my-antigravity-api",
         provider: "my-antigravity",
         model: "gemini-4-hydrogen",
@@ -350,6 +358,40 @@ it("declares tools via parametersJsonSchema and replays images, assistant calls,
   expect(mergedModelReplay.request.contents).toStrictEqual([
     { role: "user", parts: [{ text: "hi" }] },
     { role: "model", parts: [{ text: "step 1" }, { text: "step 2" }] },
+  ]);
+
+  // Merge consecutive user turns when a followUp (e.g. tmux completion batch) arrives after a user message.
+  const followUpBatch = buildGenerateBody({
+    project: "aicode-consumers",
+    publicModelId: "gemini-4-hydrogen",
+    level: "medium",
+    systemPrompt: undefined,
+    messages: [
+      { role: "user", content: "start", timestamp: 0 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Started detached tmux command." }],
+        api: "my-antigravity-api",
+        provider: "my-antigravity",
+        model: "gemini-4-hydrogen",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: {} },
+        stopReason: "stop",
+        timestamp: 1,
+      },
+      { role: "user", content: "tmux completion batch: 2 tasks completed", timestamp: 2 },
+      { role: "user", content: "continue", timestamp: 3 },
+    ] as TranscriptContext["messages"],
+    tools: [READ_TOOL],
+    maxTokens: undefined,
+    modelMaxTokens: 65536,
+  });
+  expect(followUpBatch.request.contents).toStrictEqual([
+    { role: "user", parts: [{ text: "start" }] },
+    { role: "model", parts: [{ text: "Started detached tmux command." }] },
+    {
+      role: "user",
+      parts: [{ text: "tmux completion batch: 2 tasks completed" }, { text: "continue" }],
+    },
   ]);
 });
 
@@ -641,16 +683,50 @@ it("retries 503 across endpoints and handles CRLF + non-Error throws", async () 
   expect(nonRetryEvents.at(-1)?.type).toBe("error");
 });
 
-it("handles empty streams and CRLF framing", async () => {
+it("retries empty streams once and errors if still empty", async () => {
   const emptyEvents: AssistantMessageEvent[] = [];
+  const emptyAttempts = { count: 0 };
   for await (const event of streamAntigravity(TEST_MODEL, contextWith(""), {
     apiKey: "tok",
-    send: async () => sseResponse(200, [{ response: {} }]),
+    send: async () => {
+      emptyAttempts.count += 1;
+      return sseResponse(200, [{ response: {} }]);
+    },
   })) {
     emptyEvents.push(event);
   }
-  expect(emptyEvents.at(-1)?.type).toBe("done");
+  expect(emptyAttempts.count).toBe(2);
+  const emptyErr = emptyEvents.at(-1);
+  expect(emptyErr?.type).toBe("error");
+  if (emptyErr?.type === "error") {
+    expect(emptyErr.error.errorMessage).toMatch(/empty response/);
+  }
 
+  // Transient empty response followed by a normal response succeeds on retry.
+  const recoveredEvents: AssistantMessageEvent[] = [];
+  const recoverAttempts = { count: 0 };
+  for await (const event of streamAntigravity(TEST_MODEL, contextWith(""), {
+    apiKey: "tok",
+    send: async () => {
+      recoverAttempts.count += 1;
+      return recoverAttempts.count === 1
+        ? sseResponse(200, [{ response: {} }])
+        : sseResponse(200, [
+            {
+              response: {
+                candidates: [{ content: { parts: [{ text: "ok" }] }, finishReason: "STOP" }],
+              },
+            },
+          ]);
+    },
+  })) {
+    recoveredEvents.push(event);
+  }
+  expect(recoverAttempts.count).toBe(2);
+  expect(recoveredEvents.at(-1)?.type).toBe("done");
+});
+
+it("handles CRLF framing and EOF without trailing newline", async () => {
   const crlfEvents: AssistantMessageEvent[] = [];
   const crlfPayload = `data: {"response":{"candidates":[{"content":{"parts":\r\ndata: [{"text":"crlf"}]},"finishReason":"STOP"}]}}\r\n\r\n`;
   for await (const event of streamAntigravity(TEST_MODEL, contextWith("sys"), {

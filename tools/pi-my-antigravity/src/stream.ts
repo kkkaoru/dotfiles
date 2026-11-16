@@ -155,7 +155,6 @@ interface ReplayTurnContext {
   includeToolId: boolean;
   requiresSignature: boolean;
   publicModelId: string;
-  degradedToolIds: Set<string>;
 }
 
 interface ToolCache {
@@ -298,26 +297,27 @@ const sanitizeRawToolCallId = (rawId: string | undefined, fallbackName: string):
 const sanitizeToolCallId = (rawId: string | undefined, fallbackName: string): string =>
   rawId && VALID_TOOL_ID_PATTERN.test(rawId) ? rawId : sanitizeRawToolCallId(rawId, fallbackName);
 
-function degradeToolCallPart(block: ToolCall, degradedToolIds: Set<string>): GeminiPart {
-  if (block.id) {
-    degradedToolIds.add(block.id);
-  }
-  return { text: `(called ${block.name} with ${stringifyJson(block.arguments)})` };
-}
+const SKIP_THOUGHT_SIGNATURE = "skip_thought_signature_validator";
 
-const toFunctionCallPart = (block: ToolCall, includeToolId: boolean): GeminiPart => ({
-  functionCall: {
-    name: block.name,
-    args: block.arguments,
-    ...(includeToolId ? { id: sanitizeToolCallId(block.id, block.name) } : {}),
-  },
-  ...(block.thoughtSignature ? { thoughtSignature: block.thoughtSignature } : {}),
-});
+const toFunctionCallPart = (
+  block: ToolCall,
+  includeToolId: boolean,
+  requiresSignature: boolean,
+): GeminiPart => {
+  const signature =
+    block.thoughtSignature ?? (requiresSignature ? SKIP_THOUGHT_SIGNATURE : undefined);
+  return {
+    functionCall: {
+      name: block.name,
+      args: block.arguments,
+      ...(includeToolId ? { id: sanitizeToolCallId(block.id, block.name) } : {}),
+    },
+    ...(signature ? { thoughtSignature: signature } : {}),
+  };
+};
 
 const toToolCallPart = (block: ToolCall, turnCtx: ReplayTurnContext): GeminiPart =>
-  turnCtx.requiresSignature && !block.thoughtSignature
-    ? degradeToolCallPart(block, turnCtx.degradedToolIds)
-    : toFunctionCallPart(block, turnCtx.includeToolId);
+  toFunctionCallPart(block, turnCtx.includeToolId, turnCtx.requiresSignature);
 
 function toAssistantPart(
   block: TextContent | ThinkingContent | ToolCall,
@@ -325,11 +325,12 @@ function toAssistantPart(
   sameModel: boolean,
 ): GeminiPart | undefined {
   if (block.type === "text") {
-    if (!block.text.trim()) {
+    const trimmed = block.text.trim();
+    if (!trimmed) {
       return undefined;
     }
     // Strip legacy pseudo-tool-call lines from aborted/mimicked turns so Gemini does not keep imitating them.
-    if (/^\[(?:Tool call|Call tool)\s+/i.test(block.text.trim())) {
+    if (/^(?:\[(?:Tool call|Call tool)\s+|\(called\s+\w+\s+with\s+\{)/i.test(trimmed)) {
       return undefined;
     }
     return { text: block.text };
@@ -394,9 +395,7 @@ const toFunctionResponsePart = (
 });
 
 const toToolResultPart = (message: ToolResultInput, turnCtx: ReplayTurnContext): GeminiPart =>
-  message.toolCallId && turnCtx.degradedToolIds.has(message.toolCallId)
-    ? { text: `(result of ${message.toolName}: ${toolResultText(message.content)})` }
-    : toFunctionResponsePart(message, turnCtx.includeToolId, toolResultText(message.content));
+  toFunctionResponsePart(message, turnCtx.includeToolId, toolResultText(message.content));
 
 const canMergeToolResponse = (
   last: GeminiContent | undefined,
@@ -405,6 +404,12 @@ const canMergeToolResponse = (
   last?.role === "user" &&
   last.parts[0]?.functionResponse !== undefined &&
   part.functionResponse !== undefined;
+
+const canMergePlainUser = (
+  contents: readonly GeminiContent[],
+  last: GeminiContent | undefined,
+): last is GeminiContent =>
+  contents.length > 1 && last?.role === "user" && last.parts[0]?.functionResponse === undefined;
 
 function appendToolResultTurn(
   contents: GeminiContent[],
@@ -425,13 +430,10 @@ function appendUserTurn(
   message: Extract<TranscriptMessage, { role: "user" }>,
 ): void {
   const parts = textOf(message);
-  // Keep the leading system-prompt turn separate (index 0); merge subsequent consecutive user turns.
+  // Keep the leading system-prompt turn separate (index 0); merge subsequent consecutive user turns
+  // (e.g. tmux completion batches or queued user messages).
   const last = contents.at(-1);
-  if (
-    contents.length > 1 &&
-    last?.role === "user" &&
-    last.parts[0]?.functionResponse === undefined
-  ) {
+  if (canMergePlainUser(contents, last)) {
     last.parts.push(...parts);
     return;
   }
@@ -472,7 +474,6 @@ function buildContents(options: BuildGenerateBodyOptions, runtimeModel: string):
     includeToolId: needsToolCallId(options.publicModelId) || needsToolCallId(runtimeModel),
     requiresSignature: runtimeModel.startsWith("gemini-"),
     publicModelId: options.publicModelId,
-    degradedToolIds: new Set(),
   };
   const systemText = options.systemPrompt?.trim();
   const contents: GeminiContent[] = systemText
@@ -916,6 +917,10 @@ function finalizeStream(
   emit({ type: "done", reason, message });
 }
 
+function hasUsableOutput(emitState: StreamEmitState): boolean {
+  return Boolean(emitState.textBlock || emitState.thinkingBlock || emitState.toolCalls.length > 0);
+}
+
 async function runStream(
   model: Model<Api>,
   context: TranscriptContext,
@@ -942,12 +947,6 @@ async function runStream(
   });
 
   emit({ type: "start", partial: message });
-  const response = await sendGenerateRequest(
-    auth.token,
-    body,
-    options.signal,
-    options.send ?? postWire,
-  );
   const emitState: StreamEmitState = {
     textIndex: -1,
     textBlock: undefined,
@@ -955,7 +954,17 @@ async function runStream(
     thinkingBlock: undefined,
     toolCalls: [],
   };
+  const send = options.send ?? postWire;
+  const response = await sendGenerateRequest(auth.token, body, options.signal, send);
   await readStream(response, (chunk) => applyChunk(chunk, message, emitState, emit));
+  if (!hasUsableOutput(emitState) && !options.signal?.aborted) {
+    // Transient empty SSE response (0 output tokens, no parts): retry once on the same request.
+    const retryResponse = await sendGenerateRequest(auth.token, body, options.signal, send);
+    await readStream(retryResponse, (chunk) => applyChunk(chunk, message, emitState, emit));
+  }
+  if (!hasUsableOutput(emitState)) {
+    throw new Error("Antigravity returned an empty response (no text, thinking, or tool calls).");
+  }
   finalizeStream(emitState, message, emit);
 }
 
