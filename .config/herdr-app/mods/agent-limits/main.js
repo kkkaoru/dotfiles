@@ -10,9 +10,10 @@ const POLL_MS = 5 * 60 * 1000;
 const WARN_PERCENT = 80;
 const FULL_PERCENT = 100;
 const ICON_SIZE = 14;
+const MS_PER_MINUTE = 60 * 1000;
 const MINUTES_PER_HOUR = 60;
-const MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR;
-const DAYS_PER_MONTH = 30;
+const HOURS_PER_DAY = 24;
+const MINUTES_PER_DAY = HOURS_PER_DAY * MINUTES_PER_HOUR;
 const WINDOW_KEYS = ["primary", "secondary", "tertiary"];
 // Herdr.app started from the Dock lacks the shell's variables, so the key is read as envs.fish
 // reads it: the variable, else ~/.codex/.env, else ~/.env (launchctl's copy can be stale), else
@@ -35,29 +36,62 @@ const OPENCODE_GO_USAGE = [
   "codexbar usage --provider opencodego --source api --json",
 ].join(" ");
 
-/** "5h", "7d", or a calendar for the monthly window (30d is wide); null when the provider reports
- *  no length (Grok's CLI proxy). */
+/** "5h", "7d", or null for 30d/missing length (Grok's CLI proxy). */
+const DAYS_PER_MONTH = 30;
+
 const windowLabel = (minutes) => {
-  if (!Number.isFinite(minutes)) {
+  if (!Number.isFinite(minutes) || minutes === DAYS_PER_MONTH * MINUTES_PER_DAY) {
     return null;
-  }
-  if (minutes === DAYS_PER_MONTH * MINUTES_PER_DAY) {
-    return "📅";
   }
   return minutes % MINUTES_PER_DAY === 0
     ? `${minutes / MINUTES_PER_DAY}d`
     : `${Math.round(minutes / MINUTES_PER_HOUR)}h`;
 };
 
-/** The one window worth showing, from windows ordered shortest first: the longest used-up one,
- *  since the shorter ones no longer matter, else the shortest, which runs out first. */
+/** Remaining time until `resetsAt` as `Xd`, `Yh`, or `Zm` (coarsest non-zero unit), or null. */
+export function formatResetRemaining(resetsAt, now = Date.now()) {
+  if (!resetsAt) {
+    return null;
+  }
+  const target = Date.parse(resetsAt);
+  if (!Number.isFinite(target)) {
+    return null;
+  }
+  const totalMinutes = Math.max(0, Math.ceil((target - now) / MS_PER_MINUTE));
+  if (totalMinutes === 0) {
+    return null;
+  }
+  const days = Math.floor(totalMinutes / MINUTES_PER_DAY);
+  if (days > 0) {
+    return `${days}d`;
+  }
+  const hours = Math.floor(totalMinutes / MINUTES_PER_HOUR);
+  if (hours > 0) {
+    return `${hours}h`;
+  }
+  return `${totalMinutes}m`;
+}
+
+const withReset = (label, used, resetsAt, compact) => ({
+  label,
+  used,
+  ...(resetsAt ? { resetsAt } : {}),
+  ...(compact ? { compact: true } : {}),
+});
+
+/** The windows worth showing for a provider. Multi-pool providers (like Antigravity) already
+ *  return one entry per pool; single-pool providers return their windows shortest-first so we pick
+ *  the longest used-up one, else the shortest. */
 export function shownWindows(windows) {
+  if (windows.some(({ keep }) => keep)) {
+    return windows.map(({ label, used, resetsAt }) => withReset(label, used, resetsAt, true));
+  }
   const full = windows.findLast(({ used }) => used >= FULL_PERCENT);
   return full ? [full] : windows.slice(0, 1);
 }
 
-/** `codexbar usage --provider <p> --json` -> its windows as `{ label, used }`, or null when the
- *  provider answered with an error. A placeholder window (no data yet) is left out. */
+/** `codexbar usage --provider <p> --json` -> its windows as `{ label, used, resetsAt? }`, or null
+ *  when the provider answered with an error. A placeholder window (no data yet) is left out. */
 export function parseLimits(stdout) {
   const [entry] = JSON.parse(stdout);
   if (entry.error) {
@@ -65,32 +99,55 @@ export function parseLimits(stdout) {
   }
   return WINDOW_KEYS.map((key) => entry.usage[key])
     .filter((window) => window && !window.isSyntheticPlaceholder)
-    .map((window) => ({
-      label: windowLabel(window.windowMinutes),
-      used: Math.round(window.usedPercent),
-    }));
+    .map((window) =>
+      withReset(windowLabel(window.windowMinutes), Math.round(window.usedPercent), window.resetsAt),
+    );
 }
 
-/** `codexbar usage --provider antigravity --json` -> its quota pools' windows as
- *  `{ label, used }`, the one closest to running out first, or null on an error. Antigravity splits
- *  quota into Gemini, Claude/GPT and Argon pools, so a single number can only show the tightest. */
+/** `codexbar usage --provider antigravity --json` -> one `{ label, used, resetsAt?, keep: true }`
+ *  per Antigravity quota pool (Gemini, Claude/GPT, Argon), picking the full window in each pool if
+ *  any, else the highest-used window in that pool, or null on an error. */
+const ANTIGRAVITY_POOLS = [
+  ["💧", (id) => id.includes("gemini-") && !id.includes("argon")],
+  ["🤖", (id) => id.includes("3p-")],
+  ["☁️", (id) => id.includes("gemini-argon-")],
+];
+
 export function parseAntigravity(stdout) {
   const [entry] = JSON.parse(stdout);
   if (entry.error) {
     return null;
   }
-  return (entry.usage?.extraRateWindows ?? [])
-    .map(({ window }) => window)
-    .filter((window) => window && !window.isSyntheticPlaceholder)
-    .map((window) => ({
+  const windows = (entry.usage?.extraRateWindows ?? [])
+    .filter(({ window }) => window && !window.isSyntheticPlaceholder)
+    .map(({ id = "", title = "", window }) => ({
+      id: id || title,
+      minutes: window.windowMinutes,
       label: windowLabel(window.windowMinutes),
       used: Math.round(window.usedPercent),
+      resetsAt: window.resetsAt,
     }))
-    .sort((left, right) => right.used - left.used);
+    .sort((left, right) => left.minutes - right.minutes);
+  return ANTIGRAVITY_POOLS.flatMap(([tag, match]) => {
+    const matching = windows.filter((item) => match(item.id));
+    if (matching.length === 0) {
+      return [];
+    }
+    const full = matching.findLast(({ used }) => used >= FULL_PERCENT);
+    const picked = full ?? [...matching].sort((left, right) => right.used - left.used)[0];
+    return [
+      {
+        label: tag,
+        used: picked.used,
+        ...(picked.resetsAt ? { resetsAt: picked.resetsAt } : {}),
+        keep: true,
+      },
+    ];
+  });
 }
 
-/** Ollama's `/api/balance` -> its session (5h) and weekly windows as `{ label, used }`, or null
- *  when curl got no answer (a rejected key or a server error). */
+/** Ollama's `/api/balance` -> its session (5h) and weekly windows as `{ label, used, resetsAt? }`,
+ *  or null when curl got no answer (a rejected key or a server error). */
 export function parseOllamaBalance(stdout) {
   if (stdout.trim() === "") {
     return null;
@@ -101,10 +158,9 @@ export function parseOllamaBalance(stdout) {
     ["7d", included?.weekly],
   ]
     .filter(([, window]) => window)
-    .map(([label, window]) => ({
-      label,
-      used: Math.round(FULL_PERCENT - window.remaining_percent),
-    }));
+    .map(([label, window]) =>
+      withReset(label, Math.round(FULL_PERCENT - window.remaining_percent), window.resets_at),
+    );
 }
 
 const codexbar = (provider, source) => [
@@ -149,10 +205,14 @@ export default class AgentLimits extends View {
 
   render(_cx) {
     const t = theme();
-    const windowText = ({ label, used }) =>
-      div()
+    const windowText = ({ label, used, resetsAt, compact }) => {
+      const remaining = used >= FULL_PERCENT ? formatResetRemaining(resetsAt) : null;
+      const value = remaining ?? `${used}%`;
+      const separator = compact ? "" : " ";
+      return div()
         .text_color(used >= WARN_PERCENT ? t.blocked : t.foreground)
-        .child(label ? `${label} ${used}%` : `${used}%`);
+        .child(label ? `${label}${separator}${value}` : value);
+    };
     // As agents-emoji draws an agent's icon from Herdr's program table.
     const icon = (path, tint) =>
       tint
