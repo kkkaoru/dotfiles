@@ -31,6 +31,7 @@
   "packages": [
     "./packages/pi-effort-manager",
     "./packages/pi-plamo-translate",
+    "./packages/pi-my-antigravity",
     "./packages/pi-my-clinepass-provider",
     "npm:pi-ollama-cloud",
     "./packages/pi-my-cursor-provider",
@@ -42,8 +43,7 @@
     "./packages/executor-skills",
     "npm:@ogulcancelik/pi-herdr",
     "git:github.com/DietrichGebert/ponytail",
-    "npm:pi-chrome",
-    "npm:pi-antigravity"
+    "npm:pi-chrome"
   ],
   "extensionChangelogVersions": {
     "{\"source\":\"npm:pi-ollama-cloud\",\"scope\":\"user\"}": "0.13.1",

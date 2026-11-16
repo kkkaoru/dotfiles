@@ -41,6 +41,9 @@ integrations. These instructions apply to agents working here, including pi and 
   Read the current file rather than assuming a fixed model or version.
 - `tools/pi-*/` — Local pi extensions and providers, including persistent goals,
   loops, detached tmux execution, effort management, and oMLX lifecycle management.
+- `tools/pi-my-antigravity/` — Subscription-backed Antigravity (Cloud Code Assist) provider that
+  mirrors the official `agy` CLI wire format (`bun run check`). Sends the system prompt as the
+  leading user turn because the backend 429s third-party prompts in `systemInstruction`.
 - `tools/claudex-*/` — Claudex adapters and routing/tool policies.
 - `.claude-plugin/marketplace.json` — The `dotfiles` plugin marketplace that lists the `tools/claude-*`
   mods. `./create-symlinks.sh` registers the checkout where it is cloned (in the ignored
