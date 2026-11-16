@@ -4,6 +4,7 @@ import type {
   InputEventResult,
   MarkdownMessageType,
   MarkdownTransformContext,
+  SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import { DISPLAY_TYPES } from "./policy.ts";
 import {
@@ -14,11 +15,14 @@ import {
   startSession,
   translateInput,
   type Runtime,
+  type SessionContextLike,
   type UiSink,
 } from "./runtime.ts";
 
 export interface PlamoHooks {
-  onSessionStart(handler: (ctx: { readonly ui: UiSink }) => void): void;
+  onSessionStart(
+    handler: (ctx: SessionContextLike, reason?: SessionStartEvent["reason"]) => void,
+  ): void;
   onInput(
     handler: (event: InputEvent, ctx: { readonly ui: UiSink }) => Promise<InputEventResult>,
   ): void;
@@ -34,8 +38,8 @@ export interface PlamoHooks {
 }
 
 export function bindPlamo(hooks: PlamoHooks, runtime: Runtime): void {
-  hooks.onSessionStart((ctx) => {
-    startSession(runtime, ctx.ui);
+  hooks.onSessionStart((ctx, reason) => {
+    startSession(runtime, ctx, reason);
   });
   hooks.onInput((event, ctx) => translateInput(runtime, event, ctx.ui));
   hooks.onBeforeAgent((sections) => {

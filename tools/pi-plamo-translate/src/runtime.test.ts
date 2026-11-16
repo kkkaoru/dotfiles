@@ -447,7 +447,7 @@ test("session start captures the renderer and warms the server", async () => {
       }),
     );
   };
-  startSession(box, sink);
+  startSession(box, { ui: sink });
   await Promise.resolve();
   expect(warmed.count).toBe(1);
   expect(hosts).toHaveLength(1);
@@ -477,7 +477,7 @@ test("a warm-up failure is reported", async () => {
     async () => "x",
     () => Promise.reject(new Error("down")),
   );
-  startSession(box, sink);
+  startSession(box, { ui: sink });
   await Promise.resolve();
   await Promise.resolve();
   expect(sink.notes).toStrictEqual(["plamo-translate: warming the server failed: down"]);

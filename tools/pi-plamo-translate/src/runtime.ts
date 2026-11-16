@@ -2,10 +2,11 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { Component } from "@earendil-works/pi-tui";
 import type {
-  BeforeAgentStartEvent,
   InputEvent,
   InputEventResult,
   MarkdownTransformContext,
+  SessionEntry,
+  SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import type { Translator } from "../../claude-plamo-translate/hooks/translate.ts";
 import { translateFast } from "./fast.ts";
@@ -15,6 +16,7 @@ import {
   OFF,
   remember,
   replyRule,
+  RESUME_HISTORY_LIMIT,
   SECTION_NAME,
   shouldTranslatePrompt,
   STATUS_KEY,
@@ -48,6 +50,13 @@ interface Progress {
   looping: boolean;
 }
 
+export interface SessionContextLike {
+  readonly ui: UiSink;
+  readonly sessionManager?: {
+    buildContextEntries(): readonly SessionEntry[];
+  };
+}
+
 export interface Runtime {
   readonly ready: Map<string, string>;
   readonly pending: Map<string, Promise<string>>;
@@ -60,6 +69,8 @@ export interface Runtime {
   progress: Progress;
   ui: UiSink;
   warned: boolean;
+  /** Non-empty on `resume`/`fork`: only these persisted entry IDs may be translated. */
+  resumedIds: ReadonlySet<string> | null;
 }
 
 // A translation still running after the first delay reports itself, then once per interval.
@@ -98,6 +109,7 @@ export function createRuntime(
     progress: { done: 0, total: 0, shown: false, looping: false },
     ui: silent,
     warned: false,
+    resumedIds: null,
   };
 }
 
@@ -288,6 +300,14 @@ export function displayOf(
   if (ready !== undefined) {
     return ready;
   }
+  // On resume/fork, older persisted entries stay untranslated so history does not flood PLaMo.
+  if (
+    runtime.resumedIds !== null &&
+    context.messageId !== undefined &&
+    !runtime.resumedIds.has(context.messageId)
+  ) {
+    return markdown;
+  }
   schedule(runtime, markdown, runtime.settings.replyLanguage);
   return markdown;
 }
@@ -314,10 +334,7 @@ export async function translateInput(
   return transformedInput(english, event.images);
 }
 
-export function installRule(
-  runtime: Runtime,
-  sections: BeforeAgentStartEvent["systemPromptOptions"]["sections"],
-): void {
+export function installRule(runtime: Runtime, sections: Record<string, string>): void {
   const rule = replyRule(runtime.settings.replyLanguage, runtime.settings.promptLanguage);
   if (rule === undefined) {
     return;
@@ -337,9 +354,32 @@ export function scheduleReply(
   });
 }
 
-export function startSession(runtime: Runtime, ui: UiSink): void {
-  runtime.ui = ui;
-  ui.setWidget(WIDGET_KEY, (tui) => holdHost(runtime, tui), { placement: "belowEditor" });
+function recentResumedIds(
+  reason: SessionStartEvent["reason"] | undefined,
+  ctx: SessionContextLike,
+): ReadonlySet<string> | null {
+  if ((reason !== "resume" && reason !== "fork") || !ctx.sessionManager) {
+    return null;
+  }
+  const ids = ctx.sessionManager
+    .buildContextEntries()
+    .filter(
+      (entry) =>
+        entry.type === "message" || entry.type === "compaction" || entry.type === "branch_summary",
+    )
+    .slice(-RESUME_HISTORY_LIMIT)
+    .map((entry) => entry.id);
+  return new Set(ids);
+}
+
+export function startSession(
+  runtime: Runtime,
+  ctx: SessionContextLike,
+  reason?: SessionStartEvent["reason"],
+): void {
+  runtime.ui = ctx.ui;
+  runtime.resumedIds = recentResumedIds(reason, ctx);
+  ctx.ui.setWidget(WIDGET_KEY, (tui) => holdHost(runtime, tui), { placement: "belowEditor" });
   runtime.server.ensure().catch((error: unknown) => {
     warnOnce(runtime, `plamo-translate: warming the server failed: ${errorMessage(error)}`);
   });

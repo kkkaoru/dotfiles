@@ -2,6 +2,7 @@ import { afterEach, expect, test, vi } from "vitest";
 
 import { host, reset } from "./mocks/herdr.js";
 import AgentLimits, {
+  formatResetRemaining,
   parseAntigravity,
   parseLimits,
   parseOllamaBalance,
@@ -120,21 +121,26 @@ const drawn = (view) =>
     .kids.map(({ kids }) => kids.map((part, index) => (index === 0 ? part.path : part.kids[0])));
 
 afterEach(() => {
+  vi.useRealTimers();
   reset();
 });
 
 test("parseLimits reads each reported window and leaves out a placeholder", () => {
-  expect(parseLimits(CLAUDE)).toStrictEqual([{ label: "7d", used: 24 }]);
+  expect(parseLimits(CLAUDE)).toStrictEqual([
+    { label: "7d", used: 24, resetsAt: "2026-11-17T12:59:59Z" },
+  ]);
 });
 
 test("parseLimits leaves the label out when the provider reports no window length", () => {
-  expect(parseLimits(GROK_NO_WINDOW)).toStrictEqual([{ label: null, used: 100 }]);
+  expect(parseLimits(GROK_NO_WINDOW)).toStrictEqual([
+    { label: null, used: 100, resetsAt: "2026-11-17T07:35:47Z" },
+  ]);
 });
 
 test("parseOllamaBalance turns the remaining session and weekly shares into used percents", () => {
   expect(parseOllamaBalance(OLLAMA)).toStrictEqual([
-    { label: "5h", used: 12 },
-    { label: "7d", used: 85 },
+    { label: "5h", used: 12, resetsAt: "2026-11-14T11:00:00Z" },
+    { label: "7d", used: 85, resetsAt: "2026-11-16T00:00:00Z" },
   ]);
   expect(
     parseOllamaBalance(JSON.stringify({ included: { weekly: { remaining_percent: 0 } } })),
@@ -149,13 +155,11 @@ test("parseLimits is null when the provider answered with an error", () => {
   expect(parseLimits(GO_ERROR)).toBe(null);
 });
 
-test("parseAntigravity reads every quota pool's window, closest to running out first", () => {
+test("parseAntigravity reads one window per quota pool (Gemini, Claude/GPT, Argon)", () => {
   expect(parseAntigravity(ANTIGRAVITY)).toStrictEqual([
-    { label: "7d", used: 88 },
-    { label: "7d", used: 60 },
-    { label: "7d", used: 40 },
-    { label: "5h", used: 12 },
-    { label: "5h", used: 0 },
+    { label: "💧7d", used: 88, resetsAt: "2026-11-21T14:59:37Z", keep: true },
+    { label: "🤖7d", used: 40, resetsAt: "2026-11-21T14:59:37Z", keep: true },
+    { label: "☁️7d", used: 60, resetsAt: "2026-11-21T14:59:37Z", keep: true },
   ]);
 });
 
@@ -170,7 +174,7 @@ test("parseAntigravity leaves a placeholder window out and is null on an error",
       },
     },
   ]);
-  expect(parseAntigravity(placeholder)).toStrictEqual([{ label: "7d", used: 30 }]);
+  expect(parseAntigravity(placeholder)).toStrictEqual([{ label: "💧7d", used: 30, keep: true }]);
   expect(parseAntigravity(GO_ERROR)).toBe(null);
 });
 
@@ -226,19 +230,43 @@ test("render shows each provider's windows, a dash for one that failed or has no
   ]);
   await Promise.all(tasks);
   expect(drawn(view)).toStrictEqual([
-    ["icons/claude.svg", "7d 24%"],
-    ["icons/codex.svg", "📅 61%"],
-    ["icons/ollama.svg", "5h 12%"],
+    ["icons/claude.svg", "7d24%"],
+    ["icons/codex.svg", "61%"],
+    ["icons/ollama.svg", "5h12%"],
     ["icons/opencode.svg", "—"],
-    ["icons/grok.svg", "7d 0%"],
-    ["icons/antigravity.svg", "7d 88%"],
+    ["icons/grok.svg", "7d0%"],
+    ["icons/antigravity.svg", "💧7d88%", "🤖7d40%", "☁️7d60%"],
   ]);
 });
 
-test("render shows a window without a length as its percent alone", async () => {
+test("render shows a window without a length as its percent alone, and shows reset countdown without 100% or parentheses when full", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-11-16T05:10:00Z"));
   const { view, tasks } = newLimits({ ...ANSWERS, grok: GROK_NO_WINDOW });
   await Promise.all(tasks);
-  expect(drawn(view)[4]).toStrictEqual(["icons/grok.svg", "100%"]);
+  expect(drawn(view)[4]).toStrictEqual(["icons/grok.svg", "1d"]);
+
+  const fullClaude = JSON.stringify([
+    {
+      provider: "claude",
+      usage: {
+        primary: { windowMinutes: 300, usedPercent: 100, resetsAt: "2026-11-16T08:15:00Z" },
+      },
+    },
+  ]);
+  const fullView = newLimits({ ...ANSWERS, claude: fullClaude });
+  await Promise.all(fullView.tasks);
+  expect(drawn(fullView.view)[0]).toStrictEqual(["icons/claude.svg", "5h3h"]);
+});
+
+test("formatResetRemaining formats days, hours, or minutes (coarsest unit) or returns null when missing/expired", () => {
+  const now = Date.parse("2026-11-16T00:00:00Z");
+  expect(formatResetRemaining(undefined, now)).toBe(null);
+  expect(formatResetRemaining("not-a-date", now)).toBe(null);
+  expect(formatResetRemaining("2026-11-15T23:59:00Z", now)).toBe(null);
+  expect(formatResetRemaining("2026-11-16T00:45:00Z", now)).toBe("45m");
+  expect(formatResetRemaining("2026-11-16T03:20:00Z", now)).toBe("3h");
+  expect(formatResetRemaining("2026-11-18T02:05:00Z", now)).toBe("2d");
 });
 
 test("a window at 80% or more is drawn in the warning color", async () => {
@@ -258,11 +286,11 @@ test("a hundred-hour window is labelled in hours", () => {
   expect(parseLimits(answer)).toStrictEqual([{ label: "100h", used: 1 }]);
 });
 
-test("the monthly window is a calendar instead of 30d", () => {
+test("the monthly window omits its 30d label", () => {
   const answer = JSON.stringify([
     { usage: { primary: { windowMinutes: 43200, usedPercent: 61 }, secondary: null } },
   ]);
-  expect(parseLimits(answer)).toStrictEqual([{ label: "📅", used: 61 }]);
+  expect(parseLimits(answer)).toStrictEqual([{ label: null, used: 61 }]);
 });
 
 test("Claude's icon keeps its own colors, the one-color glyphs take the text color", () => {
@@ -327,5 +355,5 @@ test("a provider's windows are drawn as shownWindows leaves them", async () => {
   ]);
   const { view, tasks } = newLimits({ ...ANSWERS, opencodego: goMonthly });
   await Promise.all(tasks);
-  expect(drawn(view)[3]).toStrictEqual(["icons/opencode.svg", "5h 0%"]);
+  expect(drawn(view)[3]).toStrictEqual(["icons/opencode.svg", "5h0%"]);
 });
