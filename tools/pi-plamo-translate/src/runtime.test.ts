@@ -399,7 +399,7 @@ test("the prompt rule is installed unless both directions are off", () => {
     sections,
   );
   expect(sections[SECTION_NAME]).toBe(
-    "The user writes in Japanese. Their messages are machine-translated into English before you read them, and your replies are machine-translated into `ja` for display only. Read and write English. Only inline code and fenced code blocks are shown exactly as written. Put anything the user must read or copy verbatim in one of them: commands, file paths, identifiers, option and flag names, literal values, error messages and quoted UI text. Do not wrap ordinary prose.",
+    "The user writes in Japanese. Their messages are machine-translated into English before you read them, and your replies are machine-translated into `ja` for display only. Read and write English. Only inline code, fenced code blocks and 「...」 are shown exactly as written. Put anything the user must read or copy verbatim in one of them: commands, file paths, identifiers, option and flag names, literal values, error messages and quoted UI text. Do not wrap ordinary prose.",
   );
   const empty: Record<string, string> = {};
   installRule(

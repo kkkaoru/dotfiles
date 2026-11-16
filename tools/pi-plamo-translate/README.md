@@ -15,8 +15,8 @@ You see Japanese. The agent reads and writes English.
   and tool output stay as written. While a reply is still streaming it is shown as written; the
   Japanese replaces it when the translation lands. Prose is translated two lines per request, so a
   long reply fills in as its pieces arrive instead of waiting for all of it.
-- Code spans, fenced blocks, and URLs are not sent for translation. If the server is down, the
-  original text is used and a warning is shown once.
+- Code spans, fenced blocks, URLs and the inside of 「...」 are not sent for translation. If the
+  server is down, the original text is used and a warning is shown once.
 - A translation still running after two seconds reports itself in one chat line
   (`PLaMo: 翻訳中… 12/30`), updated once every five seconds and cleared when the run ends. The same
   count is in the footer.

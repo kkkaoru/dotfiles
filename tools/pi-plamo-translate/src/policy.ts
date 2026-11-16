@@ -50,7 +50,7 @@ export function replyRule(replyLanguage: string, promptLanguage: string): string
   if (replyLanguage === OFF) {
     return ENGLISH_ONLY;
   }
-  return `The user writes in Japanese. Their messages are machine-translated into English before you read them, and your replies are machine-translated into \`${replyLanguage}\` for display only. Read and write English. Only inline code and fenced code blocks are shown exactly as written. Put anything the user must read or copy verbatim in one of them: commands, file paths, identifiers, option and flag names, literal values, error messages and quoted UI text. Do not wrap ordinary prose.`;
+  return `The user writes in Japanese. Their messages are machine-translated into English before you read them, and your replies are machine-translated into \`${replyLanguage}\` for display only. Read and write English. Only inline code, fenced code blocks and 「...」 are shown exactly as written. Put anything the user must read or copy verbatim in one of them: commands, file paths, identifiers, option and flag names, literal values, error messages and quoted UI text. Do not wrap ordinary prose.`;
 }
 
 export function needsDisplayTranslation(

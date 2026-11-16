@@ -65,3 +65,13 @@ test("a table is not sent as one block", async () => {
   });
   expect(calls.count).toBe(4);
 });
+
+test("a Japanese quote keeps its content while the rest is translated", async () => {
+  const sent: string[] = [];
+  const translated = await translateFast("Rename it to 「作業」 later", async (text) => {
+    sent.push(text);
+    return text.replace("Rename it to", "rename it to").replace("later", "LATER");
+  });
+  expect(sent).toStrictEqual(["Rename it to {{0}} later"]);
+  expect(translated).toBe("rename it to 「作業」 LATER");
+});
