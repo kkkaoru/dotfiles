@@ -87,11 +87,22 @@ it("falls back to CLI_VERSION when agy binary is absent or fails", async () => {
 });
 
 it("reads OAuth client credentials from environment and throws when missing", () => {
+  const originalPath = process.env["PATH"];
+  const originalExe = process.env["ANTIGRAVITY_AGENTAPI_EXE"];
   delete process.env["MY_ANTIGRAVITY_CLIENT_ID"];
   delete process.env["MY_ANTIGRAVITY_CLIENT_SECRET"];
   delete process.env["ANTIGRAVITY_CLIENT_ID"];
   delete process.env["ANTIGRAVITY_CLIENT_SECRET"];
-  expect(() => oauthClientConfig()).toThrow(/Missing OAuth client config/);
+  delete process.env["ANTIGRAVITY_AGENTAPI_EXE"];
+  process.env["PATH"] = "";
+  try {
+    expect(() => oauthClientConfig()).toThrow(/Missing OAuth client config/);
+  } finally {
+    process.env["PATH"] = originalPath;
+    if (originalExe !== undefined) {
+      process.env["ANTIGRAVITY_AGENTAPI_EXE"] = originalExe;
+    }
+  }
 
   process.env["MY_ANTIGRAVITY_CLIENT_ID"] = "cid";
   process.env["MY_ANTIGRAVITY_CLIENT_SECRET"] = "csec";

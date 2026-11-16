@@ -9,8 +9,19 @@ import { afterEach, expect, it, vi } from "vitest";
 import { closePool, httpPost, postWire } from "../src/transport.ts";
 
 class FakeStream extends PassThrough {
+  onStreamTimeout: (() => void) | undefined;
+
   override end(): this {
     return this;
+  }
+
+  setTimeout(_ms: number, cb?: () => void): this {
+    this.onStreamTimeout = cb;
+    return this;
+  }
+
+  close(): void {
+    this.destroy();
   }
 }
 
@@ -285,4 +296,38 @@ it("falls back to HTTP/1.1 when dial throws or session errors before response", 
   } finally {
     server.close();
   }
+});
+
+it("rejects when an HTTP/2 stream times out or aborts before headers arrive", async () => {
+  const timeoutSession = new FakeSession();
+  timeoutSession.nextStream = (stream) => {
+    stream.onStreamTimeout?.();
+    stream.onStreamTimeout?.();
+  };
+  await expect(
+    postWire({
+      url: "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchUserInfo",
+      token: "t",
+      body: "{}",
+      accept: "application/json",
+      dial: () => timeoutSession as unknown as ClientHttp2Session,
+    }),
+  ).rejects.toThrow(/timed out/);
+
+  const abortController = new AbortController();
+  const abortSession = new FakeSession();
+  abortSession.nextStream = (stream) => {
+    abortController.abort(new Error("user cancelled"));
+    stream.emit("close");
+  };
+  await expect(
+    postWire({
+      url: "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchUserInfo",
+      token: "t",
+      body: "{}",
+      accept: "application/json",
+      signal: abortController.signal,
+      dial: () => abortSession as unknown as ClientHttp2Session,
+    }),
+  ).rejects.toThrow(/user cancelled/);
 });

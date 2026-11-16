@@ -24,6 +24,7 @@ vi.mock("../src/client.ts", async () => {
     ...actual,
     loadCodeAssistProject: vi.fn(async () => "aicode-consumers"),
     fetchUserInfo: vi.fn(async () => ({ email: "user@example.com" })),
+    fetchQuotaSummary: vi.fn(async () => ({ groups: [] })),
     fetchAvailableModels: vi.fn(async () => [
       { id: "gemini-4-hydrogen-medium", modelEnum: "MODEL_PLACEHOLDER_M526" },
       { id: "gemini-5-new-high", displayName: "Gemini 5 New" },
@@ -216,6 +217,80 @@ it("handles my-antigravity.models and my-antigravity.doctor commands", async () 
   );
   expect(quotaMessage).toContain("claude-sonnet-5-5-high: remaining unknown, resets invalid-date");
   expect(quotaMessage).toContain("gemini-4-argon-low: 99.0% remaining");
+
+  vi.mocked(clientModule.fetchQuotaSummary).mockResolvedValueOnce({
+    groups: [
+      {
+        displayName: "Gemini Models",
+        buckets: [
+          {
+            bucketId: "gemini-weekly",
+            window: "weekly",
+            remainingFraction: 0.58,
+            resetTime: "2026-11-21T14:59:37Z",
+          },
+          {
+            bucketId: "gemini-5h",
+            window: "5h",
+            remainingFraction: 0.58,
+            resetTime: "2026-11-16T11:51:04Z",
+          },
+        ],
+      },
+      {
+        displayName: "Claude and GPT models",
+        buckets: [
+          {
+            bucketId: "3p-weekly",
+            window: "weekly",
+            remainingFraction: 0.886,
+            resetTime: "2026-11-23T01:53:19Z",
+          },
+          {
+            bucketId: "3p-5h",
+            window: "5h",
+            remainingFraction: 0.999,
+            resetTime: "2026-11-16T12:43:31Z",
+          },
+        ],
+      },
+      {
+        displayName: "Gemini 4 Argon",
+        buckets: [
+          {
+            bucketId: "gemini-argon-wtu-weekly",
+            window: "weekly",
+            remainingFraction: 0.301,
+            resetTime: "2026-11-21T14:58:47Z",
+          },
+        ],
+      },
+    ],
+  });
+  await captured.commands.get("my-antigravity.quota")!("", credCtx);
+  const summaryMessage = captured.sentMessages.at(-1)?.message.content ?? "";
+  expect(summaryMessage).toContain("Gemini Models\n  weekly: 58.0% remaining");
+  expect(summaryMessage).toContain("Claude and GPT models\n  weekly: 88.6% remaining");
+  expect(summaryMessage).toContain("Gemini 4 Argon\n  weekly: 30.1% remaining");
+
+  vi.mocked(clientModule.fetchQuotaSummary).mockResolvedValueOnce({
+    groups: [
+      {
+        displayName: "Empty Group",
+        buckets: [{ bucketId: "fallback-bucket" }],
+      },
+    ],
+  });
+  await captured.commands.get("my-antigravity.quota")!("", credCtx);
+  expect(captured.sentMessages.at(-1)?.message.content).toContain(
+    "Empty Group\n  fallback-bucket: remaining unknown",
+  );
+
+  vi.mocked(clientModule.fetchQuotaSummary).mockRejectedValueOnce(new Error("summary boom"));
+  vi.mocked(clientModule.fetchAvailableModels).mockRejectedValueOnce(new Error("models boom"));
+  await expect(captured.commands.get("my-antigravity.quota")!("", credCtx)).rejects.toThrow(
+    /summary boom/,
+  );
 
   await captured.commands.get("my-antigravity.doctor")!("", credCtx);
   expect(logSpy).toHaveBeenCalled();

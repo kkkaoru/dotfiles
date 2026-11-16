@@ -68,6 +68,8 @@ interface Http2Context {
   client: ClientHttp2Session;
   stream: ClientHttp2Stream;
   onClientError: () => void;
+  onAbort: () => void;
+  signal?: AbortSignal;
   resolve: (value: WireResponse) => void;
   reject: (error: Error) => void;
 }
@@ -120,6 +122,7 @@ export const TRANSPORT_TLS_OPTIONS: TransportTlsOptions = {
 };
 
 const IDLE_TIMEOUT_MS = 60_000;
+const REQUEST_TIMEOUT_MS = 120_000;
 const POOLS: Map<string, ClientHttp2Session> = new Map();
 
 /** Header map in the order the CLI's Go client writes them. */
@@ -260,6 +263,7 @@ function markSettled(context: Http2Context): boolean {
   }
   context.state.settled = true;
   context.client.off("error", context.onClientError);
+  context.signal?.removeEventListener("abort", context.onAbort);
   return true;
 }
 
@@ -277,6 +281,7 @@ const streamErrorHandler =
 const streamResponseHandler =
   (context: Http2Context) =>
   (headers: IncomingHttpHeaders): void => {
+    context.stream.setTimeout(0);
     if (!markSettled(context)) {
       return;
     }
@@ -290,6 +295,24 @@ const streamCloseHandler = (context: Http2Context) => (): void => {
     return;
   }
   context.resolve(toWireResponse(0, {}, emptyBody()));
+};
+
+const streamTimeoutHandler = (context: Http2Context) => (): void => {
+  if (!markSettled(context)) {
+    return;
+  }
+  context.stream.close();
+  dropFromPool(context.origin, context.client);
+  context.client.destroy();
+  context.reject(new Error("Antigravity request timed out waiting for server response"));
+};
+
+const streamAbortHandler = (context: Http2Context) => (): void => {
+  if (!markSettled(context)) {
+    return;
+  }
+  context.stream.close();
+  context.reject(toError(context.signal?.reason));
 };
 
 function sendHttp2(
@@ -321,9 +344,15 @@ function sendHttp2(
       client,
       stream,
       onClientError,
+      onAbort: () => {},
+      ...(request.signal ? { signal: request.signal } : {}),
       resolve,
       reject,
     };
+    context.onAbort = streamAbortHandler(context);
+    request.signal?.addEventListener("abort", context.onAbort, { once: true });
+    // Only enforce header timeout before response headers arrive; clear it once streaming starts.
+    stream.setTimeout(REQUEST_TIMEOUT_MS, streamTimeoutHandler(context));
     stream.once("error", streamErrorHandler(context));
     stream.once("response", streamResponseHandler(context));
     stream.once("close", streamCloseHandler(context));

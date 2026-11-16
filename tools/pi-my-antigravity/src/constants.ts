@@ -9,6 +9,8 @@
 
 import { execFileSync } from "node:child_process";
 
+import { resolveOAuthClientFromAgy } from "./agy-oauth.ts";
+
 interface VersionState {
   detected: string | undefined;
   defaultUa: string | undefined;
@@ -72,16 +74,36 @@ export const CALLBACK_PATH = "/oauth-callback";
 const firstEnv = (primary: string, fallback: string): string =>
   process.env[primary]?.trim() || process.env[fallback]?.trim() || "";
 
-/** Read OAuth client credentials from environment variables without hardcoding them. */
-export function oauthClientConfig(): OAuthClientConfig {
+function resolveAndPopulateOAuthClient(): OAuthClientConfig | undefined {
   const clientId = firstEnv("MY_ANTIGRAVITY_CLIENT_ID", "ANTIGRAVITY_CLIENT_ID");
   const clientSecret = firstEnv("MY_ANTIGRAVITY_CLIENT_SECRET", "ANTIGRAVITY_CLIENT_SECRET");
-  if (!clientId || !clientSecret) {
+  if (clientId && clientSecret) {
+    return { clientId, clientSecret };
+  }
+  const resolved = resolveOAuthClientFromAgy(process.env);
+  if (!resolved) {
+    return undefined;
+  }
+  const effectiveId = clientId || resolved.clientId;
+  const effectiveSecret = clientSecret || resolved.clientSecret;
+  process.env["MY_ANTIGRAVITY_CLIENT_ID"] ||= effectiveId;
+  process.env["MY_ANTIGRAVITY_CLIENT_SECRET"] ||= effectiveSecret;
+  return { clientId: effectiveId, clientSecret: effectiveSecret };
+}
+
+/** Auto-populate `MY_ANTIGRAVITY_CLIENT_ID` / `MY_ANTIGRAVITY_CLIENT_SECRET` from `agy` if unset. */
+export const ensureOAuthClientEnv = (): OAuthClientConfig | undefined =>
+  resolveAndPopulateOAuthClient();
+
+/** Read OAuth client credentials from environment variables, falling back to the installed `agy` binary. */
+export function oauthClientConfig(): OAuthClientConfig {
+  const config = resolveAndPopulateOAuthClient();
+  if (!config) {
     throw new Error(
       "Missing OAuth client config: set MY_ANTIGRAVITY_CLIENT_ID and MY_ANTIGRAVITY_CLIENT_SECRET.",
     );
   }
-  return { clientId, clientSecret };
+  return config;
 }
 
 const errorCode = (error: unknown): unknown =>

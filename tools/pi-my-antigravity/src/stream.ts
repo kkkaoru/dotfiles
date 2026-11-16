@@ -151,7 +151,30 @@ interface ToolResultInput {
   content: Array<TextContent | ImageContent>;
 }
 
+interface ReplayTurnContext {
+  includeToolId: boolean;
+  requiresSignature: boolean;
+  publicModelId: string;
+  degradedToolIds: Set<string>;
+}
+
+interface ToolCache {
+  tools: Tool[] | undefined;
+  groups: ToolDeclarationGroup[] | undefined;
+}
+
+interface AuthCache {
+  raw: string;
+  resolved: ResolvedAuth | undefined;
+}
+
 type StreamPush = ReturnType<typeof createAssistantMessageEventStream>["push"];
+type TranscriptMessage = TranscriptContext["messages"][number];
+type MessageAppender = (
+  contents: GeminiContent[],
+  message: TranscriptMessage,
+  turnCtx: ReplayTurnContext,
+) => void;
 
 const HTTP_OK_MIN = 200;
 const HTTP_OK_MAX = 300;
@@ -168,6 +191,12 @@ const SSE_DATA_PREFIX = "data:";
 const SSE_DATA_PREFIX_LENGTH = 5;
 const CR_CHAR_CODE = 13;
 const SPACE_CHAR_CODE = 32;
+const MAX_TOOL_ID_LENGTH = 64;
+const VALID_TOOL_ID_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
+const INVALID_TOOL_ID_CHARS = /[^a-zA-Z0-9_-]/g;
+
+const TOOL_CACHE: ToolCache = { tools: undefined, groups: undefined };
+const AUTH_CACHE: AuthCache = { raw: "", resolved: undefined };
 
 const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([
   HTTP_NOT_FOUND,
@@ -175,16 +204,31 @@ const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([
   HTTP_SERVICE_UNAVAILABLE,
 ]);
 
+const USAGE_FIELDS: ReadonlyArray<readonly [string, keyof StreamUsage]> = [
+  ["promptTokenCount", "input"],
+  ["candidatesTokenCount", "output"],
+  ["thoughtsTokenCount", "reasoning"],
+];
+
 const randomId = (): string => crypto.randomUUID();
 
 export function parseAuthValue(raw: string | undefined): ResolvedAuth {
+  if (raw && AUTH_CACHE.raw === raw && AUTH_CACHE.resolved) {
+    return AUTH_CACHE.resolved;
+  }
   const value = (raw ?? "").trim();
   if (!value) {
     throw new Error("No Antigravity credential. Run /login my-antigravity first.");
   }
-  if (!value.startsWith("{")) {
-    return { token: value };
+  const resolved: ResolvedAuth = !value.startsWith("{") ? { token: value } : parseAuthJson(value);
+  if (raw) {
+    AUTH_CACHE.raw = raw;
+    AUTH_CACHE.resolved = resolved;
   }
+  return resolved;
+}
+
+function parseAuthJson(value: string): ResolvedAuth {
   const parsed = parseJson(value);
   if (!isRecord(parsed) || typeof parsed["token"] !== "string" || !parsed["token"]) {
     throw new Error(
@@ -216,24 +260,10 @@ const toFunctionDeclaration = (tool: Tool): FunctionDeclaration => ({
   parametersJsonSchema: tool.parameters,
 });
 
-interface ToolCache {
-  tools: Tool[] | undefined;
-  groups: ToolDeclarationGroup[] | undefined;
-}
-
-const TOOL_CACHE: ToolCache = { tools: undefined, groups: undefined };
-
-function sameToolList(left: readonly Tool[] | undefined, right: readonly Tool[]): boolean {
-  if (!left || left.length !== right.length) {
-    return false;
-  }
-  for (let index = 0; index < left.length; index += 1) {
-    if (left[index] !== right[index]) {
-      return false;
-    }
-  }
-  return true;
-}
+const sameToolList = (left: readonly Tool[] | undefined, right: readonly Tool[]): boolean =>
+  Boolean(
+    left && left.length === right.length && left.every((tool, index) => tool === right[index]),
+  );
 
 /**
  * Gemini's `parametersJsonSchema` accepts the JSON Schema pi's tools declare
@@ -255,58 +285,89 @@ function toolDeclarations(tools: Tool[] | undefined): ToolDeclarationGroup[] | u
   return groups;
 }
 
-const MAX_TOOL_ID_LENGTH = 64;
-
 const needsToolCallId = (modelId: string): boolean =>
   modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
 
-function sanitizeToolCallId(rawId: string | undefined, fallbackName: string): string {
-  const cleaned = (rawId ?? "").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, MAX_TOOL_ID_LENGTH);
-  return cleaned || `${fallbackName.replace(/[^a-zA-Z0-9_-]/g, "_")}_${randomId().slice(0, 8)}`;
+const fallbackToolCallId = (fallbackName: string): string =>
+  `${fallbackName.replace(INVALID_TOOL_ID_CHARS, "_")}_${randomId().slice(0, 8)}`;
+
+const sanitizeRawToolCallId = (rawId: string | undefined, fallbackName: string): string =>
+  (rawId ?? "").replace(INVALID_TOOL_ID_CHARS, "_").slice(0, MAX_TOOL_ID_LENGTH) ||
+  fallbackToolCallId(fallbackName);
+
+const sanitizeToolCallId = (rawId: string | undefined, fallbackName: string): string =>
+  rawId && VALID_TOOL_ID_PATTERN.test(rawId) ? rawId : sanitizeRawToolCallId(rawId, fallbackName);
+
+function degradeToolCallPart(block: ToolCall, degradedToolIds: Set<string>): GeminiPart {
+  if (block.id) {
+    degradedToolIds.add(block.id);
+  }
+  return { text: `(called ${block.name} with ${stringifyJson(block.arguments)})` };
 }
+
+const toFunctionCallPart = (block: ToolCall, includeToolId: boolean): GeminiPart => ({
+  functionCall: {
+    name: block.name,
+    args: block.arguments,
+    ...(includeToolId ? { id: sanitizeToolCallId(block.id, block.name) } : {}),
+  },
+  ...(block.thoughtSignature ? { thoughtSignature: block.thoughtSignature } : {}),
+});
+
+const toToolCallPart = (block: ToolCall, turnCtx: ReplayTurnContext): GeminiPart =>
+  turnCtx.requiresSignature && !block.thoughtSignature
+    ? degradeToolCallPart(block, turnCtx.degradedToolIds)
+    : toFunctionCallPart(block, turnCtx.includeToolId);
 
 function toAssistantPart(
   block: TextContent | ThinkingContent | ToolCall,
-  includeToolId: boolean,
+  turnCtx: ReplayTurnContext,
+  sameModel: boolean,
 ): GeminiPart | undefined {
-  if (block.type === "text" && block.text.trim()) {
+  if (block.type === "text") {
+    if (!block.text.trim()) {
+      return undefined;
+    }
+    // Strip legacy pseudo-tool-call lines from aborted/mimicked turns so Gemini does not keep imitating them.
+    if (/^\[(?:Tool call|Call tool)\s+/i.test(block.text.trim())) {
+      return undefined;
+    }
     return { text: block.text };
   }
-  if (block.type === "thinking" && block.thinking.trim() && block.thinkingSignature) {
-    return {
-      thought: true,
-      text: block.thinking,
-      thoughtSignature: block.thinkingSignature,
-    };
+  if (block.type === "thinking") {
+    return sameModel && block.thinking.trim() && block.thinkingSignature
+      ? { thought: true, text: block.thinking, thoughtSignature: block.thinkingSignature }
+      : undefined;
   }
-  if (block.type !== "toolCall") {
-    return undefined;
-  }
-  return {
-    functionCall: {
-      name: block.name,
-      args: block.arguments,
-      ...(includeToolId ? { id: sanitizeToolCallId(block.id, block.name) } : {}),
-    },
-    ...(block.thoughtSignature ? { thoughtSignature: block.thoughtSignature } : {}),
-  };
+  return toToolCallPart(block, turnCtx);
 }
+
+const assistantTurnParts = (
+  message: Extract<TranscriptContext["messages"][number], { role: "assistant" }>,
+  turnCtx: ReplayTurnContext,
+): GeminiPart[] =>
+  message.content
+    .map((block) => toAssistantPart(block, turnCtx, message.model === turnCtx.publicModelId))
+    .filter((part): part is GeminiPart => part !== undefined);
 
 function appendAssistantTurn(
   contents: GeminiContent[],
-  blocks: Array<TextContent | ThinkingContent | ToolCall>,
-  includeToolId: boolean,
+  message: Extract<TranscriptContext["messages"][number], { role: "assistant" }>,
+  turnCtx: ReplayTurnContext,
 ): void {
-  const parts: GeminiPart[] = [];
-  for (const block of blocks) {
-    const part = toAssistantPart(block, includeToolId);
-    if (part) {
-      parts.push(part);
-    }
+  if (message.stopReason === "error" || message.stopReason === "aborted") {
+    return;
   }
-  if (parts.length > 0) {
-    contents.push({ role: "model", parts });
+  const parts = assistantTurnParts(message, turnCtx);
+  if (parts.length === 0) {
+    return;
   }
+  const last = contents.at(-1);
+  if (last?.role === "model") {
+    last.parts.push(...parts);
+    return;
+  }
+  contents.push({ role: "model", parts });
 }
 
 function toolResultText(content: Array<TextContent | ImageContent>): string {
@@ -320,40 +381,83 @@ function toolResultText(content: Array<TextContent | ImageContent>): string {
   return parts.join("\n");
 }
 
+const toFunctionResponsePart = (
+  message: ToolResultInput,
+  includeToolId: boolean,
+  text: string,
+): GeminiPart => ({
+  functionResponse: {
+    name: message.toolName,
+    response: message.isError ? { error: text } : { output: text },
+    ...(includeToolId ? { id: sanitizeToolCallId(message.toolCallId, message.toolName) } : {}),
+  },
+});
+
+const toToolResultPart = (message: ToolResultInput, turnCtx: ReplayTurnContext): GeminiPart =>
+  message.toolCallId && turnCtx.degradedToolIds.has(message.toolCallId)
+    ? { text: `(result of ${message.toolName}: ${toolResultText(message.content)})` }
+    : toFunctionResponsePart(message, turnCtx.includeToolId, toolResultText(message.content));
+
+const canMergeToolResponse = (
+  last: GeminiContent | undefined,
+  part: GeminiPart,
+): last is GeminiContent =>
+  last?.role === "user" &&
+  last.parts[0]?.functionResponse !== undefined &&
+  part.functionResponse !== undefined;
+
 function appendToolResultTurn(
   contents: GeminiContent[],
   message: ToolResultInput,
-  includeToolId: boolean,
+  turnCtx: ReplayTurnContext,
 ): void {
-  const text = toolResultText(message.content);
-  const part: GeminiPart = {
-    functionResponse: {
-      name: message.toolName,
-      response: message.isError ? { error: text } : { output: text },
-      ...(includeToolId ? { id: sanitizeToolCallId(message.toolCallId, message.toolName) } : {}),
-    },
-  };
+  const part = toToolResultPart(message, turnCtx);
   const last = contents.at(-1);
-  if (last?.role === "user" && last.parts[0]?.functionResponse !== undefined) {
+  if (canMergeToolResponse(last, part)) {
     last.parts.push(part);
     return;
   }
   contents.push({ role: "user", parts: [part] });
 }
 
-function appendMessage(
+function appendUserTurn(
   contents: GeminiContent[],
-  message: TranscriptContext["messages"][number],
-  includeToolId: boolean,
+  message: Extract<TranscriptMessage, { role: "user" }>,
 ): void {
-  if (message.role === "user") {
-    contents.push({ role: "user", parts: textOf(message) });
-  } else if (message.role === "assistant") {
-    appendAssistantTurn(contents, message.content, includeToolId);
-  } else if (message.role === "toolResult") {
-    appendToolResultTurn(contents, message, includeToolId);
+  const parts = textOf(message);
+  // Keep the leading system-prompt turn separate (index 0); merge subsequent consecutive user turns.
+  const last = contents.at(-1);
+  if (
+    contents.length > 1 &&
+    last?.role === "user" &&
+    last.parts[0]?.functionResponse === undefined
+  ) {
+    last.parts.push(...parts);
+    return;
   }
+  contents.push({ role: "user", parts });
 }
+
+const MESSAGE_APPENDERS: ReadonlyMap<TranscriptMessage["role"], MessageAppender> = new Map<
+  TranscriptMessage["role"],
+  MessageAppender
+>([
+  [
+    "user",
+    (contents, message) =>
+      message.role === "user" ? appendUserTurn(contents, message) : undefined,
+  ],
+  [
+    "assistant",
+    (contents, message, turnCtx) =>
+      message.role === "assistant" ? appendAssistantTurn(contents, message, turnCtx) : undefined,
+  ],
+  [
+    "toolResult",
+    (contents, message, turnCtx) =>
+      message.role === "toolResult" ? appendToolResultTurn(contents, message, turnCtx) : undefined,
+  ],
+]);
 
 /**
  * Build the Cloud Code Assist body the official CLI sends, with one deliberate
@@ -363,27 +467,34 @@ function appendMessage(
  * (pi-antigravity#137); the same text in `contents` is accepted, and `agy` itself
  * sends only its own prompt text there.
  */
+function buildContents(options: BuildGenerateBodyOptions, runtimeModel: string): GeminiContent[] {
+  const turnCtx: ReplayTurnContext = {
+    includeToolId: needsToolCallId(options.publicModelId) || needsToolCallId(runtimeModel),
+    requiresSignature: runtimeModel.startsWith("gemini-"),
+    publicModelId: options.publicModelId,
+    degradedToolIds: new Set(),
+  };
+  const systemText = options.systemPrompt?.trim();
+  const contents: GeminiContent[] = systemText
+    ? [{ role: "user", parts: [{ text: systemText }] }]
+    : [];
+  for (const message of options.messages) {
+    MESSAGE_APPENDERS.get(message.role)?.(contents, message, turnCtx);
+  }
+  return contents;
+}
+
+const buildGenerationConfig = (options: BuildGenerateBodyOptions): Record<string, unknown> => ({
+  thinkingConfig: {
+    includeThoughts: true,
+    thinkingBudget: thinkingBudget(options.level),
+  },
+  maxOutputTokens: Math.min(options.maxTokens ?? options.modelMaxTokens, options.modelMaxTokens),
+});
+
 export function buildGenerateBody(options: BuildGenerateBodyOptions): GenerateBody {
   const runtimeModel = options.runtimeModel ?? runtimeModelId(options.publicModelId, options.level);
-  const includeToolId = needsToolCallId(options.publicModelId) || needsToolCallId(runtimeModel);
-  const contents: GeminiContent[] = [];
-  const systemText = options.systemPrompt?.trim();
-  if (systemText) {
-    contents.push({ role: "user", parts: [{ text: systemText }] });
-  }
-  for (const message of options.messages) {
-    appendMessage(contents, message, includeToolId);
-  }
-
-  const maxTokens = Math.min(options.maxTokens ?? options.modelMaxTokens, options.modelMaxTokens);
-  const generationConfig: Record<string, unknown> = {
-    thinkingConfig: {
-      includeThoughts: true,
-      thinkingBudget: thinkingBudget(options.level),
-    },
-    maxOutputTokens: maxTokens,
-  };
-
+  const contents = buildContents(options, runtimeModel);
   const envelope = sessionEnvelope({
     ...(options.sessionId ? { sessionId: options.sessionId } : {}),
     messages: options.messages,
@@ -392,21 +503,17 @@ export function buildGenerateBody(options: BuildGenerateBodyOptions): GenerateBo
     isNonGemini: !options.publicModelId.startsWith("gemini-"),
     ...(options.modelEnum ? { modelEnum: options.modelEnum } : {}),
   });
-  const request: GenerateRequestPayload = {
-    contents,
-    generationConfig,
-    sessionId: envelope.sessionId,
-    labels: envelope.labels,
-  };
   const tools = toolDeclarations(options.tools);
-  if (tools) {
-    request.tools = tools;
-  }
-
   return {
     project: options.project,
     model: runtimeModel,
-    request,
+    request: {
+      contents,
+      generationConfig: buildGenerationConfig(options),
+      sessionId: envelope.sessionId,
+      labels: envelope.labels,
+      ...(tools ? { tools } : {}),
+    },
     requestType: "agent",
     userAgent: "antigravity",
     requestId: envelope.requestId,
@@ -421,6 +528,26 @@ function applyTextPart(chunk: StreamChunk, text: string, thought: unknown): void
   chunk.text = (chunk.text ?? "") + text;
 }
 
+function parseToolCall(
+  call: unknown,
+  thoughtSignature: string | undefined,
+): StreamChunk["toolCall"] {
+  if (!isRecord(call)) {
+    return undefined;
+  }
+  const name = nonEmptyString(call["name"]);
+  if (!name) {
+    return undefined;
+  }
+  const callId = nonEmptyString(call["id"]);
+  return {
+    ...(callId ? { id: callId } : {}),
+    name,
+    args: isRecord(call["args"]) ? call["args"] : {},
+    ...(thoughtSignature ? { thoughtSignature } : {}),
+  };
+}
+
 function applyPart(chunk: StreamChunk, part: unknown): void {
   if (!isRecord(part)) {
     return;
@@ -429,20 +556,10 @@ function applyPart(chunk: StreamChunk, part: unknown): void {
   if (thoughtSignature) {
     chunk.signature = thoughtSignature;
   }
-  const call = part["functionCall"];
-  if (isRecord(call)) {
-    const name = nonEmptyString(call["name"]);
-    if (name) {
-      const rawArgs = call["args"];
-      const callId = nonEmptyString(call["id"]);
-      chunk.toolCall = {
-        ...(callId ? { id: callId } : {}),
-        name,
-        args: isRecord(rawArgs) ? rawArgs : {},
-        ...(thoughtSignature ? { thoughtSignature } : {}),
-      };
-      return;
-    }
+  const toolCall = parseToolCall(part["functionCall"], thoughtSignature);
+  if (toolCall) {
+    chunk.toolCall = toolCall;
+    return;
   }
   const text = nonEmptyString(part["text"]);
   if (text) {
@@ -450,15 +567,16 @@ function applyPart(chunk: StreamChunk, part: unknown): void {
   }
 }
 
-const parseUsage = (usage: Record<string, unknown>): StreamUsage => ({
-  ...(typeof usage["promptTokenCount"] === "number" ? { input: usage["promptTokenCount"] } : {}),
-  ...(typeof usage["candidatesTokenCount"] === "number"
-    ? { output: usage["candidatesTokenCount"] }
-    : {}),
-  ...(typeof usage["thoughtsTokenCount"] === "number"
-    ? { reasoning: usage["thoughtsTokenCount"] }
-    : {}),
-});
+function parseUsage(usage: Record<string, unknown>): StreamUsage {
+  const result: StreamUsage = {};
+  for (const [sourceKey, targetKey] of USAGE_FIELDS) {
+    const value = usage[sourceKey];
+    if (typeof value === "number") {
+      result[targetKey] = value;
+    }
+  }
+  return result;
+}
 
 function applyCandidate(chunk: StreamChunk, candidate: unknown): void {
   if (!isRecord(candidate)) {
@@ -545,29 +663,45 @@ function extractDataPayload(buffer: string, start: number, end: number): string 
   return buffer.slice(offset.start, offset.end);
 }
 
+function processLine(state: StreamReadState, start: number, end: number, flush: () => void): void {
+  if (end === start) {
+    flush();
+    return;
+  }
+  const data = extractDataPayload(state.buffer, start, end);
+  if (data !== undefined) {
+    state.data.push(data);
+  }
+}
+
+const remainingBuffer = (buffer: string, offset: number): string =>
+  offset === buffer.length ? "" : buffer.slice(offset);
+
 function drainLines(state: StreamReadState, flush: () => void): void {
   const cursor = { offset: 0 };
-  while (true) {
-    const newlineIndex = state.buffer.indexOf("\n", cursor.offset);
-    if (newlineIndex < 0) {
-      break;
-    }
-    const end = lineEndWithoutCr(state.buffer, cursor.offset, newlineIndex);
+  for (
+    let newlineIndex = state.buffer.indexOf("\n", 0);
+    newlineIndex >= 0;
+    newlineIndex = state.buffer.indexOf("\n", cursor.offset)
+  ) {
     const start = cursor.offset;
     cursor.offset = newlineIndex + 1;
-    if (end === start) {
-      flush();
-      continue;
-    }
-    const data = extractDataPayload(state.buffer, start, end);
-    if (data !== undefined) {
-      state.data.push(data);
-    }
+    processLine(state, start, lineEndWithoutCr(state.buffer, start, newlineIndex), flush);
   }
-  if (cursor.offset === state.buffer.length) {
-    state.buffer = "";
-  } else if (cursor.offset > 0) {
-    state.buffer = state.buffer.slice(cursor.offset);
+  if (cursor.offset > 0) {
+    state.buffer = remainingBuffer(state.buffer, cursor.offset);
+  }
+}
+
+function flushStreamState(state: StreamReadState, emit: (chunk: StreamChunk) => void): void {
+  if (state.data.length === 0) {
+    return;
+  }
+  const payload = state.data.length === 1 ? (state.data[0] ?? "") : state.data.join("\n");
+  state.data.length = 0;
+  const chunk = parseChunk(payload);
+  if (chunk) {
+    emit(chunk);
   }
 }
 
@@ -577,17 +711,7 @@ async function readStream(
 ): Promise<void> {
   const decoder = new TextDecoder();
   const state: StreamReadState = { buffer: "", data: [] };
-  const flush = (): void => {
-    if (state.data.length === 0) {
-      return;
-    }
-    const payload = state.data.length === 1 ? (state.data[0] ?? "") : state.data.join("\n");
-    state.data.length = 0;
-    const chunk = parseChunk(payload);
-    if (chunk) {
-      emit(chunk);
-    }
-  };
+  const flush = (): void => flushStreamState(state, emit);
   for await (const value of response.body) {
     state.buffer += decoder.decode(value, { stream: true });
     drainLines(state, flush);

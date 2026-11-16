@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 
 import {
   fetchAvailableModels,
+  fetchQuotaSummary,
   fetchUserInfo,
   loadCodeAssistProject,
   modelEnumFor,
@@ -162,4 +163,56 @@ it("parses, filters, sorts, and remembers model enums from fetchAvailableModels"
 
   const emptyModelsSend = async (): Promise<WireResponse> => jsonResponse(200, {});
   expect(await fetchAvailableModels("t", "p", { send: emptyModelsSend })).toStrictEqual([]);
+
+  const quotaSend = async (): Promise<WireResponse> =>
+    jsonResponse(200, {
+      groups: [
+        "bad",
+        { displayName: "NoBuckets" },
+        {
+          displayName: "Gemini Models",
+          description: "desc",
+          buckets: [
+            "bad-bucket",
+            { bucketId: "" },
+            {
+              bucketId: "gemini-weekly",
+              displayName: "Weekly",
+              window: "weekly",
+              remainingFraction: 0.5,
+              resetTime: "2026-11-21T14:59:37Z",
+            },
+            {
+              bucketId: "gemini-5h",
+            },
+          ],
+        },
+      ],
+      description: "Summary desc",
+    });
+  expect(await fetchQuotaSummary("t", "aicode-consumers", { send: quotaSend })).toStrictEqual({
+    groups: [
+      {
+        displayName: "Gemini Models",
+        description: "desc",
+        buckets: [
+          {
+            bucketId: "gemini-weekly",
+            displayName: "Weekly",
+            window: "weekly",
+            remainingFraction: 0.5,
+            resetTime: "2026-11-21T14:59:37Z",
+          },
+          { bucketId: "gemini-5h" },
+        ],
+      },
+    ],
+    description: "Summary desc",
+  });
+  expect(
+    await fetchQuotaSummary("t", "p", {
+      send: emptyModelsSend,
+      signal: new AbortController().signal,
+    }),
+  ).toStrictEqual({ groups: [] });
 });

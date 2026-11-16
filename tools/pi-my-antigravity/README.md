@@ -46,7 +46,9 @@ pi `ToolCall` and echoed on the next turn.
 - `/login my-antigravity` runs Google OAuth PKCE using
   `MY_ANTIGRAVITY_CLIENT_ID` and `MY_ANTIGRAVITY_CLIENT_SECRET` (or
   `ANTIGRAVITY_CLIENT_ID` / `ANTIGRAVITY_CLIENT_SECRET`); no client id or secret
-  is hardcoded in source files.
+  is hardcoded in source files. When those environment variables are unset, the
+  provider automatically extracts them from the installed `agy` binary and
+  populates `MY_ANTIGRAVITY_CLIENT_ID` / `MY_ANTIGRAVITY_CLIENT_SECRET`.
 - Scopes: `aicode`, `cloud-platform`, `userinfo.*`, `cclog`,
   `experimentsandconfigs` — the set `agy` requests.
 - Credentials land in pi's auth store (`~/.pi/agent/auth.json`, provider

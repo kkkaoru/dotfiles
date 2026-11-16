@@ -107,6 +107,16 @@ it("declares tools via parametersJsonSchema and replays images, assistant calls,
       },
       {
         role: "assistant",
+        content: [{ type: "text", text: "failed turn" }],
+        api: "my-antigravity-api",
+        provider: "my-antigravity",
+        model: "claude-sonnet-5-5",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: {} },
+        stopReason: "error",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
         content: [
           { type: "thinking", thinking: "hmm", thinkingSignature: "sig-think" },
           { type: "thinking", thinking: "unsigned" },
@@ -221,6 +231,125 @@ it("declares tools via parametersJsonSchema and replays images, assistant calls,
   expect(last?.parts).toStrictEqual([
     { functionResponse: { name: "bash", response: { output: "ok" }, id: "c1" } },
     { functionResponse: { name: "read", response: { error: "boom\n[image]" }, id: "c2" } },
+  ]);
+
+  // Replaying an unsigned Claude/GPT-OSS tool call on Gemini 4 Argon degrades to plain text instead of 400ing.
+  const argonReplay = buildGenerateBody({
+    project: "aicode-consumers",
+    publicModelId: "gemini-4-argon",
+    level: "medium",
+    systemPrompt: undefined,
+    messages: [
+      { role: "user", content: "run pwd", timestamp: 1 },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "u1", name: "bash", arguments: { command: "pwd" } }],
+        api: "my-antigravity-api",
+        provider: "my-antigravity",
+        model: "claude-sonnet-5-5",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: {} },
+        stopReason: "toolUse",
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "u1",
+        toolName: "bash",
+        content: [{ type: "text", text: "/tmp" }],
+        isError: false,
+        timestamp: 3,
+      },
+    ] as TranscriptContext["messages"],
+    tools: [READ_TOOL],
+    maxTokens: undefined,
+    modelMaxTokens: 65536,
+  });
+  expect(argonReplay.request.contents[1]).toStrictEqual({
+    role: "model",
+    parts: [{ text: '(called bash with {"command":"pwd"})' }],
+  });
+  expect(argonReplay.request.contents[2]).toStrictEqual({
+    role: "user",
+    parts: [{ text: "(result of bash: /tmp)" }],
+  });
+
+  // Legacy mimicked "[Tool call ...]" assistant text blocks are omitted from replay.
+  const mimickedReplay = buildGenerateBody({
+    project: "aicode-consumers",
+    publicModelId: "gemini-4-hydrogen",
+    level: "medium",
+    systemPrompt: undefined,
+    messages: [
+      { role: "user", content: "first", timestamp: 0 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+        api: "my-antigravity-api",
+        provider: "my-antigravity",
+        model: "gemini-4-hydrogen",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: {} },
+        stopReason: "stop",
+        timestamp: 1,
+      },
+      { role: "user", content: "continue", timestamp: 2 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: '[Tool call read({"path":"/tmp/a"})]' }],
+        api: "my-antigravity-api",
+        provider: "my-antigravity",
+        model: "gemini-4-hydrogen",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: {} },
+        stopReason: "stop",
+        timestamp: 3,
+      },
+      { role: "user", content: "continue", timestamp: 4 },
+    ] as TranscriptContext["messages"],
+    tools: [READ_TOOL],
+    maxTokens: undefined,
+    modelMaxTokens: 65536,
+  });
+  expect(mimickedReplay.request.contents).toStrictEqual([
+    { role: "user", parts: [{ text: "first" }] },
+    { role: "model", parts: [{ text: "ok" }] },
+    { role: "user", parts: [{ text: "continue" }, { text: "continue" }] },
+  ]);
+
+  // Consecutive surviving model turns after an omitted user/system turn merge cleanly.
+  const mergedModelReplay = buildGenerateBody({
+    project: "aicode-consumers",
+    publicModelId: "gemini-4-hydrogen",
+    level: "medium",
+    systemPrompt: undefined,
+    messages: [
+      { role: "user", content: "hi", timestamp: 0 },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "step 1" }],
+        api: "my-antigravity-api",
+        provider: "my-antigravity",
+        model: "gemini-4-hydrogen",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: {} },
+        stopReason: "stop",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "step 2" }],
+        api: "my-antigravity-api",
+        provider: "my-antigravity",
+        model: "gemini-4-hydrogen",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: {} },
+        stopReason: "stop",
+        timestamp: 2,
+      },
+    ] as TranscriptContext["messages"],
+    tools: [READ_TOOL],
+    maxTokens: undefined,
+    modelMaxTokens: 65536,
+  });
+  expect(mergedModelReplay.request.contents).toStrictEqual([
+    { role: "user", parts: [{ text: "hi" }] },
+    { role: "model", parts: [{ text: "step 1" }, { text: "step 2" }] },
   ]);
 });
 

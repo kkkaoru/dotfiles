@@ -10,6 +10,25 @@ export interface ModelQuota {
   resetTime?: string;
 }
 
+export interface QuotaBucket {
+  bucketId: string;
+  displayName?: string;
+  window?: string;
+  remainingFraction?: number;
+  resetTime?: string;
+}
+
+export interface QuotaGroup {
+  displayName: string;
+  description?: string;
+  buckets: QuotaBucket[];
+}
+
+export interface QuotaSummary {
+  groups: QuotaGroup[];
+  description?: string;
+}
+
 export interface DiscoveredModel {
   /** Runtime id exactly as `fetchAvailableModels` reports it, e.g. `gemini-4-hydrogen-medium`. */
   id: string;
@@ -61,6 +80,54 @@ const MAX_ERROR_BODY_LENGTH = 200;
 
 /** Runtime id → `model_enum`, filled from the live catalog. */
 const MODEL_ENUMS: Map<string, string> = new Map();
+
+type ModelFieldSetter = (model: DiscoveredModel, info: Record<string, unknown>) => void;
+
+const MODEL_FIELD_SETTERS: ReadonlyMap<keyof Omit<DiscoveredModel, "id">, ModelFieldSetter> =
+  new Map<keyof Omit<DiscoveredModel, "id">, ModelFieldSetter>([
+    [
+      "modelEnum",
+      (model, info) => {
+        if (typeof info["model"] === "string" && info["model"]) {
+          model.modelEnum = info["model"];
+        }
+      },
+    ],
+    [
+      "displayName",
+      (model, info) => {
+        const display = info["displayName"] ?? info["label"] ?? info["modelName"];
+        if (typeof display === "string" && display) {
+          model.displayName = display;
+        }
+      },
+    ],
+    [
+      "supportsThinking",
+      (model, info) => {
+        if (info["supportsThinking"] === true) {
+          model.supportsThinking = true;
+        }
+      },
+    ],
+    [
+      "supportsImages",
+      (model, info) => {
+        if (info["supportsImages"] === true) {
+          model.supportsImages = true;
+        }
+      },
+    ],
+    [
+      "quota",
+      (model, info) => {
+        const quota = parseQuotaInfo(info["quotaInfo"]);
+        if (quota) {
+          model.quota = quota;
+        }
+      },
+    ],
+  ]);
 
 function messageOf(body: unknown, fallback: string): string {
   if (!isRecord(body)) {
@@ -204,22 +271,8 @@ function parseQuotaInfo(raw: unknown): ModelQuota | undefined {
 
 function parseModelEntry(id: string, info: Record<string, unknown>): DiscoveredModel {
   const model: DiscoveredModel = { id };
-  if (typeof info["model"] === "string" && info["model"]) {
-    model.modelEnum = info["model"];
-  }
-  const display = info["displayName"] ?? info["label"] ?? info["modelName"];
-  if (typeof display === "string" && display) {
-    model.displayName = display;
-  }
-  if (info["supportsThinking"] === true) {
-    model.supportsThinking = true;
-  }
-  if (info["supportsImages"] === true) {
-    model.supportsImages = true;
-  }
-  const quota = parseQuotaInfo(info["quotaInfo"]);
-  if (quota) {
-    model.quota = quota;
+  for (const apply of MODEL_FIELD_SETTERS.values()) {
+    apply(model, info);
   }
   return model;
 }
@@ -251,4 +304,69 @@ export async function fetchAvailableModels(
     discovered.push(parseModelEntry(id, info));
   }
   return discovered.sort(compareDiscovered);
+}
+
+function parseQuotaBucket(raw: unknown): QuotaBucket | undefined {
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+  const bucketId = nonEmptyString(raw["bucketId"]);
+  if (!bucketId) {
+    return undefined;
+  }
+  const displayName = nonEmptyString(raw["displayName"]);
+  const window = nonEmptyString(raw["window"]);
+  const quota = parseQuotaInfo(raw);
+  return {
+    bucketId,
+    ...(displayName ? { displayName } : {}),
+    ...(window ? { window } : {}),
+    ...quota,
+  };
+}
+
+function parseQuotaGroup(raw: unknown): QuotaGroup | undefined {
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+  const displayName = nonEmptyString(raw["displayName"]);
+  const rawBuckets = raw["buckets"];
+  if (!displayName || !Array.isArray(rawBuckets)) {
+    return undefined;
+  }
+  const buckets = rawBuckets
+    .map(parseQuotaBucket)
+    .filter((bucket): bucket is QuotaBucket => bucket !== undefined);
+  const description = nonEmptyString(raw["description"]);
+  return {
+    displayName,
+    ...(description ? { description } : {}),
+    buckets,
+  };
+}
+
+/** `v1internal:retrieveUserQuotaSummary` — the pool-level 5h & weekly quotas behind `agy`. */
+export async function fetchQuotaSummary(
+  token: string,
+  project: string,
+  options?: ClientTransportOptions,
+): Promise<QuotaSummary> {
+  const data = await postJson({
+    path: "/v1internal:retrieveUserQuotaSummary",
+    token,
+    body: { project },
+    ...(options?.signal ? { signal: options.signal } : {}),
+    send: options?.send ?? postWire,
+  });
+  if (!isRecord(data) || !Array.isArray(data["groups"])) {
+    return { groups: [] };
+  }
+  const groups = data["groups"]
+    .map(parseQuotaGroup)
+    .filter((group): group is QuotaGroup => group !== undefined);
+  const description = nonEmptyString(data["description"]);
+  return {
+    groups,
+    ...(description ? { description } : {}),
+  };
 }

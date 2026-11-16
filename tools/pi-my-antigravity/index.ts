@@ -5,10 +5,14 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import {
   CONSUMER_PROJECT,
   fetchAvailableModels,
+  fetchQuotaSummary,
   fetchUserInfo,
   loadCodeAssistProject,
   rememberModelEnums,
   type DiscoveredModel,
+  type QuotaBucket,
+  type QuotaGroup,
+  type QuotaSummary,
 } from "./src/client.ts";
 import {
   API_ID,
@@ -103,15 +107,42 @@ function formatResetTimeJst(resetTime: string): string {
   return `${JST_FORMATTER.format(date)} JST`;
 }
 
-function formatModelQuota(model: DiscoveredModel): string {
+function formatRemainingAndReset(
+  remainingFraction: number | undefined,
+  resetTime: string | undefined,
+): string {
   const remaining =
-    model.quota?.remainingFraction !== undefined
-      ? `${(model.quota.remainingFraction * PERCENT_SCALE).toFixed(1)}% remaining`
+    remainingFraction !== undefined
+      ? `${(remainingFraction * PERCENT_SCALE).toFixed(1)}% remaining`
       : "remaining unknown";
-  const reset = model.quota?.resetTime
-    ? `, resets ${formatResetTimeJst(model.quota.resetTime)}`
-    : "";
-  return `${model.id}: ${remaining}${reset}`;
+  const reset = resetTime ? `, resets ${formatResetTimeJst(resetTime)}` : "";
+  return `${remaining}${reset}`;
+}
+
+function formatQuotaBucket(bucket: QuotaBucket): string {
+  const label = bucket.window ?? bucket.displayName ?? bucket.bucketId;
+  return `  ${label}: ${formatRemainingAndReset(bucket.remainingFraction, bucket.resetTime)}`;
+}
+
+function formatQuotaGroup(group: QuotaGroup): string {
+  const lines = [group.displayName, ...group.buckets.map(formatQuotaBucket)];
+  return lines.join("\n");
+}
+
+function formatQuotaOutput(summary: QuotaSummary, discovered: readonly DiscoveredModel[]): string {
+  if (summary.groups.length > 0) {
+    return summary.groups.map(formatQuotaGroup).join("\n");
+  }
+  const withQuota = discovered.filter((model) => model.quota);
+  if (withQuota.length === 0) {
+    return "No quota info returned.";
+  }
+  return withQuota
+    .map(
+      (model) =>
+        `${model.id}: ${formatRemainingAndReset(model.quota?.remainingFraction, model.quota?.resetTime)}`,
+    )
+    .join("\n");
 }
 
 function print(
@@ -137,6 +168,7 @@ function apiKeyFromCredentials(credentials: OAuthCredentials): string {
 }
 
 export default function piMyAntigravity(pi: ExtensionAPI): void {
+  // Defer agy binary parsing until login/refresh needs oauthClientConfig().
   pi.registerProvider(PROVIDER_ID, {
     name: PROVIDER_NAME,
     baseUrl: DEFAULT_ENDPOINT,
@@ -190,7 +222,7 @@ export default function piMyAntigravity(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("my-antigravity.quota", {
-    description: "Show Antigravity remaining quota and reset times per model",
+    description: "Show Antigravity 5h and weekly quota pools",
     handler: async (_args, ctx) => {
       const raw = await ctx.modelRegistry.getApiKeyForProvider(PROVIDER_ID);
       if (!raw) {
@@ -198,12 +230,17 @@ export default function piMyAntigravity(pi: ExtensionAPI): void {
         return;
       }
       const { token, projectId } = parseAuthValue(raw);
-      const discovered = await fetchAvailableModels(token, projectId ?? CONSUMER_PROJECT);
-      const withQuota = discovered.filter((model) => model.quota);
-      const output =
-        withQuota.length === 0
-          ? "No quota info returned by fetchAvailableModels."
-          : withQuota.map(formatModelQuota).join("\n");
+      const project = projectId ?? CONSUMER_PROJECT;
+      const [summaryResult, modelsResult] = await Promise.allSettled([
+        fetchQuotaSummary(token, project),
+        fetchAvailableModels(token, project),
+      ]);
+      const summary = summaryResult.status === "fulfilled" ? summaryResult.value : { groups: [] };
+      const discovered = modelsResult.status === "fulfilled" ? modelsResult.value : [];
+      if (summaryResult.status === "rejected" && modelsResult.status === "rejected") {
+        throw summaryResult.reason;
+      }
+      const output = formatQuotaOutput(summary, discovered);
       const content = `Antigravity quota\n\`\`\`\n${output}\n\`\`\``;
       pi.events.emit("plamo-translate:exclude", content);
       if (ctx.hasUI) {
