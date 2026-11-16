@@ -2,6 +2,17 @@
 import { formatUsage, parseUsage, SESSION } from "./policy.ts";
 
 const USAGE_TTL_MS = 60_000;
+const MAX_REASON_STDERR = 160;
+
+/** Last meaningful stderr line, so a Colab-side failure (e.g. `Service Unavailable`) reaches the UI. */
+function startFailure(code: number, stderr: string): string {
+  const line = stderr
+    .split("\n")
+    .map((value: string): string => value.trim())
+    .findLast((value: string): boolean => value.length > 0);
+  const detail = line === undefined ? "" : `: ${line.slice(0, MAX_REASON_STDERR)}`;
+  return `colab start failed (exit ${code})${detail}`;
+}
 
 export interface RunResult {
   readonly code: number;
@@ -92,7 +103,7 @@ export class ColabLifecycleRuntime {
     const result = await this.deps.run(this.config.upScript, [], this.config.upTimeoutMs);
     const { url } = this.deps.readState();
     if (result.code !== 0 || url === undefined) {
-      return { ok: false, started: true, reason: `colab start failed (exit ${result.code})` };
+      return { ok: false, started: true, reason: startFailure(result.code, result.stderr) };
     }
     this.touch();
     this.ensureWatcher();

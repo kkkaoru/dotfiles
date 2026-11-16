@@ -1,18 +1,29 @@
 #!/usr/bin/env bash
-# Bring up Qwen3.8-27B on a fresh Colab A100 via the `colab` CLI and connect pi to it.
+# Bring up a Qwen model on a fresh Colab A100 via the `colab` CLI and connect pi to it.
 # Reuses the persistent key in ~/.pi/agent/auth.json. Stop later with: colab stop -s qwen
+#
+# The model is selectable, but only what fits one Colab GPU does. Qwen3.8-27B needs 28.5 GiB
+# of weights (served at fp8, max-model-len 32768). Qwen3.8-Flash-Next is 172.8 GiB at fp8 /
+# 335.3 GiB at bf16, so no Colab GPU (A100 40/80 GiB, H100) can hold it: serve that one on a
+# multi-GPU host or through an API instead.
 set -euo pipefail
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
+colab_bin="${COLAB_BIN:-$root/scripts/colab}"
 s=qwen
+# HF repo, the name pi asks for, the context to serve, and the quantization to apply (empty = as published).
+model="${COLAB_MODEL:-Qwen/Qwen3.8-27B}"
+served="${COLAB_SERVED_NAME:-Qwen3.8-27B}"
+max_len="${COLAB_MAX_MODEL_LEN:-32768}"
+quant="${COLAB_QUANTIZATION-fp8}"
 work="$(mktemp -d)"
 "$root/scripts/colab-qwen-ensure-key.sh"
 key="$(jq -er '.["google-colab"].key' "$root/.pi/agent/auth.json")"
 
-run() { colab exec -s "$s" --timeout "${2:-120}" -f "$1"; }
+run() { "$colab_bin" exec -s "$s" --timeout "${2:-120}" -f "$1"; }
 
-colab sessions 2>&1 | grep -q "\[$s\]" || colab new -s "$s" --gpu A100
+"$colab_bin" sessions 2>&1 | grep -q "\[$s\]" || "$colab_bin" new -s "$s" --gpu A100
 
 cat >"$work/install.py" <<'PY'
 import subprocess
@@ -29,11 +40,14 @@ PY
 cat >"$work/serve.py" <<PY
 import subprocess
 open("/content/api_key", "w").write("$key")
-subprocess.Popen(["vllm", "serve", "Qwen/Qwen3.8-27B", "--served-model-name", "Qwen3.8-27B",
-    "--quantization", "fp8", "--max-model-len", "65536", "--gpu-memory-utilization", "0.90",
+args = ["vllm", "serve", "$model", "--served-model-name", "$served",
+    "--max-model-len", "$max_len", "--gpu-memory-utilization", "0.90",
     "--max-num-seqs", "4", "--max-num-batched-tokens", "4096", "--enforce-eager",
     "--reasoning-parser", "qwen3", "--enable-auto-tool-choice", "--tool-call-parser", "qwen3_coder",
-    "--api-key", "$key", "--port", "8000"],
+    "--api-key", "$key", "--port", "8000"]
+if "$quant":
+    args[6:6] = ["--quantization", "$quant"]
+subprocess.Popen(args,
     stdout=open("/content/vllm.log", "w"), stderr=subprocess.STDOUT, start_new_session=True)
 PY
 cat >"$work/wait.py" <<'PY'
@@ -43,6 +57,11 @@ for _ in range(10):
         urllib.request.urlopen("http://127.0.0.1:8000/health", timeout=3); print("READY"); break
     except Exception:
         time.sleep(10)
+PY
+cat >"$work/alive.py" <<'PY'
+import subprocess
+out = subprocess.run(["pgrep", "-f", "vllm serve"], capture_output=True, text=True)
+print("ALIVE" if out.stdout.strip() else "DEAD")
 PY
 cat >"$work/tunnel.py" <<'PY'
 import re, subprocess, time
@@ -58,6 +77,15 @@ PY
 run "$work/install.py" 60
 until run "$work/installed.py" 150 2>/dev/null | grep -q DONE; do sleep 5; done
 run "$work/serve.py" 60
-until run "$work/wait.py" 150 2>/dev/null | grep -q READY; do sleep 5; done
+tries=0
+until run "$work/wait.py" 150 2>/dev/null | grep -q READY; do
+  tries=$((tries + 1))
+  # vLLM dies on an OOM or a too-long max-model-len; say so instead of waiting forever.
+  if [ "$tries" -gt 20 ] || [ "$(run "$work/alive.py" 30 2>/dev/null)" = "DEAD" ]; then
+    echo "vllm did not become ready; see /content/vllm.log" >&2
+    exit 1
+  fi
+  sleep 5
+done
 url="$(run "$work/tunnel.py" 90 2>/dev/null | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1)"
 "$root/scripts/colab-qwen-connect.sh" "$url"

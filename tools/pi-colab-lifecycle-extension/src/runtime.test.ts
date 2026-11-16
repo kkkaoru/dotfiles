@@ -25,6 +25,7 @@ interface HarnessInput {
   readonly initial: State;
   readonly sessions: string;
   readonly upCode: number;
+  readonly upStderr?: string;
   readonly urlAfterUp?: string;
 }
 
@@ -37,7 +38,7 @@ function setup(input: HarnessInput): Harness {
     if (input.urlAfterUp !== undefined) {
       store.state = { ...store.state, url: input.urlAfterUp };
     }
-    return { code: input.upCode, stdout: "", stderr: "" };
+    return { code: input.upCode, stdout: "", stderr: input.upStderr ?? "" };
   });
   const spawnDetached = vi.fn<Deps["spawnDetached"]>();
   const deps: Deps = {
@@ -89,14 +90,28 @@ it("starts Colab when no URL is recorded", async () => {
 });
 
 it("reports a failed start without throwing", async () => {
-  const harness = setup({ initial: {}, sessions: "", upCode: 1 });
+  const harness = setup({
+    initial: {},
+    sessions: "",
+    upCode: 1,
+    upStderr: "Traceback (most recent call last):\n  ...\nService Unavailable\n\n",
+  });
   const outcome = await harness.runtime.ensureUp();
   expect(outcome).toStrictEqual({
     ok: false,
     started: true,
-    reason: "colab start failed (exit 1)",
+    reason: "colab start failed (exit 1): Service Unavailable",
   });
   expect(harness.spawnDetached).not.toHaveBeenCalled();
+});
+
+it("reports a failed start with only the exit code when stderr is empty", async () => {
+  const harness = setup({ initial: {}, sessions: "", upCode: 1 });
+  expect(await harness.runtime.ensureUp()).toStrictEqual({
+    ok: false,
+    started: true,
+    reason: "colab start failed (exit 1)",
+  });
 });
 
 it("shares one start between concurrent callers", async () => {

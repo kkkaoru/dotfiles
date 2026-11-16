@@ -20,9 +20,9 @@ ln -sfn "$root/tools/pi-colab-lifecycle-extension" "$root/.pi/agent/extensions/c
 
 "$root/scripts/colab-qwen-ensure-key.sh"
 
-if ! colab sessions >/dev/null 2>&1; then
+if ! "$root/scripts/colab" sessions >/dev/null 2>&1; then
   echo "colab is not authenticated yet. Run once (needs a browser):" >&2
-  echo "  colab --auth=oauth2 sessions   # or: gcloud auth application-default login (see \`colab skill\`)" >&2
+  echo "  gcloud auth application-default login --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory" >&2
   exit 1
 fi
 echo "ok: pick google-colab / Qwen3.8-27B in pi (first use starts a Colab A100, ~10 min)"

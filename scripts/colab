@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# The Colab CLI for unattended use: the default `oauth2` strategy asks for an
+# authorization code on stdin, which a spawned pi extension cannot answer, so
+# every dotfiles caller goes through Application Default Credentials instead.
+# Authenticate once with:
+#   gcloud auth application-default login --scopes=openid,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/userinfo.email,https://www.googleapis.com/auth/colaboratory
+set -euo pipefail
+
+exec "${COLAB_CLI:-$HOME/.local/bin/colab}" --auth=adc "$@"

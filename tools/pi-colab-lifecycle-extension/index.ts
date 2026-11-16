@@ -47,8 +47,10 @@ const ROOT = path.resolve(realpathSync(import.meta.dirname), "..", "..");
 const STATE_FILE =
   process.env["COLAB_QWEN_STATE"] ?? path.join(homedir(), ".cache", "colab-qwen", "state.json");
 
+// The Colab CLI wrapper `scripts/colab` adds `--auth=adc`.
+// The CLI's default oauth2 strategy needs an authorization code on stdin, which a spawned extension cannot answer.
 const CONFIG: Config = {
-  colabCommand: path.join(homedir(), ".local", "bin", "colab"),
+  colabCommand: process.env["COLAB_BIN"] ?? path.join(ROOT, "scripts", "colab"),
   upScript: path.join(ROOT, "scripts", "colab-qwen-up.sh"),
   upTimeoutMs: 25 * 60 * 1000,
   watcherScript: path.join(ROOT, "scripts", "colab-qwen-idle-stop.sh"),

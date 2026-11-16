@@ -7,7 +7,7 @@ export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 state="${COLAB_QWEN_STATE:-$HOME/.cache/colab-qwen/state.json}"
 idle_ms="${COLAB_QWEN_IDLE_MS:-600000}"
 poll="${COLAB_QWEN_POLL_SECONDS:-30}"
-colab_bin="${COLAB_BIN:-$HOME/.local/bin/colab}"
+colab_bin="${COLAB_BIN:-$(cd "$(dirname "$0")" && pwd)/colab}"
 lock="$(dirname "$state")/watcher.lock"
 
 mkdir -p "$(dirname "$state")"
