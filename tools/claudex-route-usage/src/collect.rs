@@ -1,16 +1,18 @@
 //! Provider usage collection, Ollama probes, daemon health, and memory.
 
 use crate::config::{Config, Paths, valid_model_id};
-use crate::process::{Deadline, run_before, run_before_with_input, run_with_timeout};
+use crate::process::{
+    Deadline, run_before, run_before_with_input, run_with_timeout, run_with_timeout_with_input,
+};
 use crate::routing::quota::provider_status;
 use crate::routing::workers::worker;
 use crate::routing::{memory_management_enabled, memory_pressure_thresholds, pressure_level};
-use crate::util::python_round;
+use crate::util::{number_f64, python_round, valid_percentage};
 use anyhow::{Result, bail};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 use url::Url;
@@ -24,6 +26,19 @@ pub const MEMORY_COMMAND_TIMEOUT_SECONDS: u64 = 5;
 pub const OLLAMA_USAGE_PROVIDER: &str = "ollama";
 pub const OLLAMA_BASE_URL_ENV: &str = "CLAUDEX_OLLAMA_BASE_URL";
 pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://127.0.0.1:11434";
+/// Ollama Cloud's balance API, and the key herdr-app's agent-limits mod uses: the variable,
+/// else ~/.codex/.env, else ~/.env (the dotfiles-managed files every machine has), else pi's own
+/// login in ~/.pi/agent/auth.json.
+pub const OLLAMA_BALANCE_URL: &str = "https://ollama.com/api/balance";
+pub const OLLAMA_API_KEY_ENV: &str = "OLLAMA_API_KEY";
+const OLLAMA_API_KEY_FILES: &[&str] = &[".codex/.env", ".env"];
+const PI_AUTH_FILE: &str = ".pi/agent/auth.json";
+const PI_OLLAMA_PROVIDER: &str = "ollama-cloud";
+/// CodexBar reads OpenCode Go's usage API with its own key, which pi's login also holds.
+pub const OPENCODE_API_KEY_ENV: &str = "OPENCODE_API_KEY";
+const PI_OPENCODE_PROVIDER: &str = "opencode-go";
+const FIVE_HOUR_MINUTES: i64 = 300;
+const SEVEN_DAY_MINUTES: i64 = 10_080;
 pub const DAEMON_HEALTH_URL_ENV: &str = "CLAUDEX_DAEMON_HEALTH_URL";
 pub const ANTHROPIC_BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
 pub const DEFAULT_DAEMON_HEALTH_URL: &str = "http://127.0.0.1:8318/health";
@@ -49,6 +64,9 @@ pub fn strict_json_array(output: &str) -> Result<Value> {
 fn run_codexbar_before(program: &str, deadline: Option<Deadline>) -> Result<Value> {
     let mut command = Command::new(program);
     command.args(["usage", "--json"]);
+    if let Some(key) = opencode_api_key() {
+        command.env(OPENCODE_API_KEY_ENV, key);
+    }
     let (_code, stdout, _stderr) = run_collector(
         command,
         deadline,
@@ -147,14 +165,134 @@ fn ollama_usage_entry_before(
     if !found {
         return unavailable_usage_entry(provider);
     }
-    // Local /api/tags only proves the model is reachable. It does not expose
-    // Ollama Cloud weekly quotas, so never invent maxUsedPercent=0 (that used
-    // to rank as 100% weekly headroom and beat real CodexBar meters).
+    // Local /api/tags only proves the model is reachable; the cloud quotas come from
+    // `ollama_balance_entry_before`. Never invent maxUsedPercent=0 (that used to rank as 100%
+    // weekly headroom and beat real CodexBar meters).
     serde_json::json!({
         "provider": provider,
         "available": true,
         "reason": "available-ollama-api-only",
     })
+}
+
+/// Ollama Cloud's `/api/balance` as a CodexBar-shaped entry, so routing reads the same 5h and
+/// weekly meters as every other provider, or None when no key is configured or curl got no answer.
+fn ollama_balance_entry_before(
+    curl_program: &str,
+    provider: &str,
+    deadline: Option<Deadline>,
+) -> Option<Value> {
+    let key = ollama_api_key()?;
+    let mut command = Command::new(curl_program);
+    command.args([
+        "--fail",
+        "--silent",
+        "--show-error",
+        "--max-time",
+        &REQUEST_TIMEOUT_SECONDS.to_string(),
+        "--header",
+        "@-",
+        OLLAMA_BALANCE_URL,
+    ]);
+    let timeout = Duration::from_secs(REQUEST_TIMEOUT_SECONDS + SUBPROCESS_GRACE_SECONDS);
+    if deadline.is_some_and(|deadline| deadline.remaining().is_none()) {
+        return None;
+    }
+    // The header goes in on stdin, so the key stays out of every process's arguments.
+    let header = format!("Authorization: Bearer {key}\n");
+    let (code, stdout, _) =
+        run_collector_with_input(command, deadline, timeout, header.as_bytes()).ok()?;
+    if code != 0 {
+        return None;
+    }
+    ollama_balance_windows(&stdout).map(|usage| {
+        serde_json::json!({
+            "provider": provider,
+            "usage": usage,
+        })
+    })
+}
+
+/// `/api/balance` -> CodexBar's primary (session) and secondary (weekly) windows.
+fn ollama_balance_windows(stdout: &str) -> Option<Value> {
+    let payload: Value = serde_json::from_str(stdout).ok()?;
+    let included = payload.get("included")?;
+    let mut usage = serde_json::Map::new();
+    for (slot, window, minutes) in [
+        ("primary", "session", FIVE_HOUR_MINUTES),
+        ("secondary", "weekly", SEVEN_DAY_MINUTES),
+    ] {
+        let Some(used) = included
+            .get(window)
+            .and_then(|window| window.get("remaining_percent"))
+            .and_then(remaining_as_used_percent)
+        else {
+            continue;
+        };
+        usage.insert(
+            slot.to_owned(),
+            serde_json::json!({ "windowMinutes": minutes, "usedPercent": used }),
+        );
+    }
+    (!usage.is_empty()).then_some(Value::Object(usage))
+}
+
+fn remaining_as_used_percent(remaining: &Value) -> Option<f64> {
+    if !valid_percentage(remaining) {
+        return None;
+    }
+    number_f64(remaining)
+        .filter(|percent| *percent <= 100.0)
+        .map(|percent| python_round(100.0 - percent, 6))
+}
+
+fn ollama_api_key() -> Option<String> {
+    let home = env::var_os("HOME")?;
+    let home = Path::new(&home);
+    env_key(OLLAMA_API_KEY_ENV)
+        .or_else(|| dotenv_key(home))
+        .or_else(|| pi_provider_key(home, PI_OLLAMA_PROVIDER))
+}
+
+fn opencode_api_key() -> Option<String> {
+    let home = env::var_os("HOME")?;
+    env_key(OPENCODE_API_KEY_ENV)
+        .or_else(|| pi_provider_key(Path::new(&home), PI_OPENCODE_PROVIDER))
+}
+
+fn env_key(name: &str) -> Option<String> {
+    let key = env::var(name).ok()?;
+    Some(unquoted(&key))
+        .filter(|key| !key.is_empty())
+        .map(str::to_owned)
+}
+
+fn pi_provider_key(home: &Path, provider: &str) -> Option<String> {
+    let text = std::fs::read_to_string(home.join(PI_AUTH_FILE)).ok()?;
+    let auth: Value = serde_json::from_str(&text).ok()?;
+    Some(unquoted(auth.get(provider)?.get("key")?.as_str()?))
+        .filter(|key| !key.is_empty())
+        .map(str::to_owned)
+}
+
+fn dotenv_key(home: &Path) -> Option<String> {
+    OLLAMA_API_KEY_FILES.iter().find_map(|name| {
+        let text = std::fs::read_to_string(home.join(name)).ok()?;
+        dotenv_value(&text, OLLAMA_API_KEY_ENV)
+    })
+}
+
+fn dotenv_value(text: &str, name: &str) -> Option<String> {
+    let prefix = format!("{name}=");
+    text.lines()
+        .find_map(|line| line.trim().strip_prefix(&prefix))
+        .map(unquoted)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn unquoted(value: &str) -> &str {
+    value.trim().trim_matches(['"', '\''])
 }
 
 fn collect_codexbar_report_before(
@@ -237,8 +375,8 @@ fn codexbar_usage_names(providers: &[&Value], config: &Config) -> BTreeSet<Strin
     names
 }
 
-/// Ollama providers whose CodexBar entry is missing or unusable, so the local
-/// API probe is the only remaining capacity signal.
+/// Ollama providers whose CodexBar entry is missing or unusable, so the balance API (or the
+/// local API when no key is configured) is the only remaining capacity signal.
 fn ollama_fallback_providers<'a>(providers: &[&'a Value], report: &[Value]) -> Vec<&'a Value> {
     let snapshot = Value::Array(report.to_vec());
     providers
@@ -283,7 +421,10 @@ fn probe_ollama_providers(
                 .get("model")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            let entry = ollama_usage_entry_before(curl_program, &usage_provider, model, deadline);
+            let entry = ollama_balance_entry_before(curl_program, &usage_provider, deadline)
+                .unwrap_or_else(|| {
+                    ollama_usage_entry_before(curl_program, &usage_provider, model, deadline)
+                });
             (usage_provider, entry)
         })
         .collect()
@@ -297,6 +438,18 @@ fn run_collector(
     match deadline {
         Some(deadline) => run_before(command, deadline, maximum),
         None => run_with_timeout(command, maximum),
+    }
+}
+
+fn run_collector_with_input(
+    command: Command,
+    deadline: Option<Deadline>,
+    maximum: Duration,
+    input: &[u8],
+) -> Result<(i32, String, String)> {
+    match deadline {
+        Some(deadline) => run_before_with_input(command, deadline, maximum, input),
+        None => run_with_timeout_with_input(command, maximum, input),
     }
 }
 
@@ -663,5 +816,75 @@ mod tests {
                 .any(|window| window == INSTALL_LAUNCH_AGENT)
         );
         assert_eq!(arguments, ["-s", "--", "--refresh-within", "7200"]);
+    }
+
+    #[test]
+    fn reads_ollama_cloud_balance_as_codexbar_windows() {
+        let payload = r#"{"included":{"session":{"remaining_percent":94.5,"resets_at":"2026-11-16T03:00:00Z"},"weekly":{"remaining_percent":99.03,"resets_at":"2026-11-23T00:00:00Z"}},"purchased":{"balance_usd":0}}"#;
+        let usage = ollama_balance_windows(payload).unwrap();
+        assert_eq!(usage["primary"]["usedPercent"], 5.5);
+        assert_eq!(usage["primary"]["windowMinutes"], 300);
+        assert_eq!(usage["secondary"]["usedPercent"], 0.97);
+        assert_eq!(usage["secondary"]["windowMinutes"], 10080);
+    }
+
+    #[test]
+    fn drops_ollama_balance_windows_it_cannot_read() {
+        assert_eq!(
+            ollama_balance_windows(r#"{"included":{"session":{"remaining_percent":120}}}"#),
+            None
+        );
+        assert_eq!(ollama_balance_windows(r#"{"included":{}}"#), None);
+        assert_eq!(
+            ollama_balance_windows(r#"{"purchased":{"balance_usd":0}}"#),
+            None
+        );
+        assert_eq!(ollama_balance_windows(""), None);
+        let weekly_only =
+            ollama_balance_windows(r#"{"included":{"weekly":{"remaining_percent":100}}}"#).unwrap();
+        assert_eq!(weekly_only["secondary"]["usedPercent"], 0.0);
+        assert!(weekly_only.get("primary").is_none());
+    }
+
+    #[test]
+    fn reads_the_ollama_key_from_the_dotenv_files_herdr_app_reads() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join(".codex")).unwrap();
+        std::fs::write(
+            root.path().join(".codex/.env"),
+            "OTHER=1\nOLLAMA_API_KEY=\"from-codex\"\n",
+        )
+        .unwrap();
+        std::fs::write(root.path().join(".env"), "OLLAMA_API_KEY=from-home\n").unwrap();
+        assert_eq!(dotenv_key(root.path()).as_deref(), Some("from-codex"));
+
+        std::fs::write(root.path().join(".codex/.env"), "OLLAMA_API_KEY=\n").unwrap();
+        assert_eq!(dotenv_key(root.path()).as_deref(), Some("from-home"));
+
+        std::fs::remove_file(root.path().join(".env")).unwrap();
+        assert_eq!(dotenv_key(root.path()), None);
+    }
+
+    #[test]
+    fn falls_back_to_the_pi_login_for_the_ollama_key() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join(".pi/agent")).unwrap();
+        let auth = root.path().join(".pi/agent/auth.json");
+        std::fs::write(
+            &auth,
+            r#"{"ollama-cloud":{"key":"from-pi","type":"api"},"xai":{"key":"other"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            pi_provider_key(root.path(), "ollama-cloud").as_deref(),
+            Some("from-pi")
+        );
+        assert_eq!(pi_provider_key(root.path(), "opencode-go"), None);
+
+        std::fs::write(&auth, r#"{"xai":{"key":"other"}}"#).unwrap();
+        assert_eq!(pi_provider_key(root.path(), "ollama-cloud"), None);
+
+        std::fs::write(&auth, "not json").unwrap();
+        assert_eq!(pi_provider_key(root.path(), "ollama-cloud"), None);
     }
 }

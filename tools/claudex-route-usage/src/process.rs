@@ -232,6 +232,19 @@ pub fn run_with_timeout(command: Command, timeout: Duration) -> Result<(i32, Str
     run_before(command, Deadline::after(timeout + CLEANUP_RESERVE), timeout)
 }
 
+pub fn run_with_timeout_with_input(
+    command: Command,
+    timeout: Duration,
+    input: &[u8],
+) -> Result<(i32, String, String)> {
+    run_before_input(
+        command,
+        Deadline::after(timeout + CLEANUP_RESERVE),
+        timeout,
+        Some(input),
+    )
+}
+
 #[cfg(test)]
 #[path = "process/tests.rs"]
 mod tests;

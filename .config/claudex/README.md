@@ -152,9 +152,10 @@ daemonのPATHでは `~/.local/bin` をHomebrewより先に置き、壊れたHome
    `gpt-5.6-luna` などへのhidden bootstrap、またはrequest modelのremapには使いません。
    claudex実行時だけglobal hookでworker向けorchestration contextを追加します。
 2. prompt送信時にCodex/Grok/Sakana/Ollama/OpenCode Go/Claude/Qwen Cloudは
-   `codexbar usage --json` を使います。Ollamaの
-   usage取得に失敗した場合はlocal Ollama APIのmodel catalogを確認し、対象modelが存在すれば
-   残量不明の候補として維持します。routing結果
+   `codexbar usage --json` を使います。Ollamaの usage取得に失敗した場合は
+   `OLLAMA_API_KEY`（無ければ `~/.codex/.env`、`~/.env`、`~/.pi/agent/auth.json`）で
+   `https://ollama.com/api/balance` の session / weekly 残量を読み、どれも無いか失敗したときだけ local Ollama APIのmodel catalogを
+   確認して、対象modelが存在すれば残量不明の候補として維持します。routing結果
    全体は既定で5分間キャッシュされます。共有daemonの `/health` にあるmodel別
    `model_concurrency` はpromptごとに再取得し、usage cacheには保存しません。health URLは
    `CLAUDEX_DAEMON_HEALTH_URL`、loopback `ANTHROPIC_BASE_URL` のorigin、
