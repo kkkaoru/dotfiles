@@ -37,11 +37,13 @@ interface GeminiInlineData {
 interface GeminiFunctionCall {
   name: string;
   args: JsonObject;
+  id?: string;
 }
 
 interface GeminiFunctionResponse {
   name: string;
   response: Record<string, string>;
+  id?: string;
 }
 
 interface GeminiPart {
@@ -103,6 +105,7 @@ export interface BuildGenerateBodyOptions {
 }
 
 export interface StreamToolCall {
+  id?: string;
   name: string;
   args: JsonObject;
   thoughtSignature?: string;
@@ -142,6 +145,7 @@ interface StreamEmitState {
 }
 
 interface ToolResultInput {
+  toolCallId?: string;
   toolName: string;
   isError: boolean;
   content: Array<TextContent | ImageContent>;
@@ -251,15 +255,39 @@ function toolDeclarations(tools: Tool[] | undefined): ToolDeclarationGroup[] | u
   return groups;
 }
 
-function toAssistantPart(block: TextContent | ThinkingContent | ToolCall): GeminiPart | undefined {
+const MAX_TOOL_ID_LENGTH = 64;
+
+const needsToolCallId = (modelId: string): boolean =>
+  modelId.startsWith("claude-") || modelId.startsWith("gpt-oss-");
+
+function sanitizeToolCallId(rawId: string | undefined, fallbackName: string): string {
+  const cleaned = (rawId ?? "").replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, MAX_TOOL_ID_LENGTH);
+  return cleaned || `${fallbackName.replace(/[^a-zA-Z0-9_-]/g, "_")}_${randomId().slice(0, 8)}`;
+}
+
+function toAssistantPart(
+  block: TextContent | ThinkingContent | ToolCall,
+  includeToolId: boolean,
+): GeminiPart | undefined {
   if (block.type === "text" && block.text.trim()) {
     return { text: block.text };
+  }
+  if (block.type === "thinking" && block.thinking.trim() && block.thinkingSignature) {
+    return {
+      thought: true,
+      text: block.thinking,
+      thoughtSignature: block.thinkingSignature,
+    };
   }
   if (block.type !== "toolCall") {
     return undefined;
   }
   return {
-    functionCall: { name: block.name, args: block.arguments },
+    functionCall: {
+      name: block.name,
+      args: block.arguments,
+      ...(includeToolId ? { id: sanitizeToolCallId(block.id, block.name) } : {}),
+    },
     ...(block.thoughtSignature ? { thoughtSignature: block.thoughtSignature } : {}),
   };
 }
@@ -267,10 +295,11 @@ function toAssistantPart(block: TextContent | ThinkingContent | ToolCall): Gemin
 function appendAssistantTurn(
   contents: GeminiContent[],
   blocks: Array<TextContent | ThinkingContent | ToolCall>,
+  includeToolId: boolean,
 ): void {
   const parts: GeminiPart[] = [];
   for (const block of blocks) {
-    const part = toAssistantPart(block);
+    const part = toAssistantPart(block, includeToolId);
     if (part) {
       parts.push(part);
     }
@@ -291,12 +320,17 @@ function toolResultText(content: Array<TextContent | ImageContent>): string {
   return parts.join("\n");
 }
 
-function appendToolResultTurn(contents: GeminiContent[], message: ToolResultInput): void {
+function appendToolResultTurn(
+  contents: GeminiContent[],
+  message: ToolResultInput,
+  includeToolId: boolean,
+): void {
   const text = toolResultText(message.content);
   const part: GeminiPart = {
     functionResponse: {
       name: message.toolName,
       response: message.isError ? { error: text } : { output: text },
+      ...(includeToolId ? { id: sanitizeToolCallId(message.toolCallId, message.toolName) } : {}),
     },
   };
   const last = contents.at(-1);
@@ -310,13 +344,14 @@ function appendToolResultTurn(contents: GeminiContent[], message: ToolResultInpu
 function appendMessage(
   contents: GeminiContent[],
   message: TranscriptContext["messages"][number],
+  includeToolId: boolean,
 ): void {
   if (message.role === "user") {
     contents.push({ role: "user", parts: textOf(message) });
   } else if (message.role === "assistant") {
-    appendAssistantTurn(contents, message.content);
+    appendAssistantTurn(contents, message.content, includeToolId);
   } else if (message.role === "toolResult") {
-    appendToolResultTurn(contents, message);
+    appendToolResultTurn(contents, message, includeToolId);
   }
 }
 
@@ -330,13 +365,14 @@ function appendMessage(
  */
 export function buildGenerateBody(options: BuildGenerateBodyOptions): GenerateBody {
   const runtimeModel = options.runtimeModel ?? runtimeModelId(options.publicModelId, options.level);
+  const includeToolId = needsToolCallId(options.publicModelId) || needsToolCallId(runtimeModel);
   const contents: GeminiContent[] = [];
   const systemText = options.systemPrompt?.trim();
   if (systemText) {
     contents.push({ role: "user", parts: [{ text: systemText }] });
   }
   for (const message of options.messages) {
-    appendMessage(contents, message);
+    appendMessage(contents, message, includeToolId);
   }
 
   const maxTokens = Math.min(options.maxTokens ?? options.modelMaxTokens, options.modelMaxTokens);
@@ -398,7 +434,9 @@ function applyPart(chunk: StreamChunk, part: unknown): void {
     const name = nonEmptyString(call["name"]);
     if (name) {
       const rawArgs = call["args"];
+      const callId = nonEmptyString(call["id"]);
       chunk.toolCall = {
+        ...(callId ? { id: callId } : {}),
         name,
         args: isRecord(rawArgs) ? rawArgs : {},
         ...(thoughtSignature ? { thoughtSignature } : {}),
@@ -653,7 +691,7 @@ function emitToolCall(
 ): void {
   const call: ToolCall = {
     type: "toolCall",
-    id: randomId(),
+    id: sanitizeToolCallId(toolCall.id, toolCall.name),
     name: toolCall.name,
     arguments: toolCall.args,
     ...(toolCall.thoughtSignature ? { thoughtSignature: toolCall.thoughtSignature } : {}),
@@ -670,13 +708,17 @@ function emitToolCall(
   emit({ type: "toolcall_end", contentIndex, toolCall: call, partial: message });
 }
 
-function attachLateSignature(signature: string | undefined, toolCalls: ToolCall[]): void {
+function attachLateSignature(signature: string | undefined, state: StreamEmitState): void {
   if (!signature) {
     return;
   }
-  const lastCall = toolCalls.at(-1);
+  const lastCall = state.toolCalls.at(-1);
   if (lastCall && !lastCall.thoughtSignature) {
     lastCall.thoughtSignature = signature;
+    return;
+  }
+  if (state.thinkingBlock && !state.thinkingBlock.thinkingSignature) {
+    state.thinkingBlock.thinkingSignature = signature;
   }
 }
 
@@ -685,7 +727,7 @@ function applyMetadata(
   message: AssistantMessage,
   state: StreamEmitState,
 ): void {
-  attachLateSignature(chunk.signature, state.toolCalls);
+  attachLateSignature(chunk.signature, state);
   if (chunk.responseId) {
     message.responseId = chunk.responseId;
   }

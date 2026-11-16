@@ -108,7 +108,8 @@ it("declares tools via parametersJsonSchema and replays images, assistant calls,
       {
         role: "assistant",
         content: [
-          { type: "thinking", thinking: "hmm" },
+          { type: "thinking", thinking: "hmm", thinkingSignature: "sig-think" },
+          { type: "thinking", thinking: "unsigned" },
           { type: "text", text: "   " },
           { type: "text", text: "checking" },
           {
@@ -206,16 +207,20 @@ it("declares tools via parametersJsonSchema and replays images, assistant calls,
   expect(body.request.contents[1]).toStrictEqual({
     role: "model",
     parts: [
+      { thought: true, text: "hmm", thoughtSignature: "sig-think" },
       { text: "checking" },
-      { functionCall: { name: "bash", args: { command: "pwd" } }, thoughtSignature: "sig-1" },
-      { functionCall: { name: "read", args: {} } },
+      {
+        functionCall: { name: "bash", args: { command: "pwd" }, id: "c1" },
+        thoughtSignature: "sig-1",
+      },
+      { functionCall: { name: "read", args: {}, id: "c2" } },
     ],
   });
   const last = body.request.contents.at(-1);
   expect(last?.role).toBe("user");
   expect(last?.parts).toStrictEqual([
-    { functionResponse: { name: "bash", response: { output: "ok" } } },
-    { functionResponse: { name: "read", response: { error: "boom\n[image]" } } },
+    { functionResponse: { name: "bash", response: { output: "ok" }, id: "c1" } },
+    { functionResponse: { name: "read", response: { error: "boom\n[image]" }, id: "c2" } },
   ]);
 });
 
@@ -343,10 +348,32 @@ it("streams thinking, text, and tool calls through pi events", async () => {
     sessionId: "s1",
     send: async () =>
       sseResponse(200, [
-        { response: { candidates: [{ content: { parts: [{ thought: true, text: "plan" }] } }] } },
+        {
+          response: {
+            candidates: [
+              { content: { parts: [{ thought: true, text: "plan", thoughtSignature: "sig-t" }] } },
+            ],
+          },
+        },
         { response: { candidates: [{ content: { parts: [{ thought: true, text: " more" }] } }] } },
         { response: { candidates: [{ content: { parts: [{ text: "answer" }] } }] } },
         { response: { candidates: [{ content: { parts: [{ text: "!" }] } }] } },
+        {
+          response: {
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      functionCall: { id: "call-bash", name: "bash", args: { command: "pwd" } },
+                      thoughtSignature: "sig-inline",
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
         {
           response: {
             candidates: [
@@ -357,22 +384,6 @@ it("streams thinking, text, and tool calls through pi events", async () => {
               },
             ],
             usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 3, thoughtsTokenCount: 1 },
-          },
-        },
-        {
-          response: {
-            candidates: [
-              {
-                content: {
-                  parts: [
-                    {
-                      functionCall: { name: "bash", args: { command: "pwd" } },
-                      thoughtSignature: "sig-inline",
-                    },
-                  ],
-                },
-              },
-            ],
           },
         },
         {
