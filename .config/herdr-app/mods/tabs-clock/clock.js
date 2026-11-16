@@ -46,8 +46,10 @@ export const DRACULA = [
   "#f8f8f2", // foreground
 ];
 
-// The strip fills the 42 px bar; the cat is 47x21 cells scaled to it, 2 px a cell.
-const H = 42;
+// The bar is 42 px inside a 1 px bottom border, so the clock fills 41: pictures are fitted inside
+// their box, so each box is given the artwork's own 21-cell height and the width that goes with it.
+// A box off that aspect leaves a clear margin at the sides, which cut the rainbow at every join.
+const H = 41;
 const CAT_W = (H * 47) / 21;
 const TAIL_W = (H * NYAN_TAIL) / 21;
 // Rainbow tiles behind the cat: enough for a bar 4096 px wide.
