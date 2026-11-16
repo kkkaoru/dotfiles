@@ -1,7 +1,7 @@
 # Session-deferred external providers
 
-CommandCode and Antigravity register eagerly when explicitly selected, otherwise on Pi's awaited
-`session_start` boundary. Resource discovery alone must not start a timer or fetch their catalogs.
+CommandCode registers eagerly when explicitly selected, otherwise on Pi's awaited
+`session_start` boundary. Resource discovery alone must not start a timer or fetch its catalog.
 Initialization is cached once per extension runtime, including across session switches. Loading a
 provider at session start can delay that boundary until its own initialization finishes; this is
 intentional so a model request cannot race registration. CommandCode currently fetches its catalog
@@ -12,9 +12,9 @@ Web Access is **not** deferred: `.pi/agent/settings.json` loads the installed ve
 native loader before session dispatch. The old 250ms factory timer missed the initial event and
 could outlive reload; `PI_LAZY_EXTENSION_DELAY_MS` is no longer used.
 
-No external packages are upgraded by this change. The two providers retain their existing host
-compatibility aliases. Full removal of the custom importer is deferred until their catalog startup
-can be made cache-only without changing the upstream providers. Reload or restart Pi to apply.
+No external packages are upgraded by this change. The provider retains its existing host
+compatibility aliases. Full removal of the custom importer is deferred until its catalog startup
+can be made cache-only without changing the upstream provider. Reload or restart Pi to apply.
 
 ## Offline verification
 
