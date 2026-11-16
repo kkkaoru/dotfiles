@@ -283,7 +283,7 @@ function replyTranslatorFor(engine: EngineInterface, settings: Settings): Transl
 
 // Tells the model what survives translation, so it marks text the person must read exactly.
 const untranslatedRule = (lang: string): string =>
-  `Your text and AskUserQuestion dialogs are shown to the user machine-translated into \`${lang}\`. Only inline code (\`...\`) and fenced code blocks (\`\`\`) are left exactly as written. Put anything the user must read or copy verbatim in one of them: commands, file paths, identifiers, option and flag names, literal values, error messages and quoted UI text. Do not wrap ordinary prose.`
+  `Your text and AskUserQuestion dialogs are shown to the user machine-translated into \`${lang}\`. Only inline code (\`...\`), fenced code blocks (\`\`\`) and 「...」 are left exactly as written. Put anything the user must read or copy verbatim in one of them: commands, file paths, identifiers, option and flag names, literal values, error messages and quoted UI text. Do not wrap ordinary prose.`
 
 const withRule = ({ sections }: PromptComposeResult, lang: string): PromptComposeResult => ({
   sections: [...sections, { id: UNTRANSLATED_ID, text: untranslatedRule(lang), scope: 'session' }],

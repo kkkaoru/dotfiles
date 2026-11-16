@@ -567,7 +567,7 @@ test('the system prompt tells the model that only code spans and fenced blocks s
       intro,
       {
         id: 'plamo-translate:untranslated',
-        text: 'Your text and AskUserQuestion dialogs are shown to the user machine-translated into `ja`. Only inline code (`...`) and fenced code blocks (```) are left exactly as written. Put anything the user must read or copy verbatim in one of them: commands, file paths, identifiers, option and flag names, literal values, error messages and quoted UI text. Do not wrap ordinary prose.',
+        text: 'Your text and AskUserQuestion dialogs are shown to the user machine-translated into `ja`. Only inline code (`...`), fenced code blocks (```) and 「...」 are left exactly as written. Put anything the user must read or copy verbatim in one of them: commands, file paths, identifiers, option and flag names, literal values, error messages and quoted UI text. Do not wrap ordinary prose.',
         scope: 'session',
       },
     ],

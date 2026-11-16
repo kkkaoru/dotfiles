@@ -13,8 +13,8 @@ interface FenceScan {
 const FENCE: RegExp = /^(?:>\s*)*(`{3,}|~{3,})(.*)$/
 const TABLE_RULE: RegExp = /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?$/
 // Inline code (a run of backticks up to the next run of the same length, as CommonMark reads it),
-// autolinks, bare URLs and link targets survive translation as {{n}} slots.
-const PROTECTED: RegExp = /(?<!`)(`+)(?!`).+?(?<!`)\1(?!`)|<https?:\/\/[^>\s]+>|\]\([^)\s]+\)|https?:\/\/[^\s)>\]]+/g
+// a Japanese quote, autolinks, bare URLs and link targets survive translation as {{n}} slots.
+const PROTECTED: RegExp = /(?<!`)(`+)(?!`).+?(?<!`)\1(?!`)|「[^「」]*」|<https?:\/\/[^>\s]+>|\]\([^)\s]+\)|https?:\/\/[^\s)>\]]+/g
 const SLOT: RegExp = /\{\{(\d+)\}\}/g
 // Leading list/heading/quote markers stay as written; only the text after them is sent.
 const MARKER: RegExp = /^(\s*(?:[-*+]\s+|\d+[.)]\s+|#{1,6}\s+|>\s*)*)(.*)$/

@@ -29,10 +29,11 @@ GeForce and Radeon alike) on Linux and Windows. Nothing leaves the machine.
   lingering after the translation is done. A new one appears only once
   the last is gone, so a long run shows several, never overlapping. Prompt translations show none.
 
-Code blocks, inline code and URLs are never sent for translation. If a translation drops one of
-them, or the server is unreachable, the original text is used. While replies are translated, a
-`plamo-translate:untranslated` section of the system prompt tells Claude so, and asks it to put
-anything you must read or copy verbatim (commands, paths, identifiers, error messages) in them.
+Code blocks, inline code, URLs and the inside of 「...」 are never sent for translation. If a
+translation drops one of them, or the server is unreachable, the original text is used. While replies
+are translated, a `plamo-translate:untranslated` section of the system prompt tells Claude so, and asks
+it to put anything you must read or copy verbatim (commands, paths, identifiers, error messages) in
+them.
 
 ## Install
 

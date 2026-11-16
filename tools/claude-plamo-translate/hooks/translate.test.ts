@@ -61,6 +61,34 @@ test('code spans and URLs are sent as slots and put back', async () => {
   expect(out).toBe('run `bun run check` at https://example.com/a NOW')
 })
 
+test('a Japanese quote is sent as a slot and kept as written', async () => {
+  const sent: string[] = []
+  const out = await translateProse('Rename it to 「作業」 later', async text => {
+    sent.push(text)
+    return 'rename it to {{0}} later'
+  })
+  expect(sent).toStrictEqual(['Rename it to {{0}} later'])
+  expect(out).toBe('rename it to 「作業」 later')
+})
+
+test('two Japanese quotes are separate slots', async () => {
+  const sent: string[] = []
+  const out = await translateProse('「設定」 and 「保存」 are buttons', async text => {
+    sent.push(text)
+    return '{{0}} and {{1}} ARE BUTTONS'
+  })
+  expect(sent).toStrictEqual(['{{0}} and {{1}} are buttons'])
+  expect(out).toBe('「設定」 and 「保存」 ARE BUTTONS')
+})
+
+test('text made only of a Japanese quote is not sent', async () => {
+  expect(await translateProse('「保存」', async () => 'never')).toBe('「保存」')
+})
+
+test('an unclosed Japanese quote is translated as text', async () => {
+  expect(await translateProse('「保存', upper)).toBe('「保存')
+})
+
 test('a translation that drops a slot keeps the source', async () => {
   expect(await translateProse('Run `bun run check` now', async () => 'run check now')).toBe('Run `bun run check` now')
 })
