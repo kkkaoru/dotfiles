@@ -1,0 +1,169 @@
+// This file runs with bun.
+import type { OAuthCredentials } from "@earendil-works/pi-ai";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+
+import {
+  CONSUMER_PROJECT,
+  fetchAvailableModels,
+  fetchUserInfo,
+  loadCodeAssistProject,
+  rememberModelEnums,
+} from "./src/client.ts";
+import { API_ID, ENDPOINTS, PROVIDER_ID, PROVIDER_NAME } from "./src/constants.ts";
+import { mergeDiscovered, staticModels } from "./src/models.ts";
+import { login, refreshCredential, type AntigravityCredential } from "./src/oauth.ts";
+import { streamAntigravity } from "./src/stream.ts";
+import { closePool } from "./src/transport.ts";
+
+interface ProjectState {
+  resolved: string | undefined;
+}
+
+interface LoginCallbacks {
+  onAuth(info: { url: string; instructions?: string }): void;
+  signal?: AbortSignal;
+}
+
+/** `loadCodeAssist` project, resolved once per process and shared by request and catalog paths. */
+const PROJECT_STATE: ProjectState = { resolved: undefined };
+
+async function projectFor(token: string): Promise<string> {
+  if (PROJECT_STATE.resolved) {
+    return PROJECT_STATE.resolved;
+  }
+  PROJECT_STATE.resolved = (await loadCodeAssistProject(token)) ?? CONSUMER_PROJECT;
+  return PROJECT_STATE.resolved;
+}
+
+function asCredential(
+  credentials: OAuthCredentials | undefined,
+): AntigravityCredential | undefined {
+  if (!credentials || typeof credentials.access !== "string") {
+    return undefined;
+  }
+  return credentials as AntigravityCredential;
+}
+
+async function loginAntigravity(callbacks: LoginCallbacks): Promise<OAuthCredentials> {
+  const credential = await login((url) => {
+    callbacks.onAuth({
+      url,
+      instructions:
+        "Complete the Google sign-in; the browser returns to this machine automatically.",
+    });
+  });
+  // Same startup reads the CLI performs after sign-in.
+  const [projectResult, userResult] = await Promise.allSettled([
+    loadCodeAssistProject(credential.access),
+    fetchUserInfo(credential.access),
+  ]);
+  if (projectResult.status === "fulfilled" && projectResult.value) {
+    PROJECT_STATE.resolved = projectResult.value;
+    credential.projectId = projectResult.value;
+  } else if (projectResult.status === "rejected") {
+    console.warn(
+      `my-antigravity: loadCodeAssist failed during login: ${projectResult.reason instanceof Error ? projectResult.reason.message : String(projectResult.reason)}`,
+    );
+  }
+  if (userResult.status === "fulfilled" && userResult.value.email && !credential.email) {
+    credential.email = userResult.value.email;
+  } else if (userResult.status === "rejected") {
+    console.warn(
+      `my-antigravity: fetchUserInfo failed during login: ${userResult.reason instanceof Error ? userResult.reason.message : String(userResult.reason)}`,
+    );
+  }
+  return credential as OAuthCredentials;
+}
+
+function print(
+  ctx: ExtensionCommandContext,
+  text: string,
+  level: "info" | "warning" = "info",
+): void {
+  if (ctx.hasUI) {
+    ctx.ui.notify(text, level);
+  }
+  console.log(text);
+}
+
+function apiKeyFromCredentials(credentials: OAuthCredentials): string {
+  const credential = asCredential(credentials);
+  if (!credential) {
+    return "";
+  }
+  const projectId = credential.projectId ?? PROJECT_STATE.resolved;
+  return JSON.stringify(
+    projectId ? { token: credential.access, projectId } : { token: credential.access },
+  );
+}
+
+export default function piMyAntigravity(pi: ExtensionAPI): void {
+  pi.registerProvider(PROVIDER_ID, {
+    name: PROVIDER_NAME,
+    baseUrl: ENDPOINTS[0] ?? "https://daily-cloudcode-pa.googleapis.com",
+    api: API_ID,
+    models: staticModels(),
+    oauth: {
+      name: PROVIDER_NAME,
+      isSubscription: true,
+      login: loginAntigravity,
+      refreshToken: async (credentials: OAuthCredentials) =>
+        refreshCredential(asCredential(credentials) as AntigravityCredential),
+      // Synchronous by contract: the project is resolved during login/refresh and cached.
+      getApiKey: apiKeyFromCredentials,
+    },
+    /** Live catalog: `fetchAvailableModels` is what `agy models` prints. */
+    refreshModels: async (context) => {
+      const credential = asCredential(context.credential as OAuthCredentials | undefined);
+      if (!credential?.access || !context.allowNetwork) {
+        return staticModels();
+      }
+      const projectId = credential.projectId ?? (await projectFor(credential.access));
+      // Account lookup mirrors the CLI's startup sequence; do not block model discovery if user info fails.
+      const [, modelsResult] = await Promise.allSettled([
+        fetchUserInfo(credential.access, { signal: context.signal }),
+        fetchAvailableModels(credential.access, projectId, { signal: context.signal }),
+      ]);
+      if (modelsResult.status === "rejected") {
+        throw modelsResult.reason;
+      }
+      rememberModelEnums(modelsResult.value);
+      return mergeDiscovered(modelsResult.value);
+    },
+    streamSimple: streamAntigravity,
+  });
+
+  // Idle HTTP/2 connections are per process; close them with the session.
+  pi.on("session_shutdown", () => closePool());
+
+  pi.registerCommand("my-antigravity.models", {
+    description: "List Antigravity runtime models available to this subscription",
+    handler: async (_args, ctx) => {
+      const raw = await ctx.modelRegistry.getApiKeyForProvider(PROVIDER_ID);
+      if (!raw) {
+        print(ctx, "No Antigravity credential. Run /login my-antigravity first.", "warning");
+        return;
+      }
+      const { token, projectId } = JSON.parse(raw) as { token: string; projectId?: string };
+      const discovered = await fetchAvailableModels(token, projectId ?? CONSUMER_PROJECT);
+      print(ctx, ["Antigravity runtime models", ...discovered.map((model) => model.id)].join("\n"));
+    },
+  });
+
+  pi.registerCommand("my-antigravity.doctor", {
+    description: "Show sanitized my-antigravity provider state",
+    handler: async (_args, ctx) => {
+      print(
+        ctx,
+        [
+          `provider=${PROVIDER_ID}`,
+          `api=${API_ID}`,
+          `endpoint=${ENDPOINTS[0]}`,
+          `project=${PROJECT_STATE.resolved ?? "unresolved"}`,
+          "wire=leading user turn carries the system prompt (agy uses systemInstruction; the backend 429s third-party prompts there)",
+          "commands=/login my-antigravity, /my-antigravity.models, /my-antigravity.doctor",
+        ].join("\n"),
+      );
+    },
+  });
+}

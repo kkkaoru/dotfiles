@@ -1,0 +1,12 @@
+{
+  "ignorePatterns": ["coverage", "node_modules"],
+  "rules": {
+    "complexity": ["error", 10],
+    "curly": ["error", "all"],
+    "max-depth": ["error", 3],
+    "no-nested-ternary": "error"
+  },
+  "categories": {
+    "perf": "error"
+  }
+}
