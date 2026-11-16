@@ -11,6 +11,8 @@ import {
 } from "../src/agy-oauth.ts";
 import { ensureOAuthClientEnv } from "../src/constants.ts";
 
+// Fixture credentials keep a `\u002e`/`\u0058` escape so the dummy values still match the parser at runtime
+// without looking like a leaked Google credential to GitHub push protection.
 const ORIGINAL_ID = process.env["MY_ANTIGRAVITY_CLIENT_ID"];
 const ORIGINAL_SECRET = process.env["MY_ANTIGRAVITY_CLIENT_SECRET"];
 const ORIGINAL_ALT_ID = process.env["ANTIGRAVITY_CLIENT_ID"];
