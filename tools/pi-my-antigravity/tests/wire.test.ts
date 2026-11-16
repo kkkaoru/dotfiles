@@ -1,5 +1,8 @@
 // This file runs with bun.
-import { afterEach, expect, it } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, expect, it, vi } from "vitest";
 
 import { cliVersion, oauthClientConfig, userAgent } from "../src/constants.ts";
 import { TRANSPORT_TLS_OPTIONS, wireHeaders } from "../src/transport.ts";
@@ -7,6 +10,8 @@ import { TRANSPORT_TLS_OPTIONS, wireHeaders } from "../src/transport.ts";
 const ORIGINAL_UA = process.env["MY_ANTIGRAVITY_USER_AGENT"];
 const ORIGINAL_ID = process.env["MY_ANTIGRAVITY_CLIENT_ID"];
 const ORIGINAL_SECRET = process.env["MY_ANTIGRAVITY_CLIENT_SECRET"];
+const ORIGINAL_ALT_ID = process.env["ANTIGRAVITY_CLIENT_ID"];
+const ORIGINAL_ALT_SECRET = process.env["ANTIGRAVITY_CLIENT_SECRET"];
 
 afterEach(() => {
   if (ORIGINAL_UA === undefined) {
@@ -24,20 +29,61 @@ afterEach(() => {
   } else {
     process.env["MY_ANTIGRAVITY_CLIENT_SECRET"] = ORIGINAL_SECRET;
   }
+  if (ORIGINAL_ALT_ID === undefined) {
+    delete process.env["ANTIGRAVITY_CLIENT_ID"];
+  } else {
+    process.env["ANTIGRAVITY_CLIENT_ID"] = ORIGINAL_ALT_ID;
+  }
+  if (ORIGINAL_ALT_SECRET === undefined) {
+    delete process.env["ANTIGRAVITY_CLIENT_SECRET"];
+  } else {
+    process.env["ANTIGRAVITY_CLIENT_SECRET"] = ORIGINAL_ALT_SECRET;
+  }
 });
 
-it("reads the installed CLI version or falls back cleanly", () => {
-  expect(cliVersion()).toMatch(/^\d+\.\d+\.\d+$/);
-});
-
-it("matches the CLI User-Agent template and honors overrides", () => {
+it("reads the installed CLI version and caches default User-Agent", () => {
   delete process.env["MY_ANTIGRAVITY_USER_AGENT"];
-  expect(userAgent()).toMatch(
+  expect(cliVersion()).toMatch(/^\d+\.\d+\.\d+$/);
+  const firstUa = userAgent();
+  expect(firstUa).toMatch(
     /^antigravity\/cli\/\d+\.\d+\.\d+ \(aidev_client; os_type=(darwin|linux|windows); arch=(arm64|amd64|386|arm); purpose=agent; auth_method=consumer\)$/,
   );
+  expect(userAgent()).toBe(firstUa);
 
   process.env["MY_ANTIGRAVITY_USER_AGENT"] = "antigravity/cli/9.9.9 (test)";
   expect(userAgent()).toBe("antigravity/cli/9.9.9 (test)");
+});
+
+it("falls back to CLI_VERSION when agy binary is absent or fails", async () => {
+  const warnCalls: unknown[][] = [];
+  vi.spyOn(console, "warn").mockImplementation((...args) => {
+    warnCalls.push(args);
+  });
+  const originalPath = process.env["PATH"];
+  process.env["PATH"] = "";
+  vi.resetModules();
+  try {
+    const fresh = await import("../src/constants.ts");
+    expect(fresh.cliVersion()).toBe("1.5.9");
+    expect(warnCalls.length).toBe(0);
+  } finally {
+    process.env["PATH"] = originalPath;
+    vi.resetModules();
+  }
+
+  const dir = mkdtempSync(join(tmpdir(), "myag-cli-fail-"));
+  writeFileSync(join(dir, "agy"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  process.env["PATH"] = dir;
+  vi.resetModules();
+  try {
+    const fresh = await import("../src/constants.ts");
+    expect(fresh.cliVersion()).toBe("1.5.9");
+    expect(warnCalls.length).toBe(1);
+  } finally {
+    process.env["PATH"] = originalPath;
+    rmSync(dir, { recursive: true, force: true });
+    vi.resetModules();
+  }
 });
 
 it("reads OAuth client credentials from environment and throws when missing", () => {

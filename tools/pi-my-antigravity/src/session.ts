@@ -2,6 +2,8 @@
 import { createHash } from "node:crypto";
 import type { TranscriptContext } from "@earendil-works/pi-ai";
 
+import { stringifyJson } from "./json.ts";
+
 /**
  * Wire session identity.
  *
@@ -32,6 +34,23 @@ export interface Envelope {
   labels: Record<string, string>;
 }
 
+interface ConversationScanState {
+  firstUser: TranscriptContext["messages"][number] | undefined;
+  index: number;
+}
+
+interface CachedIdentity {
+  seed: string;
+  trajectoryId: string;
+  sessionId: string;
+}
+
+const IDENTITY_CACHE: CachedIdentity = {
+  seed: "",
+  trajectoryId: "",
+  sessionId: "",
+};
+
 const UUID_BYTE_COUNT = 16;
 const UUID_VERSION_INDEX = 6;
 const UUID_VARIANT_INDEX = 8;
@@ -57,6 +76,61 @@ export function stableSessionId(seed: string): string {
   return value.toString();
 }
 
+function recordConversationMessage(
+  state: ConversationScanState,
+  message: TranscriptContext["messages"][number],
+  needFirstUser: boolean,
+): void {
+  if (needFirstUser && !state.firstUser && message.role === "user") {
+    state.firstUser = message;
+    return;
+  }
+  if (
+    message.role === "assistant" &&
+    message.stopReason !== "error" &&
+    message.stopReason !== "aborted"
+  ) {
+    state.index += 1;
+  }
+}
+
+function scanConversation(
+  sessionId: string | undefined,
+  messages: TranscriptContext["messages"],
+): { seed: string; index: number } {
+  const trimmedSession = sessionId?.trim();
+  const state: ConversationScanState = {
+    firstUser: undefined,
+    index: 0,
+  };
+  const needFirstUser = !trimmedSession;
+  for (const message of messages) {
+    recordConversationMessage(state, message, needFirstUser);
+  }
+  if (trimmedSession) {
+    return { seed: `session:${trimmedSession}`, index: state.index };
+  }
+  if (!state.firstUser || state.firstUser.role !== "user") {
+    return { seed: "prompt:empty", index: state.index };
+  }
+  return { seed: seedFromUserContent(state.firstUser.content), index: state.index };
+}
+
+function seedFromUserContent(
+  content: Extract<TranscriptContext["messages"][number], { role: "user" }>["content"],
+): string {
+  if (typeof content === "string") {
+    return `prompt:${content.slice(0, MAX_PROMPT_SEED_LENGTH)}`;
+  }
+  // Bound before serializing so large base64 image payloads are never stringified whole.
+  const preview = content.map((block) =>
+    block.type === "text"
+      ? { type: "text", text: block.text.slice(0, MAX_PROMPT_SEED_LENGTH) }
+      : { type: block.type },
+  );
+  return `prompt:${stringifyJson(preview).slice(0, MAX_PROMPT_SEED_LENGTH)}`;
+}
+
 /** Conversation seed: pi's session id when present, otherwise the opening user turn. */
 export function conversationSeed(
   sessionId: string | undefined,
@@ -66,40 +140,29 @@ export function conversationSeed(
     return `session:${sessionId.trim()}`;
   }
   const firstUser = messages.find((message) => message.role === "user");
-  if (!firstUser) {
+  if (!firstUser || firstUser.role !== "user") {
     return "prompt:empty";
   }
-  if (typeof firstUser.content === "string") {
-    return `prompt:${firstUser.content.slice(0, MAX_PROMPT_SEED_LENGTH)}`;
-  }
-  // Bound before serializing so large base64 image payloads are never stringified whole.
-  const preview = firstUser.content.map((block) =>
-    block.type === "text"
-      ? { type: "text", text: block.text.slice(0, MAX_PROMPT_SEED_LENGTH) }
-      : { type: block.type },
-  );
-  return `prompt:${JSON.stringify(preview).slice(0, MAX_PROMPT_SEED_LENGTH)}`;
+  return seedFromUserContent(firstUser.content);
 }
 
 /** Completed assistant turns; the CLI's `requestIndex`. */
-export function requestIndex(messages: TranscriptContext["messages"]): number {
-  const counter = { count: 0 };
-  for (const message of messages) {
-    if (message.role !== "assistant") {
-      continue;
-    }
-    const stopReason = (message as { stopReason?: string }).stopReason;
-    if (stopReason !== "error" && stopReason !== "aborted") {
-      counter.count += 1;
-    }
+export const requestIndex = (messages: TranscriptContext["messages"]): number =>
+  scanConversation("_", messages).index;
+
+function resolveIdentity(seed: string): CachedIdentity {
+  if (IDENTITY_CACHE.seed === seed) {
+    return IDENTITY_CACHE;
   }
-  return counter.count;
+  IDENTITY_CACHE.seed = seed;
+  IDENTITY_CACHE.trajectoryId = stableUuid(`antigravity:trajectory:${seed}`);
+  IDENTITY_CACHE.sessionId = stableSessionId(`antigravity:session:${seed}`);
+  return IDENTITY_CACHE;
 }
 
 export function sessionEnvelope(input: EnvelopeInput): Envelope {
-  const seed = conversationSeed(input.sessionId, input.messages);
-  const trajectoryId = stableUuid(`antigravity:trajectory:${seed}`);
-  const index = requestIndex(input.messages);
+  const { seed, index } = scanConversation(input.sessionId, input.messages);
+  const { trajectoryId, sessionId } = resolveIdentity(seed);
   const step = Math.max(1, input.step);
 
   const labels: Record<string, string> = {
@@ -120,7 +183,7 @@ export function sessionEnvelope(input: EnvelopeInput): Envelope {
   return {
     trajectoryId,
     requestId: `${trajectoryId}-${index}`,
-    sessionId: stableSessionId(`antigravity:session:${seed}`),
+    sessionId,
     labels,
   };
 }

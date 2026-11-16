@@ -8,6 +8,7 @@ import type {
 } from "@earendil-works/pi-ai";
 import { expect, it } from "vitest";
 
+import { rememberModelEnums } from "../src/client.ts";
 import { buildGenerateBody, parseAuthValue, parseChunk, streamAntigravity } from "../src/stream.ts";
 import type { WireResponse } from "../src/transport.ts";
 
@@ -91,16 +92,24 @@ it("declares tools via parametersJsonSchema and replays images, assistant calls,
     systemPrompt: undefined,
     messages: [
       {
+        role: "system",
+        content: "ignored",
+        timestamp: 0,
+      },
+      {
         role: "user",
         content: [
           { type: "text", text: "see" },
           { type: "image", data: "YWJj", mimeType: "image/jpeg" },
+          { type: "image", data: "ZGVm", mimeType: "" },
         ],
         timestamp: 1,
       },
       {
         role: "assistant",
         content: [
+          { type: "thinking", thinking: "hmm" },
+          { type: "text", text: "   " },
           { type: "text", text: "checking" },
           {
             type: "toolCall",
@@ -108,6 +117,12 @@ it("declares tools via parametersJsonSchema and replays images, assistant calls,
             name: "bash",
             arguments: { command: "pwd" },
             thoughtSignature: "sig-1",
+          },
+          {
+            type: "toolCall",
+            id: "c2",
+            name: "read",
+            arguments: {},
           },
         ],
         api: "my-antigravity-api",
@@ -129,7 +144,10 @@ it("declares tools via parametersJsonSchema and replays images, assistant calls,
         role: "toolResult",
         toolCallId: "c2",
         toolName: "read",
-        content: [{ type: "text", text: "boom" }],
+        content: [
+          { type: "text", text: "boom" },
+          { type: "image", data: "img", mimeType: "image/png" },
+        ],
         isError: true,
         timestamp: 4,
       },
@@ -139,25 +157,65 @@ it("declares tools via parametersJsonSchema and replays images, assistant calls,
     modelMaxTokens: 128000,
   });
 
-  const declaration = body.request.tools?.[0]?.functionDeclarations[0] as Record<string, unknown>;
-  expect(declaration["parametersJsonSchema"]).toBeDefined();
+  const declaration = body.request.tools?.[0]?.functionDeclarations[0];
+  expect(declaration?.parametersJsonSchema).toBeDefined();
+  // Second call with the same tools array exercises TOOL_CACHE hit.
+  const cachedTools = [READ_TOOL];
+  const cachedFirst = buildGenerateBody({
+    project: "aicode-consumers",
+    publicModelId: "gemini-4-hydrogen",
+    level: "low",
+    systemPrompt: undefined,
+    messages: contextWith("").messages,
+    tools: cachedTools,
+    maxTokens: undefined,
+    modelMaxTokens: 65536,
+  });
+  const cachedSecond = buildGenerateBody({
+    project: "aicode-consumers",
+    publicModelId: "gemini-4-hydrogen",
+    level: "low",
+    systemPrompt: undefined,
+    messages: contextWith("").messages,
+    tools: cachedTools,
+    maxTokens: undefined,
+    modelMaxTokens: 65536,
+  });
+  expect(cachedSecond.request.tools).toBe(cachedFirst.request.tools);
+
+  const otherTool = { ...READ_TOOL, name: "write" } as unknown as Tool;
+  const cachedThird = buildGenerateBody({
+    project: "aicode-consumers",
+    publicModelId: "gemini-4-hydrogen",
+    level: "low",
+    systemPrompt: undefined,
+    messages: contextWith("").messages,
+    tools: [otherTool],
+    maxTokens: undefined,
+    modelMaxTokens: 65536,
+  });
+  expect(cachedThird.request.tools).not.toBe(cachedFirst.request.tools);
   expect(body.request.generationConfig?.["maxOutputTokens"]).toBe(1024);
   expect(body.request.labels["used_claude"]).toBe("true");
   expect(body.request.contents[0]?.parts[1]).toStrictEqual({
     inlineData: { mimeType: "image/jpeg", data: "YWJj" },
+  });
+  expect(body.request.contents[0]?.parts[2]).toStrictEqual({
+    inlineData: { mimeType: "image/png", data: "ZGVm" },
   });
   expect(body.request.contents[1]).toStrictEqual({
     role: "model",
     parts: [
       { text: "checking" },
       { functionCall: { name: "bash", args: { command: "pwd" } }, thoughtSignature: "sig-1" },
+      { functionCall: { name: "read", args: {} } },
     ],
   });
   const last = body.request.contents.at(-1);
   expect(last?.role).toBe("user");
   expect(last?.parts).toStrictEqual([
     { functionResponse: { name: "bash", response: { output: "ok" } } },
-    { functionResponse: { name: "read", response: { error: "boom" } } },
+    { functionResponse: { name: "read", response: { error: "boom\n[image]" } } },
   ]);
 });
 
@@ -213,18 +271,71 @@ it("parses SSE chunks and auth values", () => {
   });
 
   expect(parseChunk("not json")).toBeUndefined();
+  expect(parseChunk("null")).toBeUndefined();
   expect(parseChunk(JSON.stringify({ response: {} }))).toStrictEqual({});
+  expect(parseChunk(JSON.stringify({ candidates: [{}] }))).toStrictEqual({});
+  expect(parseChunk(JSON.stringify({ candidates: [] }))).toStrictEqual({});
+  expect(
+    parseChunk(
+      JSON.stringify({
+        candidates: [
+          { content: { parts: [{ text: 123 }, { functionCall: { name: "x", args: "bad" } }] } },
+        ],
+      }),
+    ),
+  ).toStrictEqual({ toolCall: { name: "x", args: {} } });
+  expect(
+    parseChunk(
+      JSON.stringify({
+        candidates: [{ content: { parts: [{ text: "a" }] }, finishReason: "OTHER" }],
+      }),
+    ),
+  ).toStrictEqual({ text: "a", finishReason: "OTHER" });
+
+  // Also test streamAntigravity with finishReason "OTHER" (not MAX_TOKENS) and empty stream.
+  expect(
+    parseChunk(
+      JSON.stringify({
+        candidates: [
+          {
+            content: {
+              parts: [
+                null,
+                { functionCall: {} },
+                {
+                  functionCall: {
+                    name: "bash",
+                    args: { ok: true, count: 2, empty: null, list: ["x", 1], nested: { a: "b" } },
+                  },
+                },
+                { text: "" },
+              ],
+            },
+          },
+        ],
+        usageMetadata: {},
+      }),
+    ),
+  ).toStrictEqual({
+    toolCall: {
+      name: "bash",
+      args: { ok: true, count: 2, empty: null, list: ["x", 1], nested: { a: "b" } },
+    },
+    usage: {},
+  });
 
   expect(parseAuthValue(JSON.stringify({ token: "t", projectId: "p" }))).toStrictEqual({
     token: "t",
     projectId: "p",
   });
   expect(parseAuthValue("t")).toStrictEqual({ token: "t" });
+  expect(() => parseAuthValue(undefined)).toThrow(/login my-antigravity/);
   expect(() => parseAuthValue("")).toThrow(/login my-antigravity/);
   expect(() => parseAuthValue("{}")).toThrow(/missing an access token/);
 });
 
 it("streams thinking, text, and tool calls through pi events", async () => {
+  rememberModelEnums([{ id: "gemini-4-hydrogen-medium", modelEnum: "MODEL_PLACEHOLDER_M526" }]);
   const events: AssistantMessageEvent[] = [];
   const stream = streamAntigravity(TEST_MODEL, contextWith("sys", [READ_TOOL]), {
     apiKey: JSON.stringify({ token: "tok", projectId: "proj" }),
@@ -233,13 +344,32 @@ it("streams thinking, text, and tool calls through pi events", async () => {
     send: async () =>
       sseResponse(200, [
         { response: { candidates: [{ content: { parts: [{ thought: true, text: "plan" }] } }] } },
+        { response: { candidates: [{ content: { parts: [{ thought: true, text: " more" }] } }] } },
         { response: { candidates: [{ content: { parts: [{ text: "answer" }] } }] } },
+        { response: { candidates: [{ content: { parts: [{ text: "!" }] } }] } },
         {
           response: {
             candidates: [
               {
                 content: {
                   parts: [{ functionCall: { name: "read", args: { path: "a.ts" } } }],
+                },
+              },
+            ],
+            usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 3, thoughtsTokenCount: 1 },
+          },
+        },
+        {
+          response: {
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    {
+                      functionCall: { name: "bash", args: { command: "pwd" } },
+                      thoughtSignature: "sig-inline",
+                    },
+                  ],
                 },
               },
             ],
@@ -255,7 +385,7 @@ it("streams thinking, text, and tool calls through pi events", async () => {
                 finishReason: "STOP",
               },
             ],
-            usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 3, thoughtsTokenCount: 1 },
+            usageMetadata: {},
             responseId: "resp-1",
           },
         },
@@ -325,11 +455,12 @@ it("emits error events for 429, 401, and retries 503 across endpoints", async ()
   }
 });
 
-it("retries 503 across endpoints", async () => {
+it("retries 503 across endpoints and handles CRLF + non-Error throws", async () => {
   const retryEvents: AssistantMessageEvent[] = [];
   const attempts = { count: 0 };
-  for await (const event of streamAntigravity(TEST_MODEL, contextWith("sys"), {
+  for await (const event of streamAntigravity({ ...TEST_MODEL, maxTokens: 0 }, contextWith("sys"), {
     apiKey: "tok",
+    signal: new AbortController().signal,
     send: async () => {
       attempts.count += 1;
       return sseResponse(503, [{ error: "down" }]);
@@ -339,4 +470,110 @@ it("retries 503 across endpoints", async () => {
   }
   expect(attempts.count).toBe(2);
   expect(retryEvents.at(-1)?.type).toBe("error");
+
+  const nonErrorEvents: AssistantMessageEvent[] = [];
+  for await (const event of streamAntigravity(TEST_MODEL, contextWith("sys"), {
+    apiKey: "tok",
+    send: async () => {
+      throw "string-boom";
+    },
+  })) {
+    nonErrorEvents.push(event);
+  }
+  const strErr = nonErrorEvents.at(-1);
+  expect(strErr?.type).toBe("error");
+  if (strErr?.type === "error") {
+    expect(strErr.error.errorMessage).toBe("string-boom");
+  }
+
+  const nonRetryEvents: AssistantMessageEvent[] = [];
+  const badReqAttempts = { count: 0 };
+  for await (const event of streamAntigravity(TEST_MODEL, contextWith("sys"), {
+    apiKey: "tok",
+    send: async () => {
+      badReqAttempts.count += 1;
+      return sseResponse(400, [{ error: "bad request" }]);
+    },
+  })) {
+    nonRetryEvents.push(event);
+  }
+  expect(badReqAttempts.count).toBe(1);
+  expect(nonRetryEvents.at(-1)?.type).toBe("error");
+});
+
+it("handles empty streams and CRLF framing", async () => {
+  const emptyEvents: AssistantMessageEvent[] = [];
+  for await (const event of streamAntigravity(TEST_MODEL, contextWith(""), {
+    apiKey: "tok",
+    send: async () => sseResponse(200, [{ response: {} }]),
+  })) {
+    emptyEvents.push(event);
+  }
+  expect(emptyEvents.at(-1)?.type).toBe("done");
+
+  const crlfEvents: AssistantMessageEvent[] = [];
+  const crlfPayload = `data: {"response":{"candidates":[{"content":{"parts":\r\ndata: [{"text":"crlf"}]},"finishReason":"STOP"}]}}\r\n\r\n`;
+  for await (const event of streamAntigravity(TEST_MODEL, contextWith("sys"), {
+    apiKey: "tok",
+    send: async () => ({
+      status: 200,
+      headers: {},
+      body: (async function* () {
+        yield Buffer.from(crlfPayload);
+      })(),
+      text: async () => crlfPayload,
+    }),
+  })) {
+    crlfEvents.push(event);
+  }
+  expect(crlfEvents.at(-1)?.type).toBe("done");
+
+  // Stream ending without a trailing newline flushes the final data line on EOF.
+  const eofEvents: AssistantMessageEvent[] = [];
+  const eofPayload = `data: ${JSON.stringify({ response: { candidates: [{ content: { parts: [{ text: "eof" }] }, finishReason: "STOP" }] } })}`;
+  for await (const event of streamAntigravity(TEST_MODEL, contextWith("sys"), {
+    apiKey: "tok",
+    send: async () => ({
+      status: 200,
+      headers: {},
+      body: (async function* () {
+        yield Buffer.from(eofPayload);
+      })(),
+      text: async () => eofPayload,
+    }),
+  })) {
+    eofEvents.push(event);
+  }
+  const eofDone = eofEvents.at(-1);
+  expect(eofDone?.type).toBe("done");
+  if (eofDone?.type === "done") {
+    expect(eofDone.message.content[0]).toStrictEqual({ type: "text", text: "eof" });
+  }
+});
+
+it("streams large SSE payloads in linear time", async () => {
+  const chunkLine = `data: ${JSON.stringify({ response: { candidates: [{ content: { parts: [{ text: "x" }] } }] } })}\n\n`;
+  const runBatch = async (count: number): Promise<number> => {
+    const payload = chunkLine.repeat(count);
+    const start = performance.now();
+    for await (const _event of streamAntigravity(TEST_MODEL, contextWith("sys"), {
+      apiKey: "tok",
+      send: async () => ({
+        status: 200,
+        headers: {},
+        body: (async function* () {
+          yield Buffer.from(payload);
+        })(),
+        text: async () => payload,
+      }),
+    })) {
+      // Drain stream events to measure total parsing and emission scaling.
+    }
+    return performance.now() - start;
+  };
+
+  await runBatch(500);
+  const smallMs = Math.max(await runBatch(1000), 1);
+  const largeMs = await runBatch(10000);
+  expect(largeMs / smallMs).toBeLessThan(25);
 });

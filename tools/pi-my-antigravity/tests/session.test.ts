@@ -98,4 +98,20 @@ it("counts completed assistant turns and builds first vs subsequent envelopes", 
   expect(secondTurn.labels["last_execution_id"]).toBeDefined();
   expect(secondTurn.labels["used_claude"]).toBe("true");
   expect(secondTurn.labels["used_non_gemini_model"]).toBe("true");
+
+  const headlessArray = sessionEnvelope({
+    messages: asMessages(user([{ type: "text", text: "hi" }])),
+    step: 1,
+    isClaude: false,
+    isNonGemini: false,
+  });
+  expect(headlessArray.trajectoryId).toBeDefined();
+
+  const headlessEmpty = sessionEnvelope({
+    messages: asMessages(),
+    step: 1,
+    isClaude: false,
+    isNonGemini: false,
+  });
+  expect(headlessEmpty.trajectoryId).toBeDefined();
 });

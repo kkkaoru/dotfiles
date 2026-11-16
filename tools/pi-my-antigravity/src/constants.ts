@@ -11,6 +11,7 @@ import { execFileSync } from "node:child_process";
 
 interface VersionState {
   detected: string | undefined;
+  defaultUa: string | undefined;
 }
 
 export interface OAuthClientConfig {
@@ -22,9 +23,11 @@ export const PROVIDER_ID = "my-antigravity";
 export const PROVIDER_NAME = "Antigravity (my)";
 export const API_ID = "my-antigravity-api";
 
+export const DEFAULT_ENDPOINT = "https://daily-cloudcode-pa.googleapis.com";
+
 /** `agy` talks to the daily Cloud Code Assist host first, then production. */
 export const ENDPOINTS: readonly string[] = [
-  "https://daily-cloudcode-pa.googleapis.com",
+  DEFAULT_ENDPOINT,
   "https://cloudcode-pa.googleapis.com",
 ] satisfies readonly string[];
 
@@ -33,7 +36,7 @@ export const CLI_VERSION = "1.5.9";
 
 const CLI_VERSION_PATTERN = /(\d+\.\d+\.\d+)/;
 const CLI_QUERY_TIMEOUT_MS = 2000;
-const VERSION_STATE: VersionState = { detected: undefined };
+const VERSION_STATE: VersionState = { detected: undefined, defaultUa: undefined };
 
 /** Go's `runtime.GOOS` naming, which is what the CLI reports. */
 const GO_OS: ReadonlyMap<string, string> = new Map([
@@ -81,6 +84,9 @@ export function oauthClientConfig(): OAuthClientConfig {
   return { clientId, clientSecret };
 }
 
+const errorCode = (error: unknown): unknown =>
+  typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+
 /**
  * The CLI builds its User-Agent from `<product>/<version> (aidev_client; os_type=%s;
  * …; auth_method=%s)`. Read the version from the installed binary so a CLI update
@@ -101,7 +107,7 @@ export function cliVersion(): string {
     }
   } catch (error) {
     // Installed `agy` binary is optional; fall back to `CLI_VERSION` when absent.
-    if ((error as { code?: string }).code !== "ENOENT") {
+    if (errorCode(error) !== "ENOENT") {
       console.warn(
         `my-antigravity: failed to read agy --version: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -116,7 +122,11 @@ export function userAgent(): string {
   if (override) {
     return override;
   }
+  if (VERSION_STATE.defaultUa !== undefined) {
+    return VERSION_STATE.defaultUa;
+  }
   const osName = GO_OS.get(process.platform) ?? process.platform;
   const archName = GO_ARCH.get(process.arch) ?? process.arch;
-  return `antigravity/cli/${cliVersion()} (aidev_client; os_type=${osName}; arch=${archName}; purpose=agent; auth_method=consumer)`;
+  VERSION_STATE.defaultUa = `antigravity/cli/${cliVersion()} (aidev_client; os_type=${osName}; arch=${archName}; purpose=agent; auth_method=consumer)`;
+  return VERSION_STATE.defaultUa;
 }

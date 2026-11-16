@@ -1,7 +1,9 @@
 // This file runs with bun.
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+import type { ModelThinkingLevel, ThinkingLevel, ThinkingLevelMap } from "@earendil-works/pi-ai";
 
-export type LevelMap = Record<ThinkingLevel, string | null>;
+export type { ModelThinkingLevel, ThinkingLevel, ThinkingLevelMap };
+
+export type LevelMap = ThinkingLevelMap;
 
 export interface LevelMapSet {
   threeTier: LevelMap;
@@ -28,10 +30,8 @@ const GPT_OSS_CONTEXT_WINDOW = 131072;
 const GPT_OSS_MAX_TOKENS = 32768;
 const HYDROGEN_MAX_TOKENS = 262144;
 
-const withLevels = (
-  ...levels: Array<Exclude<ThinkingLevel, "off" | "minimal" | "max">>
-): LevelMap => {
-  const map: LevelMap = {
+const withLevels = (...levels: Array<Exclude<ThinkingLevel, "minimal" | "max">>): LevelMap => {
+  const map: Record<ModelThinkingLevel, string | null> = {
     off: null,
     minimal: null,
     low: null,

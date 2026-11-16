@@ -10,10 +10,18 @@ import {
   type Family,
   type LevelMap,
   type LevelMapSet,
+  type ModelThinkingLevel,
   type ThinkingLevel,
 } from "./families.ts";
 
-export { PROVIDER_ID, levelMap, type LevelMap, type LevelMapSet, type ThinkingLevel };
+export {
+  PROVIDER_ID,
+  levelMap,
+  type LevelMap,
+  type LevelMapSet,
+  type ModelThinkingLevel,
+  type ThinkingLevel,
+};
 
 export interface DiscoveredEntry {
   id: string;
@@ -22,7 +30,7 @@ export interface DiscoveredEntry {
 
 const FREE_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
-const THINKING_BUDGETS: ReadonlyMap<ThinkingLevel, number> = new Map([
+const THINKING_BUDGETS: ReadonlyMap<ModelThinkingLevel, number> = new Map([
   ["minimal", 1024],
   ["low", 4096],
   ["medium", 8192],
@@ -39,25 +47,34 @@ const FAMILY_BY_ID: ReadonlyMap<string, Family> = new Map(
 );
 const KNOWN_FAMILY_IDS: ReadonlySet<string> = new Set(FAMILIES.map((family) => family.family));
 
-const configFor = (family: Family): ProviderModelConfig =>
-  ({
-    id: family.family,
-    name: family.name,
-    reasoning: true,
-    thinkingLevelMap: family.levels,
-    input: family.input,
-    cost: FREE_COST,
-    contextWindow: family.contextWindow,
-    maxTokens: family.maxTokens,
-  }) as ProviderModelConfig;
+const FALLBACK_LEVELS: readonly ModelThinkingLevel[] = [
+  "high",
+  "medium",
+  "low",
+  "xhigh",
+  "minimal",
+];
 
-export const staticModels = (): ProviderModelConfig[] => FAMILIES.map(configFor);
+const configFor = (family: Family): ProviderModelConfig => ({
+  id: family.family,
+  name: family.name,
+  reasoning: true,
+  thinkingLevelMap: family.levels,
+  input: family.input,
+  cost: FREE_COST,
+  contextWindow: family.contextWindow,
+  maxTokens: family.maxTokens,
+});
+
+const STATIC_MODELS: readonly ProviderModelConfig[] = FAMILIES.map(configFor);
+
+export const staticModels = (): ProviderModelConfig[] => STATIC_MODELS.slice();
 
 /**
  * Resolve the runtime id the CLI would send for a public id + pi thinking level.
  * `agy --model gemini-4-hydrogen --effort medium` sends `gemini-4-hydrogen-medium`.
  */
-export function runtimeModelId(publicId: string, level: ThinkingLevel | undefined): string {
+export function runtimeModelId(publicId: string, level: ModelThinkingLevel | undefined): string {
   const family = FAMILY_BY_ID.get(publicId);
   if (!family) {
     return publicId;
@@ -65,16 +82,14 @@ export function runtimeModelId(publicId: string, level: ThinkingLevel | undefine
   if (family.fixedRuntime) {
     return family.fixedRuntime;
   }
-  const fallbacks: Array<ThinkingLevel | undefined> = [
-    level,
-    "high",
-    "medium",
-    "low",
-    "xhigh",
-    "minimal",
-  ];
-  for (const candidate of fallbacks) {
-    const tier = candidate ? family.levels[candidate] : null;
+  if (level) {
+    const requested = family.levels[level];
+    if (typeof requested === "string" && requested) {
+      return `${family.family}-${requested}`;
+    }
+  }
+  for (const candidate of FALLBACK_LEVELS) {
+    const tier = family.levels[candidate];
     if (typeof tier === "string" && tier) {
       return `${family.family}-${tier}`;
     }
@@ -83,7 +98,7 @@ export function runtimeModelId(publicId: string, level: ThinkingLevel | undefine
 }
 
 /** Thinking budget per level, matching the CLI's `--effort` behaviour. */
-export const thinkingBudget = (level: ThinkingLevel | undefined): number =>
+export const thinkingBudget = (level: ModelThinkingLevel | undefined): number =>
   (level ? THINKING_BUDGETS.get(level) : undefined) ?? DEFAULT_THINKING_BUDGET;
 
 /**
@@ -117,7 +132,7 @@ export function mergeDiscovered(discovered: DiscoveredEntry[]): ProviderModelCon
       cost: FREE_COST,
       contextWindow: DEFAULT_CONTEXT_WINDOW,
       maxTokens: DEFAULT_MAX_TOKENS,
-    } as ProviderModelConfig);
+    });
   }
   return models;
 }

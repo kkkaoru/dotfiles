@@ -9,10 +9,17 @@ import {
   loadCodeAssistProject,
   rememberModelEnums,
 } from "./src/client.ts";
-import { API_ID, ENDPOINTS, PROVIDER_ID, PROVIDER_NAME } from "./src/constants.ts";
+import {
+  API_ID,
+  DEFAULT_ENDPOINT,
+  ENDPOINTS,
+  PROVIDER_ID,
+  PROVIDER_NAME,
+} from "./src/constants.ts";
+import { stringifyJson } from "./src/json.ts";
 import { mergeDiscovered, staticModels } from "./src/models.ts";
 import { login, refreshCredential, type AntigravityCredential } from "./src/oauth.ts";
-import { streamAntigravity } from "./src/stream.ts";
+import { parseAuthValue, streamAntigravity } from "./src/stream.ts";
 import { closePool } from "./src/transport.ts";
 
 interface ProjectState {
@@ -92,7 +99,7 @@ function apiKeyFromCredentials(credentials: OAuthCredentials): string {
     return "";
   }
   const projectId = credential.projectId ?? PROJECT_STATE.resolved;
-  return JSON.stringify(
+  return stringifyJson(
     projectId ? { token: credential.access, projectId } : { token: credential.access },
   );
 }
@@ -100,7 +107,7 @@ function apiKeyFromCredentials(credentials: OAuthCredentials): string {
 export default function piMyAntigravity(pi: ExtensionAPI): void {
   pi.registerProvider(PROVIDER_ID, {
     name: PROVIDER_NAME,
-    baseUrl: ENDPOINTS[0] ?? "https://daily-cloudcode-pa.googleapis.com",
+    baseUrl: DEFAULT_ENDPOINT,
     api: API_ID,
     models: staticModels(),
     oauth: {
@@ -144,7 +151,7 @@ export default function piMyAntigravity(pi: ExtensionAPI): void {
         print(ctx, "No Antigravity credential. Run /login my-antigravity first.", "warning");
         return;
       }
-      const { token, projectId } = JSON.parse(raw) as { token: string; projectId?: string };
+      const { token, projectId } = parseAuthValue(raw);
       const discovered = await fetchAvailableModels(token, projectId ?? CONSUMER_PROJECT);
       print(ctx, ["Antigravity runtime models", ...discovered.map((model) => model.id)].join("\n"));
     },

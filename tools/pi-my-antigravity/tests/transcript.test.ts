@@ -2,7 +2,7 @@
 import type { Tool, TranscriptContext } from "@earendil-works/pi-ai";
 import { expect, it } from "vitest";
 
-import { currentSystemPrompt, currentTools } from "../src/transcript.ts";
+import { currentSystemPrompt, currentTools, replayTranscript } from "../src/transcript.ts";
 
 const messages = (...items: unknown[]): TranscriptContext["messages"] =>
   items as TranscriptContext["messages"];
@@ -14,6 +14,7 @@ it("replays string, array, and section system messages in order", () => {
   const prompt = currentSystemPrompt(
     messages(
       { role: "system", content: "base prompt", timestamp: 1 },
+      { role: "system", content: "   ", timestamp: 1 },
       { role: "user", content: "ignored", timestamp: 2 },
       {
         role: "system",
@@ -25,6 +26,7 @@ it("replays string, array, and section system messages in order", () => {
       },
       {
         role: "system",
+        content: 123,
         sections: { rules: "<rules>be brief</rules>", empty: "  ", removed: null },
         timestamp: 4,
       },
@@ -37,7 +39,7 @@ it("replays string, array, and section system messages in order", () => {
 it("applies toolsAdded, tools, and toolsRemoved in order", () => {
   const tools = currentTools(
     messages(
-      { role: "system", content: "", toolsAdded: [tool("read"), tool("bash")], timestamp: 1 },
+      { role: "system", content: "", toolsAdded: [tool("read"), tool("bash"), {}], timestamp: 1 },
       { role: "user", content: "hi", timestamp: 2 },
       {
         role: "system",
@@ -49,4 +51,13 @@ it("applies toolsAdded, tools, and toolsRemoved in order", () => {
     ),
   );
   expect(tools.map((entry) => entry.name)).toStrictEqual(["read", "edit"]);
+
+  const combined = replayTranscript(
+    messages(
+      { role: "system", content: "sys", toolsAdded: [tool("read")], timestamp: 1 },
+      { role: "user", content: "hi", timestamp: 2 },
+    ),
+  );
+  expect(combined.systemPrompt).toBe("sys");
+  expect(combined.tools.map((entry) => entry.name)).toStrictEqual(["read"]);
 });

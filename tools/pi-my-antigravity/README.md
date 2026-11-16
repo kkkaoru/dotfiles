@@ -66,7 +66,7 @@ prints the live list.
 ## Checks
 
 ```sh
-bun run check     # tsc --noEmit + bun test (offline; no network, no model calls)
+bun run check     # oxfmt --check + oxlint + tsc --noEmit + vitest --coverage (offline; no network, no model calls)
 ```
 
 `git diff --check` must stay clean. Nothing here writes credentials; the tests use

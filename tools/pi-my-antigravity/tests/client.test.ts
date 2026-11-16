@@ -30,12 +30,34 @@ it("fetches user info and loadCodeAssist project with endpoint fallback", async 
     return jsonResponse(200, { cloudaicompanionProject: "aicode-consumers" });
   };
 
-  expect(await fetchUserInfo("t", { send })).toStrictEqual({ email: "a@b.c", tier: "pro" });
+  expect(await fetchUserInfo("t", { send, signal: new AbortController().signal })).toStrictEqual({
+    email: "a@b.c",
+    tier: "pro",
+  });
   expect(attempts).toStrictEqual([
     "https://daily-cloudcode-pa.googleapis.com/v1internal:fetchUserInfo",
     "https://cloudcode-pa.googleapis.com/v1internal:fetchUserInfo",
   ]);
-  expect(await loadCodeAssistProject("t", { send })).toBe("aicode-consumers");
+  expect(await loadCodeAssistProject("t", { send, signal: new AbortController().signal })).toBe(
+    "aicode-consumers",
+  );
+
+  const directSend = async ({ url }: { url: string }): Promise<WireResponse> => {
+    if (url.includes("fetchUserInfo")) {
+      return jsonResponse(200, { email: "direct@b.c" });
+    }
+    return jsonResponse(200, { project: "fallback-proj" });
+  };
+  expect(await fetchUserInfo("t", { send: directSend })).toStrictEqual({ email: "direct@b.c" });
+  expect(await loadCodeAssistProject("t", { send: directSend })).toBe("fallback-proj");
+
+  const emptySend = async (): Promise<WireResponse> => jsonResponse(200, {});
+  expect(await fetchUserInfo("t", { send: emptySend })).toStrictEqual({});
+  expect(await loadCodeAssistProject("t", { send: emptySend })).toBeUndefined();
+
+  const nonRecordSend = async (): Promise<WireResponse> => jsonResponse(200, "null");
+  expect(await fetchUserInfo("t", { send: nonRecordSend })).toStrictEqual({});
+  expect(await loadCodeAssistProject("t", { send: nonRecordSend })).toBeUndefined();
 });
 
 it("throws when all endpoints fail or return invalid payloads", async () => {
@@ -43,6 +65,21 @@ it("throws when all endpoints fail or return invalid payloads", async () => {
     throw new Error("network down");
   };
   await expect(fetchUserInfo("t", { send })).rejects.toThrow(/network down/);
+
+  const nonErrorSend = async (): Promise<WireResponse> => {
+    throw "raw-fail";
+  };
+  await expect(fetchUserInfo("t", { send: nonErrorSend })).rejects.toThrow(/raw-fail/);
+
+  const emptyErrorSend = async (): Promise<WireResponse> => {
+    throw new Error("");
+  };
+  await expect(fetchUserInfo("t", { send: emptyErrorSend })).rejects.toThrow(
+    /no endpoint reachable/,
+  );
+
+  const arrayErrorSend = async (): Promise<WireResponse> => jsonResponse(403, "[]");
+  await expect(loadCodeAssistProject("t", { send: arrayErrorSend })).rejects.toThrow(/403: \[\]/);
 
   const rawErrorSend = async (): Promise<WireResponse> => jsonResponse(403, "forbidden");
   await expect(loadCodeAssistProject("t", { send: rawErrorSend })).rejects.toThrow(
@@ -69,15 +106,25 @@ it("parses, filters, sorts, and remembers model enums from fetchAvailableModels"
           label: "Claude Sonnet 5.5",
           supportsThinking: true,
         },
+        "gemini-3.8-flash-low": {
+          modelName: "Gemini 3.8 Flash",
+        },
       },
     });
 
-  const models = await fetchAvailableModels("t", "aicode-consumers", { send });
+  const models = await fetchAvailableModels("t", "aicode-consumers", {
+    send,
+    signal: new AbortController().signal,
+  });
   expect(models).toStrictEqual([
     {
       id: "claude-sonnet-5-5-high",
       displayName: "Claude Sonnet 5.5",
       supportsThinking: true,
+    },
+    {
+      id: "gemini-3.8-flash-low",
+      displayName: "Gemini 3.8 Flash",
     },
     {
       id: "gemini-4-hydrogen-medium",
@@ -91,4 +138,7 @@ it("parses, filters, sorts, and remembers model enums from fetchAvailableModels"
   rememberModelEnums(models);
   expect(modelEnumFor("gemini-4-hydrogen-medium")).toBe("MODEL_PLACEHOLDER_M526");
   expect(modelEnumFor("claude-sonnet-5-5-high")).toBeUndefined();
+
+  const emptyModelsSend = async (): Promise<WireResponse> => jsonResponse(200, {});
+  expect(await fetchAvailableModels("t", "p", { send: emptyModelsSend })).toStrictEqual([]);
 });

@@ -1,6 +1,7 @@
 // This file runs with bun.
 import { createHash, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { URL, URLSearchParams } from "node:url";
 
 import {
   AUTH_URL,
@@ -11,6 +12,8 @@ import {
   TOKEN_URL,
   oauthClientConfig,
 } from "./constants.ts";
+import { isRecord, parseJson } from "./json.ts";
+import { httpPost, type HttpPostOptions, type WireResponse } from "./transport.ts";
 
 /** Credential shape pi stores for an OAuth provider. */
 export interface AntigravityCredential {
@@ -22,6 +25,17 @@ export interface AntigravityCredential {
   /** Cloud Code Assist project resolved from `loadCodeAssist`. */
   projectId?: string;
   email?: string;
+}
+
+export interface ExchangeCodeOptions {
+  code: string;
+  redirectUri: string;
+  verifier: string;
+  post?: (options: HttpPostOptions) => Promise<WireResponse>;
+}
+
+export interface RefreshCredentialOptions {
+  post?: (options: HttpPostOptions) => Promise<WireResponse>;
 }
 
 export interface TokenResponse {
@@ -89,10 +103,8 @@ export function emailFromIdToken(idToken: string | undefined): string | undefine
     return undefined;
   }
   try {
-    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
-      email?: unknown;
-    };
-    return typeof parsed.email === "string" ? parsed.email : undefined;
+    const parsed = parseJson(Buffer.from(payload, "base64url").toString("utf8"));
+    return isRecord(parsed) && typeof parsed["email"] === "string" ? parsed["email"] : undefined;
   } catch (error) {
     console.warn(
       `my-antigravity: failed to decode id_token payload: ${error instanceof Error ? error.message : String(error)}`,
@@ -139,14 +151,34 @@ export function credentialFromTokenResponse(
   );
 }
 
-export async function exchangeCode(
-  code: string,
-  redirectUri: string,
-  verifier: string,
-): Promise<AntigravityCredential> {
+function toTokenResponse(value: unknown): TokenResponse {
+  if (!isRecord(value)) {
+    return {};
+  }
+  return {
+    ...(typeof value["access_token"] === "string" ? { access_token: value["access_token"] } : {}),
+    ...(typeof value["refresh_token"] === "string"
+      ? { refresh_token: value["refresh_token"] }
+      : {}),
+    ...(typeof value["expires_in"] === "number" ? { expires_in: value["expires_in"] } : {}),
+    ...(typeof value["id_token"] === "string" ? { id_token: value["id_token"] } : {}),
+    ...(typeof value["error"] === "string" ? { error: value["error"] } : {}),
+    ...(typeof value["error_description"] === "string"
+      ? { error_description: value["error_description"] }
+      : {}),
+  };
+}
+
+export async function exchangeCode({
+  code,
+  redirectUri,
+  verifier,
+  post,
+}: ExchangeCodeOptions): Promise<AntigravityCredential> {
   const { clientId, clientSecret } = oauthClientConfig();
-  const response = await fetch(TOKEN_URL, {
-    method: "POST",
+  const send = post ?? httpPost;
+  const response = await send({
+    url: TOKEN_URL,
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       client_id: clientId,
@@ -155,29 +187,31 @@ export async function exchangeCode(
       grant_type: "authorization_code",
       redirect_uri: redirectUri,
       code_verifier: verifier,
-    }),
+    }).toString(),
   });
-  return credentialFromTokenResponse((await response.json()) as TokenResponse);
+  return credentialFromTokenResponse(toTokenResponse(parseJson(await response.text())));
 }
 
 export async function refreshCredential(
   credential: AntigravityCredential,
+  options?: RefreshCredentialOptions,
 ): Promise<AntigravityCredential> {
   if (!credential.refresh) {
     throw new Error("Antigravity credential has no refresh token; run /login again");
   }
   const { clientId, clientSecret } = oauthClientConfig();
-  const response = await fetch(TOKEN_URL, {
-    method: "POST",
+  const send = options?.post ?? httpPost;
+  const response = await send({
+    url: TOKEN_URL,
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       client_id: clientId,
       client_secret: clientSecret,
       refresh_token: credential.refresh,
       grant_type: "refresh_token",
-    }),
+    }).toString(),
   });
-  const body = (await response.json()) as TokenResponse;
+  const body = toTokenResponse(parseJson(await response.text()));
   const previous: PreviousCredentialMeta = {
     refresh: credential.refresh,
     ...(credential.projectId !== undefined ? { projectId: credential.projectId } : {}),
@@ -220,6 +254,7 @@ function handleCallbackRequest(
 export async function login(
   onUrl: (url: string) => void | Promise<void>,
   port = CALLBACK_PORT,
+  post?: (options: HttpPostOptions) => Promise<WireResponse>,
 ): Promise<AntigravityCredential> {
   const state = base64url(randomBytes(STATE_BYTES));
   const { verifier, challenge } = pkcePair();
@@ -252,5 +287,10 @@ export async function login(
     onUrl(authorizeUrl(callbackState.redirectUri, challenge, state)),
     codePromise,
   ]);
-  return exchangeCode(code, callbackState.redirectUri, verifier);
+  return exchangeCode({
+    code,
+    redirectUri: callbackState.redirectUri,
+    verifier,
+    ...(post ? { post } : {}),
+  });
 }
