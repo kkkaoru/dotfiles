@@ -12,23 +12,42 @@ const FULL_PERCENT = 100;
 const ICON_SIZE = 14;
 const MINUTES_PER_HOUR = 60;
 const MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR;
+const DAYS_PER_MONTH = 30;
 const WINDOW_KEYS = ["primary", "secondary", "tertiary"];
 // Herdr.app started from the Dock lacks the shell's variables, so the key is read as envs.fish
-// reads it: the variable, else ~/.codex/.env, else ~/.env (launchctl's copy can be stale). printf
+// reads it: the variable, else ~/.codex/.env, else ~/.env (launchctl's copy can be stale), else
+// pi's own login (~/.pi/agent/auth.json, which the dotfiles link keeps on every machine). printf
 // is a shell builtin and curl reads the header from stdin, so the key is in no process's arguments.
 const OLLAMA_BALANCE = [
   'key="$OLLAMA_API_KEY";',
   "for file in ~/.codex/.env ~/.env; do",
   '[ -n "$key" ] || key=$(sed -n "s/^OLLAMA_API_KEY=//p" "$file" 2>/dev/null | head -n 1 | tr -d "\\"\'");',
   "done;",
+  '[ -n "$key" ] || key=$(plutil -extract ollama-cloud.key raw -o - ~/.pi/agent/auth.json 2>/dev/null);',
   'printf "Authorization: Bearer %s\\n" "$key" |',
   "curl --silent --fail --max-time 20 -H @- https://ollama.com/api/balance",
 ].join(" ");
 
-const windowLabel = (minutes) =>
-  minutes % MINUTES_PER_DAY === 0
+// CodexBar reads OpenCode Go's usage API with OPENCODE_API_KEY, which lives in pi's login on this
+// machine; the shell exports it so the key stays out of the arguments, as the Ollama one does.
+const OPENCODE_GO_USAGE = [
+  'export OPENCODE_API_KEY="${OPENCODE_API_KEY:-$(plutil -extract opencode-go.key raw -o - ~/.pi/agent/auth.json 2>/dev/null)}";',
+  "codexbar usage --provider opencodego --source api --json",
+].join(" ");
+
+/** "5h", "7d", or a calendar for the monthly window (30d is wide); null when the provider reports
+ *  no length (Grok's CLI proxy). */
+const windowLabel = (minutes) => {
+  if (!Number.isFinite(minutes)) {
+    return null;
+  }
+  if (minutes === DAYS_PER_MONTH * MINUTES_PER_DAY) {
+    return "📅";
+  }
+  return minutes % MINUTES_PER_DAY === 0
     ? `${minutes / MINUTES_PER_DAY}d`
     : `${Math.round(minutes / MINUTES_PER_HOUR)}h`;
+};
 
 /** The one window worth showing, from windows ordered shortest first: the longest used-up one,
  *  since the shorter ones no longer matter, else the shortest, which runs out first. */
@@ -95,12 +114,14 @@ const codexbar = (provider, source) => [
 
 // [Herdr's agent icon, tinted (one-color glyph) or drawn as is, key, [command, args], parser].
 // CodexBar rejects the balance Ollama's API answers today and its web path is redirected to sign
-// in, so Ollama is asked directly; OpenCode Go comes from its usage API (Auto would try a browser
-// session first, which the console fails).
+// in, so Ollama is asked directly; OpenCode Go's usage API needs its key exported, which Auto
+// would instead look for in a browser session, and the console fails. Claude is asked for its
+// OAuth meters: its Auto path falls back to the Claude CLI, which hangs here with no cookies.
 const PROVIDERS = [
-  ["icons/claude.svg", false, "claude", codexbar("claude", "auto"), parseLimits],
+  ["icons/claude.svg", false, "claude", codexbar("claude", "oauth"), parseLimits],
+  ["icons/codex.svg", false, "codex", codexbar("codex", "auto"), parseLimits],
   ["icons/ollama.svg", true, "ollama", ["sh", ["-c", OLLAMA_BALANCE]], parseOllamaBalance],
-  ["icons/opencode.svg", true, "opencodego", codexbar("opencodego", "api"), parseLimits],
+  ["icons/opencode.svg", true, "opencodego", ["sh", ["-c", OPENCODE_GO_USAGE]], parseLimits],
   ["icons/grok.svg", true, "grok", codexbar("grok", "auto"), parseLimits],
   ["icons/antigravity.svg", true, "antigravity", codexbar("antigravity", "auto"), parseAntigravity],
 ];
@@ -131,7 +152,7 @@ export default class AgentLimits extends View {
     const windowText = ({ label, used }) =>
       div()
         .text_color(used >= WARN_PERCENT ? t.blocked : t.foreground)
-        .child(`${label} ${used}%`);
+        .child(label ? `${label} ${used}%` : `${used}%`);
     // As agents-emoji draws an agent's icon from Herdr's program table.
     const icon = (path, tint) =>
       tint
