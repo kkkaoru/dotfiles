@@ -34,8 +34,13 @@ const count = (text: string, pattern: RegExp): number => text.match(pattern)?.le
 const readsAsJapanese = (text: string, letters: number): boolean =>
   count(text, KANA) > 0 && (count(text, KANA) + count(text, HAN)) / letters >= JAPANESE_SHARE
 
+const isContinueOnly = (text: string): boolean => text.trim().toLowerCase() === 'continue'
+
 /** Whether `text` already reads as `lang` (judged for ja and en only), so translating it would only cost time. */
 export function isInLanguage(text: string, lang: string): boolean {
+  if (isContinueOnly(text)) {
+    return true
+  }
   const letters = count(text, LETTER)
   if (letters === 0) {
     return true

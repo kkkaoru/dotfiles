@@ -51,6 +51,8 @@ test("streaming and Japanese text are not sent for display translation", () => {
   expect(needsDisplayTranslation("タブを追加する", "ja", false)).toBe(false);
   expect(needsDisplayTranslation("Add a tab", "ja", true)).toBe(false);
   expect(needsDisplayTranslation("Add a tab", "off", false)).toBe(false);
+  expect(needsDisplayTranslation("continue", "ja", false)).toBe(false);
+  expect(needsDisplayTranslation("  Continue ", "ja", false)).toBe(false);
 });
 
 test("a prompt without images transforms the text only", () => {

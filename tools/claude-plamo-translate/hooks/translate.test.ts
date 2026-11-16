@@ -29,6 +29,12 @@ test('text without letters needs no translation', () => {
   expect(isInLanguage('1234 + 5', 'ja')).toBe(true)
 })
 
+test('a message containing only continue needs no translation', () => {
+  expect(isInLanguage('continue', 'ja')).toBe(true)
+  expect(isInLanguage('  Continue\n', 'ja')).toBe(true)
+  expect(isInLanguage('continue', 'en')).toBe(true)
+})
+
 test('languages other than ja and en are always translated', () => {
   expect(isInLanguage('Bonjour', 'fr')).toBe(false)
 })
