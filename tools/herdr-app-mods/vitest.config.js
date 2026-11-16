@@ -4,6 +4,16 @@ import { defineConfig } from "vitest/config";
 
 const mock = (name) => fileURLToPath(new URL(`./mocks/${name}.js`, import.meta.url));
 const MODS = fileURLToPath(new URL("../../.config/herdr-app/mods/", import.meta.url));
+// Only this repository's mods: the app also writes its shipped mods into the same folder, which it
+// keeps out of Git and which have no tests here.
+const OWN = [
+  "prefix",
+  "spaces-emoji",
+  "agents-emoji",
+  "system-stats",
+  "agent-limits",
+  "tabs-clock",
+];
 
 export default defineConfig({
   resolve: {
@@ -13,7 +23,7 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       allowExternal: true,
-      include: [`${MODS}*/*.js`],
+      include: OWN.map((mod) => `${MODS}${mod}/*.js`),
       // Each mod file on its own: a well-tested file must not carry a weak one.
       thresholds: { perFile: true, statements: 95, branches: 95, functions: 95, lines: 95 },
     },
