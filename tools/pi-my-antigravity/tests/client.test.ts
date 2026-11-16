@@ -101,13 +101,24 @@ it("parses, filters, sorts, and remembers model enums from fetchAvailableModels"
           displayName: "Gemini 4 Hydrogen (Medium)",
           supportsThinking: true,
           supportsImages: true,
+          quotaInfo: {
+            remainingFraction: 0.25,
+            resetTime: "2026-11-16T06:51:04Z",
+          },
         },
         "claude-sonnet-5-5-high": {
           label: "Claude Sonnet 5.5",
           supportsThinking: true,
+          quotaInfo: {
+            resetTime: "2026-11-16T06:53:19Z",
+          },
         },
         "gemini-3.8-flash-low": {
           modelName: "Gemini 3.8 Flash",
+          quotaInfo: {},
+        },
+        "gpt-oss-120b-medium": {
+          quotaInfo: "invalid",
         },
       },
     });
@@ -121,6 +132,9 @@ it("parses, filters, sorts, and remembers model enums from fetchAvailableModels"
       id: "claude-sonnet-5-5-high",
       displayName: "Claude Sonnet 5.5",
       supportsThinking: true,
+      quota: {
+        resetTime: "2026-11-16T06:53:19Z",
+      },
     },
     {
       id: "gemini-3.8-flash-low",
@@ -132,6 +146,13 @@ it("parses, filters, sorts, and remembers model enums from fetchAvailableModels"
       displayName: "Gemini 4 Hydrogen (Medium)",
       supportsThinking: true,
       supportsImages: true,
+      quota: {
+        remainingFraction: 0.25,
+        resetTime: "2026-11-16T06:51:04Z",
+      },
+    },
+    {
+      id: "gpt-oss-120b-medium",
     },
   ]);
 

@@ -48,12 +48,16 @@ interface CapturedRegistry {
   config?: RegisteredProviderConfig;
   events: Map<string, () => Promise<void> | void>;
   commands: Map<string, (args: string, ctx: unknown) => Promise<void>>;
+  sentMessages: Array<{ message: { customType: string; content: string; display: boolean } }>;
+  emittedEvents: Array<{ event: string; data: unknown }>;
 }
 
 function setupExtension(): CapturedRegistry {
   const captured: CapturedRegistry = {
     events: new Map(),
     commands: new Map(),
+    sentMessages: [],
+    emittedEvents: [],
   };
   const pi = {
     registerProvider(id: string, config: RegisteredProviderConfig) {
@@ -68,6 +72,14 @@ function setupExtension(): CapturedRegistry {
       opts: { handler: (args: string, ctx: unknown) => Promise<void> },
     ) {
       captured.commands.set(name, opts.handler);
+    },
+    sendMessage(message: { customType: string; content: string; display: boolean }) {
+      captured.sentMessages.push({ message });
+    },
+    events: {
+      emit(event: string, data: unknown) {
+        captured.emittedEvents.push({ event, data });
+      },
     },
   } as unknown as ExtensionAPI;
 
@@ -174,6 +186,37 @@ it("handles my-antigravity.models and my-antigravity.doctor commands", async () 
     },
   };
   await captured.commands.get("my-antigravity.models")!("", credCtx);
+  await captured.commands.get("my-antigravity.quota")!("", noCredCtx);
+  await captured.commands.get("my-antigravity.quota")!("", credCtx);
+  expect(captured.sentMessages.at(-1)?.message.customType).toBe("my-antigravity-quota");
+  expect(captured.sentMessages.at(-1)?.message.content).toContain("No quota info returned");
+
+  vi.mocked(clientModule.fetchAvailableModels).mockResolvedValueOnce([
+    {
+      id: "gemini-4-hydrogen-medium",
+      quota: { remainingFraction: 0.0363, resetTime: "2026-11-16T06:51:04Z" },
+    },
+    {
+      id: "claude-sonnet-5-5-high",
+      quota: { resetTime: "invalid-date" },
+    },
+    {
+      id: "gemini-4-argon-low",
+      quota: { remainingFraction: 0.99 },
+    },
+  ]);
+  await captured.commands.get("my-antigravity.quota")!("", credCtx);
+  const quotaMessage = captured.sentMessages.at(-1)?.message.content ?? "";
+  expect(captured.emittedEvents.at(-1)).toStrictEqual({
+    event: "plamo-translate:exclude",
+    data: quotaMessage,
+  });
+  expect(quotaMessage).toContain(
+    "gemini-4-hydrogen-medium: 3.6% remaining, resets 2026-11-16 15:51:04 JST",
+  );
+  expect(quotaMessage).toContain("claude-sonnet-5-5-high: remaining unknown, resets invalid-date");
+  expect(quotaMessage).toContain("gemini-4-argon-low: 99.0% remaining");
+
   await captured.commands.get("my-antigravity.doctor")!("", credCtx);
   expect(logSpy).toHaveBeenCalled();
 
@@ -253,5 +296,6 @@ it("handles my-antigravity.models and my-antigravity.doctor commands", async () 
     modelRegistry: { getApiKeyForProvider: async () => '{"token":"acc-1"}' },
   };
   await captured.commands.get("my-antigravity.models")!("", silentCtx);
+  await captured.commands.get("my-antigravity.quota")!("", silentCtx);
   await captured.commands.get("my-antigravity.doctor")!("", silentCtx);
 });

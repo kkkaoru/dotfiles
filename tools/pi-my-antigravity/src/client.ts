@@ -5,6 +5,11 @@ import { postWire, type WireRequest, type WireResponse } from "./transport.ts";
 
 export { API_ID, PROVIDER_ID };
 
+export interface ModelQuota {
+  remainingFraction?: number;
+  resetTime?: string;
+}
+
 export interface DiscoveredModel {
   /** Runtime id exactly as `fetchAvailableModels` reports it, e.g. `gemini-4-hydrogen-medium`. */
   id: string;
@@ -13,6 +18,7 @@ export interface DiscoveredModel {
   displayName?: string;
   supportsThinking?: boolean;
   supportsImages?: boolean;
+  quota?: ModelQuota;
 }
 
 export interface UserInfo {
@@ -181,6 +187,21 @@ export async function loadCodeAssistProject(
 const compareDiscovered = (left: DiscoveredModel, right: DiscoveredModel): number =>
   left.id.localeCompare(right.id);
 
+function parseQuotaInfo(raw: unknown): ModelQuota | undefined {
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+  const fraction = raw["remainingFraction"];
+  const resetTime = raw["resetTime"];
+  const quota: ModelQuota = {
+    ...(typeof fraction === "number" && Number.isFinite(fraction)
+      ? { remainingFraction: fraction }
+      : {}),
+    ...(typeof resetTime === "string" && resetTime ? { resetTime } : {}),
+  };
+  return quota.remainingFraction !== undefined || quota.resetTime !== undefined ? quota : undefined;
+}
+
 function parseModelEntry(id: string, info: Record<string, unknown>): DiscoveredModel {
   const model: DiscoveredModel = { id };
   if (typeof info["model"] === "string" && info["model"]) {
@@ -195,6 +216,10 @@ function parseModelEntry(id: string, info: Record<string, unknown>): DiscoveredM
   }
   if (info["supportsImages"] === true) {
     model.supportsImages = true;
+  }
+  const quota = parseQuotaInfo(info["quotaInfo"]);
+  if (quota) {
+    model.quota = quota;
   }
   return model;
 }

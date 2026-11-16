@@ -8,6 +8,7 @@ import {
   fetchUserInfo,
   loadCodeAssistProject,
   rememberModelEnums,
+  type DiscoveredModel,
 } from "./src/client.ts";
 import {
   API_ID,
@@ -80,6 +81,37 @@ async function loginAntigravity(callbacks: LoginCallbacks): Promise<OAuthCredent
     );
   }
   return credential as OAuthCredentials;
+}
+
+const PERCENT_SCALE = 100;
+const JST_FORMATTER = new Intl.DateTimeFormat("sv-SE", {
+  timeZone: "Asia/Tokyo",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+});
+
+function formatResetTimeJst(resetTime: string): string {
+  const date = new Date(resetTime);
+  if (Number.isNaN(date.getTime())) {
+    return resetTime;
+  }
+  return `${JST_FORMATTER.format(date)} JST`;
+}
+
+function formatModelQuota(model: DiscoveredModel): string {
+  const remaining =
+    model.quota?.remainingFraction !== undefined
+      ? `${(model.quota.remainingFraction * PERCENT_SCALE).toFixed(1)}% remaining`
+      : "remaining unknown";
+  const reset = model.quota?.resetTime
+    ? `, resets ${formatResetTimeJst(model.quota.resetTime)}`
+    : "";
+  return `${model.id}: ${remaining}${reset}`;
 }
 
 function print(
@@ -157,6 +189,38 @@ export default function piMyAntigravity(pi: ExtensionAPI): void {
     },
   });
 
+  pi.registerCommand("my-antigravity.quota", {
+    description: "Show Antigravity remaining quota and reset times per model",
+    handler: async (_args, ctx) => {
+      const raw = await ctx.modelRegistry.getApiKeyForProvider(PROVIDER_ID);
+      if (!raw) {
+        print(ctx, "No Antigravity credential. Run /login my-antigravity first.", "warning");
+        return;
+      }
+      const { token, projectId } = parseAuthValue(raw);
+      const discovered = await fetchAvailableModels(token, projectId ?? CONSUMER_PROJECT);
+      const withQuota = discovered.filter((model) => model.quota);
+      const output =
+        withQuota.length === 0
+          ? "No quota info returned by fetchAvailableModels."
+          : withQuota.map(formatModelQuota).join("\n");
+      const content = `Antigravity quota\n\`\`\`\n${output}\n\`\`\``;
+      pi.events.emit("plamo-translate:exclude", content);
+      if (ctx.hasUI) {
+        pi.sendMessage(
+          {
+            customType: "my-antigravity-quota",
+            content,
+            display: true,
+          },
+          { triggerTurn: false },
+        );
+      } else {
+        console.log(`Antigravity quota\n${output}`);
+      }
+    },
+  });
+
   pi.registerCommand("my-antigravity.doctor", {
     description: "Show sanitized my-antigravity provider state",
     handler: async (_args, ctx) => {
@@ -168,7 +232,7 @@ export default function piMyAntigravity(pi: ExtensionAPI): void {
           `endpoint=${ENDPOINTS[0]}`,
           `project=${PROJECT_STATE.resolved ?? "unresolved"}`,
           "wire=leading user turn carries the system prompt (agy uses systemInstruction; the backend 429s third-party prompts there)",
-          "commands=/login my-antigravity, /my-antigravity.models, /my-antigravity.doctor",
+          "commands=/login my-antigravity, /my-antigravity.models, /my-antigravity.quota, /my-antigravity.doctor",
         ].join("\n"),
       );
     },
