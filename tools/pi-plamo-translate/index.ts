@@ -7,6 +7,7 @@ import process from "node:process";
 import { setTimeout } from "node:timers/promises";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { bindPlamo } from "./src/bind.ts";
+import { EXCLUDE_EVENT } from "./src/policy.ts";
 import { createRuntime, type Runtime } from "./src/runtime.ts";
 import { createServer, type ServerDeps } from "./src/server.ts";
 import { readPlamoSettings } from "./src/settings.ts";
@@ -63,6 +64,9 @@ export default function plamoTranslate(pi: ExtensionAPI): void {
       },
       onMarkdown: (transformer, messageTypes) => {
         pi.registerMarkdownTransformer(transformer, { messageTypes });
+      },
+      onExclude: (handler) => {
+        pi.events.on(EXCLUDE_EVENT, handler);
       },
     },
     runtime,

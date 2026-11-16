@@ -52,6 +52,7 @@ export interface Runtime {
   readonly ready: Map<string, string>;
   readonly pending: Map<string, Promise<string>>;
   readonly typed: Map<string, string>;
+  readonly excluded: Map<string, true>;
   readonly server: Server;
   readonly settings: PlamoSettings;
   readonly sleep: (ms: number) => Promise<void>;
@@ -89,6 +90,7 @@ export function createRuntime(
     ready: new Map(),
     pending: new Map(),
     typed: new Map(),
+    excluded: new Map(),
     server,
     settings,
     sleep,
@@ -251,8 +253,15 @@ async function storeTranslation(runtime: Runtime, source: string, lang: string):
   }
 }
 
+export function excludeText(runtime: Runtime, data: unknown): void {
+  if (typeof data !== "string" || data === "") {
+    return;
+  }
+  remember(runtime.excluded, data, true);
+}
+
 export function schedule(runtime: Runtime, source: string, lang: string): void {
-  if (runtime.pending.has(source) || runtime.ready.has(source)) {
+  if (runtime.excluded.has(source) || runtime.pending.has(source) || runtime.ready.has(source)) {
     return;
   }
   // oxlint-disable-next-line typescript/no-floating-promises -- kept in pending; storeTranslation reports failure
@@ -265,7 +274,10 @@ export function displayOf(
   markdown: string,
   context: MarkdownTransformContext,
 ): string {
-  if (!needsDisplayTranslation(markdown, runtime.settings.replyLanguage, context.isStreaming)) {
+  if (
+    runtime.excluded.has(markdown) ||
+    !needsDisplayTranslation(markdown, runtime.settings.replyLanguage, context.isStreaming)
+  ) {
     return markdown;
   }
   const typed = runtime.typed.get(markdown);
@@ -286,7 +298,10 @@ export async function translateInput(
   ui: UiSink,
 ): Promise<InputEventResult> {
   runtime.ui = ui;
-  if (!shouldTranslatePrompt(event.text, event.source, runtime.settings.promptLanguage)) {
+  if (
+    runtime.excluded.has(event.text) ||
+    !shouldTranslatePrompt(event.text, event.source, runtime.settings.promptLanguage)
+  ) {
     return { action: "continue" };
   }
   begin(runtime);

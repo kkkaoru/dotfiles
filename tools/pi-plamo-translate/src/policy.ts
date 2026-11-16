@@ -11,6 +11,7 @@ export const OFF = "off";
 export const SECTION_NAME = "plamo-translate";
 export const STATUS_KEY = "plamo-translate";
 export const WIDGET_KEY = "plamo-translate";
+export const EXCLUDE_EVENT = "plamo-translate:exclude";
 export const CACHE_LIMIT = 200;
 export const DISPLAY_TYPES = [
   "user",

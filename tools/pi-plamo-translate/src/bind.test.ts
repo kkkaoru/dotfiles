@@ -11,6 +11,7 @@ interface Stored {
   rule: ((sections: Record<string, string>) => void) | undefined;
   reply: ((message: { readonly role: string }) => void) | undefined;
   markdown: ((markdown: string, context: MarkdownTransformContext) => string) | undefined;
+  exclude: ((data: unknown) => void) | undefined;
 }
 
 function capture(): { readonly hooks: PlamoHooks; readonly stored: Stored } {
@@ -20,6 +21,7 @@ function capture(): { readonly hooks: PlamoHooks; readonly stored: Stored } {
     rule: undefined,
     reply: undefined,
     markdown: undefined,
+    exclude: undefined,
   };
   return {
     stored,
@@ -38,6 +40,9 @@ function capture(): { readonly hooks: PlamoHooks; readonly stored: Stored } {
       },
       onMarkdown: (transformer) => {
         stored.markdown = transformer;
+      },
+      onExclude: (handler) => {
+        stored.exclude = handler;
       },
     },
   };
@@ -80,4 +85,20 @@ test("the hooks translate prompts and leave a stream in English", async () => {
       availableWidth: 20,
     }),
   ).toBe("Add a tab");
+  captured.stored.exclude?.("");
+  captured.stored.exclude?.(123);
+  captured.stored.exclude?.("Excluded text");
+  expect(
+    captured.stored.markdown?.("Excluded text", {
+      messageType: "assistant",
+      isStreaming: false,
+      availableWidth: 20,
+    }),
+  ).toBe("Excluded text");
+  expect(
+    await captured.stored.input(
+      { type: "input", text: "Excluded text", source: "interactive" },
+      { ui: sink },
+    ),
+  ).toStrictEqual({ action: "continue" });
 });

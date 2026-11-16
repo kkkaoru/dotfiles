@@ -8,6 +8,7 @@ import type {
 import { DISPLAY_TYPES } from "./policy.ts";
 import {
   displayOf,
+  excludeText,
   installRule,
   scheduleReply,
   startSession,
@@ -29,6 +30,7 @@ export interface PlamoHooks {
     transformer: (markdown: string, context: MarkdownTransformContext) => string,
     messageTypes: readonly MarkdownMessageType[],
   ): void;
+  onExclude(handler: (data: unknown) => void): void;
 }
 
 export function bindPlamo(hooks: PlamoHooks, runtime: Runtime): void {
@@ -43,4 +45,7 @@ export function bindPlamo(hooks: PlamoHooks, runtime: Runtime): void {
     scheduleReply(runtime, message);
   });
   hooks.onMarkdown((markdown, context) => displayOf(runtime, markdown, context), DISPLAY_TYPES);
+  hooks.onExclude((data) => {
+    excludeText(runtime, data);
+  });
 }
