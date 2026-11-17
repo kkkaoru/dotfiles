@@ -346,3 +346,20 @@ it("invalidates an old compaction transition when the model changes", () => {
   expect(thinking).toBe("medium");
   expect(controller.status(context)).toMatch(/recoverySteps=0/u);
 });
+
+it("keeps effort fixed on providers whose engine caps its own thinking", () => {
+  const localBonsai = { ...reasoningModel, provider: "bonsai" } as Model<Api>;
+  const localContext = { ...context, model: localBonsai } as unknown as ExtensionContext;
+  const controller = new EffortController(pi);
+  controller.sessionStart(localContext, "on");
+  expect(thinking).toBe("medium");
+
+  contextTokenCount = 90;
+  controller.beforeAgentStart(localContext);
+  expect(thinking).toBe("medium");
+  controller.beforeCompaction(localContext);
+  expect(thinking).toBe("medium");
+  expect(controller.compacted(localContext)).toBe(false);
+  controller.turnEnded(localContext, { id: "", results: [] });
+  expect(thinking).toBe("medium");
+});

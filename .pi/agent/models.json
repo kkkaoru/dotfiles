@@ -390,7 +390,7 @@
             "image"
           ],
           "contextWindow": 40000,
-          "maxTokens": 8192,
+          "maxTokens": 16384,
           "samplingParams": {
             "temperature": 1.0,
             "top_p": 0.95,
@@ -438,7 +438,7 @@
             "image"
           ],
           "contextWindow": 40000,
-          "maxTokens": 8192,
+          "maxTokens": 16384,
           "samplingParams": {
             "temperature": 1.0,
             "top_p": 0.95,

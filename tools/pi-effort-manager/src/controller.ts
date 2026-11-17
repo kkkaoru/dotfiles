@@ -19,7 +19,12 @@ import {
   type ObservedReasoning,
 } from "./display.ts";
 import { fastEligible } from "./fast.ts";
-import { effortProfile, selectDynamicEffort, type EffortProfile } from "./policy.ts";
+import {
+  effortProfile,
+  FIXED_EFFORT_PROVIDERS,
+  selectDynamicEffort,
+  type EffortProfile,
+} from "./policy.ts";
 import type { ProgressTextSettings } from "./progress.ts";
 import {
   countCompaction,
@@ -289,6 +294,9 @@ export class EffortController {
   }
 
   #profile(context: ExtensionContext): EffortProfile | undefined {
+    if (context.model !== undefined && FIXED_EFFORT_PROVIDERS.has(context.model.provider)) {
+      return undefined;
+    }
     return effortProfile(context.model, {
       compactionEffort: this.#state.overrides.compactionEffort ?? this.#settings.compactionEffort,
       endEffort: this.#state.overrides.endEffort ?? this.#settings.endEffort,

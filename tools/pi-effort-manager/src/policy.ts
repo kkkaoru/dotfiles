@@ -12,6 +12,19 @@ export const DEFAULT_START_EFFORT: ThinkingLevel = "medium";
 export const DEFAULT_RESET_COMPACTION_EFFORT: ThinkingLevel = "xhigh";
 export const DEFAULT_RESET_COMPACTION_INTERVAL = 1;
 
+/**
+ * Local engines that answer far slower than hosted models and already cap their own thinking
+ * budget, so a ramping effort only spends the same tokens slower. Their level stays as set.
+ */
+export const FIXED_EFFORT_PROVIDERS: ReadonlySet<string> = new Set([
+  "bonsai",
+  "bonsai-mac",
+  "strata",
+  "strata-colab",
+  "strata-mac",
+  "strata-win",
+]);
+
 export const CANONICAL_LEVELS: readonly ThinkingLevel[] = [
   "minimal",
   "low",
