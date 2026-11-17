@@ -13,7 +13,8 @@ export const STATUS_KEY = "plamo-translate";
 export const WIDGET_KEY = "plamo-translate";
 export const EXCLUDE_EVENT = "plamo-translate:exclude";
 export const CACHE_LIMIT = 200;
-export const RESUME_HISTORY_LIMIT = 6;
+export const RESUME_HISTORY_LIMIT = 2;
+export const RESUME_LINE_LIMIT = 12;
 export const DISPLAY_TYPES = [
   "user",
   "assistant",

@@ -17,6 +17,7 @@ import {
   remember,
   replyRule,
   RESUME_HISTORY_LIMIT,
+  RESUME_LINE_LIMIT,
   SECTION_NAME,
   shouldTranslatePrompt,
   STATUS_KEY,
@@ -300,11 +301,11 @@ export function displayOf(
   if (ready !== undefined) {
     return ready;
   }
-  // On resume, fork, or reload, older persisted entries stay untranslated so history does not flood PLaMo.
+  // On resume, fork, or reload, older and long persisted entries stay untranslated to spare PLaMo.
   if (
     runtime.resumedIds !== null &&
     context.messageId !== undefined &&
-    !runtime.resumedIds.has(context.messageId)
+    (!runtime.resumedIds.has(context.messageId) || markdown.split("\n").length > RESUME_LINE_LIMIT)
   ) {
     return markdown;
   }

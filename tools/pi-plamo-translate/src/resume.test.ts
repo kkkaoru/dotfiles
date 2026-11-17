@@ -65,9 +65,9 @@ test.each(["resume", "fork", "reload"] as const)(
       },
       reason,
     );
-    // Older entries (m1, m2) are skipped; recent entry (m8) and live renders (no messageId) translate.
+    // Only the last two entries (m7, m8) translate; older ones stay as written.
     expect(displayOf(box, "Older reply 1", { ...shown, messageId: "m1" })).toBe("Older reply 1");
-    expect(displayOf(box, "Older reply 2", { ...shown, messageId: "m2" })).toBe("Older reply 2");
+    expect(displayOf(box, "Older reply 6", { ...shown, messageId: "m6" })).toBe("Older reply 6");
     expect(box.pending.size).toBe(0);
 
     expect(displayOf(box, "Recent reply", { ...shown, messageId: "m8" })).toBe("Recent reply");
@@ -77,6 +77,19 @@ test.each(["resume", "fork", "reload"] as const)(
     expect(box.pending.has("Live reply")).toBe(true);
   },
 );
+
+test("on reload, a long persisted entry stays untranslated", () => {
+  const entries = [makeMessageEntry(0)];
+  const server: Server = {
+    complete: async (text) => `JA:${text}`,
+    ensure: async () => true,
+  };
+  const box = createRuntime(settings, server, neverResolve);
+  startSession(box, { ui: ui(), sessionManager: { buildContextEntries: () => entries } }, "reload");
+  const long = Array.from({ length: 13 }, (_unused, index) => `Line ${String(index)}`).join("\n");
+  expect(displayOf(box, long, { ...shown, messageId: "m1" })).toBe(long);
+  expect(box.pending.size).toBe(0);
+});
 
 test("on compaction resume, the compaction summary entry is included in the recent window", () => {
   const entries: SessionEntry[] = [

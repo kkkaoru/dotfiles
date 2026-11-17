@@ -10,10 +10,10 @@ You see Japanese. The agent reads and writes English.
   reads it. The transcript shows what you typed. Slash commands, `!` shell lines, and messages
   injected by extensions are not rewritten.
 - Assistant text, and compaction summaries, are drawn in `replyLanguage` (default `ja`). The session
-  keeps the English. On `/resume`, `/fork`, or `/reload`, only the most recent 6 persisted entries are
-  translated so older history stays in English instead of flooding the translation server. Tool rows
-  and tool output stay as written. While a reply is still streaming it is shown as written; the
-  Japanese replaces it when the translation lands. Prose is translated two lines per request, so a
+  keeps the English. On `/resume`, `/fork`, or `/reload`, only the most recent 2 persisted entries are
+  translated, and an entry longer than 12 lines is left in English, so history does not flood the
+  translation server. Tool rows and tool output stay as written. While a reply is still streaming it
+  is shown as written; the Japanese replaces it when the translation lands. Prose is translated two lines per request, so a
   long reply fills in as its pieces arrive instead of waiting for all of it.
 - Code spans, fenced blocks, URLs and the inside of 「...」 are not sent for translation. If the
   server is down, the original text is used and a warning is shown once.
