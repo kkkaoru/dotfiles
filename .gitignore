@@ -74,6 +74,9 @@ coverage_out/
 !.ssh/init.sh
 .env
 
+# Connector tokens for Cloudflare Tunnel stay in ~/.cloudflared; never commit them.
+*.token
+
 # GPG
 .gnupg/
 *.gpg
