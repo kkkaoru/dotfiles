@@ -8,7 +8,21 @@
   "compaction": {
     "enabled": true,
     "reserveTokens": 65536,
-    "keepRecentTokens": 12000
+    "keepRecentTokens": 12000,
+    "modelOverrides": {
+      "strata/strata": {
+        "reserveTokens": 12288,
+        "keepRecentTokens": 4000
+      },
+      "strata-win/qwen3.8-flash-next-q2_0": {
+        "reserveTokens": 12288,
+        "keepRecentTokens": 4000
+      },
+      "strata-mac/qwen3.8-flash-next-q2_0": {
+        "reserveTokens": 12288,
+        "keepRecentTokens": 4000
+      }
+    }
   },
   "retry": {
     "enabled": true,

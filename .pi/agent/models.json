@@ -115,7 +115,9 @@
       "apiKey": "strata-local",
       "compat": {
         "supportsDeveloperRole": false,
-        "supportsReasoningEffort": false
+        "supportsReasoningEffort": false,
+        "supportsThinkingTokenBudget": true,
+        "thinkingTokenBudgetField": "reasoning_budget_tokens"
       },
       "models": [
         {
@@ -144,7 +146,9 @@
       },
       "compat": {
         "supportsDeveloperRole": false,
-        "supportsReasoningEffort": false
+        "supportsReasoningEffort": false,
+        "supportsThinkingTokenBudget": true,
+        "thinkingTokenBudgetField": "reasoning_budget_tokens"
       },
       "models": [
         {
@@ -173,7 +177,9 @@
       },
       "compat": {
         "supportsDeveloperRole": false,
-        "supportsReasoningEffort": false
+        "supportsReasoningEffort": false,
+        "supportsThinkingTokenBudget": true,
+        "thinkingTokenBudgetField": "reasoning_budget_tokens"
       },
       "models": [
         {
@@ -232,7 +238,10 @@
       "api": "openai-completions",
       "authHeader": true,
       "compat": {
-        "supportsDeveloperRole": false
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false,
+        "supportsThinkingTokenBudget": true,
+        "thinkingTokenBudgetField": "reasoning_budget_tokens"
       },
       "models": [
         {
