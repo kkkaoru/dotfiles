@@ -22,6 +22,15 @@ integrations. These instructions apply to agents working here, including pi and 
 - `./scripts/build-udev-gothic-light.sh [Light|ExtraLight|Thin]` — Build UDEV Gothic <weight> 35NFLG
   (JetBrains Mono Latin glyphs at that weight; installs fontforge) into `~/Library/Fonts` for Herdr.app's
   terminal font, which uses Thin.
+- `./scripts/strata-tunnel.sh` — Forward Strata's OpenAI-compatible API from the GPU host
+  (SSH alias `my-win`) to `127.0.0.1:18080`, where the `strata-win` provider in
+  `.pi/agent/models.json` expects it. The `strata` provider is the Strata running on this Mac
+  at `127.0.0.1:8080`. Change the remote target with `STRATA_SSH_HOST`, `STRATA_REMOTE_ADDR`,
+  `STRATA_REMOTE_PORT` or `STRATA_LOCAL_PORT`; the remote API key stays in `~/.pi/agent/auth.json`.
+- `./scripts/strata-local.sh` — Start this Mac's Strata as a managed instance on `127.0.0.1:8080`
+  for the `strata` provider (profile `launch-q2_0-32k`, ~30 s warm-up). Without it every client
+  fails with `connect ECONNREFUSED 127.0.0.1:8080`. `./scripts/strata-stop.sh` drains and stops
+  the same instance; both take `STRATA_PROFILE` and `STRATA_LOCAL_PORT`.
 - `./init-ssh.sh` — Initialize SSH configuration.
 - `./scripts/cleanup-deepswe-disk.sh` — Remove legacy DeepSWE/Pier images and job directories;
   run only when cleanup is requested.

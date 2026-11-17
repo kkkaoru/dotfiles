@@ -264,6 +264,9 @@ link_path "${DOTPATH}/scripts/claudex-install-adapter" "${HOME}/.local/bin/claud
 link_path "${DOTPATH}/scripts/serena-dotfiles-mcp" "${HOME}/.local/bin/serena-dotfiles-mcp"
 link_path "${DOTPATH}/scripts/ensure-omlx.sh" "${HOME}/.local/bin/ensure-omlx"
 link_path "${DOTPATH}/scripts/omlx-idle-stop.sh" "${HOME}/.local/bin/omlx-idle-stop"
+link_path "${DOTPATH}/scripts/strata-tunnel.sh" "${HOME}/.local/bin/strata-tunnel"
+link_path "${DOTPATH}/scripts/strata-local.sh" "${HOME}/.local/bin/strata-local"
+link_path "${DOTPATH}/scripts/strata-stop.sh" "${HOME}/.local/bin/strata-stop"
 link_path "${DOTPATH}/scripts/pi" "${HOME}/.local/bin/pi"
 link_path "${DOTPATH}/tools/dsh-workspace/src/cli.ts" "${HOME}/.local/bin/dsh-workspace"
 if [ -x "${DOTPATH}/scripts/omlx-idle-stop.sh" ]; then

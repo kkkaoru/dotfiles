@@ -108,6 +108,57 @@
         }
       ]
     },
+    "strata": {
+      "name": "Strata (this Mac)",
+      "baseUrl": "http://127.0.0.1:8080/v1",
+      "api": "openai-completions",
+      "apiKey": "strata-local",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false
+      },
+      "models": [
+        {
+          "id": "strata",
+          "name": "Qwen3.8-Flash-Next Q2_0 (Strata, this Mac)",
+          "reasoning": true,
+          "input": ["text"],
+          "contextWindow": 32768,
+          "maxTokens": 8192,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        }
+      ]
+    },
+    "strata-win": {
+      "name": "Strata (my-win RX 6900 XT)",
+      "baseUrl": "http://127.0.0.1:18080/v1",
+      "api": "openai-completions",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false
+      },
+      "models": [
+        {
+          "id": "qwen3.8-flash-next-q2_0",
+          "name": "Qwen3.8-Flash-Next Q2_0 (Strata, my-win)",
+          "reasoning": true,
+          "input": ["text"],
+          "contextWindow": 32768,
+          "maxTokens": 8192,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        }
+      ]
+    },
     "google-colab": {
       "name": "Colab Qwen3.8-27B (vLLM)",
       "baseUrl": "https://example.trycloudflare.com/v1",
