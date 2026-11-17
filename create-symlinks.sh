@@ -210,7 +210,7 @@ fi
 # ~/.pi is a top-level symlink to this repository. Keep repository-owned
 # extensions inside the managed tree so a fresh clone still installs them.
 mkdir -p "${DOTPATH}/.pi/agent/extensions" "${DOTPATH}/.pi/agent/packages"
-for extension in colab-lifecycle goal loop omlx-lifecycle tmux-timeout; do
+for extension in colab-lifecycle goal loop omlx-lifecycle strata-lifecycle tmux-timeout; do
   extension_path="${DOTPATH}/tools/pi-${extension}-extension"
   if [ -d "$extension_path" ]; then
     link_path "$extension_path" "${DOTPATH}/.pi/agent/extensions/${extension}"
@@ -267,10 +267,15 @@ link_path "${DOTPATH}/scripts/omlx-idle-stop.sh" "${HOME}/.local/bin/omlx-idle-s
 link_path "${DOTPATH}/scripts/strata-tunnel.sh" "${HOME}/.local/bin/strata-tunnel"
 link_path "${DOTPATH}/scripts/strata-local.sh" "${HOME}/.local/bin/strata-local"
 link_path "${DOTPATH}/scripts/strata-stop.sh" "${HOME}/.local/bin/strata-stop"
+link_path "${DOTPATH}/scripts/strata-idle-stop.sh" "${HOME}/.local/bin/strata-idle-stop"
+link_path "${DOTPATH}/scripts/ensure-strata-win.sh" "${HOME}/.local/bin/ensure-strata-win"
 link_path "${DOTPATH}/scripts/pi" "${HOME}/.local/bin/pi"
 link_path "${DOTPATH}/tools/dsh-workspace/src/cli.ts" "${HOME}/.local/bin/dsh-workspace"
 if [ -x "${DOTPATH}/scripts/omlx-idle-stop.sh" ]; then
   "${DOTPATH}/scripts/omlx-idle-stop.sh" --install
+fi
+if [ -x "${DOTPATH}/scripts/strata-idle-stop.sh" ]; then
+  "${DOTPATH}/scripts/strata-idle-stop.sh" --install
 fi
 
 # .config apps

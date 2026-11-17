@@ -14,8 +14,16 @@ remote_port="${STRATA_REMOTE_PORT:-8080}"
 local_port="${STRATA_LOCAL_PORT:-18080}"
 
 if nc -z 127.0.0.1 "$local_port" 2>/dev/null; then
-  echo "strata tunnel already up on 127.0.0.1:$local_port"
-  exit 0
+  # A listener that forwards nothing (remote restarted or gone) must be replaced, not trusted:
+  # nc only proves the local ssh holds the port.
+  if curl -fsS -m 5 "http://127.0.0.1:$local_port/v1/models" >/dev/null 2>&1; then
+    echo "strata tunnel already up on 127.0.0.1:$local_port"
+    exit 0
+  fi
+  stale=$(lsof -nP -iTCP:"$local_port" -sTCP:LISTEN -t 2>/dev/null || true)
+  [ -n "$stale" ] && printf "%s
+" "$stale" | xargs kill
+  sleep 1
 fi
 
 ssh -N -f -o ExitOnForwardFailure=yes -o ConnectTimeout=10 \

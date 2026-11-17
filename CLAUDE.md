@@ -28,9 +28,16 @@ integrations. These instructions apply to agents working here, including pi and 
   at `127.0.0.1:8080`. Change the remote target with `STRATA_SSH_HOST`, `STRATA_REMOTE_ADDR`,
   `STRATA_REMOTE_PORT` or `STRATA_LOCAL_PORT`; the remote API key stays in `~/.pi/agent/auth.json`.
 - `./scripts/strata-local.sh` — Start this Mac's Strata as a managed instance on `127.0.0.1:8080`
-  for the `strata` provider (profile `launch-q2_0-32k`, ~30 s warm-up). Without it every client
-  fails with `connect ECONNREFUSED 127.0.0.1:8080`. `./scripts/strata-stop.sh` drains and stops
-  the same instance; both take `STRATA_PROFILE` and `STRATA_LOCAL_PORT`.
+  for the `strata` provider (profile `launch-q2_0-32k`, ~30 s warm-up). Nothing starts it in
+  advance: `tools/pi-strata-lifecycle` runs this when a `strata` model is selected, and
+  `./scripts/strata-idle-stop.sh` (launchd `com.kkkaoru.strata-idle-stop`, every 2 min) stops it
+  after `STRATA_IDLE_MINUTES` (default 10) with no request and no client connection.
+  `./scripts/strata-stop.sh` drains it on demand; all take `STRATA_PROFILE`/`STRATA_LOCAL_PORT`.
+- `./scripts/ensure-strata-win.sh` — Start the GPU host's Strata on demand: runs its `StrataStart`
+  scheduled task (no trigger — only `schtasks /run` starts it) and brings the tunnel up. The same
+  `tools/pi-strata-lifecycle` extension calls it when a `strata-win` model is selected; my-win's
+  `StrataIdleStop` task (`scripts/strata-win-idle-stop.ps1`, every 5 min) stops it after 10 idle
+  minutes. Servers therefore exist only while a Strata model is in use.
 - `./init-ssh.sh` — Initialize SSH configuration.
 - `./scripts/cf-remote-access.sh <label> [--agent]` — Publish one machine's SSH server as
   `<label>.kkk4oru.com` through a remotely managed Cloudflare Tunnel plus an Access application
