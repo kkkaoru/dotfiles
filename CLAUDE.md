@@ -42,9 +42,9 @@ integrations. These instructions apply to agents working here, including pi and 
 - `./scripts/setup-bonsai.sh` — Install Ternary Bonsai 2 27B (MLX 2-bit) and symlink it into
   `~/.omlx/models` so pi's `bonsai` provider is that oMLX model, not a second server. `--link <dir>`
   moves an existing download to `~/Models/Ternary-Bonsai-2-27B-mlx-2bit` and leaves a symlink.
-- `./scripts/ensure-bonsai-mac.sh` — Start oMLX on mac2 over SSH when
+- `./scripts/ensure-bonsai-mac.sh` — Start oMLX on my-mac over SSH when
   https://bonsai-mac.kkk4oru.com is not listing the Bonsai model. That hostname is on the
-  `ssh-mac2` tunnel (`./scripts/cf-expose-http.sh bonsai-mac 8891 ssh-mac2`), aimed at oMLX
+  `ssh-my-mac` tunnel (`./scripts/cf-expose-http.sh bonsai-mac 8891 ssh-my-mac`), aimed at oMLX
   port 8891. pi's `tools/pi-strata-lifecycle` calls it before a `bonsai-mac` request. Local
   `bonsai` starts oMLX only when that provider is selected (`tools/pi-omlx-lifecycle-extension`);
   the model is unpinned and unloads after 10 idle minutes. `bonsai-serve.sh` is the retired

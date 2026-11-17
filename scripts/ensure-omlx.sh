@@ -21,7 +21,7 @@ fi
 
 serving_bonsai() {
   curl -sf --max-time 2 -H "Authorization: Bearer ${OMLX_API_KEY:-omlx}" \
-    "http://127.0.0.1:${PORT}/v1/models" | grep -q "\"id\": \"$BONSAI_ID\""
+    "http://127.0.0.1:${PORT}/v1/models" | grep -F -q "$BONSAI_ID"
 }
 
 if curl -sf --max-time 2 "$HEALTH" >/dev/null; then

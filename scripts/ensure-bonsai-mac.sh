@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Ensure mac2's Bonsai 2 27B is served by oMLX behind https://bonsai-mac.kkk4oru.com.
-# That hostname is on the ssh-mac2 tunnel, aimed at oMLX port 8891.
-#   BONSAI_SSH_HOST  SSH alias (default: mac2)
+# Ensure my-mac's Bonsai 2 27B is served by oMLX behind https://bonsai-mac.kkk4oru.com.
+# That hostname is on the ssh-my-mac tunnel, aimed at oMLX port 8891.
+#   BONSAI_SSH_HOST  SSH alias (default: my-mac)
 #   BONSAI_MAC_URL   endpoint base URL (default: https://bonsai-mac.kkk4oru.com)
 #   BONSAI_MODEL_ID  oMLX model id (default: Ternary-Bonsai-2-27B-mlx-2bit)
 set -euo pipefail
 
-host="${BONSAI_SSH_HOST:-mac2}"
+host="${BONSAI_SSH_HOST:-my-mac}"
 url="${BONSAI_MAC_URL:-https://bonsai-mac.kkk4oru.com}"
 model_id="${BONSAI_MODEL_ID:-Ternary-Bonsai-2-27B-mlx-2bit}"
 cf_dir="${BONSAI_CF_DIR:-$HOME/.config/strata}"
@@ -18,7 +18,7 @@ serving() {
   curl -fsS -m 5 \
     -H "CF-Access-Client-Id: $id" \
     -H "CF-Access-Client-Secret: $sec" \
-    "$url/v1/models" | grep -q "\"id\": \"$model_id\""
+    "$url/v1/models" | grep -F -q "$model_id"
 }
 
 if serving; then
