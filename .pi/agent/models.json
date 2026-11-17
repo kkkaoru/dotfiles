@@ -117,7 +117,7 @@
         "supportsDeveloperRole": false,
         "supportsReasoningEffort": false,
         "supportsThinkingTokenBudget": true,
-        "thinkingTokenBudgetField": "reasoning_budget_tokens"
+        "thinkingTokenBudgetField": "thinking_budget_tokens"
       },
       "models": [
         {
@@ -140,6 +140,7 @@
       "name": "Strata (my-win RX 6900 XT, Cloudflare Access)",
       "baseUrl": "https://strata.kkk4oru.com/v1",
       "api": "openai-completions",
+      "apiKey": "strata-local",
       "headers": {
         "CF-Access-Client-Id": "!cat ~/.config/strata/cf-client-id",
         "CF-Access-Client-Secret": "!cat ~/.config/strata/cf-client-secret"
@@ -148,7 +149,7 @@
         "supportsDeveloperRole": false,
         "supportsReasoningEffort": false,
         "supportsThinkingTokenBudget": true,
-        "thinkingTokenBudgetField": "reasoning_budget_tokens"
+        "thinkingTokenBudgetField": "thinking_budget_tokens"
       },
       "models": [
         {
@@ -171,6 +172,7 @@
       "name": "Strata (my-mac, Cloudflare Access)",
       "baseUrl": "https://strata-mac.kkk4oru.com/v1",
       "api": "openai-completions",
+      "apiKey": "strata-local",
       "headers": {
         "CF-Access-Client-Id": "!cat ~/.config/strata/cf-client-id",
         "CF-Access-Client-Secret": "!cat ~/.config/strata/cf-client-secret"
@@ -179,7 +181,7 @@
         "supportsDeveloperRole": false,
         "supportsReasoningEffort": false,
         "supportsThinkingTokenBudget": true,
-        "thinkingTokenBudgetField": "reasoning_budget_tokens"
+        "thinkingTokenBudgetField": "thinking_budget_tokens"
       },
       "models": [
         {
@@ -241,7 +243,7 @@
         "supportsDeveloperRole": false,
         "supportsReasoningEffort": false,
         "supportsThinkingTokenBudget": true,
-        "thinkingTokenBudgetField": "reasoning_budget_tokens"
+        "thinkingTokenBudgetField": "thinking_budget_tokens"
       },
       "models": [
         {
