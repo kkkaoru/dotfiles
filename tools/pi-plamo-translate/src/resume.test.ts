@@ -48,32 +48,35 @@ function makeMessageEntry(index: number): SessionEntry {
 
 const neverResolve = (): Promise<void> => new Promise<void>(() => {});
 
-test("on resume, only the most recent persisted entries are scheduled for translation", () => {
-  const entries = Array.from({ length: 8 }, (_unused, index) => makeMessageEntry(index));
-  const server: Server = {
-    complete: async (text) => `JA:${text}`,
-    ensure: async () => true,
-  };
-  const box = createRuntime(settings, server, neverResolve);
-  startSession(
-    box,
-    {
-      ui: ui(),
-      sessionManager: { buildContextEntries: () => entries },
-    },
-    "resume",
-  );
-  // Older entries (m1, m2) are skipped; recent entry (m8) and live renders (no messageId) translate.
-  expect(displayOf(box, "Older reply 1", { ...shown, messageId: "m1" })).toBe("Older reply 1");
-  expect(displayOf(box, "Older reply 2", { ...shown, messageId: "m2" })).toBe("Older reply 2");
-  expect(box.pending.size).toBe(0);
+test.each(["resume", "fork", "reload"] as const)(
+  "on %s, only the most recent persisted entries are scheduled for translation",
+  (reason) => {
+    const entries = Array.from({ length: 8 }, (_unused, index) => makeMessageEntry(index));
+    const server: Server = {
+      complete: async (text) => `JA:${text}`,
+      ensure: async () => true,
+    };
+    const box = createRuntime(settings, server, neverResolve);
+    startSession(
+      box,
+      {
+        ui: ui(),
+        sessionManager: { buildContextEntries: () => entries },
+      },
+      reason,
+    );
+    // Older entries (m1, m2) are skipped; recent entry (m8) and live renders (no messageId) translate.
+    expect(displayOf(box, "Older reply 1", { ...shown, messageId: "m1" })).toBe("Older reply 1");
+    expect(displayOf(box, "Older reply 2", { ...shown, messageId: "m2" })).toBe("Older reply 2");
+    expect(box.pending.size).toBe(0);
 
-  expect(displayOf(box, "Recent reply", { ...shown, messageId: "m8" })).toBe("Recent reply");
-  expect(box.pending.has("Recent reply")).toBe(true);
+    expect(displayOf(box, "Recent reply", { ...shown, messageId: "m8" })).toBe("Recent reply");
+    expect(box.pending.has("Recent reply")).toBe(true);
 
-  expect(displayOf(box, "Live reply", shown)).toBe("Live reply");
-  expect(box.pending.has("Live reply")).toBe(true);
-});
+    expect(displayOf(box, "Live reply", shown)).toBe("Live reply");
+    expect(box.pending.has("Live reply")).toBe(true);
+  },
+);
 
 test("on compaction resume, the compaction summary entry is included in the recent window", () => {
   const entries: SessionEntry[] = [

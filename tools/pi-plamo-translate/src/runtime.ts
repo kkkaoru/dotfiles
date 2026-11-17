@@ -69,7 +69,7 @@ export interface Runtime {
   progress: Progress;
   ui: UiSink;
   warned: boolean;
-  /** Non-empty on `resume`/`fork`: only these persisted entry IDs may be translated. */
+  /** Non-empty on resume, fork, or reload: only these persisted entry IDs may be translated. */
   resumedIds: ReadonlySet<string> | null;
 }
 
@@ -300,7 +300,7 @@ export function displayOf(
   if (ready !== undefined) {
     return ready;
   }
-  // On resume/fork, older persisted entries stay untranslated so history does not flood PLaMo.
+  // On resume, fork, or reload, older persisted entries stay untranslated so history does not flood PLaMo.
   if (
     runtime.resumedIds !== null &&
     context.messageId !== undefined &&
@@ -358,7 +358,7 @@ function recentResumedIds(
   reason: SessionStartEvent["reason"] | undefined,
   ctx: SessionContextLike,
 ): ReadonlySet<string> | null {
-  if ((reason !== "resume" && reason !== "fork") || !ctx.sessionManager) {
+  if ((reason !== "resume" && reason !== "fork" && reason !== "reload") || !ctx.sessionManager) {
     return null;
   }
   const ids = ctx.sessionManager
