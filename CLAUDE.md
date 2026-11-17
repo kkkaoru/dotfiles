@@ -35,9 +35,10 @@ integrations. These instructions apply to agents working here, including pi and 
   `./scripts/strata-stop.sh` drains it on demand; all take `STRATA_PROFILE`/`STRATA_LOCAL_PORT`.
 - `./scripts/ensure-strata-win.sh` — Start the GPU host's Strata on demand: runs its `StrataStart`
   scheduled task (no trigger — only `schtasks /run` starts it) and brings the tunnel up. The same
-  `tools/pi-strata-lifecycle` extension calls it when a `strata-win` model is selected; my-win's
-  `StrataIdleStop` task (`scripts/strata-win-idle-stop.ps1`, every 5 min) stops it after 10 idle
-  minutes. Servers therefore exist only while a Strata model is in use.
+  `tools/pi-strata-lifecycle` extension calls it when a `strata-win` model is selected and before
+  each provider request, so a server the idle timer stopped mid-session comes back by itself;
+  my-win's `StrataIdleStop` task (`scripts/strata-win-idle-stop.ps1`, every 5 min) stops it after
+  10 idle minutes. Servers therefore exist only while a Strata model is in use.
 - `./init-ssh.sh` — Initialize SSH configuration.
 - `./scripts/cf-remote-access.sh <label> [--agent]` — Publish one machine's SSH server as
   `<label>.kkk4oru.com` through a remotely managed Cloudflare Tunnel plus an Access application
