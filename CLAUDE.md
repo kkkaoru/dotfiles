@@ -32,6 +32,13 @@ integrations. These instructions apply to agents working here, including pi and 
   fails with `connect ECONNREFUSED 127.0.0.1:8080`. `./scripts/strata-stop.sh` drains and stops
   the same instance; both take `STRATA_PROFILE` and `STRATA_LOCAL_PORT`.
 - `./init-ssh.sh` — Initialize SSH configuration.
+- `./scripts/cf-remote-access.sh <label> [--agent]` — Publish one machine's SSH server as
+  `<label>.kkk4oru.com` through a remotely managed Cloudflare Tunnel plus an Access application
+  that allows only the logged-in Cloudflare user. Creates the tunnel, ingress, Access app/policy
+  and proxied CNAME idempotently, writes the connector token to `~/.cloudflared/ssh-<label>.token`,
+  and prints the `cloudflared access ssh` / `~/.ssh/config` lines for the other machines.
+  `--agent` also installs and loads a launchd agent on macOS. Hostnames stay first-level because
+  Universal SSL does not cover `*.<label>.<zone>`.
 - `./scripts/cleanup-deepswe-disk.sh` — Remove legacy DeepSWE/Pier images and job directories;
   run only when cleanup is requested.
 
