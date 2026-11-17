@@ -36,6 +36,7 @@ export interface Deps {
 
 export interface Config {
   readonly colabCommand: string;
+  readonly session?: string;
   readonly upScript: string;
   readonly upTimeoutMs: number;
   readonly watcherScript: string;
@@ -89,7 +90,7 @@ export class ColabLifecycleRuntime {
 
   private async sessionAlive(): Promise<boolean> {
     const result = await this.deps.run(this.config.colabCommand, ["sessions"], 30_000);
-    return result.code === 0 && result.stdout.includes(`[${SESSION}]`);
+    return result.code === 0 && result.stdout.includes(`[${this.config.session ?? SESSION}]`);
   }
 
   private async start(): Promise<EnsureOutcome> {

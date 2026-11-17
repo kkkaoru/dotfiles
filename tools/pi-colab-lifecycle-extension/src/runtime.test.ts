@@ -53,6 +53,26 @@ function setup(input: HarnessInput): Harness {
   return { runtime: new ColabLifecycleRuntime(deps, config), run, spawnDetached, store };
 }
 
+it("uses a custom session name when configured", async () => {
+  const store: { state: State } = { state: { url: "https://s.trycloudflare.com" } };
+  const run = vi.fn<Deps["run"]>(async () => ({ code: 0, stdout: "[strata] L4", stderr: "" }));
+  const deps: Deps = {
+    run,
+    spawnDetached: vi.fn<Deps["spawnDetached"]>(),
+    readState: () => store.state,
+    writeState: (next) => {
+      store.state = next;
+    },
+    now: () => 42,
+  };
+  const custom = new ColabLifecycleRuntime(deps, { ...config, session: "strata" });
+  await expect(custom.ensureUp()).resolves.toStrictEqual({
+    ok: true,
+    started: false,
+    url: "https://s.trycloudflare.com",
+  });
+});
+
 it("reuses a live session without starting Colab", async () => {
   const harness = setup({
     initial: { url: "https://a.trycloudflare.com" },

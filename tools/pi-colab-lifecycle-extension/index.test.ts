@@ -106,7 +106,10 @@ const testConfig = {
   watcherScript: "watch.sh",
 };
 
-function harness(deps: Deps): {
+function harness(
+  deps: Deps,
+  strataDeps: Deps = deps,
+): {
   handlers: Map<string, Handler>;
   registerProvider: ReturnType<typeof vi.fn>;
 } {
@@ -121,6 +124,8 @@ function harness(deps: Deps): {
       registerProvider,
     },
     deps,
+    testConfig,
+    strataDeps,
     testConfig,
   );
   return { handlers, registerProvider };
@@ -224,4 +229,36 @@ it("clears the footer balance for other models", async () => {
   await handlers.get("agent_end")?.({}, ctx);
   await handlers.get("model_select")?.({ model: { provider: "omlx" } }, ctx);
   expect(ctx.ui.setStatus).toHaveBeenCalledWith("google-colab", undefined);
+});
+
+it("warms strata-colab on demand and registers its tunnel", async () => {
+  const strataDeps = liveDeps();
+  const { handlers, registerProvider } = harness(liveDeps(), strataDeps);
+  const ctx = context("strata-colab");
+  await handlers.get("before_agent_start")?.({}, ctx);
+  expect(registerProvider).toHaveBeenCalledWith("strata-colab", {
+    baseUrl: "https://live.trycloudflare.com/v1",
+  });
+  await handlers.get("tool_execution_end")?.({}, ctx);
+  expect(strataDeps.writeState).toHaveBeenCalled();
+});
+
+it("pre-warms strata-colab when selected and warns when unavailable", async () => {
+  const failDeps: Deps = {
+    ...liveDeps(),
+    readState: () => ({}),
+    run: vi.fn(async () => ({ code: 1, stdout: "", stderr: "down" })),
+  };
+  const { handlers, registerProvider } = harness(liveDeps(), failDeps);
+  const ctx = context("strata-colab");
+  await handlers.get("model_select")?.({ model: { provider: "strata-colab" } }, ctx);
+  await vi.waitFor(() => {
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      expect.stringContaining("strata-colab unavailable"),
+      "warning",
+    );
+  });
+  expect(registerProvider).not.toHaveBeenCalled();
+  await handlers.get("model_select")?.(null, context(undefined));
+  expect(ctx.ui.setStatus).not.toHaveBeenCalled();
 });

@@ -1,5 +1,7 @@
 export const PROVIDER = "google-colab";
+export const STRATA_PROVIDER = "strata-colab";
 export const SESSION = "qwen";
+export const STRATA_SESSION = "strata";
 export const IDLE_MS = 10 * 60 * 1000;
 
 export interface IdleInput {
@@ -15,6 +17,10 @@ export function shouldStop(input: IdleInput, idleMs: number = IDLE_MS): boolean 
 
 export function isColabModel(model: { readonly provider: string } | undefined): boolean {
   return model?.provider === PROVIDER;
+}
+
+export function isStrataColabModel(model: { readonly provider: string } | undefined): boolean {
+  return model?.provider === STRATA_PROVIDER;
 }
 
 export interface UsageInfo {
