@@ -138,6 +138,11 @@ describe("footerText", () => {
     );
   });
 
+  it("omits endpoints that have not been probed yet", () => {
+    expect(footerText({ "strata-win": "awake" }, new Map(), 0)).toBe("strata: strata-win awake");
+    expect(footerText({}, new Map(), 0)).toBeUndefined();
+  });
+
   it("stays quiet about the idle timer while the endpoint was used recently", () => {
     expect(footerText(states, new Map([["strata-win", 0]]), 60_000)).toBe(
       "strata: strata-win awake · strata-mac cold · strata-colab unknown",
@@ -185,16 +190,12 @@ describe("strataLifecycle", () => {
     expect(notify).toHaveBeenCalledWith("strata start failed: exit 3", "warning");
   });
 
-  it("shows the warm-up, then the endpoint states", async () => {
-    start({
-      code: 0,
-      stderr: "",
-      stdout: "strata-win awake\nstrata-mac asleep\nstrata-colab unknown\n",
-    });
+  it("shows the warm-up, then the endpoint it just started", async () => {
+    start();
     await fire("model_select", { model: { provider: "strata-win" } });
     expect(setStatus.mock.calls).toEqual([
       ["strata", "strata: starting strata-win..."],
-      ["strata", "strata: strata-win awake · strata-mac cold · strata-colab unknown"],
+      ["strata", "strata: strata-win awake"],
     ]);
   });
 
@@ -237,6 +238,16 @@ describe("strataLifecycle status", () => {
     start();
     await fire("before_provider_headers", { headers: {} }, { ui: { notify, setStatus } });
     expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("reports a probe that failed right after startup", async () => {
+    start();
+    exec.mockRejectedValue(new Error("boom"));
+    await fire("session_start", {});
+    await vi.waitFor(() => {
+      expect(notify).toHaveBeenCalledWith("strata status: Error: boom", "warning");
+    });
+    await fire("session_shutdown", {});
   });
 
   it("publishes the endpoint states when the session starts", async () => {

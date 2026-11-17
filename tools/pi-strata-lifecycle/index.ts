@@ -52,14 +52,14 @@ const STATUS_KEY = "strata";
 const IDLE_STOP_MS = 600_000;
 const STOPS_SOON_MS = 180_000;
 
+const BIN = path.join(homedir(), ".local", "bin");
+const AWAKE_SCRIPT = path.join(BIN, "strata-awake");
+
 const ENSURE_BY_PROVIDER: Readonly<Record<string, string>> = {
   strata: "strata-local",
   "strata-mac": "ensure-strata-mac",
   "strata-win": "ensure-strata-win",
 };
-
-const BIN = path.join(homedir(), ".local", "bin");
-const AWAKE_SCRIPT = path.join(BIN, "strata-awake");
 
 /** Endpoints `strata-awake` reports on, in footer order. */
 export const WATCHED: readonly string[] = ["strata-win", "strata-mac", "strata-colab"];
@@ -104,19 +104,26 @@ export function parseAwake(stdout: string): Readonly<Record<string, AwakeState>>
 
 function describe(
   provider: string,
-  state: AwakeState | undefined,
-  idleMs: number | undefined,
+  state: AwakeState,
+  last: number | undefined,
+  now: number,
 ): string {
-  if (state === "awake") {
-    const left = IDLE_STOP_MS - (idleMs ?? 0);
-    return left <= STOPS_SOON_MS
-      ? `${provider} awake (idle stops it in ~${Math.ceil(left / 60_000)}m)`
-      : `${provider} awake`;
+  if (state !== "awake") {
+    return `${provider} ${state === "asleep" ? "cold" : "unknown"}`;
   }
-  if (state === "asleep") {
-    return `${provider} cold`;
+  if (last === undefined) {
+    return `${provider} awake`;
   }
-  return `${provider} unknown`;
+  const left = IDLE_STOP_MS - (now - last);
+  return left <= STOPS_SOON_MS
+    ? `${provider} awake (idle stops it in ~${Math.ceil(left / 60_000)}m)`
+    : `${provider} awake`;
+}
+
+/** Last stderr line of a failed start, so the reason reaches the UI. */
+function failureText(result: ExecResultLike): string {
+  const detail = (result.stderr || result.stdout).trim().split("\n").pop() ?? "";
+  return `strata start failed: ${detail || `exit ${result.code}`}`;
 }
 
 /** One footer line: which endpoints answer now, and which the idle timer is about to stop. */
@@ -124,13 +131,15 @@ export function footerText(
   states: Readonly<Record<string, AwakeState>>,
   lastUsed: ReadonlyMap<string, number>,
   now: number,
-): string {
-  const parts: string[] = [];
-  for (const provider of WATCHED) {
-    const last = lastUsed.get(provider);
-    parts.push(describe(provider, states[provider], last === undefined ? undefined : now - last));
-  }
-  return `strata: ${parts.join(" · ")}`;
+): string | undefined {
+  const parts = WATCHED.flatMap((provider) => {
+    const state = states[provider];
+    if (state === undefined) {
+      return [];
+    }
+    return [describe(provider, state, lastUsed.get(provider), now)];
+  });
+  return parts.length === 0 ? undefined : `strata: ${parts.join(" · ")}`;
 }
 
 export default function strataLifecycle(host: StrataHost): void {
@@ -139,8 +148,12 @@ export default function strataLifecycle(host: StrataHost): void {
   let states: Readonly<Record<string, AwakeState>> = {};
   let timer: ReturnType<typeof globalThis.setInterval> | undefined = undefined;
 
-  const show = (ctx: StrataContext, text: string | undefined): void => {
-    ctx.ui.setStatus?.(STATUS_KEY, text);
+  const show = (ctx: StrataContext): void => {
+    ctx.ui.setStatus?.(STATUS_KEY, footerText(states, lastUsed, Date.now()));
+  };
+
+  const markState = (provider: string, state: AwakeState): void => {
+    states = { ...states, [provider]: state };
   };
 
   async function refresh(ctx: StrataContext): Promise<void> {
@@ -152,28 +165,30 @@ export default function strataLifecycle(host: StrataHost): void {
       }
     }
     states = next;
-    show(ctx, footerText(states, lastUsed, Date.now()));
+    show(ctx);
   }
 
   async function ensure(provider: string | undefined, ctx: StrataContext): Promise<void> {
-    const script: string | undefined = ensureScriptFor(provider);
-    if (provider !== undefined) {
-      lastUsed.set(provider, Date.now());
+    if (provider === undefined) {
+      return;
     }
+    lastUsed.set(provider, Date.now());
+    const script: string | undefined = ensureScriptFor(provider);
     if (script === undefined || (servingUntil.get(script) ?? 0) > Date.now()) {
       return;
     }
-    show(ctx, `strata: starting ${provider}...`);
+    ctx.ui.setStatus?.(STATUS_KEY, `strata: starting ${provider}...`);
     try {
       const result: ExecResultLike = await host.exec(script, [], { timeout: START_TIMEOUT_MS });
       if (result.code === 0) {
         servingUntil.set(script, Date.now() + SERVING_TRUST_MS);
-        return;
+        markState(provider, "awake");
+      } else {
+        markState(provider, "asleep");
+        ctx.ui.notify(failureText(result), "warning");
       }
-      const detail: string = (result.stderr || result.stdout).trim().split("\n").pop() ?? "";
-      ctx.ui.notify(`strata start failed: ${detail || `exit ${result.code}`}`, "warning");
     } finally {
-      await refresh(ctx);
+      show(ctx);
     }
   }
 
@@ -182,8 +197,11 @@ export default function strataLifecycle(host: StrataHost): void {
   // The hook is awaited, so the first attempt waits instead of failing with a 502.
   host.on("before_provider_headers", async (_event, ctx) => ensure(ctx.model?.provider, ctx));
 
+  // A probe of three unreachable endpoints must never hold up startup, so this is not awaited.
   host.on("session_start", async (_event, ctx) => {
-    await refresh(ctx);
+    refresh(ctx).catch((error: unknown) => {
+      ctx.ui.notify(`strata status: ${String(error)}`, "warning");
+    });
     timer = globalThis.setInterval(() => {
       refresh(ctx).catch((error: unknown) => {
         ctx.ui.notify(`strata status: ${String(error)}`, "warning");
