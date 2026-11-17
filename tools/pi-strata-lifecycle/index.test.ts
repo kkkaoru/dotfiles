@@ -27,7 +27,7 @@ type ExecFn = (
 ) => Promise<ExecResult>;
 type NotifyFn = (message: string, level?: "error" | "info" | "warning") => void;
 
-const ALL_COLD = "strata-win asleep\nstrata-mac asleep\nstrata-colab unknown\n";
+const ALL_COLD = "strata-win asleep\nstrata-mac asleep\nbonsai-mac asleep\nstrata-colab unknown\n";
 
 let handlers: Map<string, (event: unknown, ctx: StrataContext) => Promise<void>>;
 let exec: ReturnType<typeof vi.fn<ExecFn>>;
@@ -76,6 +76,8 @@ describe("ensureScriptFor", () => {
     expect(ensureScriptFor("strata")).toBe(path.join(BIN, "strata-local"));
     expect(ensureScriptFor("strata-mac")).toBe(path.join(BIN, "ensure-strata-mac"));
     expect(ensureScriptFor("strata-win")).toBe(path.join(BIN, "ensure-strata-win"));
+    expect(ensureScriptFor("bonsai")).toBe(path.join(BIN, "bonsai-serve"));
+    expect(ensureScriptFor("bonsai-mac")).toBe(path.join(BIN, "ensure-bonsai-mac"));
   });
 
   it("ignores other providers and a missing provider", () => {
@@ -104,6 +106,7 @@ describe("parseAwake", () => {
     expect(parseAwake(ALL_COLD)).toEqual({
       "strata-win": "asleep",
       "strata-mac": "asleep",
+      "bonsai-mac": "asleep",
       "strata-colab": "unknown",
     });
   });
@@ -123,29 +126,30 @@ describe("footerText", () => {
   const states: Readonly<Record<string, AwakeState>> = {
     "strata-win": "awake",
     "strata-mac": "asleep",
+    "bonsai-mac": "asleep",
     "strata-colab": "unknown",
   };
 
   it("names every endpoint and the one that answers", () => {
     expect(footerText(states, new Map(), 0)).toBe(
-      "strata: strata-win awake · strata-mac cold · strata-colab unknown",
+      "awake: strata-win awake · strata-mac cold · bonsai-mac cold · strata-colab unknown",
     );
   });
 
   it("warns that the idle timer is about to stop an awake endpoint", () => {
     expect(footerText(states, new Map([["strata-win", 0]]), 9 * 60_000)).toBe(
-      "strata: strata-win awake (idle stops it in ~1m) · strata-mac cold · strata-colab unknown",
+      "awake: strata-win awake (idle stops it in ~1m) · strata-mac cold · bonsai-mac cold · strata-colab unknown",
     );
   });
 
   it("omits endpoints that have not been probed yet", () => {
-    expect(footerText({ "strata-win": "awake" }, new Map(), 0)).toBe("strata: strata-win awake");
+    expect(footerText({ "strata-win": "awake" }, new Map(), 0)).toBe("awake: strata-win awake");
     expect(footerText({}, new Map(), 0)).toBeUndefined();
   });
 
   it("stays quiet about the idle timer while the endpoint was used recently", () => {
     expect(footerText(states, new Map([["strata-win", 0]]), 60_000)).toBe(
-      "strata: strata-win awake · strata-mac cold · strata-colab unknown",
+      "awake: strata-win awake · strata-mac cold · bonsai-mac cold · strata-colab unknown",
     );
   });
 });
@@ -194,8 +198,8 @@ describe("strataLifecycle", () => {
     start();
     await fire("model_select", { model: { provider: "strata-win" } });
     expect(setStatus.mock.calls).toEqual([
-      ["strata", "strata: starting strata-win..."],
-      ["strata", "strata: strata-win awake"],
+      ["strata", "strata-win: starting..."],
+      ["strata", "awake: strata-win awake"],
     ]);
   });
 
@@ -256,7 +260,7 @@ describe("strataLifecycle status", () => {
     expect(exec).toHaveBeenCalledWith(PROBE, [], { timeout: 40_000 });
     expect(setStatus).toHaveBeenCalledWith(
       "strata",
-      "strata: strata-win cold · strata-mac cold · strata-colab unknown",
+      "awake: strata-win cold · strata-mac cold · bonsai-mac cold · strata-colab unknown",
     );
   });
 

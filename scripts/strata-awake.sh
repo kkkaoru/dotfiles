@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Report whether each remote Strata endpoint is up, one line each: "<provider> awake|asleep|unknown".
+# Report whether each remote model endpoint is up, one line each: "<provider> awake|asleep|unknown".
 # Read-only: it never starts or stops a server. pi's strata-lifecycle extension shows this in its
 # footer; the idle-stop timers on each host are what make an idle endpoint go cold.
 #   STRATA_CF_DIR   Cloudflare Access credentials (default: ~/.config/strata)
 #   STRATA_STATE    strata-colab state with its quick-tunnel URL (default: ~/.cache/strata/state.json)
+#   BONSAI_MAC_URL  my-mac's Bonsai endpoint (default: https://bonsai-mac.kkk4oru.com)
 set -uo pipefail
 
 cf_dir="${STRATA_CF_DIR:-$HOME/.config/strata}"
@@ -34,6 +35,7 @@ cloudflare() {
 
 echo "strata-win $(cloudflare "https://strata.kkk4oru.com")"
 echo "strata-mac $(cloudflare "https://strata-mac.kkk4oru.com")"
+echo "bonsai-mac $(cloudflare "${BONSAI_MAC_URL:-https://bonsai-mac.kkk4oru.com}")"
 
 url="$(jq -r '.url // empty' "$state" 2>/dev/null)"
 keyfile="$(dirname "$state")/key"

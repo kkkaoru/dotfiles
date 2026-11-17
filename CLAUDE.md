@@ -39,11 +39,23 @@ integrations. These instructions apply to agents working here, including pi and 
   each provider request, so a server the idle timer stopped mid-session comes back by itself;
   my-win's `StrataIdleStop` task (`scripts/strata-win-idle-stop.ps1`, every 5 min) stops it after
   10 idle minutes. Servers therefore exist only while a Strata model is in use.
+- `./scripts/setup-bonsai.sh` — Install Ternary Bonsai 2 27B (MLX 2-bit) on the Mac that serves
+  it: the demo's tested `.venv` with `mlx-vlm==0.7.8` and `mlx-lm==0.32.0`, then the checkpoint into
+  `~/Models/Ternary-Bonsai-2-27B-mlx-2bit`. `--link <dir>` moves an existing download there and
+  leaves a symlink at `<dir>`, so a project checkout and pi share one copy of the 8.6 GB.
+- `./scripts/bonsai-serve.sh` / `bonsai-stop.sh` — Start or drain that server on `127.0.0.1:8090`
+  (`mlx_vlm.server --enable-thinking`). `./scripts/bonsai-idle-stop.sh --install` adds the launchd
+  agent (every 5 min) that stops it after 10 idle minutes; `./scripts/ensure-bonsai-mac.sh` starts
+  it on my-mac over SSH when https://bonsai-mac.kkk4oru.com answers 502, and pi's
+  `tools/pi-strata-lifecycle` calls it before a `bonsai-mac` request.
+- `./scripts/cf-expose-http.sh <label> <port> [tunnel]` — Add `https://<label>.kkk4oru.com` to an
+  existing tunnel's ingress, with an Access application that only the `pi-strata` service token
+  and the owner's email may pass. Use it instead of opening a port to serve a new model endpoint.
 - `./scripts/strata-awake.sh` — Print one line per remote endpoint (`strata-win`, `strata-mac`,
-  `strata-colab`): `awake`, `asleep` (Cloudflare 502 or no answer) or `unknown` (no colab URL yet).
-  Read-only; it never starts a server. `tools/pi-strata-lifecycle` runs it at session start and
-  every minute to keep that state in the pi footer, and warns when an endpoint the idle timer is
-  about to stop is still in use.
+  `bonsai-mac`, `strata-colab`): `awake`, `asleep` (Cloudflare 502 or no answer) or `unknown`
+  (no colab URL yet). Read-only; it never starts a server. `tools/pi-strata-lifecycle` runs it at
+  session start and every minute to keep that state in the pi footer, and warns when an endpoint
+  the idle timer is about to stop is still in use.
 - `./init-ssh.sh` — Initialize SSH configuration.
 - `./scripts/cf-remote-access.sh <label> [--agent]` — Publish one machine's SSH server as
   `<label>.kkk4oru.com` through a remotely managed Cloudflare Tunnel plus an Access application

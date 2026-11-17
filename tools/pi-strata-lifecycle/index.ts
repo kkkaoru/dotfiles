@@ -56,13 +56,20 @@ const BIN = path.join(homedir(), ".local", "bin");
 const AWAKE_SCRIPT = path.join(BIN, "strata-awake");
 
 const ENSURE_BY_PROVIDER: Readonly<Record<string, string>> = {
+  bonsai: "bonsai-serve",
+  "bonsai-mac": "ensure-bonsai-mac",
   strata: "strata-local",
   "strata-mac": "ensure-strata-mac",
   "strata-win": "ensure-strata-win",
 };
 
 /** Endpoints `strata-awake` reports on, in footer order. */
-export const WATCHED: readonly string[] = ["strata-win", "strata-mac", "strata-colab"];
+export const WATCHED: readonly string[] = [
+  "strata-win",
+  "strata-mac",
+  "bonsai-mac",
+  "strata-colab",
+];
 
 export type AwakeState = "awake" | "asleep" | "unknown";
 
@@ -139,7 +146,7 @@ export function footerText(
     }
     return [describe(provider, state, lastUsed.get(provider), now)];
   });
-  return parts.length === 0 ? undefined : `strata: ${parts.join(" · ")}`;
+  return parts.length === 0 ? undefined : `awake: ${parts.join(" · ")}`;
 }
 
 export default function strataLifecycle(host: StrataHost): void {
@@ -177,7 +184,7 @@ export default function strataLifecycle(host: StrataHost): void {
     if (script === undefined || (servingUntil.get(script) ?? 0) > Date.now()) {
       return;
     }
-    ctx.ui.setStatus?.(STATUS_KEY, `strata: starting ${provider}...`);
+    ctx.ui.setStatus?.(STATUS_KEY, `${provider}: starting...`);
     try {
       const result: ExecResultLike = await host.exec(script, [], { timeout: START_TIMEOUT_MS });
       if (result.code === 0) {

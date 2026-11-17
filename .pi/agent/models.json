@@ -261,6 +261,66 @@
           }
         }
       ]
+    },
+    "bonsai": {
+      "name": "Bonsai 2 27B (MLX, this Mac)",
+      "baseUrl": "http://127.0.0.1:8090/v1",
+      "api": "openai-completions",
+      "apiKey": "local",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsThinkingTokenBudget": true,
+        "thinkingTokenBudgetField": "thinking_budget"
+      },
+      "models": [
+        {
+          "id": "bonsai-2-27b",
+          "name": "Ternary Bonsai 2 27B (MLX)",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 131072,
+          "maxTokens": 16384,
+          "samplingParams": { "temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.05 },
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        }
+      ]
+    },
+    "bonsai-mac": {
+      "name": "Bonsai 2 27B (my-mac, Cloudflare Access)",
+      "baseUrl": "https://bonsai-mac.kkk4oru.com/v1",
+      "api": "openai-completions",
+      "apiKey": "local",
+      "headers": {
+        "CF-Access-Client-Id": "!cat ~/.config/strata/cf-client-id",
+        "CF-Access-Client-Secret": "!cat ~/.config/strata/cf-client-secret"
+      },
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsThinkingTokenBudget": true,
+        "thinkingTokenBudgetField": "thinking_budget"
+      },
+      "models": [
+        {
+          "id": "bonsai-2-27b",
+          "name": "Ternary Bonsai 2 27B (my-mac)",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 131072,
+          "maxTokens": 16384,
+          "samplingParams": { "temperature": 1.0, "top_p": 0.95, "top_k": 20, "min_p": 0.05 },
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        }
+      ]
     }
   }
 }

@@ -272,6 +272,10 @@ link_path "${DOTPATH}/scripts/strata-idle-stop.sh" "${HOME}/.local/bin/strata-id
 link_path "${DOTPATH}/scripts/strata-awake.sh" "${HOME}/.local/bin/strata-awake"
 link_path "${DOTPATH}/scripts/ensure-strata-win.sh" "${HOME}/.local/bin/ensure-strata-win"
 link_path "${DOTPATH}/scripts/ensure-strata-mac.sh" "${HOME}/.local/bin/ensure-strata-mac"
+link_path "${DOTPATH}/scripts/ensure-bonsai-mac.sh" "${HOME}/.local/bin/ensure-bonsai-mac"
+link_path "${DOTPATH}/scripts/bonsai-serve.sh" "${HOME}/.local/bin/bonsai-serve"
+link_path "${DOTPATH}/scripts/bonsai-stop.sh" "${HOME}/.local/bin/bonsai-stop"
+link_path "${DOTPATH}/scripts/bonsai-idle-stop.sh" "${HOME}/.local/bin/bonsai-idle-stop"
 link_path "${DOTPATH}/scripts/pi" "${HOME}/.local/bin/pi"
 link_path "${DOTPATH}/tools/dsh-workspace/src/cli.ts" "${HOME}/.local/bin/dsh-workspace"
 if [ -x "${DOTPATH}/scripts/omlx-idle-stop.sh" ]; then
@@ -279,6 +283,11 @@ if [ -x "${DOTPATH}/scripts/omlx-idle-stop.sh" ]; then
 fi
 if [ -x "${DOTPATH}/scripts/strata-idle-stop.sh" ]; then
   "${DOTPATH}/scripts/strata-idle-stop.sh" --install
+fi
+# Only the machine that holds the checkpoint serves Bonsai, so only it needs the idle timer.
+if [ -x "${DOTPATH}/scripts/bonsai-idle-stop.sh" ] &&
+  [ -f "${HOME}/Models/Ternary-Bonsai-2-27B-mlx-2bit/config.json" ]; then
+  "${DOTPATH}/scripts/bonsai-idle-stop.sh" --install
 fi
 
 # .config apps
