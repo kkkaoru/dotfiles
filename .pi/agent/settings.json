@@ -12,23 +12,23 @@
     "modelOverrides": {
       "strata/strata": {
         "reserveTokens": 12288,
-        "keepRecentTokens": 4000
+        "keepRecentTokens": 8000
       },
       "strata-win/qwen3.8-flash-next-q2_0": {
         "reserveTokens": 12288,
-        "keepRecentTokens": 4000
+        "keepRecentTokens": 8000
       },
       "strata-mac/qwen3.8-flash-next-q2_0": {
         "reserveTokens": 12288,
-        "keepRecentTokens": 4000
+        "keepRecentTokens": 8000
       },
       "bonsai/Ternary-Bonsai-2-27B-mlx-2bit": {
-        "reserveTokens": 12000,
-        "keepRecentTokens": 4000
+        "reserveTokens": 20480,
+        "keepRecentTokens": 8000
       },
       "bonsai-mac/Ternary-Bonsai-2-27B-mlx-2bit": {
-        "reserveTokens": 12000,
-        "keepRecentTokens": 4000
+        "reserveTokens": 20480,
+        "keepRecentTokens": 8000
       }
     }
   },
