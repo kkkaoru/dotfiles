@@ -38,6 +38,7 @@ const START_TIMEOUT_MS = 400_000;
 
 const ENSURE_BY_PROVIDER: Readonly<Record<string, string>> = {
   strata: "strata-local",
+  "strata-mac": "ensure-strata-mac",
   "strata-win": "ensure-strata-win",
 };
 

@@ -212,6 +212,7 @@ fi
 mkdir -p "${DOTPATH}/.pi/agent/extensions" "${DOTPATH}/.pi/agent/packages"
 for extension in colab-lifecycle goal loop omlx-lifecycle strata-lifecycle tmux-timeout; do
   extension_path="${DOTPATH}/tools/pi-${extension}-extension"
+  [ -d "$extension_path" ] || extension_path="${DOTPATH}/tools/pi-${extension}"
   if [ -d "$extension_path" ]; then
     link_path "$extension_path" "${DOTPATH}/.pi/agent/extensions/${extension}"
   fi
@@ -269,6 +270,7 @@ link_path "${DOTPATH}/scripts/strata-local.sh" "${HOME}/.local/bin/strata-local"
 link_path "${DOTPATH}/scripts/strata-stop.sh" "${HOME}/.local/bin/strata-stop"
 link_path "${DOTPATH}/scripts/strata-idle-stop.sh" "${HOME}/.local/bin/strata-idle-stop"
 link_path "${DOTPATH}/scripts/ensure-strata-win.sh" "${HOME}/.local/bin/ensure-strata-win"
+link_path "${DOTPATH}/scripts/ensure-strata-mac.sh" "${HOME}/.local/bin/ensure-strata-mac"
 link_path "${DOTPATH}/scripts/pi" "${HOME}/.local/bin/pi"
 link_path "${DOTPATH}/tools/dsh-workspace/src/cli.ts" "${HOME}/.local/bin/dsh-workspace"
 if [ -x "${DOTPATH}/scripts/omlx-idle-stop.sh" ]; then

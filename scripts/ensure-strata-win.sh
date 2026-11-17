@@ -1,40 +1,41 @@
 #!/usr/bin/env bash
-# Make my-win's Strata reachable from this Mac without touching my-win by hand: ensure its
-# `StrataStart` scheduled task is running, then make sure the tunnel is up.
-# my-win stops itself after 10 idle minutes (its own StrataIdleStop task), so this is a no-op when
-# the server already answers.
-#   STRATA_SSH_HOST   SSH alias (default: my-win)
-#   STRATA_LOCAL_PORT loopback port that must match .pi/agent/models.json (default: 18080)
+# Ensure my-win's Strata is serving behind https://strata.kkk4oru.com: if Cloudflare returns 502
+# (idle-stopped), start my-win's `StrataStart` scheduled task over SSH and wait until it answers.
+#   STRATA_SSH_HOST  SSH alias (default: my-win)
+#   STRATA_WIN_URL   endpoint base URL (default: https://strata.kkk4oru.com)
 set -euo pipefail
 
 host="${STRATA_SSH_HOST:-my-win}"
-port="${STRATA_LOCAL_PORT:-18080}"
+url="${STRATA_WIN_URL:-https://strata.kkk4oru.com}"
+cf_dir="${STRATA_CF_DIR:-$HOME/.config/strata}"
 
-# Any HTTP answer (even 401 for a key we do not hold) means the server is up.
+id="$(cat "$cf_dir/cf-client-id")"
+sec="$(cat "$cf_dir/cf-client-secret")"
+
 serving() {
-  [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:${port}/v1/models")" != "000" ]
+  [ "$(curl -s -o /dev/null -m 5 -w '%{http_code}' \
+    -H "CF-Access-Client-Id: $id" \
+    -H "CF-Access-Client-Secret: $sec" \
+    "$url/v1/models")" = "200" ]
 }
 
 if serving; then
-  echo "strata-win already serving on 127.0.0.1:$port"
+  echo "strata-win already serving at $url"
   exit 0
 fi
 
-# The task starts the server detached from this SSH session, so it outlives it.
 if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" 'schtasks /run /tn StrataStart' >/dev/null 2>&1; then
   echo "strata-win: cannot run StrataStart on $host" >&2
   exit 1
 fi
 
-"$(command -v strata-tunnel)"
-
 for _ in $(seq 1 60); do
   if serving; then
-    echo "strata-win serving on 127.0.0.1:$port"
+    echo "strata-win serving at $url"
     exit 0
   fi
   sleep 5
 done
 
-echo "strata-win: started on $host but 127.0.0.1:$port never answered" >&2
+echo "strata-win: started on $host but $url never answered 200" >&2
 exit 1

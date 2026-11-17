@@ -48,8 +48,9 @@ beforeEach((): void => {
 });
 
 describe("ensureScriptFor", () => {
-  it("maps both strata providers to their ensure script", () => {
+  it("maps all strata providers to their ensure script", () => {
     expect(ensureScriptFor("strata")).toBe(path.join(BIN, "strata-local"));
+    expect(ensureScriptFor("strata-mac")).toBe(path.join(BIN, "ensure-strata-mac"));
     expect(ensureScriptFor("strata-win")).toBe(path.join(BIN, "ensure-strata-win"));
   });
 
