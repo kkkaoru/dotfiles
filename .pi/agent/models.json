@@ -274,7 +274,7 @@
       },
       "models": [
         {
-          "id": "bonsai-2-27b",
+          "id": "/Users/kkk4oru/Models/Ternary-Bonsai-2-27B-mlx-2bit",
           "name": "Ternary Bonsai 2 27B (MLX)",
           "reasoning": true,
           "input": ["text", "image"],
@@ -306,7 +306,7 @@
       },
       "models": [
         {
-          "id": "bonsai-2-27b",
+          "id": "/Users/kkk4oru/Models/Ternary-Bonsai-2-27B-mlx-2bit",
           "name": "Ternary Bonsai 2 27B (my-mac)",
           "reasoning": true,
           "input": ["text", "image"],
