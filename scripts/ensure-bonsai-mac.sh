@@ -24,18 +24,20 @@ if serving; then
   exit 0
 fi
 
-# Loading 8.6 GB of weights before the first answer takes a minute or two.
-if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" '~/.local/bin/bonsai-serve' >/dev/null 2>&1; then
+# The remote script enables the prefix cache. Pass it here too, so an older copy still does.
+if ! ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" \
+  'env APC_ENABLED=1 APC_DISK_ENABLED=1 APC_DEFAULT_TENANT=bonsai APC_MEMORY_MAX_GB=4 APC_DISK_MAX_GB=4 ~/.local/bin/bonsai-serve' \
+  >/dev/null 2>&1; then
   echo "bonsai-mac: cannot run bonsai-serve on $host" >&2
   exit 1
 fi
 
-for _ in $(seq 1 60); do
+for _ in $(seq 1 30); do
   if serving; then
     echo "bonsai-mac serving at $url"
     exit 0
   fi
-  sleep 5
+  sleep 1
 done
 
 echo "bonsai-mac: started on $host but $url never answered 200" >&2

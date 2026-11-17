@@ -44,8 +44,10 @@ integrations. These instructions apply to agents working here, including pi and 
   `~/Models/Ternary-Bonsai-2-27B-mlx-2bit`. `--link <dir>` moves an existing download there and
   leaves a symlink at `<dir>`, so a project checkout and pi share one copy of the 8.6 GB.
 - `./scripts/bonsai-serve.sh` / `bonsai-stop.sh` — Start or drain that server on `127.0.0.1:8090`
-  (`mlx_vlm.server --enable-thinking`). `./scripts/bonsai-idle-stop.sh --install` adds the launchd
-  agent (every 5 min) that stops it after 10 idle minutes; `./scripts/ensure-bonsai-mac.sh` starts
+  (`mlx_vlm.server --enable-thinking`). It keeps a prefix cache (memory while running, disk after
+  idle-stop) so the next reply does not re-prefill the same prompt. No standby process.
+  `./scripts/bonsai-idle-stop.sh --install` adds the launchd agent (every 5 min) that stops it
+  after 10 idle minutes; `./scripts/ensure-bonsai-mac.sh` starts
   it on my-mac over SSH when https://bonsai-mac.kkk4oru.com answers 502, and pi's
   `tools/pi-strata-lifecycle` calls it before a `bonsai-mac` request.
 - `./scripts/cf-expose-http.sh <label> <port> [tunnel]` — Add `https://<label>.kkk4oru.com` to an

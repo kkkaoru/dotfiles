@@ -25,18 +25,21 @@ if nc -z 127.0.0.1 "$port" 2>/dev/null; then
 fi
 
 mkdir -p "$state"
-# The server loads 8.6 GB of weights before it answers, so detach it and wait on the API.
+# Weight load is about a second. Re-prefilling an unchanged prompt is the slow part, so keep
+# that prefix in memory while this process lives and on disk after idle-stop. Not a standby process.
+export APC_ENABLED=1 APC_DISK_ENABLED=1 APC_DEFAULT_TENANT=bonsai
+export APC_MEMORY_MAX_GB="${APC_MEMORY_MAX_GB:-4}" APC_DISK_MAX_GB="${APC_DISK_MAX_GB:-4}"
 nohup "$venv/bin/python" -m mlx_vlm.server \
   --model "$models" --host 127.0.0.1 --port "$port" --enable-thinking \
   >>"$log" 2>&1 </dev/null &
 echo $! >"$pidfile"
 
-for _ in $(seq 1 60); do
-  if curl -fsS -m 3 "http://127.0.0.1:$port/v1/models" >/dev/null 2>&1; then
+for _ in $(seq 1 90); do
+  if curl -fsS -m 2 "http://127.0.0.1:$port/v1/models" >/dev/null 2>&1; then
     echo "bonsai serving on 127.0.0.1:$port"
     exit 0
   fi
-  sleep 3
+  sleep 1
 done
 
 echo "bonsai: started but 127.0.0.1:$port never answered; see $log" >&2
