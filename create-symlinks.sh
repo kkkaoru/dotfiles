@@ -269,6 +269,7 @@ link_path "${DOTPATH}/scripts/strata-tunnel.sh" "${HOME}/.local/bin/strata-tunne
 link_path "${DOTPATH}/scripts/strata-local.sh" "${HOME}/.local/bin/strata-local"
 link_path "${DOTPATH}/scripts/strata-stop.sh" "${HOME}/.local/bin/strata-stop"
 link_path "${DOTPATH}/scripts/strata-idle-stop.sh" "${HOME}/.local/bin/strata-idle-stop"
+link_path "${DOTPATH}/scripts/strata-awake.sh" "${HOME}/.local/bin/strata-awake"
 link_path "${DOTPATH}/scripts/ensure-strata-win.sh" "${HOME}/.local/bin/ensure-strata-win"
 link_path "${DOTPATH}/scripts/ensure-strata-mac.sh" "${HOME}/.local/bin/ensure-strata-mac"
 link_path "${DOTPATH}/scripts/pi" "${HOME}/.local/bin/pi"

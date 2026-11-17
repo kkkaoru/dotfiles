@@ -1,15 +1,19 @@
 import { homedir } from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import strataLifecycle, {
   ensureScriptFor,
+  footerText,
+  parseAwake,
   providerOf,
+  type AwakeState,
   type StrataContext,
   type StrataHost,
 } from "./index.ts";
 
 const BIN = path.join(homedir(), ".local", "bin");
 const TIMEOUT = 400_000;
+const PROBE = path.join(BIN, "strata-awake");
 
 interface ExecResult {
   readonly code: number;
@@ -23,21 +27,26 @@ type ExecFn = (
 ) => Promise<ExecResult>;
 type NotifyFn = (message: string, level?: "error" | "info" | "warning") => void;
 
+const ALL_COLD = "strata-win asleep\nstrata-mac asleep\nstrata-colab unknown\n";
+
 let handlers: Map<string, (event: unknown, ctx: StrataContext) => Promise<void>>;
 let exec: ReturnType<typeof vi.fn<ExecFn>>;
 let notify: ReturnType<typeof vi.fn<NotifyFn>>;
 let setStatus: ReturnType<typeof vi.fn<(key: string, text: string | undefined) => void>>;
 let ctx: StrataContext;
 
-/** Register the extension against a fake host whose ensure script exits with `result`. */
-function start(result: ExecResult): void {
+/** Register the extension against a fake host; `exec` answers by command name. */
+function start(result?: ExecResult): void {
+  const probe = result ?? { code: 0, stderr: "", stdout: ALL_COLD };
   const host: StrataHost = {
     exec,
     on: (event, fn) => {
       handlers.set(event, fn);
     },
   };
-  exec.mockResolvedValue(result);
+  exec.mockImplementation(async (command: string) =>
+    command === PROBE ? probe : { code: 0, stderr: "", stdout: "" },
+  );
   strataLifecycle(host);
 }
 
@@ -56,6 +65,10 @@ beforeEach((): void => {
   setStatus = vi.fn<(key: string, text: string | undefined) => void>();
   handlers = new Map();
   ctx = { ui: { notify, setStatus } };
+});
+
+afterEach((): void => {
+  vi.useRealTimers();
 });
 
 describe("ensureScriptFor", () => {
@@ -86,16 +99,62 @@ describe("providerOf", () => {
   });
 });
 
+describe("parseAwake", () => {
+  it("reads the provider states strata-awake prints", () => {
+    expect(parseAwake(ALL_COLD)).toEqual({
+      "strata-win": "asleep",
+      "strata-mac": "asleep",
+      "strata-colab": "unknown",
+    });
+  });
+
+  it("skips empty and malformed lines", () => {
+    expect(parseAwake("\nstrata-win awake\ngarbage\n\nstrata-mac sideways\n")).toEqual({
+      "strata-win": "awake",
+    });
+  });
+
+  it("accepts no output at all", () => {
+    expect(parseAwake("")).toEqual({});
+  });
+});
+
+describe("footerText", () => {
+  const states: Readonly<Record<string, AwakeState>> = {
+    "strata-win": "awake",
+    "strata-mac": "asleep",
+    "strata-colab": "unknown",
+  };
+
+  it("names every endpoint and the one that answers", () => {
+    expect(footerText(states, new Map(), 0)).toBe(
+      "strata: strata-win awake · strata-mac cold · strata-colab unknown",
+    );
+  });
+
+  it("warns that the idle timer is about to stop an awake endpoint", () => {
+    expect(footerText(states, new Map([["strata-win", 0]]), 9 * 60_000)).toBe(
+      "strata: strata-win awake (idle stops it in ~1m) · strata-mac cold · strata-colab unknown",
+    );
+  });
+
+  it("stays quiet about the idle timer while the endpoint was used recently", () => {
+    expect(footerText(states, new Map([["strata-win", 0]]), 60_000)).toBe(
+      "strata: strata-win awake · strata-mac cold · strata-colab unknown",
+    );
+  });
+});
+
 describe("strataLifecycle", () => {
   it("starts the Mac's server when a strata model is selected", async () => {
-    start({ code: 0, stderr: "", stdout: "" });
+    start();
     await fire("model_select", { model: { provider: "strata" } });
     expect(exec).toHaveBeenCalledWith(path.join(BIN, "strata-local"), [], { timeout: TIMEOUT });
     expect(notify).not.toHaveBeenCalled();
   });
 
   it("starts the GPU host when a strata-win model is selected", async () => {
-    start({ code: 0, stderr: "", stdout: "" });
+    start();
     await fire("model_select", { model: { provider: "strata-win" } });
     expect(exec).toHaveBeenCalledWith(path.join(BIN, "ensure-strata-win"), [], {
       timeout: TIMEOUT,
@@ -103,14 +162,15 @@ describe("strataLifecycle", () => {
   });
 
   it("does nothing for a provider it does not own", async () => {
-    start({ code: 0, stderr: "", stdout: "" });
+    start();
     await fire("model_select", { model: { provider: "omlx" } });
     expect(exec).not.toHaveBeenCalled();
     expect(notify).not.toHaveBeenCalled();
   });
 
   it("warns with the last stderr line when the start fails", async () => {
-    start({ code: 1, stderr: "noise\nstrata: cannot reach server", stdout: "" });
+    start();
+    exec.mockResolvedValue({ code: 1, stderr: "noise\nstrata: cannot reach server", stdout: "" });
     await fire("model_select", { model: { provider: "strata" } });
     expect(notify).toHaveBeenCalledWith(
       "strata start failed: strata: cannot reach server",
@@ -119,28 +179,27 @@ describe("strataLifecycle", () => {
   });
 
   it("falls back to the exit code when the failure says nothing", async () => {
-    start({ code: 3, stderr: "", stdout: "" });
+    start();
+    exec.mockResolvedValue({ code: 3, stderr: "", stdout: "" });
     await fire("model_select", { model: { provider: "strata" } });
     expect(notify).toHaveBeenCalledWith("strata start failed: exit 3", "warning");
   });
 
-  it("uses stdout when stderr is empty", async () => {
-    start({ code: 1, stderr: "", stdout: "boom" });
-    await fire("model_select", { model: { provider: "strata" } });
-    expect(notify).toHaveBeenCalledWith("strata start failed: boom", "warning");
-  });
-
-  it("shows the warm-up as a status line and clears it afterwards", async () => {
-    start({ code: 0, stderr: "", stdout: "" });
+  it("shows the warm-up, then the endpoint states", async () => {
+    start({
+      code: 0,
+      stderr: "",
+      stdout: "strata-win awake\nstrata-mac asleep\nstrata-colab unknown\n",
+    });
     await fire("model_select", { model: { provider: "strata-win" } });
     expect(setStatus.mock.calls).toEqual([
-      ["strata", "starting strata-win..."],
-      ["strata", undefined],
+      ["strata", "strata: starting strata-win..."],
+      ["strata", "strata: strata-win awake · strata-mac cold · strata-colab unknown"],
     ]);
   });
 
   it("warms the server of the active model before a request", async () => {
-    start({ code: 0, stderr: "", stdout: "" });
+    start();
     await fire(
       "before_provider_headers",
       { headers: {} },
@@ -152,24 +211,76 @@ describe("strataLifecycle", () => {
   });
 
   it("does not probe again right after a successful warm", async () => {
-    start({ code: 0, stderr: "", stdout: "" });
+    start();
     const warmCtx: StrataContext = { model: { provider: "strata" }, ui: { notify, setStatus } };
     await fire("before_provider_headers", { headers: {} }, warmCtx);
     await fire("before_provider_headers", { headers: {} }, warmCtx);
-    expect(exec).toHaveBeenCalledTimes(1);
+    expect(
+      exec.mock.calls.filter(([command]) => command === path.join(BIN, "strata-local")),
+    ).toHaveLength(1);
   });
 
   it("retries a warm that failed on the next request", async () => {
-    start({ code: 1, stderr: "down", stdout: "" });
+    start();
+    exec.mockResolvedValue({ code: 1, stderr: "down", stdout: "" });
     const warmCtx: StrataContext = { model: { provider: "strata" }, ui: { notify, setStatus } };
     await fire("before_provider_headers", { headers: {} }, warmCtx);
     await fire("before_provider_headers", { headers: {} }, warmCtx);
-    expect(exec).toHaveBeenCalledTimes(2);
+    expect(
+      exec.mock.calls.filter(([command]) => command === path.join(BIN, "strata-local")),
+    ).toHaveLength(2);
   });
+});
 
+describe("strataLifecycle status", () => {
   it("skips a request made without an active model", async () => {
-    start({ code: 0, stderr: "", stdout: "" });
+    start();
     await fire("before_provider_headers", { headers: {} }, { ui: { notify, setStatus } });
     expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("publishes the endpoint states when the session starts", async () => {
+    start();
+    await fire("session_start", {});
+    expect(exec).toHaveBeenCalledWith(PROBE, [], { timeout: 40_000 });
+    expect(setStatus).toHaveBeenCalledWith(
+      "strata",
+      "strata: strata-win cold · strata-mac cold · strata-colab unknown",
+    );
+  });
+
+  it("says when an endpoint went cold between polls", async () => {
+    vi.useFakeTimers();
+    start({
+      code: 0,
+      stderr: "",
+      stdout: "strata-win awake\nstrata-mac asleep\nstrata-colab unknown\n",
+    });
+    await fire("session_start", {});
+    exec.mockImplementation(async () => ({ code: 0, stderr: "", stdout: ALL_COLD }));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(notify).toHaveBeenCalledWith(
+      "strata-win: went cold; the next request starts it again",
+      "info",
+    );
+  });
+
+  it("stops polling when the session shuts down", async () => {
+    vi.useFakeTimers();
+    start();
+    await fire("session_start", {});
+    await fire("session_shutdown", {});
+    exec.mockClear();
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("reports a probe that failed instead of throwing", async () => {
+    vi.useFakeTimers();
+    start();
+    await fire("session_start", {});
+    exec.mockRejectedValue(new Error("boom"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(notify).toHaveBeenCalledWith("strata status: Error: boom", "warning");
   });
 });

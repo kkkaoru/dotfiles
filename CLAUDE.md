@@ -39,6 +39,11 @@ integrations. These instructions apply to agents working here, including pi and 
   each provider request, so a server the idle timer stopped mid-session comes back by itself;
   my-win's `StrataIdleStop` task (`scripts/strata-win-idle-stop.ps1`, every 5 min) stops it after
   10 idle minutes. Servers therefore exist only while a Strata model is in use.
+- `./scripts/strata-awake.sh` — Print one line per remote endpoint (`strata-win`, `strata-mac`,
+  `strata-colab`): `awake`, `asleep` (Cloudflare 502 or no answer) or `unknown` (no colab URL yet).
+  Read-only; it never starts a server. `tools/pi-strata-lifecycle` runs it at session start and
+  every minute to keep that state in the pi footer, and warns when an endpoint the idle timer is
+  about to stop is still in use.
 - `./init-ssh.sh` — Initialize SSH configuration.
 - `./scripts/cf-remote-access.sh <label> [--agent]` — Publish one machine's SSH server as
   `<label>.kkk4oru.com` through a remotely managed Cloudflare Tunnel plus an Access application
