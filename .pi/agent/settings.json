@@ -2,8 +2,8 @@
   "lastChangelogVersion": "1.5.2",
   "theme": "dracula",
   "tuiMode": "fullscreen",
-  "defaultProvider": "openai-codex",
-  "defaultModel": "gpt-6-astra",
+  "defaultProvider": "cloudflare-ai-gateway",
+  "defaultModel": "workers-ai/@cf/deepseek-ai/deepseek-v4.1-flash-1017",
   "defaultThinkingLevel": "medium",
   "compaction": {
     "enabled": true,
