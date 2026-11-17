@@ -56,7 +56,6 @@ const BIN = path.join(homedir(), ".local", "bin");
 const AWAKE_SCRIPT = path.join(BIN, "strata-awake");
 
 const ENSURE_BY_PROVIDER: Readonly<Record<string, string>> = {
-  bonsai: "bonsai-serve",
   "bonsai-mac": "ensure-bonsai-mac",
   strata: "strata-local",
   "strata-mac": "ensure-strata-mac",

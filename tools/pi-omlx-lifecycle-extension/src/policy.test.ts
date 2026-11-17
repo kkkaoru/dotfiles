@@ -1,5 +1,11 @@
 import { expect, it } from "vitest";
-import { decideModelSwitchAction, decideShutdownAction, OMLX_PROVIDER_ID } from "./policy.ts";
+import {
+  BONSAI_PROVIDER_ID,
+  decideModelSwitchAction,
+  decideShutdownAction,
+  OMLX_PROVIDER_ID,
+  usesLocalOmlx,
+} from "./policy.ts";
 
 it("exposes the omlx provider id used by .pi/agent/models.json", () => {
   expect(OMLX_PROVIDER_ID).toBe("omlx");
@@ -43,4 +49,21 @@ it("does nothing on shutdown when there is no current provider", () => {
 
 it("stops omlx on shutdown when the current provider is omlx", () => {
   expect(decideShutdownAction("omlx")).toBe("stop");
+});
+
+it("treats local bonsai as the same oMLX process", () => {
+  expect(OMLX_PROVIDER_ID).toBe("omlx");
+  expect(BONSAI_PROVIDER_ID).toBe("bonsai");
+  expect(usesLocalOmlx("bonsai")).toBe(true);
+  expect(usesLocalOmlx("bonsai-mac")).toBe(false);
+  expect(decideModelSwitchAction({ nextProvider: "bonsai", previousProvider: "anthropic" })).toBe(
+    "start",
+  );
+  expect(decideModelSwitchAction({ nextProvider: "bonsai", previousProvider: "omlx" })).toBe(
+    "start",
+  );
+  expect(decideModelSwitchAction({ nextProvider: "strata", previousProvider: "bonsai" })).toBe(
+    "stop",
+  );
+  expect(decideShutdownAction("bonsai")).toBe("stop");
 });

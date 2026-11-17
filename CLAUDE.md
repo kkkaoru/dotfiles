@@ -39,17 +39,16 @@ integrations. These instructions apply to agents working here, including pi and 
   each provider request, so a server the idle timer stopped mid-session comes back by itself;
   my-win's `StrataIdleStop` task (`scripts/strata-win-idle-stop.ps1`, every 5 min) stops it after
   10 idle minutes. Servers therefore exist only while a Strata model is in use.
-- `./scripts/setup-bonsai.sh` — Install Ternary Bonsai 2 27B (MLX 2-bit) on the Mac that serves
-  it: the demo's tested `.venv` with `mlx-vlm==0.7.8` and `mlx-lm==0.32.0`, then the checkpoint into
-  `~/Models/Ternary-Bonsai-2-27B-mlx-2bit`. `--link <dir>` moves an existing download there and
-  leaves a symlink at `<dir>`, so a project checkout and pi share one copy of the 8.6 GB.
-- `./scripts/bonsai-serve.sh` / `bonsai-stop.sh` — Start or drain that server on `127.0.0.1:8090`
-  (`mlx_vlm.server --enable-thinking`). It keeps a prefix cache (memory while running, disk after
-  idle-stop) so the next reply does not re-prefill the same prompt. No standby process.
-  `./scripts/bonsai-idle-stop.sh --install` adds the launchd agent (every 5 min) that stops it
-  after 10 idle minutes; `./scripts/ensure-bonsai-mac.sh` starts
-  it on my-mac over SSH when https://bonsai-mac.kkk4oru.com answers 502, and pi's
-  `tools/pi-strata-lifecycle` calls it before a `bonsai-mac` request.
+- `./scripts/setup-bonsai.sh` — Install Ternary Bonsai 2 27B (MLX 2-bit) and symlink it into
+  `~/.omlx/models` so pi's `bonsai` provider is that oMLX model, not a second server. `--link <dir>`
+  moves an existing download to `~/Models/Ternary-Bonsai-2-27B-mlx-2bit` and leaves a symlink.
+- `./scripts/ensure-bonsai-mac.sh` — Start oMLX on mac2 over SSH when
+  https://bonsai-mac.kkk4oru.com is not listing the Bonsai model. That hostname is on the
+  `ssh-mac2` tunnel (`./scripts/cf-expose-http.sh bonsai-mac 8891 ssh-mac2`), aimed at oMLX
+  port 8891. pi's `tools/pi-strata-lifecycle` calls it before a `bonsai-mac` request. Local
+  `bonsai` starts oMLX only when that provider is selected (`tools/pi-omlx-lifecycle-extension`);
+  the model is unpinned and unloads after 10 idle minutes. `bonsai-serve.sh` is the retired
+  mlx_vlm server and is not used by pi.
 - `./scripts/cf-expose-http.sh <label> <port> [tunnel]` — Add `https://<label>.kkk4oru.com` to an
   existing tunnel's ingress, with an Access application that only the `pi-strata` service token
   and the owner's email may pass. Use it instead of opening a port to serve a new model endpoint.

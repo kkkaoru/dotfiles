@@ -284,10 +284,9 @@ fi
 if [ -x "${DOTPATH}/scripts/strata-idle-stop.sh" ]; then
   "${DOTPATH}/scripts/strata-idle-stop.sh" --install
 fi
-# Only the machine that holds the checkpoint serves Bonsai, so only it needs the idle timer.
-if [ -x "${DOTPATH}/scripts/bonsai-idle-stop.sh" ] &&
-  [ -f "${HOME}/Models/Ternary-Bonsai-2-27B-mlx-2bit/config.json" ]; then
-  "${DOTPATH}/scripts/bonsai-idle-stop.sh" --install
+# Bonsai is a model inside oMLX. The old mlx_vlm timer would keep a second server resident.
+if [ -x "${DOTPATH}/scripts/bonsai-idle-stop.sh" ]; then
+  "${DOTPATH}/scripts/bonsai-idle-stop.sh" --uninstall
 fi
 
 # .config apps

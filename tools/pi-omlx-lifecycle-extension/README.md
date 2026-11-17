@@ -9,8 +9,8 @@ API instead.
 
 - On pi's `model_select` event (fired by `/model`, cycling models, or any other in-session model
   switch — not fired for the initial default model picked at process startup), switching **into**
-  the `omlx` provider runs `ensure-omlx` (health-checks and starts the server if needed); switching
-  **away** from `omlx` runs `omlx-idle-stop` once as an immediate nudge (it only actually stops the
+  the `omlx` or local `bonsai` provider runs `ensure-omlx` (health-checks and starts the server if
+  needed); switching **away** from both runs `omlx-idle-stop` once as an immediate nudge (it only actually stops the
   server when nothing else is using it — the same idle-stop policy already installed as a
   `launchd` agent by `create-symlinks.sh`, polling every 120 seconds).
 - On pi's `session_shutdown` event with `reason: "quit"` (the process is actually exiting), if the

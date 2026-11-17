@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Start Bonsai 2 27B (Ternary, MLX 2-bit) where pi's bonsai model expects it (127.0.0.1:8090).
-# Nothing starts it in advance: pi's lifecycle extension runs this when a Bonsai model is
-# selected, and bonsai-idle-stop stops it again after BONSAI_IDLE_MINUTES.
+# Retired: pi serves Bonsai through oMLX (port 8891), not this mlx_vlm server.
+# Left so an already-running process can still be identified. Do not start it for pi.
 #   BONSAI_MODEL_DIR  MLX checkpoint (default: ~/Models/Ternary-Bonsai-2-27B-mlx-2bit)
 #   BONSAI_VENV       python with the pinned mlx-vlm (default: ~/.local/share/bonsai-2-27b/venv)
 #   BONSAI_PORT       port that must match .pi/agent/models.json (default: 8090)

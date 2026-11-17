@@ -96,8 +96,8 @@ detect_omlx_requirement() {
 
   # A provider-qualified model is an explicit selection and wins over the
   # ambient provider. Otherwise use pi's configured default provider.
-  if [ "$provider_from_cli" -eq 0 ] && [[ "$model" == omlx/* ]]; then
-    provider="omlx"
+  if [ "$provider_from_cli" -eq 0 ] && [[ "$model" == omlx/* || "$model" == bonsai/* ]]; then
+    provider="${model%%/*}"
   elif [ -z "$provider" ]; then
     for settings_file in \
       "${PWD}/.pi/settings.json" \
@@ -113,7 +113,7 @@ detect_omlx_requirement() {
     done
   fi
 
-  if [ "$provider" = "omlx" ]; then
+  if [ "$provider" = "omlx" ] || [ "$provider" = "bonsai" ]; then
     needs_omlx=1
   fi
 }

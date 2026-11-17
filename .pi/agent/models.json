@@ -263,20 +263,28 @@
       ]
     },
     "bonsai": {
-      "name": "Bonsai 2 27B (MLX, this Mac)",
-      "baseUrl": "http://127.0.0.1:8090/v1",
+      "name": "Bonsai 2 27B (oMLX, this Mac)",
+      "baseUrl": "http://127.0.0.1:8891/v1",
       "api": "openai-completions",
-      "apiKey": "local",
+      "apiKey": "omlx",
+      "authHeader": true,
       "compat": {
-        "supportsDeveloperRole": false,
-        "supportsThinkingTokenBudget": true,
-        "thinkingTokenBudgetField": "thinking_budget"
+        "supportsDeveloperRole": false
       },
       "models": [
         {
-          "id": "/Users/kkk4oru/Models/Ternary-Bonsai-2-27B-mlx-2bit",
-          "name": "Ternary Bonsai 2 27B (MLX)",
+          "id": "Ternary-Bonsai-2-27B-mlx-2bit",
+          "name": "Ternary Bonsai 2 27B (oMLX)",
           "reasoning": true,
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "xhigh",
+            "xhigh": "xhigh",
+            "max": null
+          },
           "input": ["text", "image"],
           "contextWindow": 131072,
           "maxTokens": 16384,
@@ -291,24 +299,32 @@
       ]
     },
     "bonsai-mac": {
-      "name": "Bonsai 2 27B (my-mac, Cloudflare Access)",
+      "name": "Bonsai 2 27B (my-mac oMLX, Cloudflare Access)",
       "baseUrl": "https://bonsai-mac.kkk4oru.com/v1",
       "api": "openai-completions",
-      "apiKey": "local",
+      "apiKey": "omlx",
+      "authHeader": true,
       "headers": {
         "CF-Access-Client-Id": "!cat ~/.config/strata/cf-client-id",
         "CF-Access-Client-Secret": "!cat ~/.config/strata/cf-client-secret"
       },
       "compat": {
-        "supportsDeveloperRole": false,
-        "supportsThinkingTokenBudget": true,
-        "thinkingTokenBudgetField": "thinking_budget"
+        "supportsDeveloperRole": false
       },
       "models": [
         {
-          "id": "/Users/kkk4oru/Models/Ternary-Bonsai-2-27B-mlx-2bit",
-          "name": "Ternary Bonsai 2 27B (my-mac)",
+          "id": "Ternary-Bonsai-2-27B-mlx-2bit",
+          "name": "Ternary Bonsai 2 27B (my-mac oMLX)",
           "reasoning": true,
+          "thinkingLevelMap": {
+            "off": null,
+            "minimal": null,
+            "low": "low",
+            "medium": "medium",
+            "high": "xhigh",
+            "xhigh": "xhigh",
+            "max": null
+          },
           "input": ["text", "image"],
           "contextWindow": 131072,
           "maxTokens": 16384,

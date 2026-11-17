@@ -76,12 +76,12 @@ describe("ensureScriptFor", () => {
     expect(ensureScriptFor("strata")).toBe(path.join(BIN, "strata-local"));
     expect(ensureScriptFor("strata-mac")).toBe(path.join(BIN, "ensure-strata-mac"));
     expect(ensureScriptFor("strata-win")).toBe(path.join(BIN, "ensure-strata-win"));
-    expect(ensureScriptFor("bonsai")).toBe(path.join(BIN, "bonsai-serve"));
     expect(ensureScriptFor("bonsai-mac")).toBe(path.join(BIN, "ensure-bonsai-mac"));
   });
 
   it("ignores other providers and a missing provider", () => {
     expect(ensureScriptFor("omlx")).toBeUndefined();
+    expect(ensureScriptFor("bonsai")).toBeUndefined();
     expect(ensureScriptFor(undefined)).toBeUndefined();
   });
 });

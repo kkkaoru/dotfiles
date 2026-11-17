@@ -40,6 +40,23 @@
       "is_hidden": false,
       "is_favorite": false,
       "trust_remote_code": false
+    },
+    "Ternary-Bonsai-2-27B-mlx-2bit": {
+      "max_context_window": 131072,
+      "max_tokens": 16384,
+      "temperature": 1.0,
+      "top_p": 0.95,
+      "top_k": 20,
+      "min_p": 0.05,
+      "force_sampling": true,
+      "enable_thinking": true,
+      "dflash_enabled": false,
+      "mtp_enabled": false,
+      "vlm_mtp_enabled": false,
+      "is_pinned": false,
+      "is_default": false,
+      "ttl_seconds": 600,
+      "trust_remote_code": false
     }
   }
 }

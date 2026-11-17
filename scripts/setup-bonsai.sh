@@ -59,5 +59,19 @@ hf download "$repo" --local-dir "$models"
   echo "bonsai: $models has no config.json after download" >&2
   exit 1
 }
-echo "bonsai ready: $models"
-echo "start it with: $(dirname "$0")/bonsai-serve.sh"
+omlx_models="${OMLX_MODELS_DIR:-$HOME/.omlx/models}"
+link="$omlx_models/$(basename "$models")"
+mkdir -p "$omlx_models"
+if [ -L "$link" ]; then
+  :
+elif [ -e "$link" ]; then
+  echo "bonsai: $link exists and is not a symlink to the checkpoint" >&2
+  exit 1
+else
+  ln -s "$models" "$link"
+fi
+if ! grep -q prism_hadamard /Applications/oMLX.app/Contents/Resources/omlx/utils/model_loading.py 2>/dev/null; then
+  echo "bonsai: installed oMLX cannot load prism_hadamard packs; need a build that serves Ternary Bonsai 2 (stock 0.7+)" >&2
+fi
+echo "bonsai ready for oMLX: $link"
+echo "pi: pi --provider bonsai --model $(basename "$models")"
