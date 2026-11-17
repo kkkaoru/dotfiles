@@ -135,9 +135,13 @@
       ]
     },
     "strata-win": {
-      "name": "Strata (my-win RX 6900 XT)",
-      "baseUrl": "http://127.0.0.1:18080/v1",
+      "name": "Strata (my-win RX 6900 XT, Cloudflare Access)",
+      "baseUrl": "https://strata.kkk4oru.com/v1",
       "api": "openai-completions",
+      "headers": {
+        "CF-Access-Client-Id": "!cat ~/.config/strata/cf-client-id",
+        "CF-Access-Client-Secret": "!cat ~/.config/strata/cf-client-secret"
+      },
       "compat": {
         "supportsDeveloperRole": false,
         "supportsReasoningEffort": false
@@ -146,6 +150,35 @@
         {
           "id": "qwen3.8-flash-next-q2_0",
           "name": "Qwen3.8-Flash-Next Q2_0 (Strata, my-win)",
+          "reasoning": true,
+          "input": ["text", "image"],
+          "contextWindow": 32768,
+          "maxTokens": 8192,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        }
+      ]
+    },
+    "strata-mac": {
+      "name": "Strata (my-mac, Cloudflare Access)",
+      "baseUrl": "https://strata-mac.kkk4oru.com/v1",
+      "api": "openai-completions",
+      "headers": {
+        "CF-Access-Client-Id": "!cat ~/.config/strata/cf-client-id",
+        "CF-Access-Client-Secret": "!cat ~/.config/strata/cf-client-secret"
+      },
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false
+      },
+      "models": [
+        {
+          "id": "qwen3.8-flash-next-q2_0",
+          "name": "Qwen3.8-Flash-Next Q2_0 (Strata, my-mac)",
           "reasoning": true,
           "input": ["text"],
           "contextWindow": 32768,
@@ -183,6 +216,31 @@
           },
           "input": ["text"],
           "contextWindow": 32768,
+          "maxTokens": 8192,
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
+        }
+      ]
+    },
+    "strata-colab": {
+      "name": "Strata Qwen3.8-Flash-Next (Colab L4)",
+      "baseUrl": "https://example.trycloudflare.com/v1",
+      "api": "openai-completions",
+      "authHeader": true,
+      "compat": {
+        "supportsDeveloperRole": false
+      },
+      "models": [
+        {
+          "id": "qwen3.8-flash-next-q2_0",
+          "name": "Qwen3.8-Flash-Next Q2_0 (Strata on Colab L4)",
+          "reasoning": true,
+          "input": ["text"],
+          "contextWindow": 131072,
           "maxTokens": 8192,
           "cost": {
             "input": 0,
