@@ -86,7 +86,7 @@ const GO_CIPHER_ORDER = [
   "ECDHE-RSA-AES256-SHA",
   "ECDHE-ECDSA-AES128-SHA",
   "ECDHE-ECDSA-AES256-SHA",
-  "RSA-PSS-RSAE-SHA256",
+  // No `RSA-PSS-RSAE-SHA256` here: Go has no such suite, and BoringSSL (Bun) rejects the name.
   "AES128-GCM-SHA256",
   "AES256-GCM-SHA384",
   "AES128-SHA",
