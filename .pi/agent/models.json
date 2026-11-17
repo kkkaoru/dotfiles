@@ -453,6 +453,44 @@
           }
         }
       ]
+    },
+    "cloudflare-workers-ai": {
+      "modelOverrides": {
+        "@cf/deepseek-ai/deepseek-v4.1-flash-1017": {
+          "inputLimits": {
+            "maxRequestBytes": 10000000,
+            "images": {
+              "maxPerMessage": 4,
+              "maxPerRequest": 8,
+              "resize": {
+                "maxWidth": 1568,
+                "maxHeight": 1568,
+                "maxBytes": 262144,
+                "jpegQuality": 75
+              }
+            }
+          }
+        }
+      }
+    },
+    "cloudflare-ai-gateway": {
+      "modelOverrides": {
+        "workers-ai/@cf/deepseek-ai/deepseek-v4.1-flash-1017": {
+          "inputLimits": {
+            "maxRequestBytes": 10000000,
+            "images": {
+              "maxPerMessage": 4,
+              "maxPerRequest": 8,
+              "resize": {
+                "maxWidth": 1568,
+                "maxHeight": 1568,
+                "maxBytes": 262144,
+                "jpegQuality": 75
+              }
+            }
+          }
+        }
+      }
     }
   }
 }
