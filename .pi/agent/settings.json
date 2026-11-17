@@ -21,6 +21,14 @@
       "strata-mac/qwen3.8-flash-next-q2_0": {
         "reserveTokens": 12288,
         "keepRecentTokens": 4000
+      },
+      "bonsai/Ternary-Bonsai-2-27B-mlx-2bit": {
+        "reserveTokens": 12000,
+        "keepRecentTokens": 4000
+      },
+      "bonsai-mac/Ternary-Bonsai-2-27B-mlx-2bit": {
+        "reserveTokens": 12000,
+        "keepRecentTokens": 4000
       }
     }
   },
