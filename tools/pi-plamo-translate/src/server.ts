@@ -4,7 +4,7 @@ import { plamoPrompt } from "../../claude-plamo-translate/hooks/translate.ts";
 import { isRecord } from "./settings.ts";
 
 const HOST = "http://127.0.0.1";
-const MLX_SERVER = ".local/bin/mlx_lm.server";
+const MLX_SERVER = ".local/bin/plamo-mlx-server";
 const MLX_MODEL = ".local/share/plamo-translate/plamo-3-translate-0.8b-mlx-4bit";
 const LLAMA_SERVER = ".local/share/plamo-translate/llama.cpp/llama-server";
 const GGUF_MODEL = ".local/share/plamo-translate/plamo-3-translate-0.8b-Q4_K_M.gguf";
@@ -17,7 +17,10 @@ const MIN_TOKENS = 64;
 const MAX_TOKENS = 4096;
 const READY_TIMEOUT_MS = 60_000;
 const READY_POLL_MS = 500;
-const PARALLEL_REQUESTS = 4;
+// Requests in flight at once; a new prompt's still goes first. Batching them keeps the GPU fed.
+// One request at a time leaves Apple Silicon's decode memory-bound and idle.
+const PARALLEL_REQUESTS = 8;
+
 export const SETUP_HINT =
   "plamo-translate: the PLaMo server is not reachable; run scripts/setup-plamo-translate.sh. Text is passed through untranslated.";
 

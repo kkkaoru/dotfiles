@@ -21,7 +21,7 @@ function response(ok: boolean, body: unknown, status = 200): ResponseLike {
 
 test("mlx is preferred when its server binary exists", () => {
   expect(commandSpec("/Users/x", "darwin", 18555, () => true)).toStrictEqual({
-    command: "/Users/x/.local/bin/mlx_lm.server",
+    command: "/Users/x/.local/bin/plamo-mlx-server",
     args: [
       "--model",
       "/Users/x/.local/share/plamo-translate/plamo-3-translate-0.8b-mlx-4bit",
@@ -31,6 +31,7 @@ test("mlx is preferred when its server binary exists", () => {
     ],
   });
 });
+
 
 test("llama.cpp is used when mlx is absent", () => {
   expect(
