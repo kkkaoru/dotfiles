@@ -8,10 +8,11 @@ integrations. These instructions apply to agents working here, including pi and 
 - `./create-symlinks.sh` — Link repository-managed configuration into `$HOME`.
   Review changes before running: this updates the live development environment.
 - `bun install` / `bun add <package>` / `bunx <package>` — Use Bun for package management.
-- `./scripts/secrets.sh keygen|encrypt|decrypt <name>` — Keep a secret in Git only as
-  `secrets/<name>.age` (age). `~/.config/age/keys.txt` holds the identity and stays on the owner's
-  Macs; `secrets/recipients.txt` lists their public keys. Copy that identity to another Mac (never
-  into Git) and add its public key before re-encrypting, so both can read every file.
+- `./scripts/secrets.sh keygen|encrypt|decrypt|identity <name>` — Keep a secret in Git only as
+  `secrets/<name>.age` (age). The age identity lives in 1Password (`AGE_OP_REF`), else the macOS
+  keychain (`AGE_KEYCHAIN_SERVICE`), else `~/.config/age/keys.txt`, so every Mac of the owner's
+  decrypts it without copying a file; `secrets/recipients.txt` lists their public keys. Re-encrypt
+  after adding a key so every Mac can read every file.
 - `./scripts/setup-executor.sh` — Register shared Executor integrations.
   `--approve-registration` explicitly permits registration and connection creation only.
 - `./scripts/executor-cloudflare-auth.sh <cloudflare-integration>` — Start the service's

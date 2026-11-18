@@ -43,14 +43,19 @@ function token(): string | undefined {
   return tokenFrom(process.env["CLOUDFLARE_API_TOKEN"], readText(wrangler));
 }
 
-// The account id is a secret: Git holds only secrets/gateway-cost.age, read with the owner's key.
+/** The repository checkout this extension lives in; its scripts own the age identity lookup. */
+export function secretsScript(): string {
+  return path.resolve(import.meta.dirname, "..", "..", "scripts", "secrets.sh");
+}
+
+// The account id is a secret: Git holds only secrets/gateway-cost.age, and scripts/secrets.sh
+// Decrypts it with the identity from 1Password, the keychain or ~/.config/age/keys.txt.
 function decryptedSecret(): string | undefined {
-  const file = path.join(getAgentDir(), "secrets", "gateway-cost.age");
-  const identity = path.join(homedir(), ".config", "age", "keys.txt");
-  if (!existsSync(file) || !existsSync(identity)) {
+  const script = secretsScript();
+  if (!existsSync(script)) {
     return undefined;
   }
-  const result = spawnSync("age", ["-d", "-i", identity, file], { encoding: "utf8" });
+  const result = spawnSync("bash", [script, "decrypt", "gateway-cost"], { encoding: "utf8" });
   return result.status === 0 ? result.stdout : undefined;
 }
 

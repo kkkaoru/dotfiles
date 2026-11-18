@@ -1,9 +1,10 @@
 // This TypeScript file is executed with Bun.
+import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { beforeEach, expect, test, vi } from "vitest";
-import gatewayCost from "./index.ts";
+import gatewayCost, { secretsScript } from "./index.ts";
 
 const files = new Map<string, string>();
 const agentDir = { value: "/agent" };
@@ -13,13 +14,12 @@ vi.mock("node:fs", () => ({
   existsSync: (file: string) => files.has(file),
   readFileSync: (file: string) => files.get(file),
 }));
-vi.mock("node:child_process", () => ({ spawnSync: () => aged }));
+vi.mock("node:child_process", () => ({ spawnSync: vi.fn(() => aged) }));
 vi.mock("@earendil-works/pi-coding-agent", () => ({ getAgentDir: () => agentDir.value }));
 
 const SETTINGS = JSON.stringify({ "pi-gateway-cost": { gateway: "pi-agent" } });
 const WRANGLER = path.join(homedir(), ".wrangler", "config", "default.toml");
-const SECRET = path.join("/agent", "secrets", "gateway-cost.age");
-const IDENTITY = path.join(homedir(), ".config", "age", "keys.txt");
+const SCRIPT = secretsScript();
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
@@ -71,8 +71,7 @@ beforeEach(() => {
   files.clear();
   files.set("/agent/settings.json", SETTINGS);
   files.set(WRANGLER, 'oauth_token = "wrangler-token"\n');
-  files.set(SECRET, "encrypted");
-  files.set(IDENTITY, "AGE-SECRET-KEY");
+  files.set(SCRIPT, "#!/bin/bash");
   vi.stubEnv("CLOUDFLARE_API_TOKEN", "");
   vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "env-acct");
   vi.stubGlobal(
@@ -147,12 +146,7 @@ test("a machine without the section or a token asks nothing", async () => {
 
   files.set(WRANGLER, 'oauth_token = "wrangler-token"\n');
   vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
-  files.delete(SECRET);
-  await harness().run("session_start");
-  expect(globalThis.fetch).not.toHaveBeenCalled();
-
-  files.set(SECRET, "encrypted");
-  files.delete(IDENTITY);
+  files.delete(SCRIPT);
   await harness().run("session_start");
   expect(globalThis.fetch).not.toHaveBeenCalled();
 });
@@ -161,6 +155,11 @@ test("the account id comes from the encrypted secret when the environment has no
   vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
   const { statuses, run } = harness();
   await run("session_start");
+  expect(vi.mocked(spawnSync).mock.calls[0]?.[1]).toStrictEqual([
+    SCRIPT,
+    "decrypt",
+    "gateway-cost",
+  ]);
   await vi.waitFor(() => {
     expect(statuses).toStrictEqual(["gateway $16.71 today"]);
   });
@@ -168,7 +167,7 @@ test("the account id comes from the encrypted secret when the environment has no
   expect(JSON.stringify(call?.[1]?.body)).toContain("secret-acct");
 });
 
-test("a secret age cannot decrypt is treated as absent", async () => {
+test("a secret the script cannot decrypt is treated as absent", async () => {
   vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "");
   aged.status = 2;
   const { statuses, run } = harness();

@@ -29,23 +29,32 @@ nothing.
 ## Account id
 
 The account id is kept out of Git in plaintext. `secrets/gateway-cost.age` holds
-`{"accountId": "..."}`, encrypted with [age](https://github.com/FiloSottile/age) to the owner's key
-at `~/.config/age/keys.txt`. The extension reads `CLOUDFLARE_ACCOUNT_ID` first and decrypts that
-file otherwise, once per session.
+`{"accountId": "..."}`, encrypted with [age](https://github.com/FiloSottile/age) to the owner's
+public key in `secrets/recipients.txt`. The extension reads `CLOUDFLARE_ACCOUNT_ID` first and
+otherwise runs `scripts/secrets.sh decrypt gateway-cost` once per session.
 
-On a new Mac:
+That script takes the age identity from the first store that has it, so no file has to be copied
+between machines:
+
+1. `AGE_IDENTITY`, a path, when it is set
+2. 1Password, `AGE_OP_REF` (default `op://Personal/dotfiles-age-identity/notesPlain`)
+3. the macOS keychain, `AGE_KEYCHAIN_SERVICE` (default `dotfiles-age-identity`)
+4. `~/.config/age/keys.txt`
+
+On a Mac where neither store has it yet:
 
 ```sh
-brew install age
-# copy ~/.config/age/keys.txt there (password manager, never Git)
-./scripts/secrets.sh decrypt gateway-cost   # check it reads
+brew install age 1password-cli
+op signin                                # or: 1Password > Settings > Developer > Integrate with CLI
+./scripts/secrets.sh keygen              # stores the identity, prints its public key
+./scripts/secrets.sh identity            # says which store answers
 ```
 
-To change the value, or to let another Mac read it, add that Mac's public key to
+`keygen` keeps an existing `~/.config/age/keys.txt` and only adds it to the store, so it also
+migrates a machine that predates this. To let another Mac decrypt, add its public key to
 `secrets/recipients.txt` and re-encrypt:
 
 ```sh
-./scripts/secrets.sh keygen                                    # prints a machine's public key
 printf '{"accountId":"..."}\n' | ./scripts/secrets.sh encrypt gateway-cost
 ```
 
