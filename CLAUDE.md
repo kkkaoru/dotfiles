@@ -27,6 +27,9 @@ integrations. These instructions apply to agents working here, including pi and 
 - `./scripts/build-udev-gothic-light.sh [Light|ExtraLight|Thin]` — Build UDEV Gothic <weight> 35NFLG
   (JetBrains Mono Latin glyphs at that weight; installs fontforge) into `~/Library/Fonts` for Herdr.app's
   terminal font, which uses Thin.
+- `./scripts/gateway-cost.sh` — Print the AI Gateway's own cost for today, the number its dashboard
+  shows. Same encrypted account id and token order as `tools/pi-gateway-cost-extension`, and it renews
+  wrangler's hourly token when the API answers 401. Herdr.app's limits block runs it.
 - `./scripts/strata-tunnel.sh` — Forward Strata's OpenAI-compatible API from the GPU host
   (SSH alias `my-win`) to `127.0.0.1:18080`, where the `strata-win` provider in
   `.pi/agent/models.json` expects it. The `strata` provider is the Strata running on this Mac

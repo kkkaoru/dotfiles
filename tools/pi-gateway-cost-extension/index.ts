@@ -19,6 +19,7 @@ import {
 const STATUS_KEY = "gateway-cost";
 const REFRESH_MS = 60_000;
 const ENDPOINT = "https://api.cloudflare.com/client/v4/graphql";
+const RENEW = "renew-wrangler-token";
 
 export interface CostHost {
   notify(message: string, type?: "info" | "warning" | "error"): void;
@@ -38,9 +39,14 @@ function settingsConfig(): GatewayConfig | undefined {
   }
 }
 
-function token(): string | undefined {
+function token(secret: string | undefined): string | undefined {
   const wrangler = path.join(homedir(), ".wrangler", "config", "default.toml");
-  return tokenFrom(process.env["CLOUDFLARE_API_TOKEN"], readText(wrangler));
+  return tokenFrom(process.env["CLOUDFLARE_API_TOKEN"], readText(wrangler), secret);
+}
+
+/** Wrangler's OAuth token expires hourly; wrangler renews the file it wrote when asked. */
+function renewWranglerToken(): void {
+  spawnSync("wrangler", ["whoami"], { stdio: "ignore" });
 }
 
 /** The repository checkout this extension lives in; its scripts own the age identity lookup. */
@@ -61,6 +67,7 @@ function decryptedSecret(): string | undefined {
 
 // The gateway's own estimate is the number the dashboard shows.
 // Pi's footer prices the same tokens from the model catalog instead.
+// An expired wrangler token answers 401, which asks the caller to renew and try once more.
 async function costOf(
   config: GatewayConfig & { accountId: string },
   key: string,
@@ -71,6 +78,9 @@ async function costOf(
     headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
     method: "POST",
   });
+  if (response.status === 401) {
+    return RENEW;
+  }
   if (!response.ok) {
     return undefined;
   }
@@ -78,23 +88,42 @@ async function costOf(
   return cost === undefined ? undefined : formatCost(cost);
 }
 
+/** Ask the gateway, renewing wrangler's expired token once when the answer is 401. */
+async function costWithRenewal(
+  config: GatewayConfig & { accountId: string },
+  key: string,
+  secret: string | undefined,
+  now: Date,
+): Promise<string | undefined> {
+  const text = await costOf(config, key, now);
+  if (text !== RENEW) {
+    return text;
+  }
+  renewWranglerToken();
+  const again = await costOf(config, token(secret) ?? key, now);
+  return again === RENEW ? undefined : again;
+}
+
 export default function gatewayCost(pi: ExtensionAPI): void {
-  const state = { account: { known: false, value: undefined as string | undefined } };
+  const state = {
+    account: undefined as string | undefined,
+    known: false,
+    secret: undefined as string | undefined,
+  };
   const run = { asking: false, at: 0, warned: false };
   const accountId = (): string | undefined => {
-    if (!state.account.known) {
-      state.account = {
-        known: true,
-        value: accountIdFrom(process.env["CLOUDFLARE_ACCOUNT_ID"], decryptedSecret()),
-      };
+    if (!state.known) {
+      state.secret = decryptedSecret();
+      state.account = accountIdFrom(process.env["CLOUDFLARE_ACCOUNT_ID"], state.secret);
+      state.known = true;
     }
-    return state.account.value;
+    return state.account;
   };
   const refresh = async (ui: CostHost): Promise<void> => {
     const now = Date.now();
     const config = settingsConfig();
     const account = accountId();
-    const key = token();
+    const key = token(state.secret);
     if (
       run.asking ||
       now - run.at < REFRESH_MS ||
@@ -107,8 +136,13 @@ export default function gatewayCost(pi: ExtensionAPI): void {
     run.asking = true;
     run.at = now;
     try {
-      const text = await costOf({ ...config, accountId: account }, key, new Date(now));
-      if (text !== undefined) {
+      const text = await costWithRenewal(
+        { ...config, accountId: account },
+        key,
+        state.secret,
+        new Date(now),
+      );
+      if (typeof text === "string") {
         ui.setStatus(STATUS_KEY, text);
         return;
       }

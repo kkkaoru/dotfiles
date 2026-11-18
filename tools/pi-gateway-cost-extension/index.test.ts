@@ -61,9 +61,9 @@ const answer = (cost: number): Response =>
     ok: true,
   }) as Response;
 
-function authHeader(): string | undefined {
-  const [first] = vi.mocked(globalThis.fetch).mock.calls;
-  const headers = (first?.[1]?.headers ?? {}) as Record<string, string>;
+function authHeader(index = 0): string | undefined {
+  const call = vi.mocked(globalThis.fetch).mock.calls[index];
+  const headers = (call?.[1]?.headers ?? {}) as Record<string, string>;
   return headers.authorization;
 }
 
@@ -128,6 +128,45 @@ test("a throwing fetch is swallowed", async () => {
   });
   expect(notes).toStrictEqual([]);
   expect(statuses).toStrictEqual([]);
+});
+
+test("a 401 renews wrangler's token and asks again", async () => {
+  files.set(WRANGLER, 'oauth_token = "stale-token"\n');
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        files.set(WRANGLER, 'oauth_token = "renewed-token"\n');
+        return { ok: false, status: 401 } as Response;
+      })
+      .mockResolvedValue(answer(2.5)),
+  );
+  const { statuses, run } = harness();
+  await run("session_start");
+  await vi.waitFor(() => {
+    expect(statuses).toStrictEqual(["gateway $2.50 today"]);
+  });
+  expect(vi.mocked(spawnSync).mock.calls[1]?.[1]).toStrictEqual(["whoami"]);
+  expect(authHeader(1)).toBe("Bearer renewed-token");
+});
+
+test("a 401 with nothing to renew to warns once", async () => {
+  files.set(WRANGLER, 'oauth_token = "stale-token"\n');
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => {
+      files.delete(WRANGLER);
+      return { ok: false, status: 401 } as Response;
+    }),
+  );
+  const { notes, statuses, run } = harness();
+  await run("session_start");
+  await vi.waitFor(() => {
+    expect(notes).toHaveLength(1);
+  });
+  expect(statuses).toStrictEqual([]);
+  expect(globalThis.fetch).toHaveBeenCalledTimes(2);
 });
 
 test("a machine without the section or a token asks nothing", async () => {

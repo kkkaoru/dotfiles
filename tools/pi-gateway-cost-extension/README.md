@@ -31,7 +31,8 @@ nothing.
 The account id is kept out of Git in plaintext. `secrets/gateway-cost.age` holds
 `{"accountId": "..."}`, encrypted with [age](https://github.com/FiloSottile/age) to the owner's
 public key in `secrets/recipients.txt`. The extension reads `CLOUDFLARE_ACCOUNT_ID` first and
-otherwise runs `scripts/secrets.sh decrypt gateway-cost` once per session.
+otherwise runs `scripts/secrets.sh decrypt gateway-cost` once per session. The same secret may hold
+a scoped `token`; see below.
 
 That script takes the age identity from the first store that has it, so no file has to be copied
 between machines:
@@ -60,9 +61,13 @@ printf '{"accountId":"..."}\n' | ./scripts/secrets.sh encrypt gateway-cost
 
 ## Token
 
-`CLOUDFLARE_API_TOKEN` wins when it is set: create an API token with **Account Analytics Read**.
-Otherwise the OAuth token `wrangler` already stores in `~/.wrangler/config/default.toml` is used, so
-a machine that runs wrangler needs no extra setup.
+`CLOUDFLARE_API_TOKEN` wins when it is set. Next is a `token` field in the same encrypted secret,
+which is the durable choice: create an API token with **Account Analytics Read** and re-encrypt
+`{"accountId":"...","token":"..."}`. Otherwise the OAuth token `wrangler` stores in
+`~/.wrangler/config/default.toml` is used, so a machine that runs wrangler needs no extra setup.
+That token expires hourly: a 401 runs `wrangler whoami` once to renew it and asks again.
+`scripts/gateway-cost.sh` prints the same number for other tools (Herdr.app's limits block), with
+the same token order and renewal.
 
 The window is today in local time. Cloudflare's cost metric is an estimate based on tokens, and its
 analytics sample the data, so treat the figure as a trend rather than an invoice.

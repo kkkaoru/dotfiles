@@ -78,9 +78,13 @@ test("the account id comes from the environment, else the decrypted secret", () 
   expect(accountIdFrom("", '{"accountId":1}')).toBeUndefined();
 });
 
-test("an environment token wins over wrangler's", () => {
+test("an environment token wins over the secret and wrangler's", () => {
   const wrangler = 'oauth_token = "from-wrangler"\n';
-  expect(tokenFrom(" from-env ", wrangler)).toBe("from-env");
+  const secret = '{"accountId":"acct","token":" from-secret "}';
+  expect(tokenFrom(" from-env ", wrangler, secret)).toBe("from-env");
+  expect(tokenFrom("", wrangler, secret)).toBe("from-secret");
+  expect(tokenFrom(undefined, wrangler, '{"accountId":"acct"}')).toBe("from-wrangler");
+  expect(tokenFrom(undefined, wrangler, "not json")).toBe("from-wrangler");
   expect(tokenFrom("", wrangler)).toBe("from-wrangler");
   expect(tokenFrom(undefined, wrangler)).toBe("from-wrangler");
   expect(tokenFrom("  ", undefined)).toBeUndefined();

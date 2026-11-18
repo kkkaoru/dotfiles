@@ -29,14 +29,34 @@ export function wranglerToken(config: string): string | undefined {
   return /^\s*oauth_token\s*=\s*"([^"]+)"/mu.exec(config)?.[1];
 }
 
-/** An Account Analytics Read token from the environment wins; wrangler's own token is the fallback. */
+/** The fields of the encrypted gateway-cost secret, or none when it is not JSON. */
+function secretOf(secret: string | undefined): Record<string, unknown> {
+  if (secret === undefined) {
+    return {};
+  }
+  try {
+    return JSON.parse(secret) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * A token from the environment wins, then a scoped token kept in the secret (it does not expire),
+ * then wrangler's own OAuth token, which does.
+ */
 export function tokenFrom(
   envToken: string | undefined,
   wranglerConfig: string | undefined,
+  secret?: string,
 ): string | undefined {
   const fromEnv = envToken?.trim();
   if (fromEnv !== undefined && fromEnv !== "") {
     return fromEnv;
+  }
+  const { token } = secretOf(secret);
+  if (typeof token === "string" && token.trim() !== "") {
+    return token.trim();
   }
   return wranglerConfig === undefined ? undefined : wranglerToken(wranglerConfig);
 }
@@ -60,15 +80,8 @@ export function accountIdFrom(
   if (fromEnv !== undefined && fromEnv !== "") {
     return fromEnv;
   }
-  if (secret === undefined) {
-    return undefined;
-  }
-  try {
-    const { accountId } = JSON.parse(secret) as Record<string, unknown>;
-    return typeof accountId === "string" ? accountId : undefined;
-  } catch {
-    return undefined;
-  }
+  const { accountId } = secretOf(secret);
+  return typeof accountId === "string" ? accountId : undefined;
 }
 
 export function queryBody(config: GatewayQuery, start: string, end: string): string {
