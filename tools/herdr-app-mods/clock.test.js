@@ -4,8 +4,8 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { host, reset } from "./mocks/herdr.js";
 import {
   ClockCat,
-  DRACULA,
   DULL_RAINBOWS,
+  INK_EVEN,
   HOUR_RAINBOWS,
   clockLook,
   clockStrip,
@@ -29,14 +29,15 @@ const paths = (el) =>
     .map((n) => n.path);
 const color = (el) => el.calls.find(([k]) => k === "text_color")?.[1];
 const arg = (el, name) => el.calls.find(([k]) => k === name)?.[1];
-const LOOK = { time: "18:25:30", r: 5, ink: "#bd93f9", fur: 2, taste: 3, progress: 0.25 };
+const LOOK = { time: "18:25:30", r: 5, ink: INK_EVEN, fur: 2, taste: 3, progress: 0.25 };
+const INK_ODD = "#50fa7b";
 
 test("the time reads to the second, zero-padded", () => {
   expect(clockText(new Date(2026, 0, 1, 7, 4, 3))).toBe("07:04:03");
   expect(clockText(new Date(2026, 0, 1, 23, 59, 59))).toBe("23:59:59");
 });
 
-test("each hour has its own rainbow and Dracula color, and each minute its own cat", () => {
+test("each hour has its own rainbow, its own time color and its own cat", () => {
   // 24 different rainbows, none of the dull ones, each with its frames.
   expect(new Set(HOUR_RAINBOWS).size).toBe(24);
   expect(HOUR_RAINBOWS.filter((r) => DULL_RAINBOWS.includes(r))).toStrictEqual([]);
@@ -47,18 +48,19 @@ test("each hour has its own rainbow and Dracula color, and each minute its own c
     );
     expect(existsSync(frame)).toBe(true);
   }
-  expect(new Set(DRACULA).size).toBe(8);
+  // The Dracula theme's white on even hours and its green on odd ones, across midnight too.
+  expect(INK_EVEN).toBe("#f8f8f2");
   expect(clockLook(new Date(2026, 0, 1, 0, 9, 59))).toStrictEqual({
     time: "00:09:59",
     r: 16,
-    ink: "#ff79c6",
+    ink: INK_EVEN,
     fur: 3,
     taste: 4,
     progress: 59 / 60,
   });
   expect(clockLook(new Date(2026, 0, 1, 18, 25, 0))).toMatchObject({
     r: 24,
-    ink: "#ffb86c",
+    ink: INK_EVEN,
     fur: 1,
     taste: 5,
   });
@@ -75,9 +77,11 @@ test("each hour has its own rainbow and Dracula color, and each minute its own c
       (ms) => clockLook(new Date(2026, 0, 1, 9, 0, Math.floor(ms / 1000), ms % 1000)).progress,
     ),
   ).toStrictEqual([0, 30_500 / 60_000, 59_999 / 60_000]);
-  // Neighboring hours never share a color, across midnight too.
+  // White on even hours, the theme's green on odd ones, so neighbors never share a color.
   const inks = Array.from({ length: 24 }, (_v, h) => clockLook(new Date(2026, 0, 1, h)).ink);
-  expect(inks.every((ink, h) => ink !== inks[(h + 1) % 24])).toBe(true);
+  expect(inks.map((ink, h) => (h % 2 === 0 ? ink === INK_EVEN : ink === INK_ODD))).toStrictEqual(
+    Array.from({ length: 24 }, () => true),
+  );
 });
 
 test("every frame the clock names exists, without the night sky", () => {
@@ -122,14 +126,14 @@ test("the cat is its progress along the bar, its rainbow trailing to the left ed
   expect(nodes(strip).some((n) => n.calls.some(([k]) => k === "bg"))).toBe(false);
 
   expect(text.calls).toContainEqual(["font_family", "Menlo"]);
-  // Two shadow rings, an outline of eight copies, then the time in its hour's color on top.
+  // Two shadow rings, an outline of eight copies, then the time in its hour's ink on top.
   const [outer, inner, ...edge] = text.kids;
   expect([outer, inner].map((ring) => arg(ring, "opacity"))).toStrictEqual([0.3, 0.6]);
   expect(outer.kids[0].calls.slice(1, 3)).toStrictEqual([
     ["top", -3],
     ["left", -4],
   ]);
-  expect(edge.map(color)).toStrictEqual([...Array.from({ length: 8 }, () => "#000000"), "#bd93f9"]);
+  expect(edge.map(color)).toStrictEqual([...Array.from({ length: 8 }, () => "#000000"), INK_EVEN]);
   expect(edge.map((e) => e.kids[0])).toStrictEqual(Array.from({ length: 9 }, () => "18:25:30"));
 });
 

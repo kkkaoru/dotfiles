@@ -1,7 +1,7 @@
 // The tab bar's clock: the time, to the second, centered on the window, and a nyan cat that crosses
 // the bar once a minute, its rainbow trailing from the bar's left edge. Each hour has its own
-// rainbow and time color; each minute a new cat (fur and poptart) sets out. It is its own view, so a
-// frame of the cat redraws the clock and not the whole bar.
+// rainbow, and white or green time by the hour; each minute a new cat (fur and poptart) sets out. It
+// is its own view, so a frame of the cat redraws the clock and not the whole bar.
 
 import { View, div, image, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
@@ -34,17 +34,10 @@ export const HOUR_RAINBOWS = [
 ];
 export const DULL_RAINBOWS = [5, 11, 12, 13];
 
-// The time's color for each hour: the Dracula theme's, ordered so neighbors never look alike.
-export const DRACULA = [
-  "#ff79c6", // pink
-  "#50fa7b", // green
-  "#ffb86c", // orange
-  "#8be9fd", // cyan
-  "#ff5555", // red
-  "#f1fa8c", // yellow
-  "#bd93f9", // purple
-  "#f8f8f2", // foreground
-];
+// The time's color by hour, from the Dracula theme: its white on even hours and its green on odd
+// ones, so the clock changes every hour and neighbors never look alike.
+export const INK_EVEN = "#f8f8f2"; // foreground
+const INK_ODD = "#50fa7b"; // green
 
 // The bar is 42 px inside a 1 px bottom border, so the clock fills 41: pictures are fitted inside
 // their box, so each box is given the artwork's own 21-cell height and the width that goes with it.
@@ -92,7 +85,7 @@ export function clockLook(now) {
   return {
     time: clockText(now),
     r: HOUR_RAINBOWS[hour],
-    ink: DRACULA[hour % DRACULA.length],
+    ink: hour % 2 === 0 ? INK_EVEN : INK_ODD,
     fur: minute % FUR.length,
     taste: (minute + Math.floor(minute / FUR.length)) % POPTART.length,
     progress,
