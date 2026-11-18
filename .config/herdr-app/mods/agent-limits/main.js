@@ -40,6 +40,9 @@ const OPENCODE_GO_USAGE = [
 // The Colab CLI's oauth2 strategy asks for an authorization code on stdin, which no spawned
 // command can answer, so ask with Application Default Credentials as scripts/colab does.
 const COLAB_USAGE = '"${COLAB_CLI:-$HOME/.local/bin/colab}" --auth=adc usage';
+// The AI Gateway's own cost for today: the script keeps the account id encrypted and renews
+// wrangler's hourly token, so this is the number the dashboard and pi's footer show.
+const GATEWAY_COST = '"$HOME/ghq/github.com/kkkaoru/dotfiles/scripts/gateway-cost.sh" 2>/dev/null';
 
 /** "5h", "7d", or null for 30d/missing length (Grok's CLI proxy). */
 const DAYS_PER_MONTH = 30;
@@ -176,7 +179,15 @@ export function parseColabUsage(stdout) {
   return balance === undefined ? null : [{ text: `${Math.round(Number(balance))}CU` }];
 }
 
+/** `scripts/gateway-cost.sh` -> today's gateway dollars as a single `{ text }`, or null when the
+ *  script printed no number (no token, no permission, no answer). */
+export function parseGatewayCost(stdout) {
+  const cost = Number.parseFloat(stdout);
+  return Number.isFinite(cost) ? [{ text: `$${cost.toFixed(2)}` }] : null;
+}
+
 // [Herdr's agent icon, tinted (one-color glyph) or drawn as is, key, [command, args], parser].
+// A null icon draws the row's own tag.
 // CodexBar rejects the balance Ollama's API answers today and its web path is redirected to sign
 // in, so Ollama is asked directly; OpenCode Go's usage API needs its key exported, which Auto
 // would instead look for in a browser session, and the console fails. Claude is asked for its
@@ -189,6 +200,8 @@ const PROVIDERS = [
   ["icons/grok.svg", true, "grok", codexbar("grok", "auto"), parseLimits],
   ["icons/antigravity.svg", true, "antigravity", codexbar("antigravity", "auto"), parseAntigravity],
   ["icons/gcloud.svg", true, "colab", ["sh", ["-c", COLAB_USAGE]], parseColabUsage],
+  // No icon of its own: the row is tagged with its name instead.
+  [null, true, "gateway", ["sh", ["-c", GATEWAY_COST]], parseGatewayCost],
 ];
 
 export default class AgentLimits extends View {
@@ -225,10 +238,14 @@ export default class AgentLimits extends View {
         .child(prefix ? `${prefix}${value}` : value);
     };
     // As agents-emoji draws an agent's icon from Herdr's program table.
-    const icon = (path, tint) =>
-      tint
+    const icon = (path, tint) => {
+      if (path === null) {
+        return div().text_color(t.dim).child("CF");
+      }
+      return tint
         ? svg(path).size(ICON_SIZE).flex_none().text_color(t.foreground)
         : image(path).w(ICON_SIZE).h(ICON_SIZE).flex_none();
+    };
     const provider = ([path, tint, name]) => {
       const windows = this.limits.get(name);
       return h_flex()

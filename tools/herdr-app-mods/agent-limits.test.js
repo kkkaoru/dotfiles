@@ -5,6 +5,7 @@ import AgentLimits, {
   formatResetRemaining,
   parseAntigravity,
   parseColabUsage,
+  parseGatewayCost,
   parseLimits,
   parseOllamaBalance,
   shownWindows,
@@ -87,6 +88,9 @@ const ANTIGRAVITY = JSON.stringify([
 // `colab usage` as the CLI prints it for an account with compute units left.
 const COLAB = "Current balance: 194.09 compute units\nUsage rate: 5.38/hr";
 
+// `scripts/gateway-cost.sh` prints the gateway's own dollars for today.
+const GATEWAY = "18.225484842588916\n";
+
 const ANSWERS = {
   claude: CLAUDE,
   codex: CODEX,
@@ -95,6 +99,7 @@ const ANSWERS = {
   grok: GROK,
   antigravity: ANTIGRAVITY,
   colab: COLAB,
+  gateway: GATEWAY,
 };
 
 // Answers exec by the provider asked for; a cx whose spawned tasks and timer a test runs by hand.
@@ -103,7 +108,8 @@ function newLimits(answers) {
     if (command !== "sh") {
       return { code: 0, stdout: answers[args[2]], stderr: "" };
     }
-    const scripted = ["opencodego", "colab"].find((name) => args[1].includes(name)) ?? "ollama";
+    const scripted =
+      ["opencodego", "colab", "gateway"].find((name) => args[1].includes(name)) ?? "ollama";
     return { code: 0, stdout: answers[scripted], stderr: "" };
   };
   host.theme = { dim: "#d", foreground: "#f", blocked: "#r", chrome: "#c", border: "#b" };
@@ -216,12 +222,17 @@ test("init asks each provider once, Ollama from its balance API and OpenCode Go 
     ["exec", "codexbar", ["usage", "--provider", "grok", "--source", "auto", "--json"]],
     ["exec", "codexbar", ["usage", "--provider", "antigravity", "--source", "auto", "--json"]],
     ["exec", "sh", ["-c", '"${COLAB_CLI:-$HOME/.local/bin/colab}" --auth=adc usage']],
+    [
+      "exec",
+      "sh",
+      ["-c", '"$HOME/ghq/github.com/kkkaoru/dotfiles/scripts/gateway-cost.sh" 2>/dev/null'],
+    ],
   ]);
-  expect(cx.notify).toHaveBeenCalledTimes(7);
+  expect(cx.notify).toHaveBeenCalledTimes(8);
   expect(timers.map(([ms]) => ms)).toStrictEqual([300000]);
   timers[0][1](cx);
   await Promise.all(tasks);
-  expect(host.calls.length).toBe(14);
+  expect(host.calls.length).toBe(16);
 });
 
 test("render shows each provider's windows, a dash for one that failed or has not answered", async () => {
@@ -234,6 +245,7 @@ test("render shows each provider's windows, a dash for one that failed or has no
     ["icons/grok.svg", "—"],
     ["icons/antigravity.svg", "—"],
     ["icons/gcloud.svg", "—"],
+    [undefined, "—"],
   ]);
   await Promise.all(tasks);
   expect(drawn(view)).toStrictEqual([
@@ -244,6 +256,7 @@ test("render shows each provider's windows, a dash for one that failed or has no
     ["icons/grok.svg", "7d0%"],
     ["icons/antigravity.svg", "💧7d88%", "🤖7d40%", "☁️7d60%"],
     ["icons/gcloud.svg", "194CU"],
+    [undefined, "$18.23"],
   ]);
 });
 
@@ -309,6 +322,12 @@ test("a hundred-hour window is labelled in hours", () => {
 test("parseColabUsage reads the compute-unit balance, or is null when it could not be read", () => {
   expect(parseColabUsage(COLAB)).toStrictEqual([{ text: "194CU" }]);
   expect(parseColabUsage("[colab] Warning: failed to fetch compute-unit info")).toBe(null);
+});
+
+test("parseGatewayCost reads the day's dollars, or is null when the script printed none", () => {
+  expect(parseGatewayCost(GATEWAY)).toStrictEqual([{ text: "$18.23" }]);
+  expect(parseGatewayCost("0\n")).toStrictEqual([{ text: "$0.00" }]);
+  expect(parseGatewayCost("")).toBe(null);
 });
 
 test("the monthly window omits its 30d label", () => {
