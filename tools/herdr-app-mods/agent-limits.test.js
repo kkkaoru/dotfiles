@@ -170,7 +170,7 @@ test("parseAntigravity reads one window per quota pool (Gemini, Claude/GPT, Argo
   expect(parseAntigravity(ANTIGRAVITY)).toStrictEqual([
     { label: "💧7d", used: 88, resetsAt: "2026-11-21T14:59:37Z", keep: true },
     { label: "🤖7d", used: 40, resetsAt: "2026-11-21T14:59:37Z", keep: true },
-    { label: "☁️7d", used: 60, resetsAt: "2026-11-21T14:59:37Z", keep: true },
+    { label: "🅰️7d", used: 60, resetsAt: "2026-11-21T14:59:37Z", keep: true },
   ]);
 });
 
@@ -244,7 +244,7 @@ test("render shows each provider's windows, a dash for one that failed or has no
     ["icons/opencode.svg", "—"],
     ["icons/grok.svg", "—"],
     ["icons/antigravity.svg", "—"],
-    ["icons/gcloud.svg", "—"],
+    [undefined, "—"],
     [undefined, "—"],
   ]);
   await Promise.all(tasks);
@@ -254,8 +254,8 @@ test("render shows each provider's windows, a dash for one that failed or has no
     ["icons/ollama.svg", "5h12%"],
     ["icons/opencode.svg", "—"],
     ["icons/grok.svg", "7d0%"],
-    ["icons/antigravity.svg", "💧7d88%", "🤖7d40%", "☁️7d60%"],
-    ["icons/gcloud.svg", "194CU"],
+    ["icons/antigravity.svg", "💧7d88%", "🤖7d40%", "🅰️7d60%"],
+    [undefined, "194CU"],
     [undefined, "$18.23"],
   ]);
 });

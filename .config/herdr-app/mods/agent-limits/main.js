@@ -114,7 +114,7 @@ export function parseLimits(stdout) {
 const ANTIGRAVITY_POOLS = [
   ["💧", (id) => id.includes("gemini-") && !id.includes("argon")],
   ["🤖", (id) => id.includes("3p-")],
-  ["☁️", (id) => id.includes("gemini-argon-")],
+  ["🅰️", (id) => id.includes("gemini-argon-")],
 ];
 
 export function parseAntigravity(stdout) {
@@ -187,7 +187,7 @@ export function parseGatewayCost(stdout) {
 }
 
 // [Herdr's agent icon, tinted (one-color glyph) or drawn as is, key, [command, args], parser].
-// A null icon draws the row's own tag.
+// A null icon draws the row's own tag: a cloud for the two cloud services.
 // CodexBar rejects the balance Ollama's API answers today and its web path is redirected to sign
 // in, so Ollama is asked directly; OpenCode Go's usage API needs its key exported, which Auto
 // would instead look for in a browser session, and the console fails. Claude is asked for its
@@ -199,7 +199,7 @@ const PROVIDERS = [
   ["icons/opencode.svg", true, "opencodego", ["sh", ["-c", OPENCODE_GO_USAGE]], parseLimits],
   ["icons/grok.svg", true, "grok", codexbar("grok", "auto"), parseLimits],
   ["icons/antigravity.svg", true, "antigravity", codexbar("antigravity", "auto"), parseAntigravity],
-  ["icons/gcloud.svg", true, "colab", ["sh", ["-c", COLAB_USAGE]], parseColabUsage],
+  [null, true, "colab", ["sh", ["-c", COLAB_USAGE]], parseColabUsage],
   // No icon of its own: the row is tagged with its name instead.
   [null, true, "gateway", ["sh", ["-c", GATEWAY_COST]], parseGatewayCost],
 ];
@@ -240,7 +240,7 @@ export default class AgentLimits extends View {
     // As agents-emoji draws an agent's icon from Herdr's program table.
     const icon = (path, tint) => {
       if (path === null) {
-        return div().text_color(t.dim).child("CF");
+        return div().text_color(t.dim).child("☁️");
       }
       return tint
         ? svg(path).size(ICON_SIZE).flex_none().text_color(t.foreground)
