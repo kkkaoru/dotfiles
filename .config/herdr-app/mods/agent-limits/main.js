@@ -180,14 +180,14 @@ export function parseColabUsage(stdout) {
 }
 
 /** `scripts/gateway-cost.sh` -> today's gateway dollars as a single `{ text }`, or null when the
- *  script printed no number (no token, no permission, no answer). */
+ *  script printed no number (no token, no permission, no answer). The counter restarts at midnight. */
 export function parseGatewayCost(stdout) {
   const cost = Number.parseFloat(stdout);
-  return Number.isFinite(cost) ? [{ text: `$${cost.toFixed(2)}` }] : null;
+  return Number.isFinite(cost) ? [{ text: `$${cost.toFixed(2)}/day` }] : null;
 }
 
-// [Herdr's agent icon, tinted (one-color glyph) or drawn as is, key, [command, args], parser].
-// A null icon draws the row's own tag: a cloud for the two cloud services.
+// [Herdr's agent icon or a literal tag, tinted (one-color glyph) or drawn as is, key,
+//  [command, args], parser].
 // CodexBar rejects the balance Ollama's API answers today and its web path is redirected to sign
 // in, so Ollama is asked directly; OpenCode Go's usage API needs its key exported, which Auto
 // would instead look for in a browser session, and the console fails. Claude is asked for its
@@ -199,9 +199,8 @@ const PROVIDERS = [
   ["icons/opencode.svg", true, "opencodego", ["sh", ["-c", OPENCODE_GO_USAGE]], parseLimits],
   ["icons/grok.svg", true, "grok", codexbar("grok", "auto"), parseLimits],
   ["icons/antigravity.svg", true, "antigravity", codexbar("antigravity", "auto"), parseAntigravity],
-  [null, true, "colab", ["sh", ["-c", COLAB_USAGE]], parseColabUsage],
-  // No icon of its own: the row is tagged with its name instead.
-  [null, true, "gateway", ["sh", ["-c", GATEWAY_COST]], parseGatewayCost],
+  ["📓", true, "colab", ["sh", ["-c", COLAB_USAGE]], parseColabUsage],
+  ["☁️", true, "gateway", ["sh", ["-c", GATEWAY_COST]], parseGatewayCost],
 ];
 
 export default class AgentLimits extends View {
@@ -239,8 +238,8 @@ export default class AgentLimits extends View {
     };
     // As agents-emoji draws an agent's icon from Herdr's program table.
     const icon = (path, tint) => {
-      if (path === null) {
-        return div().text_color(t.dim).child("☁️");
+      if (!path.endsWith(".svg")) {
+        return div().text_color(t.dim).child(path);
       }
       return tint
         ? svg(path).size(ICON_SIZE).flex_none().text_color(t.foreground)

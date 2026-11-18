@@ -256,7 +256,7 @@ test("render shows each provider's windows, a dash for one that failed or has no
     ["icons/grok.svg", "7d0%"],
     ["icons/antigravity.svg", "💧7d88%", "🤖7d40%", "🅰️7d60%"],
     [undefined, "194CU"],
-    [undefined, "$18.23"],
+    [undefined, "$18.23/day"],
   ]);
 });
 
@@ -324,9 +324,18 @@ test("parseColabUsage reads the compute-unit balance, or is null when it could n
   expect(parseColabUsage("[colab] Warning: failed to fetch compute-unit info")).toBe(null);
 });
 
+test("the two cloud rows carry their own tag", () => {
+  const { view } = newLimits(ANSWERS);
+  const tags = view
+    .render({})
+    .kids.slice(-2)
+    .map((group) => group.kids[0].kids);
+  expect(tags).toStrictEqual([["📓"], ["☁️"]]);
+});
+
 test("parseGatewayCost reads the day's dollars, or is null when the script printed none", () => {
-  expect(parseGatewayCost(GATEWAY)).toStrictEqual([{ text: "$18.23" }]);
-  expect(parseGatewayCost("0\n")).toStrictEqual([{ text: "$0.00" }]);
+  expect(parseGatewayCost(GATEWAY)).toStrictEqual([{ text: "$18.23/day" }]);
+  expect(parseGatewayCost("0\n")).toStrictEqual([{ text: "$0.00/day" }]);
   expect(parseGatewayCost("")).toBe(null);
 });
 
