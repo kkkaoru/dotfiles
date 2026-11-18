@@ -86,8 +86,11 @@ class CompletionCache:
                 self.entries[key] = value
 
     @staticmethod
-    def key(prompt: str, max_tokens: int) -> str:
-        digest = hashlib.sha256(f"{max_tokens}\x00{prompt}".encode())
+    def key(prompt: str, max_tokens: int, stop=None) -> str:
+        # `stop` changes the text the model returns for the same prompt, so it is part of the key.
+        digest = hashlib.sha256(
+            f"{max_tokens}\x00{json.dumps(stop, ensure_ascii=False, sort_keys=True)}\x00{prompt}".encode()
+        )
         return digest.hexdigest()[:32]
 
     def get(self, key: str) -> str | None:
@@ -141,6 +144,8 @@ class Capture:
 
 def install(cache: CompletionCache) -> None:
     original_post = server.APIHandler.do_POST
+    # Resolved before the assignment below, or the fallback would call this wrapper again.
+    original_get = server.APIHandler.do_GET
 
     def do_post(self) -> None:
         if self.path != COMPLETIONS:
@@ -158,7 +163,11 @@ def install(cache: CompletionCache) -> None:
         prompt = request.get("prompt")
         greedy = float(request.get("temperature", 0) or 0) == 0
         cached = greedy and request.get("cache", True) and isinstance(prompt, str)
-        key = cache.key(prompt, int(request.get("max_tokens", 512))) if cached else None
+        key = (
+            cache.key(prompt, int(request.get("max_tokens", 512)), request.get("stop"))
+            if cached
+            else None
+        )
         if key is not None:
             hit = cache.get(key)
             if hit is not None:
@@ -207,7 +216,7 @@ def install(cache: CompletionCache) -> None:
             self.end_headers()
             self.wfile.write(body)
             return
-        server.APIHandler.do_GET(self)
+        original_get(self)
 
     server.APIHandler.do_POST = do_post
     server.APIHandler.do_GET = do_GET
