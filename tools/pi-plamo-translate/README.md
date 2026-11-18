@@ -53,6 +53,12 @@ Up to eight translations run at once, a new prompt's first: batching them is wha
 Silicon GPU busy, and `scripts/bench-plamo-translate.py --concurrency 8` measures about 1.2x the
 tokens/s of four.
 
+Greedy completions are also cached on disk (`~/.cache/plamo-translate/`), keyed by the prompt, the
+token limit and the model's `config.json`. The mods re-translate the same text constantly — a
+redrawn block, a scrolled screen, a resumed session — and a repeat is answered byte-identically in
+under a millisecond instead of ~100 ms. Sampled requests and `"cache": false` bypass it;
+`GET /cache/stats` reports the hit rate.
+
 ## Check
 
 ```sh

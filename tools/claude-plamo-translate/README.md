@@ -68,6 +68,11 @@ When nothing answers on port 18555, the mod starts `~/.local/bin/plamo-mlx-serve
 otherwise `llama-server` (`llama-server.exe` on Windows, under `%USERPROFILE%` when `HOME` is
 unset).
 
+On macOS that server also caches greedy completions on disk (`~/.cache/plamo-translate/`), keyed by
+the prompt, the token limit and the model's `config.json`: the mods re-translate the same text
+constantly, and a repeat is answered byte-identically in under a millisecond instead of ~100 ms.
+Sampled requests and `"cache": false` bypass it; `GET /cache/stats` reports the hit rate.
+
 ## Options
 
 Set in `/config` or `pluginConfigs["plamo-translate"].options`:

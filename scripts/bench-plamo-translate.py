@@ -58,6 +58,9 @@ def complete(port: int, text: str, lang: str, max_tokens: int = 256) -> dict:
             "max_tokens": max_tokens,
             "temperature": 0,
             "stop": STOP,
+            # A repeated prompt would be answered from plamo-mlx-server's cache in a millisecond,
+            # which measures the cache instead of the model.
+            "cache": False,
         }
     ).encode()
     request = urllib.request.Request(
