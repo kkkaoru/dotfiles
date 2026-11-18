@@ -60,9 +60,10 @@ const repoName = (repo) =>
 // their reading fails and stays unset. All engines: compute work (a Radeon running a model)
 // never shows on 3D.
 const GPU_COUNTER = "\\GPU Engine(*)\\Utilization Percentage";
-// Windows' physical memory, total and available, in KiB.
-const MEMORY_SCRIPT =
-  '$o = Get-CimInstance Win32_OperatingSystem; "$($o.TotalVisibleMemorySize) $($o.FreePhysicalMemory)"';
+// Windows' physical memory (total and available, in KiB) and CPU load in percent, as Task
+// Manager counts it; the CPU is -1 when the counter cannot be read, so memory still arrives.
+const LOAD_SCRIPT =
+  '$o = Get-CimInstance Win32_OperatingSystem; $c = -1; try { $c = (Get-Counter "\\Processor(_Total)\\% Processor Time").CounterSamples[0].CookedValue } catch {}; "$($o.TotalVisibleMemorySize) $($o.FreePhysicalMemory) $c"';
 // typeperf over every engine takes about nine seconds; a read in flight is not started again.
 const LOAD_MS = 60000;
 const stateName = (machine) => (machine?.state ?? "asleep").replace(/_/g, " ");
@@ -114,10 +115,14 @@ export function parseGpuPercent(csv) {
   return Math.min(100, Math.round(Math.max(0, ...Object.values(engines))));
 }
 
-/** `"<total KiB> <available KiB>"` -> percent of physical memory in use, null if unreadable. */
-export function parseMemoryPercent(text) {
-  const [total, free] = text.trim().split(/\s+/).map(Number);
-  return total > 0 && free >= 0 ? Math.round((1 - free / total) * 100) : null;
+/** `"<total KiB> <available KiB> <cpu %>"` -> memory in use and CPU load in percent, each null
+ *  when unreadable. */
+export function parseLoad(text) {
+  const [total, free, cpu] = text.trim().split(/\s+/).map(Number);
+  return {
+    memory: total > 0 && free >= 0 ? Math.round((1 - free / total) * 100) : null,
+    cpu: cpu >= 0 ? Math.round(Math.min(100, cpu)) : null,
+  };
 }
 
 // One Windows reading, parsed from what the command printed; null when it couldn't be read.
@@ -156,7 +161,7 @@ export default class Spaces extends View {
       state.busy = false;
     }
     this.folded = new Set(JSON.parse(localStorage.getItem("machines.folded") ?? "[]"));
-    this.load = {}; // machine -> { gpu, memory } in percent, each null without a reading
+    this.load = {}; // machine -> { cpu, gpu, memory } in percent, each null without a reading
     this.loadAsking = new Set();
     this.refreshMachines(cx);
     cx.timer.every(15000, (cx) => this.refreshMachines(cx));
@@ -268,7 +273,7 @@ export default class Spaces extends View {
     });
   }
 
-  // Connected machines' GPU and memory load, one read per machine at a time. `fresh`: only
+  // Connected machines' CPU, GPU and memory load, one read per machine at a time. `fresh`: only
   // machines not read yet, so one that just connected shows its load without waiting a minute.
   refreshLoad(cx, fresh = false) {
     for (const { name, state } of this.machines) {
@@ -281,14 +286,16 @@ export default class Spaces extends View {
       }
       this.loadAsking.add(name);
       cx.spawn(async (cx) => {
-        const [gpu, memory] = await Promise.all([
+        const [gpu, load] = await Promise.all([
           readOn(name, "typeperf", ["-sc", "1", GPU_COUNTER], parseGpuPercent),
-          readOn(name, "powershell", ["-NoProfile", "-Command", MEMORY_SCRIPT], parseMemoryPercent),
+          readOn(name, "powershell", ["-NoProfile", "-Command", LOAD_SCRIPT], parseLoad),
         ]);
         this.loadAsking.delete(name);
-        const last = this.load[name];
-        this.load[name] = { gpu, memory };
-        if ((last?.gpu ?? null) !== gpu || (last?.memory ?? null) !== memory) {
+        const next = { cpu: load?.cpu ?? null, gpu, memory: load?.memory ?? null };
+        const nothing = { cpu: null, gpu: null, memory: null };
+        const changed = JSON.stringify(next) !== JSON.stringify(this.load[name] ?? nothing);
+        this.load[name] = next;
+        if (changed) {
           cx.notify();
         }
       });
@@ -681,11 +688,12 @@ export default class Spaces extends View {
       .when(!collapsed, (el) => this.machineDetails(el, m, state, t));
   }
 
-  // GPU and memory load, held closer together than the header's other parts.
-  loadText({ gpu, memory }) {
+  // CPU, GPU and memory load, held closer together than the header's other parts.
+  loadText({ cpu, gpu, memory }) {
     return h_flex()
       .flex_none()
       .gap(3)
+      .when(cpu !== null, (el) => el.child(`🧠 ${cpu}%`))
       .when(gpu !== null, (el) => el.child(`🎮 ${gpu}%`))
       .when(memory !== null, (el) => el.child(`🐏 ${memory}%`));
   }

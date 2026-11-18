@@ -5,7 +5,7 @@ import { host, reset } from "./mocks/herdr.js";
 import Spaces, {
   glyph,
   parseGpuPercent,
-  parseMemoryPercent,
+  parseLoad,
   tone,
 } from "../../.config/herdr-app/mods/spaces-emoji/main.js";
 
@@ -906,10 +906,12 @@ test("the busiest engine, summed over its processes, is the load, capped at 100"
   expect(parseGpuPercent("Error: no valid counters.")).toBeNull();
 });
 
-test("memory in use is the part of the total not available", () => {
-  expect(parseMemoryPercent("33482480 25063216\r\n")).toBe(25);
-  expect(parseMemoryPercent("")).toBeNull();
-  expect(parseMemoryPercent("0 0")).toBeNull();
+test("memory in use is the part of the total not available, and the CPU load is read too", () => {
+  expect(parseLoad("33482480 25063216 12.34\r\n")).toStrictEqual({ memory: 25, cpu: 12 });
+  expect(parseLoad("100 40 0")).toStrictEqual({ memory: 60, cpu: 0 });
+  expect(parseLoad("100 40 -1")).toStrictEqual({ memory: 60, cpu: null });
+  expect(parseLoad("")).toStrictEqual({ memory: null, cpu: null });
+  expect(parseLoad("0 0")).toStrictEqual({ memory: null, cpu: null });
 });
 
 const windowsHost =
@@ -929,7 +931,7 @@ test("a connected Windows machine shows its GPU and memory load beside its icon 
     { name: "away", state: "unreachable" },
   ]);
   host.machines = [{ name: null, layout: "ready" }];
-  host.exec = windowsHost(said(TYPEPERF), said("100 40"));
+  host.exec = windowsHost(said(TYPEPERF), said("100 40 12.34"));
   const { view, cx } = mount();
   await flush();
   const asks = () => named("exec").map(([cmd, , o]) => [cmd, o.on]);
@@ -940,18 +942,19 @@ test("a connected Windows machine shows its GPU and memory load beside its icon 
     ["powershell", "linux"],
   ]);
   expect(view.load).toStrictEqual({
-    win: { gpu: 43, memory: 60 },
-    linux: { gpu: null, memory: null },
+    win: { cpu: 12, gpu: 43, memory: 60 },
+    linux: { cpu: null, gpu: null, memory: null },
   });
   const win = texts(byId(view.render(cx), "machine-win"));
-  expect(win.slice(win.indexOf("🎮 43%"), win.indexOf("🎮 43%") + 2)).toStrictEqual([
+  expect(win.slice(win.indexOf("🧠 12%"), win.indexOf("🧠 12%") + 3)).toStrictEqual([
+    "🧠 12%",
     "🎮 43%",
     "🐏 60%",
   ]);
-  expect(texts(byId(view.render(cx), "machine-linux")).join()).not.toMatch(/🎮|🐏/);
+  expect(texts(byId(view.render(cx), "machine-linux")).join()).not.toMatch(/🧠|🎮|🐏/);
   // The rail has no room for them.
   host.layout = { id: "root", children: [{ id: "sidebar", size: { px: 60 } }] };
-  expect(texts(byId(view.render(cx), "machine-win")).join()).not.toMatch(/🎮|🐏/);
+  expect(texts(byId(view.render(cx), "machine-win")).join()).not.toMatch(/🧠|🎮|🐏/);
 
   // A new machine list asks only machines not read yet.
   host.calls.length = 0;
@@ -977,11 +980,11 @@ test("a connected Windows machine shows its GPU and memory load beside its icon 
   expect(asks().filter(([, on]) => on === "win")).toHaveLength(2);
   answer({ code: 1, stdout: "", stderr: "no counter" });
   await flush();
-  expect(view.load.win).toStrictEqual({ gpu: null, memory: 50 });
+  expect(view.load.win).toStrictEqual({ cpu: null, gpu: null, memory: 50 });
   expect(cx.notify).toHaveBeenCalled();
 
   // Leaving "connected" forgets the reading.
   view.machines = [{ name: "win", state: "unreachable" }];
   loadTick(cx);
-  expect(view.load).toStrictEqual({ linux: { gpu: null, memory: null } });
+  expect(view.load).toStrictEqual({ linux: { cpu: null, gpu: null, memory: null } });
 });
