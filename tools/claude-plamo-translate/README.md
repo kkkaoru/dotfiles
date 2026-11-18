@@ -2,7 +2,7 @@
 
 A Claude Code mod that translates between you and Claude with
 [PLaMo 3 Translate 0.8B](https://huggingface.co/pfnet/plamo-3-translate-0.8b), running locally:
-MLX 4-bit on `mlx_lm.server` on a Mac, the official GGUF on llama.cpp's `llama-server` (Vulkan, so
+MLX 4-bit on `plamo-mlx-server` on a Mac, the official GGUF on llama.cpp's `llama-server` (Vulkan, so
 GeForce and Radeon alike) on Linux and Windows. Nothing leaves the machine.
 
 ## What it does
@@ -64,7 +64,7 @@ them.
 
 3. Start a new session, or run `/reload-plugins` in a running one.
 
-When nothing answers on port 18555, the mod starts `~/.local/bin/mlx_lm.server` if it exists,
+When nothing answers on port 18555, the mod starts `~/.local/bin/plamo-mlx-server` if it exists,
 otherwise `llama-server` (`llama-server.exe` on Windows, under `%USERPROFILE%` when `HOME` is
 unset).
 
