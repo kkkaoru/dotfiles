@@ -256,7 +256,7 @@ test("render shows each provider's windows, a dash for one that failed or has no
     ["icons/grok.svg", "7d0%"],
     ["icons/antigravity.svg", "💧7d88%", "🤖7d40%", "🅰️7d60%"],
     [undefined, "194CU"],
-    [undefined, "$18.23/day"],
+    [undefined, "$18.23/24h"],
   ]);
 });
 
@@ -334,8 +334,8 @@ test("the two cloud rows carry their own tag", () => {
 });
 
 test("parseGatewayCost reads the day's dollars, or is null when the script printed none", () => {
-  expect(parseGatewayCost(GATEWAY)).toStrictEqual([{ text: "$18.23/day" }]);
-  expect(parseGatewayCost("0\n")).toStrictEqual([{ text: "$0.00/day" }]);
+  expect(parseGatewayCost(GATEWAY)).toStrictEqual([{ text: "$18.23/24h" }]);
+  expect(parseGatewayCost("0\n")).toStrictEqual([{ text: "$0.00/24h" }]);
   expect(parseGatewayCost("")).toBe(null);
 });
 

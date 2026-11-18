@@ -180,10 +180,11 @@ export function parseColabUsage(stdout) {
 }
 
 /** `scripts/gateway-cost.sh` -> today's gateway dollars as a single `{ text }`, or null when the
- *  script printed no number (no token, no permission, no answer). The counter restarts at midnight. */
+ *  script printed no number (no token, no permission, no answer). The window is the rolling
+ *  day the script asks for. */
 export function parseGatewayCost(stdout) {
   const cost = Number.parseFloat(stdout);
-  return Number.isFinite(cost) ? [{ text: `$${cost.toFixed(2)}/day` }] : null;
+  return Number.isFinite(cost) ? [{ text: `$${cost.toFixed(2)}/24h` }] : null;
 }
 
 // [Herdr's agent icon or a literal tag, tinted (one-color glyph) or drawn as is, key,
