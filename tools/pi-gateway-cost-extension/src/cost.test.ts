@@ -53,8 +53,8 @@ test("the cost is read from the first group", () => {
 });
 
 test("the footer text carries two decimals", () => {
-  expect(formatCost(16.7128)).toBe("gateway $16.71 today");
-  expect(formatCost(0)).toBe("gateway $0.00 today");
+  expect(formatCost(16.7128)).toBe("gateway $16.7 today");
+  expect(formatCost(0)).toBe("gateway $0.0 today");
 });
 
 test("the window starts at local midnight", () => {

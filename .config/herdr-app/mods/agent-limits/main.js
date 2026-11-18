@@ -184,7 +184,7 @@ export function parseColabUsage(stdout) {
  *  day the script asks for. */
 export function parseGatewayCost(stdout) {
   const cost = Number.parseFloat(stdout);
-  return Number.isFinite(cost) ? [{ text: `$${cost.toFixed(2)}/24h` }] : null;
+  return Number.isFinite(cost) ? [{ text: `$${cost.toFixed(1)}/24h` }] : null;
 }
 
 // [Herdr's agent icon or a literal tag, tinted (one-color glyph) or drawn as is, key,

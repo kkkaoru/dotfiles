@@ -115,7 +115,7 @@ export function parseCost(response: unknown): number | undefined {
 }
 
 export function formatCost(cost: number): string {
-  return `gateway $${cost.toFixed(2)} today`;
+  return `gateway $${cost.toFixed(1)} today`;
 }
 
 /** Midnight before `now` in local time, as the GraphQL API wants it. */
