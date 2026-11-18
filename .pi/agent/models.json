@@ -455,6 +455,7 @@
       ]
     },
     "cloudflare-workers-ai": {
+      "headers": { "x-session-affinity": "pi-agent" },
       "modelOverrides": {
         "@cf/deepseek-ai/deepseek-v4.1-flash-1017": {
           "contextWindow": 262144,
@@ -475,6 +476,7 @@
       }
     },
     "cloudflare-ai-gateway": {
+      "headers": { "x-session-affinity": "pi-agent" },
       "modelOverrides": {
         "workers-ai/@cf/deepseek-ai/deepseek-v4.1-flash-1017": {
           "contextWindow": 262144,
