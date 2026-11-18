@@ -63,6 +63,7 @@ class CompletionCache:
         self.path = path
         self.limit = limit
         self.entries: dict[str, str] = {}
+        self.pending: dict[str, threading.Event] = {}
         self.lock = threading.Lock()
         self.hits = 0
         self.misses = 0
@@ -99,6 +100,22 @@ class CompletionCache:
             self.hits += 1 if value is not None else 0
             self.misses += 0 if value is not None else 1
             return value
+
+    def claim(self, key: str) -> threading.Event | None:
+        """Claim a generation. Returns None when this request should run it, else the event to wait
+        on: a redraw can ask for the same line twice at once, and one generation answers both."""
+        with self.lock:
+            event = self.pending.get(key)
+            if event is not None:
+                return event
+            self.pending[key] = threading.Event()
+            return None
+
+    def release(self, key: str) -> None:
+        with self.lock:
+            event = self.pending.pop(key, None)
+        if event is not None:
+            event.set()
 
     def put(self, key: str, value: str) -> None:
         with self.lock:
@@ -168,23 +185,24 @@ def install(cache: CompletionCache) -> None:
             if cached
             else None
         )
+        owner = False
         if key is not None:
             hit = cache.get(key)
             if hit is not None:
-                body = json.dumps(
-                    {
-                        "choices": [{"text": hit, "index": 0, "finish_reason": "stop"}],
-                        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-                    },
-                    ensure_ascii=False,
-                ).encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(body)))
-                self.send_header("X-Plamo-Cache", "hit")
-                self.end_headers()
-                self.wfile.write(body)
+                self.send_hit(hit)
                 return
+            waiter = cache.claim(key)
+            if waiter is None:
+                owner = True
+            else:
+                # Another request is decoding this exact text; a redraw asks for the same line
+                # twice, and one generation answers both.
+                waiter.wait(timeout=120)
+                hit = cache.get(key)
+                if hit is not None:
+                    self.send_hit(hit)
+                    return
+                owner = True  # that generation failed, so this request runs its own
 
         capture = Capture(self.wfile)
         self.wfile = capture
@@ -192,18 +210,35 @@ def install(cache: CompletionCache) -> None:
             original_post(self)
         finally:
             self.wfile = capture.stream
-        if key is None:
+        if not owner:
             return
-        raw_answer = b"".join(capture.chunks)
-        # end_headers() flushes the status line and headers through the same stream, so the body
-        # starts after the blank line.
-        _, _, body = raw_answer.partition(b"\r\n\r\n")
         try:
-            text = json.loads(body)["choices"][0]["text"]
-        except (ValueError, KeyError, IndexError, TypeError):
-            return
-        if isinstance(text, str):
-            cache.put(key, text)
+            # end_headers() flushes the status line and headers through the same stream, so the
+            # body starts after the blank line.
+            _, _, body = b"".join(capture.chunks).partition(b"\r\n\r\n")
+            try:
+                text = json.loads(body)["choices"][0]["text"]
+            except (ValueError, KeyError, IndexError, TypeError):
+                return
+            if isinstance(text, str):
+                cache.put(key, text)
+        finally:
+            cache.release(key)
+
+    def send_hit(self, text: str) -> None:
+        body = json.dumps(
+            {
+                "choices": [{"text": text, "index": 0, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            },
+            ensure_ascii=False,
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Plamo-Cache", "hit")
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_GET(self) -> None:
         if self.path == "/cache/stats":
@@ -220,6 +255,7 @@ def install(cache: CompletionCache) -> None:
 
     server.APIHandler.do_POST = do_post
     server.APIHandler.do_GET = do_GET
+    server.APIHandler.send_hit = send_hit
 
 
 def main() -> int:
