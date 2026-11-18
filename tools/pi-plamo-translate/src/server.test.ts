@@ -32,7 +32,6 @@ test("mlx is preferred when its server binary exists", () => {
   });
 });
 
-
 test("llama.cpp is used when mlx is absent", () => {
   expect(
     commandSpec(
