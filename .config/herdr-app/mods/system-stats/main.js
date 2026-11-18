@@ -75,7 +75,7 @@ const oneDecimal = (value) => value.toFixed(1);
 /** The three readings as shown; a reading not taken yet is a dash. */
 export function statsText({ cpu, memory, free, battery }) {
   return {
-    cpu: cpu === null ? "—" : `${cpu}%`,
+    cpu: cpu === null ? "—" : `${oneDecimal(cpu)}%`,
     memory: memory ? `${oneDecimal(memory.used / GIB)}/${Math.round(memory.total / GIB)} GB` : "—",
     disk: free === null ? "—" : `${Math.round(free / GB)} GB free`,
     battery: battery && `${battery.percent}% · ${oneDecimal(battery.watts)} W`,

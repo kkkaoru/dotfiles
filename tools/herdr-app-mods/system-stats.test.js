@@ -100,12 +100,12 @@ test("statsText formats each reading", () => {
   const memory = { used: 38195412992, total: 51539607552 };
   const battery = { percent: 8, watts: 85.611 };
   expect(statsText({ cpu: 23, memory, free: 281483714049, battery })).toStrictEqual({
-    cpu: "23%",
+    cpu: "23.0%",
     memory: "35.6/48 GB",
     disk: "281 GB free",
     battery: "8% · 85.6 W",
   });
-  expect(statsText({ cpu: 0, memory: null, free: null, battery: null }).cpu).toBe("0%");
+  expect(statsText({ cpu: 0, memory: null, free: null, battery: null }).cpu).toBe("0.0%");
 });
 
 test("init reads everything once and polls the battery, the load and the disk at their own pace", async () => {
@@ -114,7 +114,7 @@ test("init reads everything once and polls the battery, the load and the disk at
   expect(timers.map(([ms]) => ms)).toStrictEqual([2000, 5000, 60000]);
   expect(cx.notify).toHaveBeenCalledTimes(3);
   expect(statsText(view)).toStrictEqual({
-    cpu: "23%",
+    cpu: "23.0%",
     memory: "35.6/48 GB",
     disk: "281 GB free",
     battery: "8% · 85.6 W",
@@ -162,7 +162,7 @@ test("render shows the readings in the status bar, the battery only when there i
     ["when", true],
   ]);
   expect(row.kids.map((reading) => reading.kids.map((part) => part.kids[0]))).toStrictEqual([
-    ["🧠", "23%"],
+    ["🧠", "23.0%"],
     ["🐏", "35.6/48 GB"],
     ["💾", "281 GB free"],
     ["🔋", "8% · 85.6 W"],
