@@ -14,8 +14,9 @@ export const WIDGET_KEY = "plamo-translate";
 export const EXCLUDE_EVENT = "plamo-translate:exclude";
 export const CACHE_LIMIT = 200;
 export const RESUME_HISTORY_LIMIT = 2;
-// Past this many lines a text is left as written: a redraw would ask for thousands of translations.
-export const LINE_LIMIT = 24;
+// Two lines per request, so 128 requests is the most one text may ever cost.
+// Anything longer is a transcript dump, not prose the user is waiting to read.
+export const LINE_LIMIT = 256;
 export const DISPLAY_TYPES = [
   "user",
   "assistant",

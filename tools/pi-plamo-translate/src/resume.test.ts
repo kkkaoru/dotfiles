@@ -80,12 +80,12 @@ test("a long persisted entry stays untranslated", () => {
   };
   const box = createRuntime(settings, server, neverResolve);
   startSession(box, { ui: ui(), sessionManager: { buildContextEntries: () => entries } });
-  const long = Array.from({ length: 25 }, (_unused, index) => `Line ${String(index)}`).join("\n");
+  const long = Array.from({ length: 257 }, (_unused, index) => `Line ${String(index)}`).join("\n");
   expect(displayOf(box, long, { ...shown, messageId: "m1" })).toBe(long);
   expect(box.pending.size).toBe(0);
 });
 
-test("a reply long enough to need hundreds of chunks is left as written", () => {
+test("a reply over the 128 request budget is left as written", () => {
   const server: Server = {
     complete: async (text) => `JA:${text}`,
     ensure: async () => true,
@@ -96,7 +96,10 @@ test("a reply long enough to need hundreds of chunks is left as written", () => 
   expect(box.pending.size).toBe(0);
   expect(box.progress.total).toBe(0);
 
-  scheduleReply(box, { role: "assistant", content: [{ type: "text", text: "One line." }] });
+  const atLimit = Array.from({ length: 256 }, (_unused, index) => `Line ${String(index)}`).join(
+    "\n",
+  );
+  scheduleReply(box, { role: "assistant", content: [{ type: "text", text: atLimit }] });
   expect(box.pending.size).toBe(1);
 });
 

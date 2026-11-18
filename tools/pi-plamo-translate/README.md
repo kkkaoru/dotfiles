@@ -9,12 +9,12 @@ You see Japanese. The agent reads and writes English.
 - A prompt you type in Japanese is translated to `promptLanguage` (default `en`) before the model
   reads it. The transcript shows what you typed. Slash commands, `!` shell lines, and messages
   injected by extensions are not rewritten.
-- A text longer than 24 lines is left as written: translating one would ask for hundreds of
-  requests two lines at a time. Drawing never starts a translation either, so a redraw of a long
-  transcript, a resume or a reload asks the model for nothing.
+- One text may cost at most 128 requests: two lines per request, so a text longer than 256 lines
+  is left as written. Drawing never starts a translation either, so a redraw of a long transcript,
+  a resume or a reload asks the model for nothing.
 - Assistant text, and compaction summaries, are drawn in `replyLanguage` (default `ja`). The session
   keeps the English. When a session opens (`startup`, `/resume`, `/fork`, `/reload`), only the most
-  recent 2 persisted entries are translated, and anything longer than 24 lines is left as written,
+  recent 2 persisted entries are translated, and anything longer than 256 lines is left as written,
   so history does not flood the translation server. Tool rows and tool output stay as written.
   While a reply is still streaming it is shown as written; the Japanese replaces it when the
   translation lands. Prose is translated one paragraph per request, and the lines a hard-wrapped
