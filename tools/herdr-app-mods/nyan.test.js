@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { host, reset } from "./mocks/herdr.js";
 import {
   NYAN_MS,
+  NYAN_RAINBOWS,
   NyanCat,
   NyanLetters,
   ago,
@@ -63,7 +64,7 @@ afterEach(() => {
   reset();
 });
 
-// Pinned from the code as it was before nyanVariants was restructured: a change recolors everyone's cats.
+// Pinned so an unintended change does not recolor everyone's cats; updated when mono left the set.
 test("the variants for a fixed list stay as they were", () => {
   const keys = Array.from({ length: 9 }, (_, i) => [
     `t${i}`,
@@ -71,16 +72,16 @@ test("the variants for a fixed list stay as they were", () => {
   ]);
   keys.push(["dup", keys[0][1]]);
   expect([...nyanVariants(keys).values()]).toStrictEqual([
-    [3, 4, 0],
-    [1, 0, 12],
-    [5, 5, 8],
-    [4, 3, 11],
-    [0, 1, 1],
-    [2, 2, 17],
-    [5, 0, 4],
-    [1, 4, 10],
-    [0, 5, 13],
-    [3, 1, 2],
+    [3, 4, 4],
+    [1, 0, 14],
+    [5, 5, 12],
+    [4, 3, 3],
+    [0, 1, 5],
+    [2, 2, 11],
+    [5, 0, 7],
+    [1, 4, 13],
+    [0, 5, 8],
+    [3, 1, 6],
   ]);
 });
 
@@ -125,7 +126,17 @@ test("each variant names a fur, a poptart and a rainbow in range", () => {
   const [fur, taste, r] = nyanVariants([["a", "x"]]).get("a");
   expect(fur >= 0 && fur < 6).toBe(true);
   expect(taste >= 0 && taste < 6).toBe(true);
-  expect(r >= 0 && r < 18).toBe(true);
+  expect(r >= 0 && r < NYAN_RAINBOWS.length).toBe(true);
+});
+
+test("the agents' rainbows skip mono and stay different", () => {
+  // Palette 5 is white through gray: on the bar it would read as a black-and-white rainbow.
+  expect(NYAN_RAINBOWS).not.toContain(5);
+  expect(new Set(NYAN_RAINBOWS).size).toBe(NYAN_RAINBOWS.length);
+  const keys = Array.from({ length: NYAN_RAINBOWS.length }, (_, i) => [`t${i}`, `k${i}`]);
+  const chosen = [...nyanVariants(keys).values()].map((p) => p[2]);
+  expect(new Set(chosen).size).toBe(NYAN_RAINBOWS.length);
+  expect(new Set(chosen.map((r) => NYAN_RAINBOWS[r])).size).toBe(NYAN_RAINBOWS.length);
 });
 
 test("a strip loads its rainbow's frames, repeats the tail to fill the row, then draws the cat", () => {
@@ -155,7 +166,7 @@ test("a narrow row still gets one tail", () => {
 });
 
 test("a strip keeps its next frame loaded, transparent, and the files exist", () => {
-  const ahead = nyanStrip({ h: 21, fur: 0, taste: 0, r: 17, width: 1 }, 11, null).kids[0];
+  const ahead = nyanStrip({ h: 21, fur: 0, taste: 0, r: 16, width: 1 }, 11, null).kids[0];
   const paths = ahead.kids.map((c) => c.path);
   expect(paths).toStrictEqual([
     "mods/agents-emoji/nyan/trail-17-0.svg",

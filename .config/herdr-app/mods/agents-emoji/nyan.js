@@ -45,9 +45,10 @@ const SHADOW = [
   [3, 0.3],
   [2, 0.6],
 ];
-// Rainbow palettes the agents choose from: the build script's first 18 (its AGENT_RAINBOWS). The
-// rest are the tab bar clock's (tabs-clock/clock.js); counting them here would recolor every cat.
-const NYAN_RAINBOWS = 18;
+// Rainbow palettes the agents choose from: the build script's first 18 (its AGENT_RAINBOWS), without
+// mono (5), whose bands run from white to gray and would read as black and white behind a cat. The
+// rest are the tab bar clock's (tabs-clock/clock.js); adding them would recolor every cat.
+export const NYAN_RAINBOWS = [0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
 const fnv = (s) => {
   let h = 0x811c9dc5;
   for (const ch of s) {
@@ -61,7 +62,7 @@ const fnv = (s) => {
 const NYAN_PARTS = [
   ["fur", FUR.length],
   ["poptart", POPTART.length],
-  ["rainbow", NYAN_RAINBOWS],
+  ["rainbow", NYAN_RAINBOWS.length],
 ];
 // The choice at `start`, or the next one used least (unused while any is free).
 function leastUsed(used, n, start) {
@@ -207,7 +208,7 @@ export class NyanLetters extends View {
 
 // The next frame of this cat's rainbow, 1px and transparent, so it is loaded before it shows:
 // image() draws nothing until a picture has loaded, which blinked a cat that started running.
-const nextFrame = (r, f) =>
+const nextFrame = (palette, f) =>
   div()
     .absolute()
     .top_0()
@@ -215,13 +216,15 @@ const nextFrame = (r, f) =>
     .size(1)
     .overflow_hidden()
     .opacity(0)
-    .child(image(`mods/agents-emoji/nyan/trail-${r}-${(f + 1) % NYAN_FRAMES}.svg`).size(1))
-    .child(image(`mods/agents-emoji/nyan/cat-${r}-${(f + 1) % NYAN_FRAMES}.svg`).size(1));
+    .child(image(`mods/agents-emoji/nyan/trail-${palette}-${(f + 1) % NYAN_FRAMES}.svg`).size(1))
+    .child(image(`mods/agents-emoji/nyan/cat-${palette}-${(f + 1) % NYAN_FRAMES}.svg`).size(1));
 
 // One frame of a cat: its rainbow tail, the cat with its rainbow, fur and poptart over it, and
 // its letters (a NyanLetters view) on the tail when it has them.
 export function nyanStrip(p, f, letters) {
   const { h, fur, taste, r, width } = p;
+  // The rainbow is chosen by index; the frames are named by the palette it names.
+  const palette = NYAN_RAINBOWS[r];
   const [frosting, sprinkles] = POPTART[taste];
   const w = (h * 47) / 21;
   const tw = (h * NYAN_TAIL) / 21;
@@ -235,10 +238,10 @@ export function nyanStrip(p, f, letters) {
     .rounded(3)
     .bg(SKY)
     .justify_end()
-    .child(nextFrame(r, f))
+    .child(nextFrame(palette, f))
     .children(
       Array.from({ length: Math.ceil(width / tw) }, () =>
-        image(`mods/agents-emoji/nyan/trail-${r}-${f}.svg`).h(h).w(tw).flex_none(),
+        image(`mods/agents-emoji/nyan/trail-${palette}-${f}.svg`).h(h).w(tw).flex_none(),
       ),
     )
     .child(
@@ -247,7 +250,7 @@ export function nyanStrip(p, f, letters) {
         .w(w)
         .h(h)
         .flex_none()
-        .child(layer(image(`mods/agents-emoji/nyan/cat-${r}-${f}.svg`)))
+        .child(layer(image(`mods/agents-emoji/nyan/cat-${palette}-${f}.svg`)))
         .child(layer(svg(`mods/agents-emoji/nyan/fur-${f}.svg`)).text_color(FUR[fur]))
         .child(layer(svg(`mods/agents-emoji/nyan/frosting-${f}.svg`)).text_color(frosting))
         .child(layer(svg(`mods/agents-emoji/nyan/sprinkles-${f}.svg`)).text_color(sprinkles)),
