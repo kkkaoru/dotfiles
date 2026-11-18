@@ -8,6 +8,10 @@ integrations. These instructions apply to agents working here, including pi and 
 - `./create-symlinks.sh` — Link repository-managed configuration into `$HOME`.
   Review changes before running: this updates the live development environment.
 - `bun install` / `bun add <package>` / `bunx <package>` — Use Bun for package management.
+- `./scripts/secrets.sh keygen|encrypt|decrypt <name>` — Keep a secret in Git only as
+  `secrets/<name>.age` (age). `~/.config/age/keys.txt` holds the identity and stays on the owner's
+  Macs; `secrets/recipients.txt` lists their public keys. Copy that identity to another Mac (never
+  into Git) and add its public key before re-encrypting, so both can read every file.
 - `./scripts/setup-executor.sh` — Register shared Executor integrations.
   `--approve-registration` explicitly permits registration and connection creation only.
 - `./scripts/executor-cloudflare-auth.sh <cloudflare-integration>` — Start the service's
@@ -83,8 +87,10 @@ integrations. These instructions apply to agents working here, including pi and 
 - `.pi/agent/settings.json` — pi model/provider defaults, package loading and skill exclusions.
   Read the current file rather than assuming a fixed model or version.
 - `tools/pi-*/` — Local pi extensions and providers, including persistent goals,
-  loops, detached tmux execution, effort management, oMLX lifecycle management, and trimming
-  requests to a model's declared image caps (`pi-image-budget`, linked by `create-symlinks.sh`).
+  loops, detached tmux execution, effort management, oMLX lifecycle management, trimming requests
+  to a model's declared image caps (`pi-image-budget`), the AI Gateway's own daily cost in the
+  footer (`pi-gateway-cost`), and the `x-session-affinity` header that keeps a session's Workers AI
+  prompt prefix cached (`pi-cf-affinity`). They are linked by `create-symlinks.sh`.
 - `tools/pi-my-antigravity/` — Subscription-backed Antigravity (Cloud Code Assist) provider that
   mirrors the official `agy` CLI wire format (`bun run check`). Sends the system prompt as the
   leading user turn because the backend 429s third-party prompts in `systemInstruction`.
@@ -183,12 +189,15 @@ Verification is component-specific; the root package does not provide a universa
 - `tools/claude-plamo-translate/`: `bun run check`
 - `tools/pi-plamo-translate/`: `bun run check`
 - `tools/pi-image-budget-extension/`: `bun run check`
+- `tools/pi-gateway-cost-extension/`: `bun run check`
+- `tools/pi-cf-affinity-extension/`: `bun run check`
 - `.config/herdr-app/mods/`: `bun run check` in `tools/herdr-app-mods/` (lint, format, per-file 95% coverage)
 - Other components: inspect their `package.json` and README for required checks.
 - Shell changes: check syntax; for all changes, run `git diff --check`.
 
 ## Secrets
 
-Keep credentials out of Git, prompts and command output. Executor owns integration credentials
-and OAuth tokens. Configure other services only as needed; `.env.example` contains optional
+Keep credentials out of Git, prompts and command output. A value that settings or a tool needs
+goes into `secrets/<name>.age` with `./scripts/secrets.sh`; never commit its plaintext. Executor owns
+integration credentials and OAuth tokens. Configure other services only as needed; `.env.example` contains optional
 and legacy entries, not requirements for every task. Do not print the live `.env`.

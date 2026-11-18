@@ -265,3 +265,5 @@ tools/claudex-agent-adapter/grok-acp-mock.jsonl
 .codex/app-server-control/
 .codex/app-server-daemon/
 .codex/tui-thread-reference-capabilities/
+# Age-encrypted secrets only; a decrypted copy must never be committed.
+secrets/*.json

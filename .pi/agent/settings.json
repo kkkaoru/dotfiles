@@ -57,6 +57,9 @@
     "progressTextOnEffortChange": true,
     "rampStartRatio": 0.6
   },
+  "pi-gateway-cost": {
+    "gateway": "pi-agent"
+  },
   "pi-plamo-translate": {
     "replyLanguage": "ja",
     "promptLanguage": "en"
