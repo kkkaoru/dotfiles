@@ -9,6 +9,7 @@ import { exec, theme } from "herdr";
 const POLL_MS = 5 * 60 * 1000;
 const WARN_PERCENT = 80;
 const FULL_PERCENT = 100;
+const RESET_PERCENT = 95;
 const ICON_SIZE = 14;
 const MS_PER_MINUTE = 60 * 1000;
 const MINUTES_PER_HOUR = 60;
@@ -35,6 +36,10 @@ const OPENCODE_GO_USAGE = [
   'export OPENCODE_API_KEY="${OPENCODE_API_KEY:-$(plutil -extract opencode-go.key raw -o - ~/.pi/agent/auth.json 2>/dev/null)}";',
   "codexbar usage --provider opencodego --source api --json",
 ].join(" ");
+
+// The Colab CLI's oauth2 strategy asks for an authorization code on stdin, which no spawned
+// command can answer, so ask with Application Default Credentials as scripts/colab does.
+const COLAB_USAGE = '"${COLAB_CLI:-$HOME/.local/bin/colab}" --auth=adc usage';
 
 /** "5h", "7d", or null for 30d/missing length (Grok's CLI proxy). */
 const DAYS_PER_MONTH = 30;
@@ -80,7 +85,7 @@ const withReset = (label, used, resetsAt) =>
  *  the longest used-up one, else the shortest. */
 export function shownWindows(windows) {
   if (windows.some(({ keep }) => keep)) {
-    return windows.map(({ label, used, resetsAt }) => withReset(label, used, resetsAt));
+    return windows.map(({ keep: _keep, ...window }) => window);
   }
   const full = windows.findLast(({ used }) => used >= FULL_PERCENT);
   return full ? [full] : windows.slice(0, 1);
@@ -164,6 +169,13 @@ const codexbar = (provider, source) => [
   ["usage", "--provider", provider, "--source", source, "--json"],
 ];
 
+/** `colab usage` -> the account's remaining compute units as a single `{ text }`, or null when the
+ *  balance could not be read (no credentials, Colab error). */
+export function parseColabUsage(stdout) {
+  const balance = /Current balance:\s*([\d.]+)/u.exec(stdout)?.[1];
+  return balance === undefined ? null : [{ text: `${Math.round(Number(balance))}CU` }];
+}
+
 // [Herdr's agent icon, tinted (one-color glyph) or drawn as is, key, [command, args], parser].
 // CodexBar rejects the balance Ollama's API answers today and its web path is redirected to sign
 // in, so Ollama is asked directly; OpenCode Go's usage API needs its key exported, which Auto
@@ -176,6 +188,7 @@ const PROVIDERS = [
   ["icons/opencode.svg", true, "opencodego", ["sh", ["-c", OPENCODE_GO_USAGE]], parseLimits],
   ["icons/grok.svg", true, "grok", codexbar("grok", "auto"), parseLimits],
   ["icons/antigravity.svg", true, "antigravity", codexbar("antigravity", "auto"), parseAntigravity],
+  ["icons/gcloud.svg", true, "colab", ["sh", ["-c", COLAB_USAGE]], parseColabUsage],
 ];
 
 export default class AgentLimits extends View {
@@ -201,12 +214,15 @@ export default class AgentLimits extends View {
 
   render(_cx) {
     const t = theme();
-    const windowText = ({ label, used, resetsAt }) => {
-      const remaining = used >= FULL_PERCENT ? formatResetRemaining(resetsAt) : null;
-      const value = remaining ?? `${used}%`;
+    const windowText = ({ label, used, resetsAt, text }) => {
+      const remaining = used >= RESET_PERCENT ? formatResetRemaining(resetsAt) : null;
+      const value = text ?? remaining ?? `${used}%`;
+      // A countdown already means "until reset", so drop the window's own length (5h, 7d, ...)
+      // and keep only a pool tag such as Antigravity's.
+      const prefix = remaining ? label?.replace(/\d+[hd]$/, "") : label;
       return div()
         .text_color(used >= WARN_PERCENT ? t.blocked : t.foreground)
-        .child(label ? `${label}${value}` : value);
+        .child(prefix ? `${prefix}${value}` : value);
     };
     // As agents-emoji draws an agent's icon from Herdr's program table.
     const icon = (path, tint) =>

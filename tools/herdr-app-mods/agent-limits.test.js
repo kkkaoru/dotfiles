@@ -4,6 +4,7 @@ import { host, reset } from "./mocks/herdr.js";
 import AgentLimits, {
   formatResetRemaining,
   parseAntigravity,
+  parseColabUsage,
   parseLimits,
   parseOllamaBalance,
   shownWindows,
@@ -83,6 +84,9 @@ const ANTIGRAVITY = JSON.stringify([
   },
 ]);
 
+// `colab usage` as the CLI prints it for an account with compute units left.
+const COLAB = "Current balance: 194.09 compute units\nUsage rate: 5.38/hr";
+
 const ANSWERS = {
   claude: CLAUDE,
   codex: CODEX,
@@ -90,6 +94,7 @@ const ANSWERS = {
   opencodego: GO_ERROR,
   grok: GROK,
   antigravity: ANTIGRAVITY,
+  colab: COLAB,
 };
 
 // Answers exec by the provider asked for; a cx whose spawned tasks and timer a test runs by hand.
@@ -98,7 +103,7 @@ function newLimits(answers) {
     if (command !== "sh") {
       return { code: 0, stdout: answers[args[2]], stderr: "" };
     }
-    const scripted = args[1].includes("opencodego") ? "opencodego" : "ollama";
+    const scripted = ["opencodego", "colab"].find((name) => args[1].includes(name)) ?? "ollama";
     return { code: 0, stdout: answers[scripted], stderr: "" };
   };
   host.theme = { dim: "#d", foreground: "#f", blocked: "#r", chrome: "#c", border: "#b" };
@@ -210,12 +215,13 @@ test("init asks each provider once, Ollama from its balance API and OpenCode Go 
     ],
     ["exec", "codexbar", ["usage", "--provider", "grok", "--source", "auto", "--json"]],
     ["exec", "codexbar", ["usage", "--provider", "antigravity", "--source", "auto", "--json"]],
+    ["exec", "sh", ["-c", '"${COLAB_CLI:-$HOME/.local/bin/colab}" --auth=adc usage']],
   ]);
-  expect(cx.notify).toHaveBeenCalledTimes(6);
+  expect(cx.notify).toHaveBeenCalledTimes(7);
   expect(timers.map(([ms]) => ms)).toStrictEqual([300000]);
   timers[0][1](cx);
   await Promise.all(tasks);
-  expect(host.calls.length).toBe(12);
+  expect(host.calls.length).toBe(14);
 });
 
 test("render shows each provider's windows, a dash for one that failed or has not answered", async () => {
@@ -227,6 +233,7 @@ test("render shows each provider's windows, a dash for one that failed or has no
     ["icons/opencode.svg", "—"],
     ["icons/grok.svg", "—"],
     ["icons/antigravity.svg", "—"],
+    ["icons/gcloud.svg", "—"],
   ]);
   await Promise.all(tasks);
   expect(drawn(view)).toStrictEqual([
@@ -236,10 +243,11 @@ test("render shows each provider's windows, a dash for one that failed or has no
     ["icons/opencode.svg", "—"],
     ["icons/grok.svg", "7d0%"],
     ["icons/antigravity.svg", "💧7d88%", "🤖7d40%", "☁️7d60%"],
+    ["icons/gcloud.svg", "194CU"],
   ]);
 });
 
-test("render shows a window without a length as its percent alone, and shows reset countdown without 100% or parentheses when full", async () => {
+test("render shows a window without a length as its percent alone, and shows the reset countdown without the window's length from 95%", async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-11-16T05:10:00Z"));
   const { view, tasks } = newLimits({ ...ANSWERS, grok: GROK_NO_WINDOW });
@@ -256,7 +264,19 @@ test("render shows a window without a length as its percent alone, and shows res
   ]);
   const fullView = newLimits({ ...ANSWERS, claude: fullClaude });
   await Promise.all(fullView.tasks);
-  expect(drawn(fullView.view)[0]).toStrictEqual(["icons/claude.svg", "5h3h"]);
+  expect(drawn(fullView.view)[0]).toStrictEqual(["icons/claude.svg", "3h"]);
+
+  const nearlyFullClaude = JSON.stringify([
+    {
+      provider: "claude",
+      usage: {
+        primary: { windowMinutes: 10080, usedPercent: 96, resetsAt: "2026-11-18T08:15:00Z" },
+      },
+    },
+  ]);
+  const nearlyFullView = newLimits({ ...ANSWERS, claude: nearlyFullClaude });
+  await Promise.all(nearlyFullView.tasks);
+  expect(drawn(nearlyFullView.view)[0]).toStrictEqual(["icons/claude.svg", "2d"]);
 });
 
 test("formatResetRemaining formats days, hours, or minutes (coarsest unit) or returns null when missing/expired", () => {
@@ -284,6 +304,11 @@ test("a window at 80% or more is drawn in the warning color", async () => {
 test("a hundred-hour window is labelled in hours", () => {
   const answer = JSON.stringify([{ usage: { primary: { windowMinutes: 6000, usedPercent: 1 } } }]);
   expect(parseLimits(answer)).toStrictEqual([{ label: "100h", used: 1 }]);
+});
+
+test("parseColabUsage reads the compute-unit balance, or is null when it could not be read", () => {
+  expect(parseColabUsage(COLAB)).toStrictEqual([{ text: "194CU" }]);
+  expect(parseColabUsage("[colab] Warning: failed to fetch compute-unit info")).toBe(null);
 });
 
 test("the monthly window omits its 30d label", () => {
