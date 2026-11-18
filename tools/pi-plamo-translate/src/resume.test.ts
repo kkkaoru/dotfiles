@@ -1,7 +1,7 @@
 // This TypeScript file is executed with Bun.
 import type { MarkdownTransformContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { expect, test } from "vitest";
-import { createRuntime, displayOf, startSession, type UiSink } from "./runtime.ts";
+import { createRuntime, displayOf, scheduleReply, startSession, type UiSink } from "./runtime.ts";
 import type { Server } from "./server.ts";
 
 const settings = { replyLanguage: "ja", promptLanguage: "en", port: 18555 };
@@ -80,9 +80,24 @@ test("a long persisted entry stays untranslated", () => {
   };
   const box = createRuntime(settings, server, neverResolve);
   startSession(box, { ui: ui(), sessionManager: { buildContextEntries: () => entries } });
-  const long = Array.from({ length: 13 }, (_unused, index) => `Line ${String(index)}`).join("\n");
+  const long = Array.from({ length: 25 }, (_unused, index) => `Line ${String(index)}`).join("\n");
   expect(displayOf(box, long, { ...shown, messageId: "m1" })).toBe(long);
   expect(box.pending.size).toBe(0);
+});
+
+test("a reply long enough to need hundreds of chunks is left as written", () => {
+  const server: Server = {
+    complete: async (text) => `JA:${text}`,
+    ensure: async () => true,
+  };
+  const box = createRuntime(settings, server, neverResolve);
+  const huge = Array.from({ length: 2564 }, (_unused, index) => `Line ${String(index)}`).join("\n");
+  scheduleReply(box, { role: "assistant", content: [{ type: "text", text: huge }] });
+  expect(box.pending.size).toBe(0);
+  expect(box.progress.total).toBe(0);
+
+  scheduleReply(box, { role: "assistant", content: [{ type: "text", text: "One line." }] });
+  expect(box.pending.size).toBe(1);
 });
 
 test("a compaction summary entry is included in the recent window", () => {

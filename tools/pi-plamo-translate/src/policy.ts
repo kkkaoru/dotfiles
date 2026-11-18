@@ -14,7 +14,8 @@ export const WIDGET_KEY = "plamo-translate";
 export const EXCLUDE_EVENT = "plamo-translate:exclude";
 export const CACHE_LIMIT = 200;
 export const RESUME_HISTORY_LIMIT = 2;
-export const RESUME_LINE_LIMIT = 12;
+// Past this many lines a text is left as written: a redraw would ask for thousands of translations.
+export const LINE_LIMIT = 24;
 export const DISPLAY_TYPES = [
   "user",
   "assistant",
@@ -52,6 +53,10 @@ export function replyRule(replyLanguage: string, promptLanguage: string): string
     return ENGLISH_ONLY;
   }
   return `The user writes in Japanese. Their messages are machine-translated into English before you read them, and your replies are machine-translated into \`${replyLanguage}\` for display only. Read and write English. Only inline code, fenced code blocks and 「...」 are shown exactly as written. Put anything the user must read or copy verbatim in one of them: commands, file paths, identifiers, option and flag names, literal values, error messages and quoted UI text. Do not wrap ordinary prose.`;
+}
+
+export function tooLong(text: string): boolean {
+  return text.split("\n").length > LINE_LIMIT;
 }
 
 export function needsDisplayTranslation(

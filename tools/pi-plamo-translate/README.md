@@ -9,6 +9,9 @@ You see Japanese. The agent reads and writes English.
 - A prompt you type in Japanese is translated to `promptLanguage` (default `en`) before the model
   reads it. The transcript shows what you typed. Slash commands, `!` shell lines, and messages
   injected by extensions are not rewritten.
+- A text longer than 24 lines is left as written: translating one would ask for hundreds of
+  requests two lines at a time. Drawing never starts a translation either, so a redraw of a long
+  transcript, a resume or a reload asks the model for nothing.
 - Assistant text, and compaction summaries, are drawn in `replyLanguage` (default `ja`). The session
   keeps the English. When a session opens (`startup`, `/resume`, `/fork`, `/reload`), only the most
   recent 2 persisted entries are translated, and an entry longer than 12 lines is left in English,
@@ -50,14 +53,17 @@ Options live under `pi-plamo-translate` in `~/.pi/agent/settings.json`:
 | `port`           | `18555` | Local PLaMo server, started on demand and shared with the Claude mod. |
 
 Up to eight translations run at once, a new prompt's first: batching them is what keeps an Apple
-Silicon GPU busy, and `scripts/bench-plamo-translate.py --concurrency 8` measures about 1.2x the
-tokens/s of four.
+Silicon GPU busy. `mlx_lm.server` batches them into one decode loop, so eight translations finish in
+about a third of the time eight sequential ones take (measured: 107 ms vs 305 ms), at a per-request
+latency of 70-100 ms instead of ~40 ms. `scripts/bench-plamo-translate.py --concurrency 8` measures
+it on a fixed sample set.
 
 Greedy completions are also cached on disk (`~/.cache/plamo-translate/`), keyed by the prompt, the
-token limit and the model's `config.json`. The mods re-translate the same text constantly — a
-redrawn block, a scrolled screen, a resumed session — and a repeat is answered byte-identically in
-under a millisecond instead of ~100 ms. Sampled requests and `"cache": false` bypass it;
-`GET /cache/stats` reports the hit rate.
+token limit, the stop sequence and the model's `config.json`. The mods re-translate the same text
+constantly — a redrawn block, a scrolled screen, a resumed session — and a repeat is answered
+byte-identically in under a millisecond instead of ~100 ms per line (a three-line block: 158 ms,
+then 1.2 ms). Sampled requests and `"cache": false` bypass it; `GET /cache/stats` reports the hit
+rate.
 
 ## Check
 

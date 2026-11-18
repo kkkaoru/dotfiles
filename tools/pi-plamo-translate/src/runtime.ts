@@ -16,11 +16,11 @@ import {
   remember,
   replyRule,
   RESUME_HISTORY_LIMIT,
-  RESUME_LINE_LIMIT,
   SECTION_NAME,
   shouldTranslatePrompt,
   STATUS_KEY,
   statusText,
+  tooLong,
   transformedInput,
   WIDGET_KEY,
 } from "./policy.ts";
@@ -247,7 +247,12 @@ export function excludeText(runtime: Runtime, data: unknown): void {
 }
 
 export function schedule(runtime: Runtime, source: string, lang: string): void {
-  if (runtime.excluded.has(source) || runtime.pending.has(source) || runtime.ready.has(source)) {
+  if (
+    tooLong(source) ||
+    runtime.excluded.has(source) ||
+    runtime.pending.has(source) ||
+    runtime.ready.has(source)
+  ) {
     return;
   }
   // oxlint-disable-next-line typescript/no-floating-promises -- kept in pending; storeTranslation reports failure
@@ -278,7 +283,7 @@ export function displayOf(
   if (
     context.messageId === undefined ||
     !runtime.resumedIds.has(context.messageId) ||
-    markdown.split("\n").length > RESUME_LINE_LIMIT
+    tooLong(markdown)
   ) {
     return markdown;
   }
@@ -293,6 +298,7 @@ export async function translateInput(
 ): Promise<InputEventResult> {
   runtime.ui = ui;
   if (
+    tooLong(event.text) ||
     runtime.excluded.has(event.text) ||
     !shouldTranslatePrompt(event.text, event.source, runtime.settings.promptLanguage)
   ) {
