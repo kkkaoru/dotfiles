@@ -68,7 +68,8 @@ test("a session that opens with history only translates the most recent persiste
   expect(box.pending.has("Recent reply")).toBe(true);
 
   expect(displayOf(box, "Live reply", shown)).toBe("Live reply");
-  expect(box.pending.has("Live reply")).toBe(true);
+  // A live reply is scheduled when it ends, never by drawing it.
+  expect(box.pending.has("Live reply")).toBe(false);
 });
 
 test("a long persisted entry stays untranslated", () => {
@@ -106,4 +107,25 @@ test("a compaction summary entry is included in the recent window", () => {
     "Compacted earlier turns",
   );
   expect(box.pending.has("Compacted earlier turns")).toBe(true);
+});
+
+const working: Server = { complete: async (text) => `JA:${text}`, ensure: async () => true };
+
+test("a long transcript is not translated, however often it is drawn", () => {
+  const box = createRuntime(settings, working, neverResolve);
+  // Drawn before any session start: nothing persisted is eligible.
+  const texts = Array.from({ length: 50 }, (_unused, index) => `Reply ${String(index)}`);
+  for (let pass = 0; pass < 3; pass += 1) {
+    texts.forEach((text, index) => {
+      displayOf(box, text, { ...shown, messageId: `m${String(index + 1)}` });
+    });
+  }
+  expect(box.pending.size).toBe(0);
+});
+
+test("a session start without a session manager still translates nothing persisted", () => {
+  const box = createRuntime(settings, working, neverResolve);
+  startSession(box, { ui: ui() });
+  expect(displayOf(box, "Reply", { ...shown, messageId: "m1" })).toBe("Reply");
+  expect(box.pending.size).toBe(0);
 });

@@ -69,8 +69,8 @@ export interface Runtime {
   progress: Progress;
   ui: UiSink;
   warned: boolean;
-  /** Set whenever the session opens with persisted history: only these entry IDs may be translated. */
-  resumedIds: ReadonlySet<string> | null;
+  /** The persisted entries a session may translate: the newest few, and nothing else. */
+  resumedIds: ReadonlySet<string>;
 }
 
 // A translation that finishes sooner says nothing at all.
@@ -108,7 +108,7 @@ export function createRuntime(
     progress: { done: 0, total: 0, shown: false, waiting: false },
     ui: silent,
     warned: false,
-    resumedIds: null,
+    resumedIds: new Set<string>(),
   };
 }
 
@@ -274,11 +274,11 @@ export function displayOf(
   if (ready !== undefined) {
     return ready;
   }
-  // Persisted history (startup, resume, fork, reload) is only partly translated to spare PLaMo.
+  // Drawing never starts a translation: one redraw of a long transcript would ask for thousands.
   if (
-    runtime.resumedIds !== null &&
-    context.messageId !== undefined &&
-    (!runtime.resumedIds.has(context.messageId) || markdown.split("\n").length > RESUME_LINE_LIMIT)
+    context.messageId === undefined ||
+    !runtime.resumedIds.has(context.messageId) ||
+    markdown.split("\n").length > RESUME_LINE_LIMIT
   ) {
     return markdown;
   }
@@ -329,9 +329,10 @@ export function scheduleReply(
 }
 
 // Every session start renders the persisted transcript, so the whole history would translate.
-function recentResumedIds(ctx: SessionContextLike): ReadonlySet<string> | null {
+// Without a session manager nothing persisted is eligible, which is the safe default.
+function recentResumedIds(ctx: SessionContextLike): ReadonlySet<string> {
   if (!ctx.sessionManager) {
-    return null;
+    return new Set();
   }
   const ids = ctx.sessionManager
     .buildContextEntries()

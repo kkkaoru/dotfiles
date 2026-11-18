@@ -195,7 +195,7 @@ test("a dropped connection is retried once", async () => {
   expect(box.warned).toBe(false);
 });
 
-test("display waits out a stream and then uses a finished translation", async () => {
+test("a reply is translated when it ends, and drawing shows that translation", async () => {
   const box = runtime(async (text) => `JA:${text}`);
   expect(
     displayOf(box, "Add a tab", {
@@ -204,7 +204,11 @@ test("display waits out a stream and then uses a finished translation", async ()
       availableWidth: 40,
     }),
   ).toBe("Add a tab");
+  // Drawing alone asks for nothing, however often it runs.
   expect(displayOf(box, "Add a tab", shown)).toBe("Add a tab");
+  expect(box.pending.size).toBe(0);
+
+  scheduleReply(box, { content: [{ type: "text", text: "Add a tab" }], role: "assistant" });
   await box.pending.get("Add a tab");
   expect(displayOf(box, "Add a tab", shown)).toBe("JA:Add a tab");
 });
