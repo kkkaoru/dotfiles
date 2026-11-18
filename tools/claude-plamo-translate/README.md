@@ -23,7 +23,7 @@ GeForce and Radeon alike) on Linux and Windows. Nothing leaves the machine.
   original (ctrl+o).
 - **Resumed sessions** are not translated all at once. In the fullscreen terminal only the blocks
   on screen are translated, newest first; one scrolled into view is shown as written until its
-  translation lands, then redrawn. At most four requests run at once, a new prompt's first.
+  translation lands, then redrawn. At most eight requests run at once, a new prompt's first.
 - **Progress**: a reply or dialog translation still running after two seconds shows a toast
   (`PLaMo: translating… 12/30 lines`) for `toastSeconds` (default 5). A toast cannot be closed early, so a short one keeps it from
   lingering after the translation is done. A new one appears only once
@@ -43,8 +43,11 @@ them.
    ./scripts/setup-plamo-translate.sh   # Windows: run it in Git Bash
    ```
 
-   - macOS: mlx-lm via uv; the model is downloaded and converted into
-     `~/.local/share/plamo-translate`.
+   - macOS: mlx-lm via uv; the model is downloaded from
+     `kkk4oru/plamo-3-translate-0.8b-mlx-4bit-fast` into `~/.local/share/plamo-translate` and
+     converted locally only if that download fails. It is an all-4-bit conversion: 478 MB read per
+     decode step, about twice the speed of PFN's MLX-4bit release (0.98 GB), at a small accuracy
+     cost. `scripts/bench-plamo-translate.py --port 18555` measures it on a fixed sample set.
    - Linux and Windows: llama.cpp's pinned Vulkan build into
      `~/.local/share/plamo-translate/llama.cpp` and `plamo-3-translate-0.8b-Q4_K_M.gguf` beside
      it. A Vulkan driver is needed (the GPU vendor's driver on Windows, Mesa or the NVIDIA driver

@@ -1,13 +1,16 @@
 #!/bin/bash
 # Set up PLaMo 3 Translate 0.8B for tools/claude-plamo-translate and tools/pi-plamo-translate. Safe to run again:
 # finished steps are skipped.
-#   macOS:              mlx-lm, the model converted to MLX 4-bit
+#   macOS:              mlx-lm and the MLX 4-bit model, served by scripts/plamo-mlx-server.py
 #   Linux, Windows:     llama.cpp's Vulkan build (GeForce and Radeon alike) and the official GGUF
 #   (Git Bash)
 
 set -euo pipefail
 
 SOURCE_ID="pfnet/plamo-3-translate-0.8b"
+# The all-4-bit conversion is about twice as fast as PFN's MLX-4bit release, which leaves the
+# embedding and the vocabulary head at higher precision (~0.98 GB read per token, not 478 MB).
+FAST_ID="kkk4oru/plamo-3-translate-0.8b-mlx-4bit-fast"
 MLX_LM_VERSION="0.32.2"
 DATA_DIR="${HOME}/.local/share/plamo-translate"
 MODEL_DIR="${DATA_DIR}/plamo-3-translate-0.8b-mlx-4bit"
@@ -15,6 +18,7 @@ BIN_DIR="${HOME}/.local/bin"
 LLAMA_BUILD="b12360"
 LLAMA_DIR="${DATA_DIR}/llama.cpp"
 GGUF="plamo-3-translate-0.8b-Q4_K_M.gguf"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 require() {
   for tool in "$@"; do
@@ -33,12 +37,24 @@ setup_mlx() {
   if [ -f "${MODEL_DIR}/config.json" ]; then
     echo "present: ${MODEL_DIR}"
   else
-    hf download "$SOURCE_ID"
     mkdir -p "$DATA_DIR"
-    "${BIN_DIR}/mlx_lm.convert" --hf-path "$SOURCE_ID" --mlx-path "$MODEL_DIR" -q --q-bits 4 --trust-remote-code
+    hf download "$FAST_ID" --local-dir "$MODEL_DIR"
   fi
   echo "ready: ${MODEL_DIR}"
-  echo "the mod starts ${BIN_DIR}/mlx_lm.server on demand (port 18555 by default)"
+  install_server
+  echo "the mod starts ${BIN_DIR}/plamo-mlx-server on demand (port 18555 by default)"
+  echo "benchmark it with scripts/bench-plamo-translate.py --port 18555"
+}
+
+# mlx_lm.server with a listen backlog that holds the mods' burst of eight requests: the stock one
+# resets some of them, and a reset leaves that line untranslated.
+install_server() {
+  install -m 755 "${SCRIPT_DIR}/plamo-mlx-server.py" "${DATA_DIR}/plamo-mlx-server.py"
+  cat > "${BIN_DIR}/plamo-mlx-server" <<EOF
+#!/bin/sh
+exec "\${HOME}/.local/share/uv/tools/mlx-lm/bin/python" "${DATA_DIR}/plamo-mlx-server.py" "\$@"
+EOF
+  chmod +x "${BIN_DIR}/plamo-mlx-server"
 }
 
 # $1: the release asset's platform part, e.g. ubuntu-vulkan-x64.tar.gz or win-vulkan-x64.zip

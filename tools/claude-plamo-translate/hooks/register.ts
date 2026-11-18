@@ -58,8 +58,9 @@ interface CompletionBody {
 
 const OFF: string = 'off'
 const HOST: string = 'http://127.0.0.1'
-// Written by scripts/setup-plamo-translate.sh: mlx-lm on a Mac, llama.cpp on Linux and Windows.
-const MLX_SERVER: string = '.local/bin/mlx_lm.server'
+// Written by scripts/setup-plamo-translate.sh: scripts/plamo-mlx-server.py, mlx-lm with a listen
+// backlog that holds eight requests.
+const MLX_SERVER: string = '.local/bin/plamo-mlx-server'
 const MLX_MODEL: string = '.local/share/plamo-translate/plamo-3-translate-0.8b-mlx-4bit'
 const LLAMA_SERVER: string = '.local/share/plamo-translate/llama.cpp/llama-server'
 const GGUF_MODEL: string = '.local/share/plamo-translate/plamo-3-translate-0.8b-Q4_K_M.gguf'
@@ -82,8 +83,10 @@ const DIALOGS = { plugin: 'plamo-translate', key: 'dialogs' } satisfies { plugin
 const SETUP_HINT: string =
   'plamo-translate: the PLaMo server is not reachable; run scripts/setup-plamo-translate.sh. Text is passed through untranslated.'
 const UNTRANSLATED_ID: string = 'plamo-translate:untranslated'
-// Requests the server works on at once (llama-server's default slots); the rest wait newest first.
-const PARALLEL_REQUESTS: number = 4
+// Requests the server works on at once; the rest wait newest first. Batching them is what keeps
+// the GPU fed: one request at a time leaves Apple Silicon's decode memory-bound and idle, and
+// scripts/bench-plamo-translate.py measures about 1.2x more tokens/s at 8 in flight than at 4.
+const PARALLEL_REQUESTS: number = 8
 // How long an idle worker lets a burst of draws (a resumed or scrolled screen) arrive before it
 // picks the newest.
 const SETTLE_MS: number = 100

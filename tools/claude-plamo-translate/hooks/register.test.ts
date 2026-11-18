@@ -57,7 +57,7 @@ async function setup(options: Record<string, string | number>): Promise<Fake> {
     toastTimeouts: [],
     logs: [],
     env: { HOME: '/Users/me' },
-    files: new Set(['/Users/me/.local/bin/mlx_lm.server']),
+    files: new Set(['/Users/me/.local/bin/plamo-mlx-server']),
     dialogs: undefined,
     healthy: true,
     healOnSleep: false,
@@ -247,7 +247,7 @@ test('a stopped server is started once and the prompt is translated when it is r
   expect(await call(fake, 'prompt.submit', prompt('日本語'))).toStrictEqual({ text: 'TRANSLATED', wait: false, origin: { kind: 'composer' } })
   expect(fake.spawned).toStrictEqual([
     [
-      '/Users/me/.local/bin/mlx_lm.server',
+      '/Users/me/.local/bin/plamo-mlx-server',
       '--model',
       '/Users/me/.local/share/plamo-translate/plamo-3-translate-0.8b-mlx-4bit',
       '--port',
@@ -256,6 +256,7 @@ test('a stopped server is started once and the prompt is translated when it is r
     ],
   ])
 })
+
 
 test('without mlx-lm the llama.cpp server is started with the GGUF model', async () => {
   const fake = await setup(OPTIONS)
