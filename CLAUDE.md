@@ -83,7 +83,8 @@ integrations. These instructions apply to agents working here, including pi and 
 - `.pi/agent/settings.json` — pi model/provider defaults, package loading and skill exclusions.
   Read the current file rather than assuming a fixed model or version.
 - `tools/pi-*/` — Local pi extensions and providers, including persistent goals,
-  loops, detached tmux execution, effort management, and oMLX lifecycle management.
+  loops, detached tmux execution, effort management, oMLX lifecycle management, and trimming
+  requests to a model's declared image caps (`pi-image-budget`, linked by `create-symlinks.sh`).
 - `tools/pi-my-antigravity/` — Subscription-backed Antigravity (Cloud Code Assist) provider that
   mirrors the official `agy` CLI wire format (`bun run check`). Sends the system prompt as the
   leading user turn because the backend 429s third-party prompts in `systemInstruction`.
@@ -181,6 +182,7 @@ Verification is component-specific; the root package does not provide a universa
 - `tools/claude-dynamic-effort/`: `bun run check` (vitest coverage and `claude plugin validate`)
 - `tools/claude-plamo-translate/`: `bun run check`
 - `tools/pi-plamo-translate/`: `bun run check`
+- `tools/pi-image-budget-extension/`: `bun run check`
 - `.config/herdr-app/mods/`: `bun run check` in `tools/herdr-app-mods/` (lint, format, per-file 95% coverage)
 - Other components: inspect their `package.json` and README for required checks.
 - Shell changes: check syntax; for all changes, run `git diff --check`.
