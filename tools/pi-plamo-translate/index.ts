@@ -45,8 +45,8 @@ export default function plamoTranslate(pi: ExtensionAPI): void {
   bindPlamo(
     {
       onSessionStart: (handler) => {
-        pi.on("session_start", (event, ctx) => {
-          handler(ctx, event.reason);
+        pi.on("session_start", (_event, ctx) => {
+          handler(ctx);
         });
       },
       onInput: (handler) => {

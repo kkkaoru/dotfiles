@@ -10,11 +10,12 @@ You see Japanese. The agent reads and writes English.
   reads it. The transcript shows what you typed. Slash commands, `!` shell lines, and messages
   injected by extensions are not rewritten.
 - Assistant text, and compaction summaries, are drawn in `replyLanguage` (default `ja`). The session
-  keeps the English. On `/resume`, `/fork`, or `/reload`, only the most recent 2 persisted entries are
-  translated, and an entry longer than 12 lines is left in English, so history does not flood the
-  translation server. Tool rows and tool output stay as written. While a reply is still streaming it
-  is shown as written; the Japanese replaces it when the translation lands. Prose is translated two lines per request, so a
-  long reply fills in as its pieces arrive instead of waiting for all of it.
+  keeps the English. When a session opens (`startup`, `/resume`, `/fork`, `/reload`), only the most
+  recent 2 persisted entries are translated, and an entry longer than 12 lines is left in English,
+  so history does not flood the translation server. Tool rows and tool output stay as written.
+  While a reply is still streaming it is shown as written; the Japanese replaces it when the
+  translation lands. Prose is translated one paragraph per request, and the lines a hard-wrapped
+  paragraph was split into are joined first, so a sentence is never translated in halves.
 - Code spans, fenced blocks, URLs and the inside of 「...」 are not sent for translation. If the
   server is down, the original text is used and a warning is shown once.
 - A translation still running after two seconds reports itself in one chat line
@@ -32,6 +33,11 @@ The model is set up once per machine (it is not in Git):
 ./scripts/setup-plamo-translate.sh
 ```
 
+On a Mac that downloads `kkk4oru/plamo-3-translate-0.8b-mlx-4bit-fast`, an all-4-bit conversion of the
+model: it reads 478 MB per decode step where PFN's own MLX-4bit release reads about 0.98 GB, so it is
+roughly twice as fast, at a small accuracy cost. `scripts/bench-plamo-translate.py --port 18555`
+measures it on a fixed sample set.
+
 `./create-symlinks.sh` links this directory to `~/.pi/agent/packages/pi-plamo-translate`. Settings
 load `./packages/pi-plamo-translate`. Start a new session, or run `/reload`.
 
@@ -42,6 +48,10 @@ Options live under `pi-plamo-translate` in `~/.pi/agent/settings.json`:
 | `replyLanguage`  | `ja`    | Language replies and summaries are shown in. `off` disables it.       |
 | `promptLanguage` | `en`    | Language your prompts are translated into. `off` disables it.         |
 | `port`           | `18555` | Local PLaMo server, started on demand and shared with the Claude mod. |
+
+Up to eight translations run at once, a new prompt's first: batching them is what keeps an Apple
+Silicon GPU busy, and `scripts/bench-plamo-translate.py --concurrency 8` measures about 1.2x the
+tokens/s of four.
 
 ## Check
 

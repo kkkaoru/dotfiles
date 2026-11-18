@@ -6,7 +6,6 @@ import type {
   InputEventResult,
   MarkdownTransformContext,
   SessionEntry,
-  SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import type { Translator } from "../../claude-plamo-translate/hooks/translate.ts";
 import { translateFast } from "./fast.ts";
@@ -46,9 +45,9 @@ export interface UiSink {
 interface Progress {
   done: number;
   total: number;
-  // Whether the progress line was shown, and whether its timer loop is running.
+  // Whether the footer line is shown, and whether its delayed start is still waiting.
   shown: boolean;
-  looping: boolean;
+  waiting: boolean;
 }
 
 export interface SessionContextLike {
@@ -70,13 +69,12 @@ export interface Runtime {
   progress: Progress;
   ui: UiSink;
   warned: boolean;
-  /** Non-empty on resume, fork, or reload: only these persisted entry IDs may be translated. */
+  /** Set whenever the session opens with persisted history: only these entry IDs may be translated. */
   resumedIds: ReadonlySet<string> | null;
 }
 
-// A translation still running after the first delay reports itself, then once per interval.
+// A translation that finishes sooner says nothing at all.
 const PROGRESS_DELAY_MS = 2000;
-const PROGRESS_INTERVAL_MS = 5000;
 
 // An unref'd timer never keeps pi alive while it waits.
 const realSleep = async (ms: number): Promise<void> => {
@@ -107,7 +105,7 @@ export function createRuntime(
     settings,
     sleep,
     host: null,
-    progress: { done: 0, total: 0, shown: false, looping: false },
+    progress: { done: 0, total: 0, shown: false, waiting: false },
     ui: silent,
     warned: false,
     resumedIds: null,
@@ -146,68 +144,43 @@ function showProgress(runtime: Runtime): void {
 }
 
 function resetProgress(runtime: Runtime): void {
-  // `looping` stays set: its timer exits the run itself, so a new run reuses it.
-  runtime.progress = { ...runtime.progress, done: 0, total: 0, shown: false };
-  runtime.ui.setStatus(STATUS_KEY, undefined);
-}
-
-// The progress line is pi's chat status line: notifying again rewrites the same line.
-function showToast(runtime: Runtime): void {
-  runtime.progress.shown = true;
-  runtime.ui.notify(statusText(runtime.progress.done, runtime.progress.total));
-}
-
-function clearToast(runtime: Runtime): void {
-  if (!runtime.progress.shown) {
-    return;
+  const { shown } = runtime.progress;
+  runtime.progress = { done: 0, total: 0, shown: false, waiting: false };
+  if (shown) {
+    runtime.ui.setStatus(STATUS_KEY, undefined);
   }
-  runtime.progress.shown = false;
-  runtime.ui.notify("");
 }
 
-// Recursion, as the Claude mod waits: one report per interval until the run ends.
-async function reportWhileRunning(runtime: Runtime): Promise<void> {
-  if (runtime.progress.total === 0) {
-    runtime.progress.looping = false;
-    clearToast(runtime);
-    return;
-  }
-  showToast(runtime);
-  await runtime.sleep(PROGRESS_INTERVAL_MS);
-  return reportWhileRunning(runtime);
-}
-
-async function progressLoop(runtime: Runtime): Promise<void> {
+// The footer is the only place a translation shows itself, and only once it is slow.
+async function showLater(runtime: Runtime): Promise<void> {
   await runtime.sleep(PROGRESS_DELAY_MS);
-  return reportWhileRunning(runtime);
-}
-
-function watchProgress(runtime: Runtime): void {
-  if (runtime.progress.looping) {
+  runtime.progress.waiting = false;
+  if (runtime.progress.total === 0) {
     return;
   }
-  runtime.progress.looping = true;
-  progressLoop(runtime).catch((error: unknown) => {
-    warnOnce(runtime, `plamo-translate: showing progress failed: ${errorMessage(error)}`);
-  });
+  runtime.progress.shown = true;
+  showProgress(runtime);
 }
 
 function begin(runtime: Runtime): void {
   runtime.progress.total += 1;
-  showProgress(runtime);
-  watchProgress(runtime);
+  if (runtime.progress.shown || runtime.progress.waiting) {
+    return;
+  }
+  runtime.progress.waiting = true;
+  showLater(runtime).catch((error: unknown) => {
+    warnOnce(runtime, `plamo-translate: showing progress failed: ${errorMessage(error)}`);
+  });
 }
 
 function noteDone(runtime: Runtime): void {
   runtime.progress.done += 1;
   if (runtime.progress.done >= runtime.progress.total) {
-    clearToast(runtime);
     resetProgress(runtime);
     return;
   }
-  showProgress(runtime);
   if (runtime.progress.shown) {
-    showToast(runtime);
+    showProgress(runtime);
   }
 }
 
@@ -301,7 +274,7 @@ export function displayOf(
   if (ready !== undefined) {
     return ready;
   }
-  // On resume, fork, or reload, older and long persisted entries stay untranslated to spare PLaMo.
+  // Persisted history (startup, resume, fork, reload) is only partly translated to spare PLaMo.
   if (
     runtime.resumedIds !== null &&
     context.messageId !== undefined &&
@@ -355,11 +328,9 @@ export function scheduleReply(
   });
 }
 
-function recentResumedIds(
-  reason: SessionStartEvent["reason"] | undefined,
-  ctx: SessionContextLike,
-): ReadonlySet<string> | null {
-  if ((reason !== "resume" && reason !== "fork" && reason !== "reload") || !ctx.sessionManager) {
+// Every session start renders the persisted transcript, so the whole history would translate.
+function recentResumedIds(ctx: SessionContextLike): ReadonlySet<string> | null {
+  if (!ctx.sessionManager) {
     return null;
   }
   const ids = ctx.sessionManager
@@ -373,13 +344,9 @@ function recentResumedIds(
   return new Set(ids);
 }
 
-export function startSession(
-  runtime: Runtime,
-  ctx: SessionContextLike,
-  reason?: SessionStartEvent["reason"],
-): void {
+export function startSession(runtime: Runtime, ctx: SessionContextLike): void {
   runtime.ui = ctx.ui;
-  runtime.resumedIds = recentResumedIds(reason, ctx);
+  runtime.resumedIds = recentResumedIds(ctx);
   ctx.ui.setWidget(WIDGET_KEY, (tui) => holdHost(runtime, tui), { placement: "belowEditor" });
   runtime.server.ensure().catch((error: unknown) => {
     warnOnce(runtime, `plamo-translate: warming the server failed: ${errorMessage(error)}`);

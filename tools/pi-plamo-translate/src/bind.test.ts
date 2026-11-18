@@ -1,16 +1,12 @@
 // This TypeScript file is executed with Bun.
-import type {
-  InputEvent,
-  MarkdownTransformContext,
-  SessionStartEvent,
-} from "@earendil-works/pi-coding-agent";
+import type { InputEvent, MarkdownTransformContext } from "@earendil-works/pi-coding-agent";
 import { expect, test } from "vitest";
 import { bindPlamo, type PlamoHooks } from "./bind.ts";
 import { createRuntime, type SessionContextLike, type UiSink } from "./runtime.ts";
 import type { Server } from "./server.ts";
 
 interface Stored {
-  session: ((ctx: SessionContextLike, reason?: SessionStartEvent["reason"]) => void) | undefined;
+  session: ((ctx: SessionContextLike) => void) | undefined;
   input: ((event: InputEvent, ctx: { readonly ui: UiSink }) => Promise<unknown>) | undefined;
   rule: ((sections: Record<string, string>) => void) | undefined;
   reply: ((message: { readonly role: string }) => void) | undefined;
@@ -69,7 +65,7 @@ test("the hooks translate prompts and leave a stream in English", async () => {
   if (captured.stored.session === undefined || captured.stored.input === undefined) {
     throw new Error("hooks were not registered");
   }
-  captured.stored.session({ ui: sink }, "startup");
+  captured.stored.session({ ui: sink });
   expect(
     await captured.stored.input(
       { type: "input", text: "タブを追加して", source: "interactive" },

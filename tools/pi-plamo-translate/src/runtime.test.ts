@@ -106,7 +106,7 @@ test("a Japanese prompt becomes English and is remembered for display", async ()
     sink,
   );
   expect(result).toStrictEqual({ action: "transform", text: "Add a tab" });
-  expect(sink.status).toStrictEqual(["PLaMo: 翻訳中… 0/1", undefined]);
+  expect(sink.status).toStrictEqual([]);
   expect(
     displayOf(
       runtime(async () => "Add a tab"),
@@ -223,22 +223,6 @@ test("a second request for the same text does not translate again", async () => 
   expect(box.ready.get("Add a tab")).toBe("JA:Add a tab");
 });
 
-test("two translations keep the status until both finish", async () => {
-  const sink = ui();
-  const box = runtime(async (text) => `JA:${text}`);
-  box.ui = sink;
-  schedule(box, "one", "ja");
-  schedule(box, "two", "ja");
-  await box.pending.get("one");
-  await box.pending.get("two");
-  expect(sink.status).toStrictEqual([
-    "PLaMo: 翻訳中… 0/1",
-    "PLaMo: 翻訳中… 0/2",
-    "PLaMo: 翻訳中… 1/2",
-    undefined,
-  ]);
-});
-
 test("a settled translation redraws the transcript", async () => {
   const host = {
     invalidated: 0,
@@ -258,7 +242,7 @@ test("a settled translation redraws the transcript", async () => {
   expect(host.rendered).toBe(1);
 });
 
-test("a slow translation reports progress on one chat line", async () => {
+test("a slow translation shows progress in the footer only", async () => {
   const sink = ui();
   const clock = manualClock();
   const deferred: { release: (value: string) => void } = { release: () => undefined };
@@ -275,13 +259,15 @@ test("a slow translation reports progress on one chat line", async () => {
   box.ui = sink;
   schedule(box, "Add a tab", "ja");
   await clock.step();
-  expect(sink.notes).toStrictEqual(["PLaMo: 翻訳中… 0/1"]);
+  expect(sink.status).toStrictEqual(["PLaMo: 翻訳中… 0/1"]);
+  expect(sink.notes).toStrictEqual([]);
+  expect(clock.waits).toStrictEqual([2000]);
   deferred.release("JA:Add a tab");
   await box.pending.get("Add a tab");
-  expect(sink.notes).toStrictEqual(["PLaMo: 翻訳中… 0/1", ""]);
+  expect(sink.status).toStrictEqual(["PLaMo: 翻訳中… 0/1", undefined]);
 });
 
-test("a translation that finishes in time shows no progress line", async () => {
+test("a translation that finishes in time shows no progress at all", async () => {
   const sink = ui();
   const clock = manualClock();
   const box = createRuntime(
@@ -293,80 +279,34 @@ test("a translation that finishes in time shows no progress line", async () => {
   schedule(box, "Add a tab", "ja");
   await box.pending.get("Add a tab");
   await clock.step();
-  expect(sink.notes).toStrictEqual([]);
+  expect(sink.status).toStrictEqual([]);
 });
 
-test("a second slow translation reuses the progress line", async () => {
+test("the footer line stays until both translations finish", async () => {
   const sink = ui();
   const clock = manualClock();
-  const finished: string[] = [];
+  const releases: (() => void)[] = [];
   const box = createRuntime(
     settings,
     server(
       async (text) =>
         new Promise<string>((resolve) => {
-          finished.push(text);
-          if (finished.length === 2) {
-            resolve(`JA:${text}`);
-          }
+          releases.push(() => resolve(text));
         }),
-    ),
-    clock.sleep,
-  );
-  box.ui = sink;
-  schedule(box, "one", "ja");
-  await clock.step();
-  expect(sink.notes).toStrictEqual(["PLaMo: 翻訳中… 0/1"]);
-  expect(box.progress.looping).toBe(true);
-  expect(clock.waits).toStrictEqual([2000, 5000]);
-});
-
-test("progress keeps reporting while a run continues and stops when it ends", async () => {
-  const sink = ui();
-  const clock = manualClock();
-  const box = createRuntime(
-    settings,
-    server(
-      async () =>
-        new Promise<string>(() => {
-          // Never finishes on its own.
-        }),
-    ),
-    clock.sleep,
-  );
-  box.ui = sink;
-  schedule(box, "one", "ja");
-  await clock.step();
-  await clock.step();
-  expect(sink.notes).toStrictEqual(["PLaMo: 翻訳中… 0/1", "PLaMo: 翻訳中… 0/1"]);
-  box.progress = { ...box.progress, done: 1, total: 0 };
-  await clock.step();
-  expect(sink.notes).toStrictEqual(["PLaMo: 翻訳中… 0/1", "PLaMo: 翻訳中… 0/1", ""]);
-  expect(box.progress.looping).toBe(false);
-});
-
-test("progress updates in place when one of two requests finishes", async () => {
-  const sink = ui();
-  const clock = manualClock();
-  const box = createRuntime(
-    settings,
-    server(async (text) =>
-      text === "one"
-        ? `JA:${text}`
-        : new Promise<string>(() => {
-            // Never finishes.
-          }),
     ),
     clock.sleep,
   );
   box.ui = sink;
   schedule(box, "one", "ja");
   schedule(box, "two", "ja");
-  await box.pending.get("one");
   await clock.step();
-  expect(sink.notes).toStrictEqual(["PLaMo: 翻訳中… 1/2"]);
+  expect(sink.status).toStrictEqual(["PLaMo: 翻訳中… 0/2"]);
+  releases[0]?.();
   await box.pending.get("one");
-  expect(box.progress.shown).toBe(true);
+  expect(sink.status).toStrictEqual(["PLaMo: 翻訳中… 0/2", "PLaMo: 翻訳中… 1/2"]);
+  releases[1]?.();
+  await box.pending.get("two");
+  expect(sink.status).toStrictEqual(["PLaMo: 翻訳中… 0/2", "PLaMo: 翻訳中… 1/2", undefined]);
 });
 
 test("a failure while showing progress is reported once", async () => {

@@ -48,50 +48,43 @@ function makeMessageEntry(index: number): SessionEntry {
 
 const neverResolve = (): Promise<void> => new Promise<void>(() => {});
 
-test.each(["resume", "fork", "reload"] as const)(
-  "on %s, only the most recent persisted entries are scheduled for translation",
-  (reason) => {
-    const entries = Array.from({ length: 8 }, (_unused, index) => makeMessageEntry(index));
-    const server: Server = {
-      complete: async (text) => `JA:${text}`,
-      ensure: async () => true,
-    };
-    const box = createRuntime(settings, server, neverResolve);
-    startSession(
-      box,
-      {
-        ui: ui(),
-        sessionManager: { buildContextEntries: () => entries },
-      },
-      reason,
-    );
-    // Only the last two entries (m7, m8) translate; older ones stay as written.
-    expect(displayOf(box, "Older reply 1", { ...shown, messageId: "m1" })).toBe("Older reply 1");
-    expect(displayOf(box, "Older reply 6", { ...shown, messageId: "m6" })).toBe("Older reply 6");
-    expect(box.pending.size).toBe(0);
+test("a session that opens with history only translates the most recent persisted entries", () => {
+  const entries = Array.from({ length: 8 }, (_unused, index) => makeMessageEntry(index));
+  const server: Server = {
+    complete: async (text) => `JA:${text}`,
+    ensure: async () => true,
+  };
+  const box = createRuntime(settings, server, neverResolve);
+  startSession(box, {
+    ui: ui(),
+    sessionManager: { buildContextEntries: () => entries },
+  });
+  // Only the last two entries (m7, m8) translate; older ones stay as written.
+  expect(displayOf(box, "Older reply 1", { ...shown, messageId: "m1" })).toBe("Older reply 1");
+  expect(displayOf(box, "Older reply 6", { ...shown, messageId: "m6" })).toBe("Older reply 6");
+  expect(box.pending.size).toBe(0);
 
-    expect(displayOf(box, "Recent reply", { ...shown, messageId: "m8" })).toBe("Recent reply");
-    expect(box.pending.has("Recent reply")).toBe(true);
+  expect(displayOf(box, "Recent reply", { ...shown, messageId: "m8" })).toBe("Recent reply");
+  expect(box.pending.has("Recent reply")).toBe(true);
 
-    expect(displayOf(box, "Live reply", shown)).toBe("Live reply");
-    expect(box.pending.has("Live reply")).toBe(true);
-  },
-);
+  expect(displayOf(box, "Live reply", shown)).toBe("Live reply");
+  expect(box.pending.has("Live reply")).toBe(true);
+});
 
-test("on reload, a long persisted entry stays untranslated", () => {
+test("a long persisted entry stays untranslated", () => {
   const entries = [makeMessageEntry(0)];
   const server: Server = {
     complete: async (text) => `JA:${text}`,
     ensure: async () => true,
   };
   const box = createRuntime(settings, server, neverResolve);
-  startSession(box, { ui: ui(), sessionManager: { buildContextEntries: () => entries } }, "reload");
+  startSession(box, { ui: ui(), sessionManager: { buildContextEntries: () => entries } });
   const long = Array.from({ length: 13 }, (_unused, index) => `Line ${String(index)}`).join("\n");
   expect(displayOf(box, long, { ...shown, messageId: "m1" })).toBe(long);
   expect(box.pending.size).toBe(0);
 });
 
-test("on compaction resume, the compaction summary entry is included in the recent window", () => {
+test("a compaction summary entry is included in the recent window", () => {
   const entries: SessionEntry[] = [
     {
       type: "compaction",
@@ -108,7 +101,7 @@ test("on compaction resume, the compaction summary entry is included in the rece
     ensure: async () => true,
   };
   const box = createRuntime(settings, server, neverResolve);
-  startSession(box, { ui: ui(), sessionManager: { buildContextEntries: () => entries } }, "resume");
+  startSession(box, { ui: ui(), sessionManager: { buildContextEntries: () => entries } });
   expect(displayOf(box, "Compacted earlier turns", { ...shown, messageId: "c1" })).toBe(
     "Compacted earlier turns",
   );
