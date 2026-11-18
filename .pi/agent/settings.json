@@ -49,6 +49,10 @@
     "progressTextOnEffortChange": true,
     "rampStartRatio": 0.6
   },
+  "pi-plamo-translate": {
+    "replyLanguage": "ja",
+    "promptLanguage": "en"
+  },
   "skills": [
     "!ctx-agent-history-search"
   ],
