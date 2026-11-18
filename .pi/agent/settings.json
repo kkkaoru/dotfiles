@@ -10,6 +10,14 @@
     "reserveTokens": 65536,
     "keepRecentTokens": 12000,
     "modelOverrides": {
+      "cloudflare-ai-gateway/workers-ai/@cf/deepseek-ai/deepseek-v4.1-flash-1017": {
+        "reserveTokens": 131072,
+        "keepRecentTokens": 12000
+      },
+      "cloudflare-workers-ai/@cf/deepseek-ai/deepseek-v4.1-flash-1017": {
+        "reserveTokens": 131072,
+        "keepRecentTokens": 12000
+      },
       "strata/strata": {
         "reserveTokens": 12288,
         "keepRecentTokens": 8000
