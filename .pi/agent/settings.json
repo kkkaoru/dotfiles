@@ -34,7 +34,9 @@
   },
   "retry": {
     "enabled": true,
-    "maxRetries": 6
+    "maxRetries": 10,
+    "baseDelayMs": 4000,
+    "maxAgentDelayMs": 60000
   },
   "pi-effort-manager": {
     "dynamicDefault": true,
