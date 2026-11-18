@@ -457,6 +457,7 @@
     "cloudflare-workers-ai": {
       "modelOverrides": {
         "@cf/deepseek-ai/deepseek-v4.1-flash-1017": {
+          "contextWindow": 262144,
           "inputLimits": {
             "maxRequestBytes": 10000000,
             "images": {
@@ -476,6 +477,7 @@
     "cloudflare-ai-gateway": {
       "modelOverrides": {
         "workers-ai/@cf/deepseek-ai/deepseek-v4.1-flash-1017": {
+          "contextWindow": 262144,
           "inputLimits": {
             "maxRequestBytes": 10000000,
             "images": {
