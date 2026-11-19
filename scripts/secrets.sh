@@ -5,8 +5,10 @@
 #   ./scripts/secrets.sh encrypt <name>    read JSON on stdin, write secrets/<name>.age
 #   ./scripts/secrets.sh decrypt <name>    print the JSON; cached SECRETS_CACHE_SECONDS (3600)
 #   ./scripts/secrets.sh identity          report where the identity is read from
-# The identity comes from AGE_IDENTITY (a path), else 1Password (AGE_OP_REF), else the keychain
-# (AGE_KEYCHAIN_SERVICE), else ~/.config/age/keys.txt.
+# The identity comes from AGE_IDENTITY (a path), else the macOS keychain (AGE_KEYCHAIN_SERVICE),
+# else 1Password (AGE_OP_REF), else ~/.config/age/keys.txt. The keychain is read before 1Password
+# because it never asks for authorization: a poller such as scripts/gateway-cost.sh would otherwise
+# show a 1Password prompt whenever its cached plaintext expired.
 
 set -euo pipefail
 
@@ -42,27 +44,33 @@ keychain_ready() {
     security find-generic-password -s "${KEYCHAIN_SERVICE}" -w >/dev/null 2>&1
 }
 
-# Prints a path holding the identity, taking it from the first store that has it. 1Password and the
-# keychain hand age a private temporary copy; the trap above removes it.
-resolve_identity() {
+# Prints a path holding the identity from one store, or fails. The keychain and 1Password hand age a
+# private temporary copy; the trap above removes it. `keychain` comes first because reading it never
+# asks for authorization, while `op read` shows a 1Password prompt every time the cache is cold.
+identity_from() {
+  TEMP_IDENTITY="$(mktemp)"
+  chmod 600 "${TEMP_IDENTITY}"
+  case "${1}" in
+    keychain)
+      security find-generic-password -s "${KEYCHAIN_SERVICE}" -w >"${TEMP_IDENTITY}" 2>/dev/null || return 1
+      ;;
+    op)
+      command -v op >/dev/null 2>&1 && op read "${OP_REF}" >"${TEMP_IDENTITY}" 2>/dev/null || return 1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+  printf '%s\n' "${TEMP_IDENTITY}"
+}
+
+# Prints the path of the file the user named, if it exists.
+identity_file() {
   if [ -n "${AGE_IDENTITY:-}" ] && [ -f "${AGE_IDENTITY}" ]; then
     printf '%s\n' "${AGE_IDENTITY}"
     return 0
   fi
-  TEMP_IDENTITY="$(mktemp)"
-  chmod 600 "${TEMP_IDENTITY}"
-  if command -v op >/dev/null 2>&1 && op read "${OP_REF}" >"${TEMP_IDENTITY}" 2>/dev/null; then
-    printf '%s\n' "${TEMP_IDENTITY}"
-    return 0
-  fi
-  if security find-generic-password -s "${KEYCHAIN_SERVICE}" -w >"${TEMP_IDENTITY}" 2>/dev/null; then
-    printf '%s\n' "${TEMP_IDENTITY}"
-    return 0
-  fi
-  rm -f "${TEMP_IDENTITY}"
-  TEMP_IDENTITY=""
-  [ -f "${IDENTITY_FILE}" ] || return 1
-  printf '%s\n' "${IDENTITY_FILE}"
+  [ -f "${IDENTITY_FILE}" ] && printf '%s\n' "${IDENTITY_FILE}"
 }
 
 # The identity is useless in a backup nobody restores, so it also lives where your Macs already sync.
@@ -123,11 +131,25 @@ case "${1:-}" in
       cat "${cache}"
       exit 0
     fi
-    path="$(resolve_identity)" || {
-      echo "no identity: run secrets.sh keygen, or copy ~/.config/age/keys.txt here" >&2
+    plaintext=""
+    # The first store that opens this file wins: a stale keychain copy of a rotated identity falls
+    # through to 1Password instead of failing, and a Mac with no 1Password never calls it.
+    for store in file keychain op; do
+      case "${store}" in
+        file) path="$(identity_file)" || continue ;;
+        *) path="$(identity_from "${store}")" || continue ;;
+      esac
+      if plaintext="$(age -d -i "${path}" "${DIR}/${name}.age" 2>/dev/null)"; then
+        break
+      fi
+      plaintext=""
+      rm -f "${TEMP_IDENTITY}"
+      TEMP_IDENTITY=""
+    done
+    [ -n "${plaintext}" ] || {
+      echo "cannot decrypt ${DIR}/${name}.age: no store holds a matching identity" >&2
       exit 1
     }
-    plaintext="$(age -d -i "${path}" "${DIR}/${name}.age")"
     mkdir -p "${CACHE_DIR}"
     chmod 700 "${CACHE_DIR}"
     (umask 077; printf '%s\n' "${plaintext}" > "${cache}")
@@ -136,12 +158,12 @@ case "${1:-}" in
   identity)
     if [ -n "${AGE_IDENTITY:-}" ] && [ -f "${AGE_IDENTITY}" ]; then
       echo "file ${AGE_IDENTITY}"
-    elif command -v op >/dev/null 2>&1 && op read "${OP_REF}" >/dev/null 2>&1; then
-      echo "1Password ${OP_REF}"
-    elif keychain_ready; then
-      echo "keychain ${KEYCHAIN_SERVICE}"
     elif [ -f "${IDENTITY_FILE}" ]; then
       echo "file ${IDENTITY_FILE}"
+    elif keychain_ready; then
+      echo "keychain ${KEYCHAIN_SERVICE}"
+    elif command -v op >/dev/null 2>&1; then
+      echo "1Password ${OP_REF} (no local identity on this Mac)"
     else
       echo none
       exit 1

@@ -35,13 +35,17 @@ public key in `secrets/recipients.txt`. The extension reads `CLOUDFLARE_ACCOUNT_
 otherwise runs `scripts/secrets.sh decrypt gateway-cost` once per session. The same secret may hold
 a scoped `token`; see below.
 
-That script takes the age identity from the first store that has it, so no file has to be copied
-between machines:
+That script tries the stores in this order and keeps the first identity that opens the file, so no
+file has to be copied between machines:
 
 1. `AGE_IDENTITY`, a path, when it is set
-2. 1Password, `AGE_OP_REF` (default `op://Personal/dotfiles-age-identity/notesPlain`)
+2. `~/.config/age/keys.txt`, when it exists
 3. the macOS keychain, `AGE_KEYCHAIN_SERVICE` (default `dotfiles-age-identity`)
-4. `~/.config/age/keys.txt`
+4. 1Password, `AGE_OP_REF` (default `op://Personal/dotfiles-age-identity/notesPlain`)
+
+The stores that answer without asking come first: `op read` shows a 1Password authorization every
+time it runs, so it is the last resort, not the first. A stale identity in an earlier store falls
+through to the next one instead of failing.
 
 On a Mac where neither store has it yet:
 

@@ -9,9 +9,10 @@ integrations. These instructions apply to agents working here, including pi and 
   Review changes before running: this updates the live development environment.
 - `bun install` / `bun add <package>` / `bunx <package>` — Use Bun for package management.
 - `./scripts/secrets.sh keygen|encrypt|decrypt|identity <name>` — Keep a secret in Git only as
-  `secrets/<name>.age` (age). The age identity lives in 1Password (`AGE_OP_REF`), else the macOS
-  keychain (`AGE_KEYCHAIN_SERVICE`), else `~/.config/age/keys.txt`, so every Mac of the owner's
-  decrypts it without copying a file; `secrets/recipients.txt` lists their public keys. Re-encrypt
+  `secrets/<name>.age` (age). The age identity lives in `~/.config/age/keys.txt`, the macOS
+  keychain (`AGE_KEYCHAIN_SERVICE`) or 1Password (`AGE_OP_REF`), tried in that order so a decrypt
+  never asks 1Password unless the local stores cannot open the file; every Mac of the owner's
+  decrypts without copying a file, and `secrets/recipients.txt` lists their public keys. Re-encrypt
   after adding a key so every Mac can read every file.
 - `./scripts/setup-executor.sh` — Register shared Executor integrations.
   `--approve-registration` explicitly permits registration and connection creation only.
