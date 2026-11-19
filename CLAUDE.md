@@ -94,8 +94,9 @@ integrations. These instructions apply to agents working here, including pi and 
 - `tools/pi-*/` — Local pi extensions and providers, including persistent goals,
   loops, detached tmux execution, effort management, oMLX lifecycle management, trimming requests
   to a model's declared image caps (`pi-image-budget`), the AI Gateway's own daily cost in the
-  footer (`pi-gateway-cost`), and the `x-session-affinity` header that keeps a session's Workers AI
-  prompt prefix cached (`pi-cf-affinity`). They are linked by `create-symlinks.sh`.
+  footer (`pi-gateway-cost`), the `x-session-affinity` header that keeps a session's Workers AI
+  prompt prefix cached (`pi-cf-affinity`), and the two-line footer that replaces pi's own row and
+  ends with the session id (`pi-compact-footer`). They are linked by `create-symlinks.sh`.
 - `tools/pi-my-antigravity/` — Subscription-backed Antigravity (Cloud Code Assist) provider that
   mirrors the official `agy` CLI wire format (`bun run check`). Sends the system prompt as the
   leading user turn because the backend 429s third-party prompts in `systemInstruction`.
