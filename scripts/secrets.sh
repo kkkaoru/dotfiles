@@ -3,7 +3,7 @@
 # macOS keychain so every Mac of yours can decrypt it without copying a file.
 #   ./scripts/secrets.sh keygen            create the identity (if missing), store it, print its key
 #   ./scripts/secrets.sh encrypt <name>    read JSON on stdin, write secrets/<name>.age
-#   ./scripts/secrets.sh decrypt <name>    print the decrypted JSON
+#   ./scripts/secrets.sh decrypt <name>    print the JSON; cached SECRETS_CACHE_SECONDS (3600)
 #   ./scripts/secrets.sh identity          report where the identity is read from
 # The identity comes from AGE_IDENTITY (a path), else 1Password (AGE_OP_REF), else the keychain
 # (AGE_KEYCHAIN_SERVICE), else ~/.config/age/keys.txt.
@@ -14,6 +14,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIR="${ROOT}/secrets"
 RECIPIENTS="${DIR}/recipients.txt"
 IDENTITY_FILE="${AGE_IDENTITY:-${HOME}/.config/age/keys.txt}"
+# Every decrypt that reaches 1Password asks for an authorization, so the answer is kept for a while:
+# a poller such as scripts/gateway-cost.sh runs every five minutes and would ask each time.
+CACHE_DIR="${XDG_CACHE_HOME:-${HOME}/.cache}/dotfiles-secrets"
+CACHE_SECONDS="${SECRETS_CACHE_SECONDS:-3600}"
 KEYCHAIN_SERVICE="${AGE_KEYCHAIN_SERVICE:-dotfiles-age-identity}"
 OP_REF="${AGE_OP_REF:-op://Personal/dotfiles-age-identity/notesPlain}"
 OP_VAULT="${AGE_OP_VAULT:-Personal}"
@@ -29,7 +33,8 @@ require() {
 }
 
 op_ready() {
-  command -v op >/dev/null 2>&1 && op whoami >/dev/null 2>&1
+  # `op whoami` fails under desktop-app biometric integration without `op signin`, while `op vault list` succeeds.
+  command -v op >/dev/null 2>&1 && { op whoami >/dev/null 2>&1 || op vault list >/dev/null 2>&1; }
 }
 
 keychain_ready() {
@@ -46,7 +51,7 @@ resolve_identity() {
   fi
   TEMP_IDENTITY="$(mktemp)"
   chmod 600 "${TEMP_IDENTITY}"
-  if op_ready && op read "${OP_REF}" >"${TEMP_IDENTITY}" 2>/dev/null; then
+  if command -v op >/dev/null 2>&1 && op read "${OP_REF}" >"${TEMP_IDENTITY}" 2>/dev/null; then
     printf '%s\n' "${TEMP_IDENTITY}"
     return 0
   fi
@@ -112,16 +117,26 @@ case "${1:-}" in
     require age
     name="${2:?usage: secrets.sh decrypt <name>}"
     [ -f "${DIR}/${name}.age" ] || { echo "missing: ${DIR}/${name}.age" >&2; exit 1; }
+    cache="${CACHE_DIR}/${name}.json"
+    if [ -f "${cache}" ] && [ ! "${DIR}/${name}.age" -nt "${cache}" ] &&
+      [ -z "$(find "${cache}" -mmin "+$((CACHE_SECONDS / 60))" 2>/dev/null)" ]; then
+      cat "${cache}"
+      exit 0
+    fi
     path="$(resolve_identity)" || {
       echo "no identity: run secrets.sh keygen, or copy ~/.config/age/keys.txt here" >&2
       exit 1
     }
-    age -d -i "${path}" "${DIR}/${name}.age"
+    plaintext="$(age -d -i "${path}" "${DIR}/${name}.age")"
+    mkdir -p "${CACHE_DIR}"
+    chmod 700 "${CACHE_DIR}"
+    (umask 077; printf '%s\n' "${plaintext}" > "${cache}")
+    printf '%s\n' "${plaintext}"
     ;;
   identity)
     if [ -n "${AGE_IDENTITY:-}" ] && [ -f "${AGE_IDENTITY}" ]; then
       echo "file ${AGE_IDENTITY}"
-    elif op_ready && op read "${OP_REF}" >/dev/null 2>&1; then
+    elif command -v op >/dev/null 2>&1 && op read "${OP_REF}" >/dev/null 2>&1; then
       echo "1Password ${OP_REF}"
     elif keychain_ready; then
       echo "keychain ${KEYCHAIN_SERVICE}"
