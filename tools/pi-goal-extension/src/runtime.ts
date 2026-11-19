@@ -58,7 +58,7 @@ const CONTROL_TOOLS: ReadonlySet<string> = new Set([
   "loop_complete",
 ]);
 const CONTINUATION: string =
-  "Continue the explicitly established goal. Use current artifacts and external evidence. Finish immediately actionable work. Call update_goal with a completion audit only when verified complete. If the same genuine blocker persists, report the same concise reason once per turn. Use goal_wait for a justified later check. An observation timeout is not completion: inspect the existing live job, never duplicate it. Existing loop tools remain responsible for loop pacing.";
+  "Continue the goal. Verify against current artifacts and external evidence, and finish immediately actionable work. Call update_goal only when verified complete; repeat a persistent blocker as one concise reason per turn. Use goal_wait for a later check: an observation timeout is not completion, so inspect the live job instead of duplicating it. Loop tools keep loop pacing.";
 
 export class GoalRuntime {
   readonly #host: GoalHost;
@@ -197,7 +197,7 @@ export class GoalRuntime {
       const blocking: readonly string[] = this.#blockingTasks(goal);
       if (blocking.length > 0)
         throw new Error(
-          `Inspect owned tmux tasks before claiming goal completion: ${blocking.join(", ")}`,
+          `${String(blocking.length)} owned tmux task(s) still running; wait for their completion notice or stop them before claiming completion.`,
         );
     }
     this.#save(updateGoal({ goal, status, reason, now: Date.now() }));

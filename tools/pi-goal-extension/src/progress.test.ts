@@ -95,7 +95,7 @@ it("waits for owned live tasks and prevents completion while their notification 
   runtime.end(null);
   expect(runtime.state?.noProgressTurns).toBe(0);
   expect(() => runtime.update("complete", "Not yet inspected")).toThrow(
-    "Inspect owned tmux tasks",
+    "owned tmux task(s) still running",
   );
   snapshot.pending = false;
   runtime.update("complete", "Inspected exit status and artifacts");

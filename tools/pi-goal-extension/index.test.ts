@@ -203,9 +203,7 @@ it("summarizes restored ownership in tools and prompts without weakening complet
   activity.start("session");
   await expect(
     h.tool("update_goal", { status: "complete", reason: "Verified" }),
-  ).rejects.toThrow(
-    "Inspect owned tmux tasks before claiming goal completion: pi-tmux-session-511",
-  );
+  ).rejects.toThrow("1 owned tmux task(s) still running");
   activity.stop();
   await expect(
     h.tool("update_goal", { status: "complete", reason: "Verified" }),

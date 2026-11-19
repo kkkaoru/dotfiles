@@ -7,6 +7,7 @@ import {
   type ActivityBus,
   ActivityProvider,
   announceTask,
+  pendingOwnedTasks,
   queryActivity,
   subscribeTasks,
 } from "./activity.ts";
@@ -101,6 +102,16 @@ it("delivers valid launch notices and disposes listeners", () => {
   remove();
   announceTask(events, { sessionId: "session", name: "task-2" });
   expect(listener).toHaveBeenCalledTimes(1);
+});
+it("reports a still-running task once when the goal recorded it twice", () => {
+  const snapshot = {
+    source: "tmux" as const,
+    ownsContinuation: false,
+    pendingDelivery: false,
+    tasks: ["task"],
+  };
+  expect(pendingOwnedTasks(snapshot, ["task", "task"])).toStrictEqual(["task"]);
+  expect(pendingOwnedTasks(snapshot, ["task", "done"])).toStrictEqual(["task"]);
 });
 it.each([null, {}, { sessionId: 1 }, { sessionId: "s", name: 1 }])(
   "ignores malformed launch notice",

@@ -33,7 +33,8 @@ export function pendingOwnedTasks(
   // Older publishers cannot identify pending notices; conservatively wait for owned tasks.
   const aggregatePending =
     snapshot.pendingTasks === undefined && snapshot.pendingDelivery;
-  return owned.filter(
+  // A goal that recorded the same task in several revisions would otherwise report it twice.
+  return [...new Set(owned)].filter(
     (name) =>
       aggregatePending ||
       snapshot.tasks.includes(name) ||

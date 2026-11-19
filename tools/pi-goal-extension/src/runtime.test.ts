@@ -270,7 +270,7 @@ it("tracks only new session-owned jobs and waits without model polling", () => {
   vi.advanceTimersByTime(10000);
   expect(host.send).not.toHaveBeenCalled();
   expect(() => runtime.update("complete", "claimed done")).toThrow(
-    "Inspect owned tmux tasks",
+    "owned tmux task(s) still running",
   );
   tmux.stop();
   vi.advanceTimersByTime(5000);
@@ -307,7 +307,7 @@ it("names the owned task that blocks completion", () => {
   announceTask(host.bus, { sessionId: "session", name: "owned" });
 
   expect(() => runtime.update("complete", "claimed done")).toThrow(
-    "Inspect owned tmux tasks before claiming goal completion: owned",
+    "1 owned tmux task(s) still running",
   );
   tmux.stop();
 });
@@ -324,7 +324,7 @@ it("keeps the aggregate pending signal for publishers without per-task notices",
   announceTask(host.bus, { sessionId: "session", name: "owned" });
 
   expect(() => runtime.update("complete", "claimed done")).toThrow(
-    "Inspect owned tmux tasks",
+    "owned tmux task(s) still running",
   );
   tmux.stop();
 });
