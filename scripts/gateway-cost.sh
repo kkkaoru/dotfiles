@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# Print the AI Gateway's own cost for today, the number its dashboard shows.
+# Print the AI Gateway's own cost for the last 24 hours, the number its dashboard shows.
 #
 # The account id, and a scoped token if the secret holds one, come from the encrypted
 # gateway-cost secret (scripts/secrets.sh), so no credential sits in Git or in an argument.
 # A scoped token with Account Analytics Read never expires and is used first. Wrangler's OAuth
 # token is the fallback, and it expires hourly: a 401 asks wrangler once to renew it.
 set -euo pipefail
+# Herdr.app and other Dock-launched callers get no shell PATH, and age/op live in Homebrew.
+PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
 secret=$(bash "$repo/scripts/secrets.sh" decrypt gateway-cost 2>/dev/null || true)
@@ -22,8 +24,8 @@ token="${CLOUDFLARE_API_TOKEN:-$(field token)}"
 gateway=$(plutil -extract pi-gateway-cost.gateway raw -o - "$HOME/.pi/agent/settings.json" 2>/dev/null || true)
 [ -n "$account" ] && [ -n "$token" ] && [ -n "$gateway" ] || exit 1
 
-# Midnight today in the local zone, as the RFC 3339 UTC time the GraphQL filter wants.
-start=$(date -u -r "$(date -j -f "%H:%M:%S" "00:00:00" +%s)" +%Y-%m-%dT%H:%M:%S.000Z)
+# Rolling last 24 hours in UTC, matching the Cloudflare AI Gateway dashboard's "Last 24 hours" view.
+start=$(date -u -v-24H +%Y-%m-%dT%H:%M:%S.000Z)
 end=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
 query=$(printf '{ viewer { accounts(filter: { accountTag: "%s" }) { aiGatewayRequestsAdaptiveGroups(limit: 1, filter: { gateway: "%s", datetime_geq: "%s", datetime_leq: "%s" }) { count sum { cost } } } } }' \
   "$account" "$gateway" "$start" "$end")
