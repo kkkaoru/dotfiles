@@ -27,7 +27,7 @@ const ENGLISH_ONLY =
   "The user writes in Japanese. Their messages are machine-translated into English before you read them. Read and write English.";
 
 export function statusText(done: number, total: number): string {
-  return `PLaMo: 翻訳中… ${String(done)}/${String(total)}`;
+  return `PLaMo ${String(done)}/${String(total)}`;
 }
 
 export function isCommand(text: string): boolean {

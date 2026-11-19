@@ -263,12 +263,12 @@ test("a slow translation shows progress in the footer only", async () => {
   box.ui = sink;
   schedule(box, "Add a tab", "ja");
   await clock.step();
-  expect(sink.status).toStrictEqual(["PLaMo: 翻訳中… 0/1"]);
+  expect(sink.status).toStrictEqual(["PLaMo 0/1"]);
   expect(sink.notes).toStrictEqual([]);
   expect(clock.waits).toStrictEqual([2000]);
   deferred.release("JA:Add a tab");
   await box.pending.get("Add a tab");
-  expect(sink.status).toStrictEqual(["PLaMo: 翻訳中… 0/1", undefined]);
+  expect(sink.status).toStrictEqual(["PLaMo 0/1", undefined]);
 });
 
 test("a translation that finishes in time shows no progress at all", async () => {
@@ -304,13 +304,13 @@ test("the footer line stays until both translations finish", async () => {
   schedule(box, "one", "ja");
   schedule(box, "two", "ja");
   await clock.step();
-  expect(sink.status).toStrictEqual(["PLaMo: 翻訳中… 0/2"]);
+  expect(sink.status).toStrictEqual(["PLaMo 0/2"]);
   releases[0]?.();
   await box.pending.get("one");
-  expect(sink.status).toStrictEqual(["PLaMo: 翻訳中… 0/2", "PLaMo: 翻訳中… 1/2"]);
+  expect(sink.status).toStrictEqual(["PLaMo 0/2", "PLaMo 1/2"]);
   releases[1]?.();
   await box.pending.get("two");
-  expect(sink.status).toStrictEqual(["PLaMo: 翻訳中… 0/2", "PLaMo: 翻訳中… 1/2", undefined]);
+  expect(sink.status).toStrictEqual(["PLaMo 0/2", "PLaMo 1/2", undefined]);
 });
 
 test("a failure while showing progress is reported once", async () => {

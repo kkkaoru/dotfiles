@@ -130,27 +130,26 @@ describe("footerText", () => {
     "strata-colab": "unknown",
   };
 
-  it("names every endpoint and the one that answers", () => {
-    expect(footerText(states, new Map(), 0)).toBe(
-      "awake: strata-win awake · strata-mac cold · bonsai-mac cold · strata-colab unknown",
+  it("names the endpoints that answer and stays quiet about the cold ones", () => {
+    expect(footerText(states, new Map(), 0)).toBe("awake: win");
+    expect(footerText({ ...states, "bonsai-mac": "awake" }, new Map(), 0)).toBe(
+      "awake: win bonsai",
     );
+    expect(footerText({ ...states, "strata-win": "asleep" }, new Map(), 0)).toBeUndefined();
   });
 
   it("warns that the idle timer is about to stop an awake endpoint", () => {
-    expect(footerText(states, new Map([["strata-win", 0]]), 9 * 60_000)).toBe(
-      "awake: strata-win awake (idle stops it in ~1m) · strata-mac cold · bonsai-mac cold · strata-colab unknown",
-    );
+    expect(footerText(states, new Map([["strata-win", 0]]), 9 * 60_000)).toBe("awake: win ~1m");
+    expect(footerText(states, new Map([["strata-win", 0]]), 11 * 60_000)).toBe("awake: win ~1m");
   });
 
   it("omits endpoints that have not been probed yet", () => {
-    expect(footerText({ "strata-win": "awake" }, new Map(), 0)).toBe("awake: strata-win awake");
+    expect(footerText({ "strata-win": "awake" }, new Map(), 0)).toBe("awake: win");
     expect(footerText({}, new Map(), 0)).toBeUndefined();
   });
 
   it("stays quiet about the idle timer while the endpoint was used recently", () => {
-    expect(footerText(states, new Map([["strata-win", 0]]), 60_000)).toBe(
-      "awake: strata-win awake · strata-mac cold · bonsai-mac cold · strata-colab unknown",
-    );
+    expect(footerText(states, new Map([["strata-win", 0]]), 60_000)).toBe("awake: win");
   });
 });
 
@@ -187,6 +186,13 @@ describe("strataLifecycle", () => {
     );
   });
 
+  it("warns with stdout when the failing start wrote nothing to stderr", async () => {
+    start();
+    exec.mockResolvedValue({ code: 1, stderr: "", stdout: "model not found" });
+    await fire("model_select", { model: { provider: "strata" } });
+    expect(notify).toHaveBeenCalledWith("strata start failed: model not found", "warning");
+  });
+
   it("falls back to the exit code when the failure says nothing", async () => {
     start();
     exec.mockResolvedValue({ code: 3, stderr: "", stdout: "" });
@@ -199,7 +205,7 @@ describe("strataLifecycle", () => {
     await fire("model_select", { model: { provider: "strata-win" } });
     expect(setStatus.mock.calls).toEqual([
       ["strata", "strata-win: starting..."],
-      ["strata", "awake: strata-win awake"],
+      ["strata", "awake: win"],
     ]);
   });
 
@@ -258,10 +264,8 @@ describe("strataLifecycle status", () => {
     start();
     await fire("session_start", {});
     expect(exec).toHaveBeenCalledWith(PROBE, [], { timeout: 40_000 });
-    expect(setStatus).toHaveBeenCalledWith(
-      "strata",
-      "awake: strata-win cold · strata-mac cold · bonsai-mac cold · strata-colab unknown",
-    );
+    // Every endpoint is cold, which is the normal state: the footer says nothing.
+    expect(setStatus).toHaveBeenCalledWith("strata", undefined);
   });
 
   it("says when an endpoint went cold between polls", async () => {

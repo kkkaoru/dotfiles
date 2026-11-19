@@ -63,14 +63,17 @@ const ENSURE_BY_PROVIDER: Readonly<Record<string, string>> = {
 };
 
 /** Endpoints `strata-awake` reports on, in footer order. */
-export const WATCHED: readonly string[] = [
-  "strata-win",
-  "strata-mac",
-  "bonsai-mac",
-  "strata-colab",
-];
+export const WATCHED = ["strata-win", "strata-mac", "bonsai-mac", "strata-colab"] as const;
 
 export type AwakeState = "awake" | "asleep" | "unknown";
+
+/** The name the footer uses, which has to fit beside the other extensions' statuses. */
+const SHORT: Readonly<Record<(typeof WATCHED)[number], string>> = {
+  "strata-win": "win",
+  "strata-mac": "mac",
+  "bonsai-mac": "bonsai",
+  "strata-colab": "colab",
+};
 
 /** The ensure script that must run before a model of this provider can answer, if any. */
 export function ensureScriptFor(provider: string | undefined): string | undefined {
@@ -109,21 +112,16 @@ export function parseAwake(stdout: string): Readonly<Record<string, AwakeState>>
 }
 
 function describe(
-  provider: string,
-  state: AwakeState,
+  provider: (typeof WATCHED)[number],
   last: number | undefined,
   now: number,
 ): string {
-  if (state !== "awake") {
-    return `${provider} ${state === "asleep" ? "cold" : "unknown"}`;
-  }
+  const name = SHORT[provider];
   if (last === undefined) {
-    return `${provider} awake`;
+    return name;
   }
   const left = IDLE_STOP_MS - (now - last);
-  return left <= STOPS_SOON_MS
-    ? `${provider} awake (idle stops it in ~${Math.ceil(left / 60_000)}m)`
-    : `${provider} awake`;
+  return left <= STOPS_SOON_MS ? `${name} ~${Math.max(1, Math.ceil(left / 60_000))}m` : name;
 }
 
 /** Last stderr line of a failed start, so the reason reaches the UI. */
@@ -132,20 +130,17 @@ function failureText(result: ExecResultLike): string {
   return `strata start failed: ${detail || `exit ${result.code}`}`;
 }
 
-/** One footer line: which endpoints answer now, and which the idle timer is about to stop. */
+/** One footer line: which endpoints answer now, and which the idle timer is about to stop. Only
+ *  those: a cold endpoint is the normal state and would cost the line room the awake ones need. */
 export function footerText(
   states: Readonly<Record<string, AwakeState>>,
   lastUsed: ReadonlyMap<string, number>,
   now: number,
 ): string | undefined {
-  const parts = WATCHED.flatMap((provider) => {
-    const state = states[provider];
-    if (state === undefined) {
-      return [];
-    }
-    return [describe(provider, state, lastUsed.get(provider), now)];
-  });
-  return parts.length === 0 ? undefined : `awake: ${parts.join(" · ")}`;
+  const parts = WATCHED.flatMap((provider) =>
+    states[provider] === "awake" ? [describe(provider, lastUsed.get(provider), now)] : [],
+  );
+  return parts.length === 0 ? undefined : `awake: ${parts.join(" ")}`;
 }
 
 export default function strataLifecycle(host: StrataHost): void {

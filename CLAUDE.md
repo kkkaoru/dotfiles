@@ -65,8 +65,8 @@ integrations. These instructions apply to agents working here, including pi and 
 - `./scripts/strata-awake.sh` — Print one line per remote endpoint (`strata-win`, `strata-mac`,
   `bonsai-mac`, `strata-colab`): `awake`, `asleep` (Cloudflare 502 or no answer) or `unknown`
   (no colab URL yet). Read-only; it never starts a server. `tools/pi-strata-lifecycle` runs it at
-  session start and every minute to keep that state in the pi footer, and warns when an endpoint
-  the idle timer is about to stop is still in use.
+  session start and every minute and lists only the endpoints that are awake in the pi footer
+  (`awake: win bonsai ~2m`), warning when the idle timer is about to stop one still in use.
 - `./init-ssh.sh` — Initialize SSH configuration.
 - `./scripts/cf-remote-access.sh <label> [--agent]` — Publish one machine's SSH server as
   `<label>.kkk4oru.com` through a remotely managed Cloudflare Tunnel plus an Access application

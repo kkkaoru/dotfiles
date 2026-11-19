@@ -13,7 +13,7 @@ import {
 } from "./policy.ts";
 
 test("status counts the finished requests", () => {
-  expect(statusText(1, 4)).toBe("PLaMo: 翻訳中… 1/4");
+  expect(statusText(1, 4)).toBe("PLaMo 1/4");
 });
 
 test("slash commands and bang commands are left alone", () => {

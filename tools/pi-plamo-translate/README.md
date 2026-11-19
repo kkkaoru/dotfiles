@@ -21,9 +21,9 @@ You see Japanese. The agent reads and writes English.
   paragraph was split into are joined first, so a sentence is never translated in halves.
 - Code spans, fenced blocks, URLs and the inside of 「...」 are not sent for translation. If the
   server is down, the original text is used and a warning is shown once.
-- A translation still running after two seconds reports itself in one chat line
-  (`PLaMo: 翻訳中… 12/30`), updated once every five seconds and cleared when the run ends. The same
-  count is in the footer.
+- A translation still running after two seconds reports itself in the footer (`PLaMo 12/30`),
+  updated once every five seconds and cleared when the run ends. The count is short on purpose: the
+  footer line is shared with the other extensions' statuses.
 
 A prompt recalled with the up arrow in the current session is still what you typed. After a reload,
 editor history is the English stored in the session.
