@@ -7,6 +7,9 @@ import { exec, theme } from "herdr";
 
 // CodexBar scrapes the providers' dashboards, which answer HTTP 429 when asked often.
 const POLL_MS = 5 * 60 * 1000;
+// pi's footer asks the gateway for its last-24-hours dollars every minute, so the same screen
+// would otherwise show two prices for one gateway; this row keeps up with it.
+const GATEWAY_POLL_MS = 60 * 1000;
 const WARN_PERCENT = 80;
 const FULL_PERCENT = 100;
 const RESET_PERCENT = 95;
@@ -210,11 +213,16 @@ export default class AgentLimits extends View {
     this.limits = new Map();
     this.refresh(cx);
     cx.timer.every(POLL_MS, (cx) => this.refresh(cx));
+    cx.timer.every(GATEWAY_POLL_MS, (cx) => this.refresh(cx, "gateway"));
   }
 
-  // Each provider on its own: one that fails or hangs leaves the others' readings.
-  refresh(cx) {
+  // Each provider on its own: one that fails or hangs leaves the others' readings. `only` narrows
+  // a pass to one provider, which is how the gateway row is polled more often than the rest.
+  refresh(cx, only) {
     for (const [, , provider, [command, args], parse] of PROVIDERS) {
+      if (only !== undefined && provider !== only) {
+        continue;
+      }
       cx.spawn(async (cx) => {
         // CodexBar exits 1 with the error in its JSON, which parseLimits reads.
         const { stdout } = await exec(command, args);

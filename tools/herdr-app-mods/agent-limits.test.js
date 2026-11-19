@@ -229,10 +229,25 @@ test("init asks each provider once, Ollama from its balance API and OpenCode Go 
     ],
   ]);
   expect(cx.notify).toHaveBeenCalledTimes(8);
-  expect(timers.map(([ms]) => ms)).toStrictEqual([300000]);
+  expect(timers.map(([ms]) => ms)).toStrictEqual([300000, 60000]);
   timers[0][1](cx);
   await Promise.all(tasks);
   expect(host.calls.length).toBe(16);
+});
+
+test("the gateway row keeps up with pi's footer, asking only itself every minute", async () => {
+  const { cx, tasks, timers } = newLimits(ANSWERS);
+  await Promise.all(tasks);
+  const before = host.calls.length;
+  timers[1][1](cx);
+  await Promise.all(tasks);
+  expect(host.calls.slice(before)).toStrictEqual([
+    [
+      "exec",
+      "sh",
+      ["-c", '"$HOME/ghq/github.com/kkkaoru/dotfiles/scripts/gateway-cost.sh" 2>/dev/null'],
+    ],
+  ]);
 });
 
 test("render shows each provider's windows, a dash for one that failed or has not answered", async () => {
