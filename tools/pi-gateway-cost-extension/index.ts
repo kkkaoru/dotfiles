@@ -11,7 +11,7 @@ import {
   formatCost,
   parseCost,
   queryBody,
-  startOfDay,
+  windowStart,
   tokenFrom,
   type GatewayConfig,
 } from "./src/cost.ts";
@@ -74,7 +74,7 @@ async function costOf(
   now: Date,
 ): Promise<string | undefined> {
   const response = await globalThis.fetch(ENDPOINT, {
-    body: queryBody(config, startOfDay(now), now.toISOString()),
+    body: queryBody(config, windowStart(now), now.toISOString()),
     headers: { authorization: `Bearer ${key}`, "content-type": "application/json" },
     method: "POST",
   });

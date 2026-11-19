@@ -1,13 +1,14 @@
 # pi-gateway-cost-extension
 
-Shows what the Cloudflare AI Gateway itself says the gateway has cost today, in Pi's footer.
+Shows what the Cloudflare AI Gateway itself says the gateway has cost in the last 24 hours, in
+Pi's footer.
 
 Pi's own footer total prices the tokens it sent from the model catalog. The gateway bills from its
 own token accounting (cached tokens, its own rates, sampling), so the two numbers differ. This
 extension asks the gateway through Cloudflare's GraphQL Analytics API and prints its estimate:
 
 ```
-gateway $16.71 today
+gateway $16.7/24h
 ```
 
 It asks on session start and after a turn, at most once a minute, and keeps the last value if a read
@@ -69,7 +70,8 @@ That token expires hourly: a 401 runs `wrangler whoami` once to renew it and ask
 `scripts/gateway-cost.sh` prints the same number for other tools (Herdr.app's limits block), with
 the same token order and renewal.
 
-The window is today in local time. Cloudflare's cost metric is an estimate based on tokens, and its
+The window is the rolling last 24 hours, the same one the gateway dashboard's "Last 24 hours" view
+and `scripts/gateway-cost.sh` use, so the two figures agree. Cloudflare's cost metric is an estimate based on tokens, and its
 analytics sample the data, so treat the figure as a trend rather than an invoice.
 
 ## Check

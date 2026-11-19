@@ -84,7 +84,7 @@ test("the gateway's own cost appears in the status", async () => {
   const { statuses, run } = harness();
   await run("session_start");
   await vi.waitFor(() => {
-    expect(statuses).toStrictEqual(["gateway $16.7 today"]);
+    expect(statuses).toStrictEqual(["gateway $16.7/24h"]);
   });
   expect(authHeader()).toBe("Bearer wrangler-token");
 });
@@ -145,7 +145,7 @@ test("a 401 renews wrangler's token and asks again", async () => {
   const { statuses, run } = harness();
   await run("session_start");
   await vi.waitFor(() => {
-    expect(statuses).toStrictEqual(["gateway $2.5 today"]);
+    expect(statuses).toStrictEqual(["gateway $2.5/24h"]);
   });
   expect(vi.mocked(spawnSync).mock.calls[1]?.[1]).toStrictEqual(["whoami"]);
   expect(authHeader(1)).toBe("Bearer renewed-token");
@@ -200,7 +200,7 @@ test("the account id comes from the encrypted secret when the environment has no
     "gateway-cost",
   ]);
   await vi.waitFor(() => {
-    expect(statuses).toStrictEqual(["gateway $16.7 today"]);
+    expect(statuses).toStrictEqual(["gateway $16.7/24h"]);
   });
   const [call] = vi.mocked(globalThis.fetch).mock.calls;
   expect(JSON.stringify(call?.[1]?.body)).toContain("secret-acct");

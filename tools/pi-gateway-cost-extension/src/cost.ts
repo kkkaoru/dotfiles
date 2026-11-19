@@ -115,10 +115,12 @@ export function parseCost(response: unknown): number | undefined {
 }
 
 export function formatCost(cost: number): string {
-  return `gateway $${cost.toFixed(1)} today`;
+  return `gateway $${cost.toFixed(1)}/24h`;
 }
 
 /** Midnight before `now` in local time, as the GraphQL API wants it. */
-export function startOfDay(now: Date): string {
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+/** The window the AI Gateway dashboard calls "Last 24 hours", which `scripts/gateway-cost.sh` asks
+ *  for too, so both displays agree. */
+export function windowStart(now: Date): string {
+  return new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString();
 }

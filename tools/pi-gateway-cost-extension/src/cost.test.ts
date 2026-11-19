@@ -6,7 +6,7 @@ import {
   formatCost,
   parseCost,
   queryBody,
-  startOfDay,
+  windowStart,
   tokenFrom,
   wranglerToken,
 } from "./cost.ts";
@@ -53,13 +53,13 @@ test("the cost is read from the first group", () => {
 });
 
 test("the footer text carries two decimals", () => {
-  expect(formatCost(16.7128)).toBe("gateway $16.7 today");
-  expect(formatCost(0)).toBe("gateway $0.0 today");
+  expect(formatCost(16.7128)).toBe("gateway $16.7/24h");
+  expect(formatCost(0)).toBe("gateway $0.0/24h");
 });
 
-test("the window starts at local midnight", () => {
-  const start = startOfDay(new Date(2026, 10, 18, 15, 30));
-  expect(start).toBe(new Date(2026, 10, 18).toISOString());
+test("the window is the rolling last 24 hours", () => {
+  const start = windowStart(new Date(2026, 10, 18, 15, 30));
+  expect(start).toBe(new Date(2026, 10, 17, 15, 30).toISOString());
 });
 
 test("the settings section only names the gateway", () => {
