@@ -80,10 +80,9 @@ export class EffortController {
       this.#settings.fastMode && fastEligible(context.model) ? "fast" : undefined,
     );
     context.ui.setStatus("pi-effort-dynamic", undefined);
-    // The footer already names the effort, so the spinner repeats it in the same glyphs.
-    // A sentence would go stale when Shift+Tab changes the level mid-run.
+    // The footer already names the effort, so the spinner says it in one word and one glyph.
     context.ui.setWorkingMessage(
-      level === "off" ? undefined : `🧠:${level}${this.#state.enabled ? " 🔀" : ""}`,
+      level === "off" ? undefined : `Working (${level}${this.#state.enabled ? " 🔀" : ""})`,
     );
   }
 
