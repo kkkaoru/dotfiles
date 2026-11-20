@@ -19,6 +19,11 @@ This extension sets the header, once per request, to `pi-<session id>` for
 `cloudflare-ai-gateway` and `cloudflare-workers-ai`. Every other provider is untouched, and a
 header an earlier handler already set is left as it is.
 
+A headless run (`pi -p`) reports `agent` as its session id, the same value in every process, so
+taking it at face value would pin every headless process to one instance and make them evict each
+other's prefix. For that id the extension hashes the session file instead, which is stable across a
+resume; without a session file it falls back to the process id.
+
 Nothing else changes: the model, the context window, the output limit and the reasoning effort stay
 as configured. It only makes the same request cheaper and faster.
 

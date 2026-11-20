@@ -96,7 +96,8 @@ integrations. These instructions apply to agents working here, including pi and 
   to a model's declared image caps (`pi-image-budget`), the AI Gateway's own daily cost in the
   footer (`pi-gateway-cost`), the `x-session-affinity` header that keeps a session's Workers AI
   prompt prefix cached (`pi-cf-affinity`), the two-line footer that replaces pi's own row and
-  ends with the session id (`pi-compact-footer`), and `/graceful-reload`, which aborts a running
+  ends with the session id (`pi-compact-footer`), the session's prompt cache hit rate and the
+  requests that broke the prefix (`pi-prompt-cache`), and `/graceful-reload`, which aborts a running
   response and reloads instead of asking to wait (`pi-graceful-reload`). They are linked by
   `create-symlinks.sh`.
 - `tools/pi-my-antigravity/` — Subscription-backed Antigravity (Cloud Code Assist) provider that
@@ -199,6 +200,7 @@ Verification is component-specific; the root package does not provide a universa
 - `tools/pi-image-budget-extension/`: `bun run check`
 - `tools/pi-gateway-cost-extension/`: `bun run check`
 - `tools/pi-cf-affinity-extension/`: `bun run check`
+- `tools/pi-prompt-cache/`: `bun run check`
 - `tools/pi-graceful-reload/`: `bun run check`
 - `.config/herdr-app/mods/`: `bun run check` in `tools/herdr-app-mods/` (lint, format, per-file 95% coverage)
 - Other components: inspect their `package.json` and README for required checks.
