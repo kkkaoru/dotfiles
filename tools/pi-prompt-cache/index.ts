@@ -54,18 +54,30 @@ async function openStore(
 ): Promise<Omit<Session, "ledger" | "pending" | "previous" | "reported">> {
   const file: string | undefined = context.sessionManager.getSessionFile();
   const report = reportWith(context);
+  const inMemory = async (): Promise<
+    Omit<Session, "ledger" | "pending" | "previous" | "reported">
+  > => ({ release: undefined, store: await DurableLedgerStore.open(new MemoryStorage(), report) });
   if (file === undefined) {
-    return {
-      release: undefined,
-      store: await DurableLedgerStore.open(new MemoryStorage(), report),
-    };
+    return inMemory();
   }
   // The sidecar stays with the session file, so a resumed session keeps its own hit rate.
   const directory = `${file}.cache-durable`;
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  const release = await lock(directory, { retries: 0 });
-  const storage = await openNodeJsonlStorage(directory, BACKGROUND_CONTEXT, { fsync: true });
-  return { release, store: await DurableLedgerStore.open(storage, report) };
+  let release: (() => Promise<void>) | undefined = undefined;
+  try {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    release = await lock(directory, { retries: 0 });
+    const storage = await openNodeJsonlStorage(directory, BACKGROUND_CONTEXT, { fsync: true });
+    return { release, store: await DurableLedgerStore.open(storage, report) };
+  } catch (error) {
+    // Another pi writes this session's ledger, or the sidecar cannot be opened. Keeping the ledger
+    // In memory beats failing every request; release a lock we took so nothing blocks later.
+    await release?.();
+    context.ui.notify(
+      `Prompt cache: this session's ledger stays in memory (${String(error)}).`,
+      "warning",
+    );
+    return inMemory();
+  }
 }
 
 function rowOf(message: AssistantMessage, part: Part, at: number): Row | undefined {
@@ -77,12 +89,32 @@ function rowOf(message: AssistantMessage, part: Part, at: number): Row | undefin
   return { at, cached: usage.cacheRead ?? 0, model: message.model ?? "", part, prompt };
 }
 
+async function open(context: ExtensionContext): Promise<Session> {
+  const opened = await openStore(context);
+  const stored: Ledger | undefined = await opened.store.restore();
+  return {
+    ...opened,
+    ledger: stored ?? EMPTY_LEDGER,
+    pending: null,
+    previous: undefined,
+    reported: false,
+  };
+}
+
 export default function promptCacheExtension(pi: ExtensionAPI): void {
-  let session: Session | undefined = undefined;
+  let session: Session | null = null;
+  // Events can overlap, and a second lock() would fail against the first, so they share one open.
+  let opening: Promise<Session> | null = null;
 
   const close = async (): Promise<void> => {
+    // An open still in flight would otherwise assign a session after its lock was never released.
+    try {
+      await opening;
+    } catch {
+      // An open that failed has no store to close.
+    }
     const closing = session;
-    session = undefined;
+    session = null;
     try {
       await closing?.store.close();
     } finally {
@@ -91,18 +123,13 @@ export default function promptCacheExtension(pi: ExtensionAPI): void {
   };
 
   const ensure = async (context: ExtensionContext): Promise<Session> => {
-    if (session !== undefined) {
+    if (session !== null) {
       return session;
     }
-    const opened = await openStore(context);
-    const stored: Ledger | undefined = await opened.store.restore();
-    session = {
-      ...opened,
-      ledger: stored ?? EMPTY_LEDGER,
-      pending: null,
-      previous: undefined,
-      reported: false,
-    };
+    opening ??= open(context).finally(() => {
+      opening = null;
+    });
+    session = await opening;
     return session;
   };
 

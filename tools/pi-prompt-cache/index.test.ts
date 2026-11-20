@@ -1,8 +1,9 @@
 // This TypeScript file is executed with Bun.
-import { chmod, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { lock } from "proper-lockfile";
 import { afterEach, expect, test, vi } from "vitest";
 import promptCacheExtension from "./index.ts";
 
@@ -161,4 +162,22 @@ test("a session without a file keeps its ledger in memory", async () => {
   const box = await start();
   await box.command("");
   expect(box.notify).toHaveBeenCalledWith("No request recorded yet.", "info");
+});
+
+test("a ledger another pi holds is kept in memory instead of failing every request", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "pi-prompt-cache-"));
+  directories.push(directory);
+  const file = path.join(directory, "session.jsonl");
+  await mkdir(`${file}.cache-durable`, { recursive: true });
+  const release = await lock(`${file}.cache-durable`, { retries: 0 });
+
+  const box = await start(file);
+  expect(box.notify).toHaveBeenCalledWith(expect.stringContaining("stays in memory"), "warning");
+  await box.run("before_provider_request", request([{ role: "user", content: "a" }]));
+  await box.run("message_end", answer(100, 900));
+  expect(box.setStatus).toHaveBeenLastCalledWith("prompt-cache", "cache 90%");
+  // One warning, not one error per event: the failed open is not retried.
+  expect(box.notify).toHaveBeenCalledTimes(1);
+  await box.run("session_shutdown", {});
+  await release();
 });
