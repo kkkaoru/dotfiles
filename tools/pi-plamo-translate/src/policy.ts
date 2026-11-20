@@ -13,7 +13,9 @@ export const STATUS_KEY = "plamo-translate";
 export const WIDGET_KEY = "plamo-translate";
 export const EXCLUDE_EVENT = "plamo-translate:exclude";
 export const CACHE_LIMIT = 200;
-export const RESUME_HISTORY_LIMIT = 2;
+// A reload or a resume redraws about three screens of Japanese transcript.
+// Only untranslated lines count, so what a reload kept costs nothing.
+export const RESUME_LINE_BUDGET = 120;
 // Two lines per request, so 128 requests is the most one text may ever cost.
 // Anything longer is a transcript dump, not prose the user is waiting to read.
 export const LINE_LIMIT = 256;
@@ -30,9 +32,12 @@ export function statusText(done: number, total: number): string {
   return `PLaMo ${String(done)}/${String(total)}`;
 }
 
+// A slash command or a `!` shell line, not prose that merely starts with a path. So
+// `/Users/... を直して` is translated and `/goal pause` is not.
+const COMMAND = /^[/!][a-z][\w-]*(?:\s|$)/iu;
+
 export function isCommand(text: string): boolean {
-  const trimmed = text.trimStart();
-  return trimmed.startsWith("/") || trimmed.startsWith("!");
+  return COMMAND.test(text.trimStart());
 }
 
 export function shouldTranslatePrompt(

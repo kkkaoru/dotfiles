@@ -27,7 +27,11 @@ function ui(): UiSink {
   };
 }
 
-function makeMessageEntry(index: number): SessionEntry {
+function makeMessageEntry(index: number, lines = 1): SessionEntry {
+  const text = Array.from(
+    { length: lines },
+    (_unused, line) => `Turn ${String(index + 1)} line ${String(line + 1)}`,
+  ).join("\n");
   return {
     type: "message",
     id: `m${String(index + 1)}`,
@@ -35,7 +39,7 @@ function makeMessageEntry(index: number): SessionEntry {
     timestamp: "2026-01-01T00:00:00.000Z",
     message: {
       role: "assistant",
-      content: [{ type: "text", text: `Turn ${String(index + 1)}` }],
+      content: [{ type: "text", text }],
       api: "openai-responses",
       provider: "test",
       model: "test",
@@ -55,8 +59,9 @@ function makeMessageEntry(index: number): SessionEntry {
 
 const neverResolve = (): Promise<void> => new Promise<void>(() => {});
 
-test("a session that opens with history only translates the most recent persisted entries", () => {
-  const entries = Array.from({ length: 8 }, (_unused, index) => makeMessageEntry(index));
+test("a session that opens with history translates about three screens of it", () => {
+  // Twenty lines each: the newest six fill the 120-line budget and the older four stay as written.
+  const entries = Array.from({ length: 10 }, (_unused, index) => makeMessageEntry(index, 20));
   const server: Server = {
     complete: async (text) => `JA:${text}`,
     ensure: async () => true,
@@ -66,13 +71,12 @@ test("a session that opens with history only translates the most recent persiste
     ui: ui(),
     sessionManager: { buildContextEntries: () => entries },
   });
-  // Only the last two entries (m7, m8) translate; older ones stay as written.
-  expect(displayOf(box, "Older reply 1", { ...shown, messageId: "m1" })).toBe("Older reply 1");
-  expect(displayOf(box, "Older reply 6", { ...shown, messageId: "m6" })).toBe("Older reply 6");
+  expect(displayOf(box, "Turn 1 line 1", { ...shown, messageId: "m1" })).toBe("Turn 1 line 1");
+  expect(displayOf(box, "Turn 4 line 1", { ...shown, messageId: "m4" })).toBe("Turn 4 line 1");
   expect(box.pending.size).toBe(0);
 
-  expect(displayOf(box, "Recent reply", { ...shown, messageId: "m8" })).toBe("Recent reply");
-  expect(box.pending.has("Recent reply")).toBe(true);
+  expect(displayOf(box, "Turn 10 line 1", { ...shown, messageId: "m10" })).toBe("Turn 10 line 1");
+  expect(box.pending.has("Turn 10 line 1")).toBe(true);
 
   expect(displayOf(box, "Live reply", shown)).toBe("Live reply");
   // A live reply is scheduled when it ends, never by drawing it.
@@ -169,12 +173,26 @@ test("a reload keeps every translation it already made", async () => {
   const after = createRuntime(settings, server, neverResolve, caches);
   startSession(after, { ui: ui(), sessionManager: { buildContextEntries: () => entries } });
   expect(displayOf(after, "Older reply", { ...shown, messageId: "m1" })).toBe("JA:Older reply");
-  // Cached entries cost nothing, and an uncached one outside the recent window is not re-requested.
+  // The cached entry costs nothing, so the budget still reaches the one never translated before.
   expect(after.pending.size).toBe(0);
   expect(displayOf(after, "Never translated", { ...shown, messageId: "m2" })).toBe(
     "Never translated",
   );
-  expect(after.pending.size).toBe(0);
+  expect(after.pending.has("Never translated")).toBe(true);
+});
+
+test("a reload asks only for the window the budget allows", () => {
+  const entries = Array.from({ length: 10 }, (_unused, index) => makeMessageEntry(index, 20));
+  const box = createRuntime(settings, working, neverResolve, processCaches());
+  startSession(box, { ui: ui(), sessionManager: { buildContextEntries: () => entries } });
+  // Drawing the whole transcript asks for at most the budget's worth, newest first.
+  for (let index = 0; index < entries.length; index += 1) {
+    displayOf(box, `Turn ${String(index + 1)} line 1`, {
+      ...shown,
+      messageId: `m${String(index + 1)}`,
+    });
+  }
+  expect(box.pending.size).toBe(6);
 });
 
 test("the process caches are the same maps on every call", () => {

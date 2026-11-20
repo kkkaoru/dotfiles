@@ -15,7 +15,6 @@ import {
   OFF,
   remember,
   replyRule,
-  RESUME_HISTORY_LIMIT,
   SECTION_NAME,
   shouldTranslatePrompt,
   STATUS_KEY,
@@ -26,6 +25,7 @@ import {
 } from "./policy.ts";
 import { SETUP_HINT, type Server } from "./server.ts";
 import type { PlamoSettings } from "./settings.ts";
+import { recentResumedIds } from "./window.ts";
 
 export interface RenderHost {
   invalidate(): void;
@@ -356,26 +356,9 @@ export function scheduleReply(
   });
 }
 
-// Every session start renders the persisted transcript, so the whole history would translate.
-// Without a session manager nothing persisted is eligible, which is the safe default.
-function recentResumedIds(ctx: SessionContextLike): ReadonlySet<string> {
-  if (!ctx.sessionManager) {
-    return new Set();
-  }
-  const ids = ctx.sessionManager
-    .buildContextEntries()
-    .filter(
-      (entry) =>
-        entry.type === "message" || entry.type === "compaction" || entry.type === "branch_summary",
-    )
-    .slice(-RESUME_HISTORY_LIMIT)
-    .map((entry) => entry.id);
-  return new Set(ids);
-}
-
 export function startSession(runtime: Runtime, ctx: SessionContextLike): void {
   runtime.ui = ctx.ui;
-  runtime.resumedIds = recentResumedIds(ctx);
+  runtime.resumedIds = recentResumedIds(runtime, ctx);
   ctx.ui.setWidget(WIDGET_KEY, (tui) => holdHost(runtime, tui), { placement: "belowEditor" });
   runtime.server.ensure().catch((error: unknown) => {
     warnOnce(runtime, `plamo-translate: warming the server failed: ${errorMessage(error)}`);

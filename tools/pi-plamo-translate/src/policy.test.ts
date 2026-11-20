@@ -20,6 +20,15 @@ test("slash commands and bang commands are left alone", () => {
   expect(isCommand("  /goal 調べる")).toBe(true);
   expect(isCommand("!ls")).toBe(true);
   expect(isCommand("調べる")).toBe(false);
+  // A prompt that starts with a path is prose, not a command.
+  expect(isCommand("/Users/kkk4oru/ghq/x を直して")).toBe(false);
+  expect(isCommand("!cd /tmp && ls を見て")).toBe(true);
+});
+
+test("continue is the only short prompt that is never translated", () => {
+  expect(shouldTranslatePrompt("continue", "interactive", "en")).toBe(false);
+  expect(shouldTranslatePrompt(" Continue ", "interactive", "en")).toBe(false);
+  expect(shouldTranslatePrompt("continue", "interactive", "ja")).toBe(false);
 });
 
 test("a Japanese prompt is translated and an extension prompt is not", () => {
