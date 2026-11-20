@@ -93,6 +93,21 @@ test("the footer is two short rows: model above, whole session id below", () => 
   expect(lines.map((line) => visibleWidth(line))).toStrictEqual([100, 100]);
 });
 
+test("two statuses that read the same take one place on the row", () => {
+  const lines = footerLines(
+    ctx({ percent: 45.6, contextWindow: 262_144 }),
+    data([
+      ["pi-effort-thinking", "think:max · dynamic"],
+      ["strata", "🧠:max 🔀"],
+    ]),
+    theme,
+    100,
+  );
+  expect(stripTerminalSequences(lines[1] ?? "")).toBe(
+    `45.6%/262k · 🧠:max 🔀${" ".repeat(42)}${SESSION}`,
+  );
+});
+
 test("a row without statuses still shows the folder and the session", () => {
   const lines = footerLines(ctx(undefined), data([], null), theme, 60);
   expect(lines[0]).toBe(`dotfiles${" ".repeat(17)}workers-ai/deepseek-v4.1-flash-1017`);

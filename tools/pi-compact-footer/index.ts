@@ -64,7 +64,7 @@ export function footerLines(
   const branch = footerData.getGitBranch();
   const folder = folderOf(ctx.cwd);
   const statuses = footerData.getExtensionStatuses();
-  const stats = [
+  const parts = [
     contextText(ctx.getContextUsage()),
     ...SHOWN.flatMap((key) => {
       const text = statuses.get(key);
@@ -73,9 +73,9 @@ export function footerLines(
       }
       return [key === "pi-effort-thinking" ? effortText(text) : text];
     }),
-  ]
-    .filter((part) => part.length > 0)
-    .join(" · ");
+  ].filter((part) => part.length > 0);
+  // Two keys can name the same thing; the row is shared, so each reading appears once.
+  const stats = [...new Set(parts)].join(" · ");
   return [
     twoEnds(
       theme.fg("text", branch === null ? folder : `${folder} (${branch})`),
