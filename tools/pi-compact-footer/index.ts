@@ -1,6 +1,4 @@
 // This TypeScript file is executed with Bun.
-import { homedir } from "node:os";
-import path from "node:path";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -9,19 +7,9 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
-/** Statuses that keep a place on the row, in this order. The gateway price and the ponytail mode
- *  are not among them: the row is shared, and both are stable enough to read elsewhere. */
-export const SHOWN: readonly string[] = ["pi-effort-thinking", "plamo-translate", "strata"];
-
-/** `think:max · dynamic` -> `🧠:max 🔀`: one glyph per idea, because the row is shared. */
-export function effortText(text: string): string {
-  return text.replace(/^think/u, "🧠").replace(/\s*·\s*dynamic$/u, " 🔀");
-}
-
-/** The folder names the checkout; the window title already shows the whole path. */
-export function folderOf(cwd: string): string {
-  return cwd.startsWith(homedir()) ? path.basename(cwd) : cwd;
-}
+/** Statuses that keep a place on the row, in this order. The effort level, the gateway price and
+ *  the ponytail mode are not among them: the row is shared, and they are read elsewhere. */
+export const SHOWN: readonly string[] = ["plamo-translate", "strata"];
 
 /** `workers-ai/@cf/deepseek-ai/deepseek-v4.1-flash-1017` -> `workers-ai/deepseek-v4.1-flash-1017`:
  *  the provider decides routing and cost, the model path before it does not. */
@@ -61,27 +49,18 @@ export function footerLines(
   theme: Theme,
   width: number,
 ): string[] {
-  const branch = footerData.getGitBranch();
-  const folder = folderOf(ctx.cwd);
   const statuses = footerData.getExtensionStatuses();
   const parts = [
     contextText(ctx.getContextUsage()),
     ...SHOWN.flatMap((key) => {
       const text = statuses.get(key);
-      if (text === undefined) {
-        return [];
-      }
-      return [key === "pi-effort-thinking" ? effortText(text) : text];
+      return text === undefined ? [] : [text];
     }),
   ].filter((part) => part.length > 0);
   // Two keys can name the same thing; the row is shared, so each reading appears once.
   const stats = [...new Set(parts)].join(" · ");
   return [
-    twoEnds(
-      theme.fg("text", branch === null ? folder : `${folder} (${branch})`),
-      theme.fg("dim", modelText(ctx.model?.provider, ctx.model?.id)),
-      width,
-    ),
+    twoEnds("", theme.fg("dim", modelText(ctx.model?.provider, ctx.model?.id)), width),
     twoEnds(theme.fg("dim", stats), theme.fg("dim", ctx.sessionManager.getSessionId()), width),
   ];
 }
@@ -91,15 +70,10 @@ export default function compactFooter(pi: ExtensionAPI): void {
     if (ctx.mode !== "tui") {
       return;
     }
-    ctx.ui.setFooter((tui, theme, footerData) => {
-      const dispose = footerData.onBranchChange(() => {
-        tui.requestRender();
-      });
-      return {
-        dispose,
-        invalidate() {},
-        render: (width: number) => footerLines(ctx, footerData, theme, width),
-      };
-    });
+    ctx.ui.setFooter((_tui, theme, footerData) => ({
+      dispose() {},
+      invalidate() {},
+      render: (width: number) => footerLines(ctx, footerData, theme, width),
+    }));
   });
 }

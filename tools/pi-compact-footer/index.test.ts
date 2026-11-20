@@ -9,25 +9,19 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { expect, test, vi } from "vitest";
-import compactFooter, {
-  contextText,
-  effortText,
-  folderOf,
-  footerLines,
-  modelText,
-  twoEnds,
-} from "./index.ts";
+import compactFooter, { contextText, footerLines, modelText, twoEnds } from "./index.ts";
 
 const SESSION = "01a1eefb-96d0-7357-8910-7b985ea3ce84";
 const MODEL = "workers-ai/@cf/deepseek-ai/deepseek-v4.1-flash-1017";
+const MODEL_TEXT = "workers-ai/deepseek-v4.1-flash-1017";
 const theme: Theme = { fg: (_color: string, text: string) => text } as unknown as Theme;
+// What a row of the given width reads with its left and right text at the two ends.
+const row = (left: string, right: string, width: number) =>
+  left + " ".repeat(width - left.length - right.length) + right;
 
-function data(
-  statuses: readonly (readonly [string, string])[],
-  branch: string | null = "main",
-): ReadonlyFooterDataProvider {
+function data(statuses: readonly (readonly [string, string])[]): ReadonlyFooterDataProvider {
   return {
-    getGitBranch: () => branch,
+    getGitBranch: () => "main",
     getExtensionStatuses: () => new Map(statuses),
     getAvailableProviderCount: () => 1,
     onBranchChange: () => () => {},
@@ -45,20 +39,10 @@ function ctx(
   } as unknown as ExtensionContext;
 }
 
-test("the folder names the checkout, an outside path stays whole", () => {
-  expect(folderOf(path.join(homedir(), "ghq", "dotfiles"))).toBe("dotfiles");
-  expect(folderOf("/Volumes/ssd/work")).toBe("/Volumes/ssd/work");
-});
-
 test("the model keeps its own name and the provider that routes it", () => {
   expect(modelText("workers-ai", MODEL)).toBe("workers-ai/deepseek-v4.1-flash-1017");
   expect(modelText(undefined, "anthropic/claude-opus-4")).toBe("claude-opus-4");
   expect(modelText("workers-ai", undefined)).toBe("");
-});
-
-test("effort is one glyph per idea", () => {
-  expect(effortText("think:max · dynamic")).toBe("🧠:max 🔀");
-  expect(effortText("think:medium")).toBe("🧠:medium");
 });
 
 test("context usage is a percentage of the window, or the window alone", () => {
@@ -85,38 +69,31 @@ test("the footer is two short rows: model above, whole session id below", () => 
     theme,
     100,
   );
-  expect(lines[0]).toBe(`dotfiles (main)${" ".repeat(50)}workers-ai/deepseek-v4.1-flash-1017`);
-  // The gateway price and the ponytail mode are no longer shown; the id is not shortened.
-  expect(stripTerminalSequences(lines[1] ?? "")).toBe(
-    `30.2%/262k · 🧠:max 🔀${" ".repeat(42)}${SESSION}`,
-  );
+  // The folder, its branch, the effort level, the gateway price and the ponytail mode are gone;
+  // the session id is not shortened.
+  expect(lines[0]).toBe(row("", MODEL_TEXT, 100));
+  expect(stripTerminalSequences(lines[1] ?? "")).toBe(row("30.2%/262k", SESSION, 100));
   expect(lines.map((line) => visibleWidth(line))).toStrictEqual([100, 100]);
 });
 
-test("two statuses that read the same take one place on the row", () => {
+test("a status that repeats a reading already on the row takes no second place", () => {
   const lines = footerLines(
     ctx({ percent: 45.6, contextWindow: 262_144 }),
-    data([
-      ["pi-effort-thinking", "think:max · dynamic"],
-      ["strata", "🧠:max 🔀"],
-    ]),
+    data([["strata", "45.6%/262k"]]),
     theme,
     100,
   );
-  expect(stripTerminalSequences(lines[1] ?? "")).toBe(
-    `45.6%/262k · 🧠:max 🔀${" ".repeat(42)}${SESSION}`,
-  );
+  expect(stripTerminalSequences(lines[1] ?? "")).toBe(row("45.6%/262k", SESSION, 100));
 });
 
-test("a row without statuses still shows the folder and the session", () => {
-  const lines = footerLines(ctx(undefined), data([], null), theme, 60);
-  expect(lines[0]).toBe(`dotfiles${" ".repeat(17)}workers-ai/deepseek-v4.1-flash-1017`);
-  expect(lines[1]).toBe(`${" ".repeat(24)}${SESSION}`);
+test("a row without statuses still shows the model and the session", () => {
+  const lines = footerLines(ctx(undefined), data([]), theme, 60);
+  expect(lines[0]).toBe(row("", MODEL_TEXT, 60));
+  expect(lines[1]).toBe(row("", SESSION, 60));
 });
 
-test("the session start installs the footer and its branch subscription", () => {
+test("the session start installs the footer, which draws on demand", () => {
   const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => void>();
-  const unsubscribe = vi.fn();
   const requestRender = vi.fn();
   const setFooter = vi.fn();
   compactFooter({
@@ -137,18 +114,10 @@ test("the session start installs the footer and its branch subscription", () => 
     theme: Theme,
     footerData: ReadonlyFooterDataProvider,
   ) => { dispose: () => void; invalidate: () => void; render: (width: number) => string[] };
-  const component = factory({ requestRender }, theme, {
-    ...data([]),
-    onBranchChange: (callback: () => void) => {
-      callback();
-      return unsubscribe;
-    },
-  });
+  const component = factory({ requestRender }, theme, data([]));
   component.invalidate();
-  expect(requestRender).toHaveBeenCalledTimes(1);
   expect(component.render(20)).toHaveLength(2);
   component.dispose();
-  expect(unsubscribe).toHaveBeenCalledTimes(1);
 });
 
 test("a non-TUI mode keeps the built-in footer", () => {
