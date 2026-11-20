@@ -85,7 +85,6 @@
     "./packages/executor-skills",
     "npm:@ogulcancelik/pi-herdr",
     "git:github.com/DietrichGebert/ponytail",
-    "npm:pi-chrome",
     "npm:pi-apple-fm"
   ],
   "extensionChangelogVersions": {
