@@ -95,8 +95,10 @@ integrations. These instructions apply to agents working here, including pi and 
   loops, detached tmux execution, effort management, oMLX lifecycle management, trimming requests
   to a model's declared image caps (`pi-image-budget`), the AI Gateway's own daily cost in the
   footer (`pi-gateway-cost`), the `x-session-affinity` header that keeps a session's Workers AI
-  prompt prefix cached (`pi-cf-affinity`), and the two-line footer that replaces pi's own row and
-  ends with the session id (`pi-compact-footer`). They are linked by `create-symlinks.sh`.
+  prompt prefix cached (`pi-cf-affinity`), the two-line footer that replaces pi's own row and
+  ends with the session id (`pi-compact-footer`), and `/graceful-reload`, which aborts a running
+  response and reloads instead of asking to wait (`pi-graceful-reload`). They are linked by
+  `create-symlinks.sh`.
 - `tools/pi-my-antigravity/` — Subscription-backed Antigravity (Cloud Code Assist) provider that
   mirrors the official `agy` CLI wire format (`bun run check`). Sends the system prompt as the
   leading user turn because the backend 429s third-party prompts in `systemInstruction`.
@@ -197,6 +199,7 @@ Verification is component-specific; the root package does not provide a universa
 - `tools/pi-image-budget-extension/`: `bun run check`
 - `tools/pi-gateway-cost-extension/`: `bun run check`
 - `tools/pi-cf-affinity-extension/`: `bun run check`
+- `tools/pi-graceful-reload/`: `bun run check`
 - `.config/herdr-app/mods/`: `bun run check` in `tools/herdr-app-mods/` (lint, format, per-file 95% coverage)
 - Other components: inspect their `package.json` and README for required checks.
 - Shell changes: check syntax; for all changes, run `git diff --check`.
