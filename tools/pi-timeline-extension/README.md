@@ -10,11 +10,11 @@ The agent records the tree with the `timeline` tool, and you can read it at any 
 
 ## The tool
 
-| action   | fields                                                    |
-| -------- | --------------------------------------------------------- |
-| `add`    | `title`, optional `parent`, `weight` (default 1)           |
-| `update` | `id`, any of `status`, `note`, `title`, `weight`           |
-| `list`   | —                                                          |
+| action   | fields                                           |
+| -------- | ------------------------------------------------ |
+| `add`    | `title`, optional `parent`, `weight` (default 1) |
+| `update` | `id`, any of `status`, `note`, `title`, `weight` |
+| `list`   | —                                                |
 
 `status` is `pending`, `active`, `done` or `blocked`. Every call answers with the rendered tree:
 
