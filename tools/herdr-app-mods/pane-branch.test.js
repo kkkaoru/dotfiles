@@ -67,7 +67,7 @@ test("a pane header reads its program, folder, branch and nothing else", () => {
   const { view, cx } = newView();
   const tree = render(view, cx);
   expect(ids(tree)).toStrictEqual(["pane-head-p1"]);
-  expect(texts(tree)).toStrictEqual(["Claude", "~/src/app", "feat/x"]);
+  expect(texts(tree)).toStrictEqual(["Claude", "~/src/app (feat/x)"]);
   expect(paths(tree)).toStrictEqual([]);
 });
 
@@ -76,11 +76,11 @@ test("a pane without a branch, a checkout under home, elsewhere or nowhere", () 
   host.panes = [pane({ branch: null })];
   expect(texts(render(view, cx))).toStrictEqual(["Claude", "~/src/app"]);
   host.panes = [pane({ cwd: "/Users/me" })];
-  expect(texts(render(view, cx))).toStrictEqual(["Claude", "~", "feat/x"]);
+  expect(texts(render(view, cx))).toStrictEqual(["Claude", "~ (feat/x)"]);
   host.panes = [pane({ cwd: "/opt/x" })];
-  expect(texts(render(view, cx))).toStrictEqual(["Claude", "/opt/x", "feat/x"]);
+  expect(texts(render(view, cx))).toStrictEqual(["Claude", "/opt/x (feat/x)"]);
   host.panes = [pane({ cwd: null })];
-  expect(texts(render(view, cx))).toStrictEqual(["Claude", "", "feat/x"]);
+  expect(texts(render(view, cx))).toStrictEqual(["Claude", " (feat/x)"]);
 });
 
 test("the program's picture, a tinted glyph, or nothing", () => {
@@ -202,7 +202,7 @@ test("a pane with no status shows no status glyph, and each status its own", () 
   host.panes = [pane({ status: "blocked" })];
   expect(texts(render(view, cx))).toContain("Needs you");
   host.panes = [pane({ status: "done" })];
-  expect(texts(render(view, cx))).toStrictEqual(["Claude", "~/src/app", "feat/x"]);
+  expect(texts(render(view, cx))).toStrictEqual(["Claude", "~/src/app (feat/x)"]);
   host.panes = [pane({ status: "idle" })];
   expect(paths(render(view, cx))).toStrictEqual([]);
 });
