@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "1.5.2",
+  "lastChangelogVersion": "1.6.0",
   "theme": "dracula",
   "tuiMode": "fullscreen",
   "defaultProvider": "cloudflare-ai-gateway",
