@@ -12,9 +12,74 @@ import {
   installCompactCommandVisibility,
   installExtensionUiRenderDedupe,
   installFooterRenderCache,
+  installGracefulReload,
   installLargeSessionStatusRenderThrottle,
   installLatestCompactionEventEntry,
 } from "./pi-compaction-singleflight.mjs";
+
+test("reload aborts a running response instead of asking the user to wait", async () => {
+  const calls = [];
+  let streaming = true;
+  class FakeMode {
+    session = {
+      get isStreaming() {
+        return streaming;
+      },
+      isCompacting: false,
+      async abort() {
+        calls.push("abort");
+        streaming = false;
+      },
+      abortCompaction() {
+        calls.push("abortCompaction");
+      },
+    };
+
+    async handleReloadCommand() {
+      calls.push("reload");
+    }
+  }
+
+  assert.equal(installGracefulReload(FakeMode), "installed");
+  assert.equal(installGracefulReload(FakeMode), "already-installed");
+  await new FakeMode().handleReloadCommand();
+  assert.deepEqual(calls, ["abort", "reload"]);
+});
+
+test("reload aborts a compaction too and stays quiet when idle", async () => {
+  const calls = [];
+  class Busy {
+    session = {
+      isStreaming: false,
+      isCompacting: true,
+      abortCompaction() {
+        calls.push("abortCompaction");
+        this.isCompacting = false;
+      },
+    };
+
+    async handleReloadCommand() {
+      calls.push("reload");
+    }
+  }
+  class Idle {
+    session = { isStreaming: false, isCompacting: false };
+
+    async handleReloadCommand() {
+      calls.push("reload");
+    }
+  }
+
+  installGracefulReload(Busy);
+  installGracefulReload(Idle);
+  await new Busy().handleReloadCommand();
+  await new Idle().handleReloadCommand();
+  assert.deepEqual(calls, ["abortCompaction", "reload", "reload"]);
+});
+
+test("skips reload patching when Pi no longer exposes the command", () => {
+  assert.equal(installGracefulReload(class {}), "not-needed");
+});
 
 const WRAPPER = join(dirname(fileURLToPath(import.meta.url)), "pi");
 

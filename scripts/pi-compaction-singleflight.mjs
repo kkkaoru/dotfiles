@@ -421,6 +421,43 @@ export function installCompactCommandVisibility(InteractiveMode) {
   return "installed";
 }
 
+const RELOAD_PATCH_MARKER = Symbol.for("kkkaoru.pi.graceful-reload");
+
+/** Pi refuses `/reload` while a response or compaction is live and prints "Wait for the current
+ *  response to finish before reloading.". Aborting the run instead keeps the partial answer in the
+ *  transcript and reloads at once, so typing resumes without a second `/reload`. */
+export function installGracefulReload(InteractiveMode) {
+  const prototype = InteractiveMode.prototype;
+  if (prototype[RELOAD_PATCH_MARKER] === true) {
+    return "already-installed";
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, "handleReloadCommand");
+  if (descriptor === undefined || typeof descriptor.value !== "function") {
+    return "not-needed";
+  }
+  const original = descriptor.value;
+
+  Object.defineProperty(prototype, "handleReloadCommand", {
+    ...descriptor,
+    async value(...args) {
+      const session = this.session;
+      if (session?.isStreaming === true) {
+        await session.abort();
+      }
+      if (session?.isCompacting === true) {
+        session.abortCompaction();
+      }
+      // An aborted run settles a tick later; reloading while it is still live would throw.
+      for (let waited = 0; waited < 3000 && (session?.isStreaming || session?.isCompacting); waited += 25) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      return original.apply(this, args);
+    },
+  });
+  Object.defineProperty(prototype, RELOAD_PATCH_MARKER, { value: true });
+  return "installed";
+}
+
 export function installLatestCompactionEventEntry(ExtensionRunner) {
   const prototype = ExtensionRunner.prototype;
   if (prototype[LATEST_COMPACTION_EVENT_PATCH_MARKER] === true) {
@@ -647,6 +684,7 @@ if (packageRoot !== undefined) {
   installLatestCompactionEventEntry(codingAgent.ExtensionRunner);
   installLargeSessionStatusRenderThrottle(codingAgent.InteractiveMode);
   installCompactCommandVisibility(codingAgent.InteractiveMode);
+  installGracefulReload(codingAgent.InteractiveMode);
   installFooterRenderCache(codingAgent.FooterComponent);
   installExtensionUiRenderDedupe(codingAgent.InteractiveMode);
 }
