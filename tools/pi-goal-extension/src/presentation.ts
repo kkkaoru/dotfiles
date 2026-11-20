@@ -6,10 +6,23 @@ const GUIDANCE: string =
 
 // Ownership history is internal bookkeeping, not a work plan or a list of live jobs.
 // Keep it in persisted state/details, never in model-facing goal content.
+//
+// The guidance becomes a leading system message, so its text must stay byte-identical
+// between requests: a token count, elapsed time or turn counter in here would rewrite the
+// prompt prefix on every request and drop the provider's prompt cache to its first block.
+// Only fields that change when the goal itself changes belong here; live accounting stays in
+// goalSummary, the footer and the get_goal tool result.
 export function goalContext(goal: GoalState | null): string {
   if (goal === null) return "null";
-  const { tasks, ...context } = goal;
-  return JSON.stringify({ ...context, trackedTaskCount: tasks.length });
+  return JSON.stringify({
+    objective: goal.objective,
+    status: goal.status,
+    tokenBudget: goal.tokenBudget,
+    reason: goal.reason,
+    blocker: goal.blocker?.key ?? null,
+    wait: goal.wait,
+    trackedTaskCount: goal.tasks.length,
+  });
 }
 
 export function goalGuidance(goal: GoalState | null): string {

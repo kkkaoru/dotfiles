@@ -67,29 +67,45 @@ it("keeps model context bounded independently of ownership history", () => {
   };
   expect(goalContext(null)).toBe("null");
   expect(JSON.parse(goalContext(goal))).toStrictEqual({
-    version: 1,
-    id: "g",
-    sessionId: "s",
-    revision: 0,
     objective:
       "Verify parity; do not switch an unverified scorer or replay NAR 9/25.",
     status: "active",
     tokenBudget: null,
-    tokensUsed: 0,
-    elapsedMs: 0,
-    createdAt: 0,
-    updatedAt: 0,
-    turn: 0,
-    noProgressTurns: 0,
-    blocker: { key: "Missing reference", count: 1, turn: 0 },
-    wait: { until: 60000, reason: "Wait for evidence" },
     reason: "Missing reference",
+    blocker: "Missing reference",
+    wait: { until: 60000, reason: "Wait for evidence" },
     trackedTaskCount: 512,
   });
   expect(goalGuidance(goal)).not.toMatch(/pi-tmux|"tasks"/u);
   expect(goalContext(goal).length).toBeLessThan(700);
   expect(goalGuidance(goal).length).toBeLessThan(2000);
   expect(goal.tasks).toHaveLength(512);
+});
+it("keeps the prompt prefix stable across accounting updates", () => {
+  const goal: GoalState = {
+    ...createGoal({
+      id: "g",
+      sessionId: "s",
+      objective: "work",
+      tokenBudget: 100,
+      now: 0,
+    }),
+    blocker: { key: "same blocker", count: 1, turn: 1 },
+  };
+  const later: GoalState = {
+    ...goal,
+    revision: 9,
+    tokensUsed: 1234,
+    elapsedMs: 987654,
+    updatedAt: 60000,
+    turn: 4,
+    noProgressTurns: 2,
+    blocker: { key: "same blocker", count: 3, turn: 4 },
+  };
+  expect(goalGuidance(later)).toBe(goalGuidance(goal));
+  expect(goalGuidance({ ...goal, status: "paused" })).not.toBe(
+    goalGuidance(goal),
+  );
 });
 
 it.each([

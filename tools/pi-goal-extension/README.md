@@ -13,6 +13,14 @@ preserves the existing system sections and tool declarations instead of freezing
 at run start. This lets goal guidance coexist with dynamic-effort progress without adding synthetic
 user requests. Completion remains an explicit goal audit, never an inference from a successful
 tool call, compaction or effort change.
+
+Pi hoists that system message to the front of the provider request, so the guidance text is the
+prompt prefix. It therefore carries only fields that change when the goal itself changes
+(objective, status, token budget, reason, blocker, wait, tracked task count); token counts, elapsed
+time and turn counters stay in `goalSummary`, the footer and the `get_goal` tool result. Live
+accounting in the guidance rewrote the prefix on every request and cut the provider's prompt cache
+down to its first block: measured on `deepseek-v4.1-flash-1017`, consecutive requests in a goal
+session read 11712 cached tokens after this change and 192 before it.
 Failed tool calls do not count as progress for the stalled-goal audit. A later successful work tool,
 an explicit justified wait or the existing owned-task wait rules can still establish progress.
 The stall audit and completion guard share the same task-ownership rule: unrelated pending
