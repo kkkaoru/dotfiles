@@ -13,9 +13,11 @@ You see Japanese. The agent reads and writes English.
   is left as written. Drawing never starts a translation either, so a redraw of a long transcript,
   a resume or a reload asks the model for nothing.
 - Assistant text, and compaction summaries, are drawn in `replyLanguage` (default `ja`). The session
-  keeps the English. When a session opens (`startup`, `/resume`, `/fork`, `/reload`), only the most
-  recent 2 persisted entries are translated, and anything longer than 256 lines is left as written,
-  so history does not flood the translation server. Tool rows and tool output stay as written.
+  keeps the English. Translations survive `/reload`, `/resume` and `/fork` because the process keeps
+  them, so a redraw shows the same Japanese again and asks the server for nothing. A text never
+  translated before is translated only when it belongs to the newest 2 persisted entries and is at
+  most 256 lines, so opening a long session cannot flood the translation server. Tool rows and tool
+  output stay as written.
   While a reply is still streaming it is shown as written; the Japanese replaces it when the
   translation lands. Prose is translated one paragraph per request, and the lines a hard-wrapped
   paragraph was split into are joined first, so a sentence is never translated in halves.

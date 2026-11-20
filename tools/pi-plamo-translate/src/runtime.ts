@@ -91,16 +91,38 @@ export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "unknown error";
 }
 
+export interface Caches {
+  readonly ready: Map<string, string>;
+  readonly typed: Map<string, string>;
+  readonly excluded: Map<string, true>;
+}
+
+const CACHES_KEY = Symbol.for("pi-plamo-translate.caches");
+
+/** A reload evaluates this module again in the same process, so the maps pi already filled survive
+ *  there. Without them the redrawn transcript comes back in English and only the newest entries are
+ *  translated again — the range collapses exactly when the user is mid-work. */
+export function processCaches(): Caches {
+  const holder = globalThis as unknown as Record<symbol, Caches | undefined>;
+  holder[CACHES_KEY] ??= { excluded: new Map(), ready: new Map(), typed: new Map() };
+  return holder[CACHES_KEY];
+}
+
+function emptyCaches(): Caches {
+  return { excluded: new Map(), ready: new Map(), typed: new Map() };
+}
+
 export function createRuntime(
   settings: PlamoSettings,
   server: Server,
   sleep: (ms: number) => Promise<void> = realSleep,
+  caches: Caches = emptyCaches(),
 ): Runtime {
   return {
-    ready: new Map(),
+    ready: caches.ready,
     pending: new Map(),
-    typed: new Map(),
-    excluded: new Map(),
+    typed: caches.typed,
+    excluded: caches.excluded,
     server,
     settings,
     sleep,

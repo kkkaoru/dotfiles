@@ -8,7 +8,7 @@ import { setTimeout } from "node:timers/promises";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { bindPlamo } from "./src/bind.ts";
 import { EXCLUDE_EVENT } from "./src/policy.ts";
-import { createRuntime, type Runtime } from "./src/runtime.ts";
+import { createRuntime, processCaches, type Runtime } from "./src/runtime.ts";
 import { createServer, type ServerDeps } from "./src/server.ts";
 import { readPlamoSettings } from "./src/settings.ts";
 
@@ -40,6 +40,8 @@ export default function plamoTranslate(pi: ExtensionAPI): void {
       }),
       settings.port,
     ),
+    undefined,
+    processCaches(),
   );
   holder.runtime = runtime;
   bindPlamo(

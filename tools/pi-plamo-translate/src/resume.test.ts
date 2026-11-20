@@ -1,7 +1,14 @@
 // This TypeScript file is executed with Bun.
 import type { MarkdownTransformContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { expect, test } from "vitest";
-import { createRuntime, displayOf, scheduleReply, startSession, type UiSink } from "./runtime.ts";
+import {
+  createRuntime,
+  displayOf,
+  processCaches,
+  scheduleReply,
+  startSession,
+  type UiSink,
+} from "./runtime.ts";
 import type { Server } from "./server.ts";
 
 const settings = { replyLanguage: "ja", promptLanguage: "en", port: 18555 };
@@ -146,4 +153,31 @@ test("a session start without a session manager still translates nothing persist
   startSession(box, { ui: ui() });
   expect(displayOf(box, "Reply", { ...shown, messageId: "m1" })).toBe("Reply");
   expect(box.pending.size).toBe(0);
+});
+
+test("a reload keeps every translation it already made", async () => {
+  const caches = processCaches();
+  const entries = Array.from({ length: 4 }, (_unused, index) => makeMessageEntry(index));
+  const server: Server = { complete: async (text) => `JA:${text}`, ensure: async () => true };
+
+  const before = createRuntime(settings, server, neverResolve, caches);
+  scheduleReply(before, { content: [{ type: "text", text: "Older reply" }], role: "assistant" });
+  await before.pending.get("Older reply");
+  expect(displayOf(before, "Older reply", { ...shown, messageId: "m1" })).toBe("JA:Older reply");
+
+  // The reload builds a new runtime with the same process caches and redraws the whole transcript.
+  const after = createRuntime(settings, server, neverResolve, caches);
+  startSession(after, { ui: ui(), sessionManager: { buildContextEntries: () => entries } });
+  expect(displayOf(after, "Older reply", { ...shown, messageId: "m1" })).toBe("JA:Older reply");
+  // Cached entries cost nothing, and an uncached one outside the recent window is not re-requested.
+  expect(after.pending.size).toBe(0);
+  expect(displayOf(after, "Never translated", { ...shown, messageId: "m2" })).toBe(
+    "Never translated",
+  );
+  expect(after.pending.size).toBe(0);
+});
+
+test("the process caches are the same maps on every call", () => {
+  expect(processCaches()).toBe(processCaches());
+  expect(processCaches().ready).toBe(processCaches().ready);
 });
