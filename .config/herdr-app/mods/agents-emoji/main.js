@@ -142,7 +142,10 @@ function rowLabels(list) {
     tabCounts.set(a.tab, (tabCounts.get(a.tab) ?? 0) + 1);
   }
   // Read the pane snapshot once: every host read copies the whole list into JS.
-  const leads = leadPanes(panes());
+  const all = panes();
+  const leads = leadPanes(all);
+  // The branch each agent's pane is on: the pane's own, so a worktree says which one.
+  const branch = new Map(all.filter((p) => p.terminal && p.branch).map((p) => [p.pane, p.branch]));
   const tabs = new Map(
     spaces()
       .flatMap((s) => s.tabs)
@@ -172,7 +175,7 @@ function rowLabels(list) {
       detail.set(a.address, label(a));
     }
   }
-  return { label, detail };
+  return { label, detail, branch };
 }
 
 // Under a space header the space goes without saying; an automatic tab number says nothing.
@@ -632,7 +635,7 @@ export default class Agents extends View {
         .when(!open, (el) => el.child(String(subs.length)));
     };
 
-    const { label, detail } = rowLabels(list);
+    const { label, detail, branch } = rowLabels(list);
 
     const row = (a, i, subs = []) => {
       if (collapsed) {
@@ -644,44 +647,58 @@ export default class Agents extends View {
       // Without a space header above (priority, pinned) the row names its space.
       const full = byPriority || a.pinned;
       const name = rowName(a, full, more, label(a));
-      return h_flex()
-        .id(`ag-${a.address}`)
-        .px(8)
-        .h(30)
-        .flex_none()
-        .rounded(8)
-        .items_center()
-        .gap(9)
-        .when(a.focused, (el) => el.bg(t.selected))
-        .cursor_pointer()
-        .hover((s) => s.bg(t.hover))
-        .on_hover((on, cx) => {
-          if (on) {
-            this.hovered = a.address;
-          } else if (this.hovered === a.address) {
-            this.hovered = null;
-          }
-          cx.notify();
-        })
-        .on_click(() => run("pane.focus", { pane: a.pane }))
-        .tooltip(full && more ? `${name} · ${more}` : name)
-        .child(
-          h_flex()
-            .flex_1()
-            .min_w(0)
-            .gap(5)
-            .items_center()
-            .when(full && Boolean(a.space_name), (el) =>
-              el.child(spaceAvatar(a.space, a.space_name, t)),
-            )
-            .child(this.nyan(a.address, a.status, 22, name)),
-        )
-        .when(Boolean(machine), (el) =>
-          el.child(div().text_size(10).text_color(t.dim).child(machine)),
-        )
-        .when(subs.length > 0, (el) => el.child(fold(a, subs)))
-        .when(this.hovered === a.address, (el) => el.child(this.pinButton(t, a)))
-        .when(a.status !== "working", (el) => el.child(this.status(t, a, true)));
+      return (
+        h_flex()
+          .id(`ag-${a.address}`)
+          .px(8)
+          .h(30)
+          .flex_none()
+          .rounded(8)
+          .items_center()
+          .gap(9)
+          .when(a.focused, (el) => el.bg(t.selected))
+          .cursor_pointer()
+          .hover((s) => s.bg(t.hover))
+          .on_hover((on, cx) => {
+            if (on) {
+              this.hovered = a.address;
+            } else if (this.hovered === a.address) {
+              this.hovered = null;
+            }
+            cx.notify();
+          })
+          .on_click(() => run("pane.focus", { pane: a.pane }))
+          .tooltip(full && more ? `${name} · ${more}` : name)
+          .child(
+            h_flex()
+              .flex_1()
+              .min_w(0)
+              .gap(5)
+              .items_center()
+              .when(full && Boolean(a.space_name), (el) =>
+                el.child(spaceAvatar(a.space, a.space_name, t)),
+              )
+              .child(this.nyan(a.address, a.status, 22, name)),
+          )
+          .when(Boolean(machine), (el) =>
+            el.child(div().text_size(10).text_color(t.dim).child(machine)),
+          )
+          // Which branch or worktree the agent works in, when its pane is in a git repo.
+          .when(Boolean(branch.get(a.pane)), (el) =>
+            el.child(
+              div()
+                .flex_none()
+                .max_w(120)
+                .truncate()
+                .text_size(10)
+                .text_color(t.dim)
+                .child(branch.get(a.pane)),
+            ),
+          )
+          .when(subs.length > 0, (el) => el.child(fold(a, subs)))
+          .when(this.hovered === a.address, (el) => el.child(this.pinButton(t, a)))
+          .when(a.status !== "working", (el) => el.child(this.status(t, a, true)))
+      );
     };
 
     // A group's header; it folds the group. Folded, it says how many and the most urgent state.

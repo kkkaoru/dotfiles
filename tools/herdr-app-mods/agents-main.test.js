@@ -372,6 +372,15 @@ const groupedHost = () => {
   ];
 };
 
+test("a row says which branch its pane is on, and nothing when the pane has none", () => {
+  groupedHost();
+  host.panes.push({ pane: "pane-B", terminal: "x3", tab: "tB", branch: "feat/b", program: CLAUDE });
+  const { view } = newView();
+  const tree = view.render();
+  expect(texts(byId(tree, "ag-B"))).toContain("feat/b");
+  expect(texts(byId(tree, "ag-A"))).not.toContain("feat/b");
+});
+
 test("grouped rows read their tab or the agent's own title, a tab number only to tell two apart", () => {
   groupedHost();
   const { view } = newView();
