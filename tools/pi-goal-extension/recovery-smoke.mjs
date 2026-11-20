@@ -77,7 +77,7 @@ function streamFor(scenario) {
       if (current) {
         const guidance = context.messages.findLast(
           (message) =>
-            message.role === "system" &&
+            message.role === "user" &&
             typeof message.content === "string" &&
             message.content.includes("Goal state (JSON):"),
         );

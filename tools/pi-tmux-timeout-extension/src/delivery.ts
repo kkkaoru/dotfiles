@@ -165,7 +165,9 @@ export class CompletionDelivery {
       messages: [
         ...messages,
         {
-          role: "system",
+          // A user message stays out of the leading prompt whose bytes the provider caches.
+          // A system message would be hoisted there and change the prefix.
+          role: "user",
           content: overduePrompt(overdue),
           timestamp: Date.now(),
         },

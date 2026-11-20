@@ -394,7 +394,7 @@ it("creates, injects goal guidance, accepts only current tickets and audits comp
     messages: [
       { role: "system", content: "base", timestamp: 0 },
       {
-        role: "system",
+        role: "user",
         content: expect.stringMatching(/The following JSON/),
         timestamp: expect.any(Number),
       },
@@ -514,7 +514,7 @@ it("refreshes goal state between tool rounds without freezing prompts or changin
   expect(field(paused, "messages")).toMatchObject([
     messages[0],
     messages[1],
-    { role: "system", content: expect.stringMatching(/"status":"paused"/u) },
+    { role: "user", content: expect.stringMatching(/"status":"paused"/u) },
   ]);
   await h.command("clear");
   expect(await h.call("context_with_system", { messages })).toBeUndefined();

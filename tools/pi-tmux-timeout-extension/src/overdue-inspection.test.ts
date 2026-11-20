@@ -154,7 +154,7 @@ it("preserves original instructions and user requests when projecting overdue ev
   const result = delivery.injectOverdue({ messages });
   expect(result?.messages.slice(0, 2)).toStrictEqual(messages);
   expect(result?.messages.at(-1)).toMatchObject({
-    role: "system",
+    role: "user",
     content: expect.stringMatching(
       /Current user instructions, goal state and output requirements take precedence/u,
     ),

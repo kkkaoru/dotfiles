@@ -252,6 +252,8 @@ export default function goalExtension(pi: GoalExtensionHost): void {
       ? { action: "continue" }
       : { action: "handled" };
   });
+  // A system message here is hoisted into the leading prompt, so a changed goal state
+  // would rewrite the provider's prompt prefix and drop its cache. Ride at the tail instead.
   pi.on("context_with_system", (event) => {
     const guidance: string = goalGuidance(state.runtime?.state ?? null);
     return guidance.length === 0
@@ -260,7 +262,7 @@ export default function goalExtension(pi: GoalExtensionHost): void {
           messages: [
             ...event.messages,
             {
-              role: "system",
+              role: "user",
               content: guidance,
               timestamp: Date.now(),
             },

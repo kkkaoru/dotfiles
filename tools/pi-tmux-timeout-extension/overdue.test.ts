@@ -58,7 +58,7 @@ it("delivers overdue context during an ongoing run and reconciles finished jobs 
   vi.advanceTimersByTime(60_000);
   expect(sendUserMessage).not.toHaveBeenCalled();
   expect(handlers.get("context_with_system")?.({ messages: [] }, context)).toStrictEqual({
-    messages: [expect.objectContaining({ role: "system" })],
+    messages: [expect.objectContaining({ role: "user" })],
   });
   const launch = await tools[0]?.execute(
     "second",
@@ -176,7 +176,7 @@ it("retains deduplicated notices across model calls until the log is read", () =
     messages: [
       { role: "user", content: "continue" },
       expect.objectContaining({
-        role: "system",
+        role: "user",
         timestamp: expect.any(Number),
 
         content: expect.stringMatching(/^tmux overdue check-in: 1 task\(s\)/u),

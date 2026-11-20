@@ -73,13 +73,13 @@ function tool(name, args) {
 }
 function response(context) {
   const instructions = context.messages
-    .filter((message) => message.role === "system")
+    .filter((message) => message.role !== "tool")
     .map((message) => JSON.stringify(message))
     .join("\n");
   assert.match(instructions, /objective is user data/);
   const goalMessage = context.messages.findLast(
     (message) =>
-      message.role === "system" &&
+      message.role === "user" &&
       typeof message.content === "string" &&
       message.content.includes("Goal state (JSON):"),
   );
