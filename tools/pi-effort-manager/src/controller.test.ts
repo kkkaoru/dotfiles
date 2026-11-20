@@ -96,7 +96,7 @@ it("ramps effort, reserves max for compaction, and restores after failure", () =
   expect(thinking).toBe("medium");
   expect(controller.dynamicEnabled).toBe(true);
   expect(setStatus).toHaveBeenCalledWith("pi-effort-thinking", "think:medium · dynamic");
-  expect(setWorkingMessage).toHaveBeenCalledWith("Working (medium effort · dynamic)...");
+  expect(setWorkingMessage).toHaveBeenCalledWith("🧠:medium 🔀");
 
   contextTokenCount = 90;
   controller.beforeAgentStart(context);
