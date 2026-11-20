@@ -9,25 +9,13 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
-/** Extension statuses that keep a place on the row, in this order. The rest are dropped: pi's own
- *  footer prints every status on one line and cuts it off mid-word once they no longer fit. */
-export const SHOWN: readonly string[] = [
-  "gateway-cost",
-  "pi-effort-thinking",
-  "pi-effort-dynamic",
-  "plamo-translate",
-  "strata",
-  "ponytail",
-];
+/** Statuses that keep a place on the row, in this order. The gateway price and the ponytail mode
+ *  are not among them: the row is shared, and both are stable enough to read elsewhere. */
+export const SHOWN: readonly string[] = ["pi-effort-thinking", "plamo-translate", "strata"];
 
-/** `● 🐴 ponytail: ⚡ FULL` -> `🐴 FULL`: the mode is worth a word, not a sentence.
- *  shortcut: reads ponytail's own label, so a changed format just shows its text again. */
-export function shortStatus(key: string, text: string): string {
-  if (key !== "ponytail") {
-    return text;
-  }
-  const label: string | undefined = /ponytail:\s*(.+)$/u.exec(text)?.[1];
-  return label === undefined ? text : `🐴 ${label}`;
+/** `think:max · dynamic` -> `🧠:max 🔀`: one glyph per idea, because the row is shared. */
+export function effortText(text: string): string {
+  return text.replace(/^think/u, "🧠").replace(/\s*·\s*dynamic$/u, " 🔀");
 }
 
 /** The folder names the checkout; the window title already shows the whole path. */
@@ -35,13 +23,11 @@ export function folderOf(cwd: string): string {
   return cwd.startsWith(homedir()) ? path.basename(cwd) : cwd;
 }
 
-export function shortModel(id: string | undefined): string {
-  return id?.split("/").pop() ?? "";
-}
-
-/** `/session <8 hex chars>` resumes this session, so eight characters are enough to show. */
-export function shortSession(id: string): string {
-  return id.slice(0, 8);
+/** `workers-ai/@cf/deepseek-ai/deepseek-v4.1-flash-1017` -> `workers-ai/deepseek-v4.1-flash-1017`:
+ *  the provider decides routing and cost, the model path before it does not. */
+export function modelText(provider: string | undefined, id: string | undefined): string {
+  const model = id?.split("/").pop() ?? "";
+  return provider === undefined || model === "" ? model : `${provider}/${model}`;
 }
 
 function windowText(window: number): string {
@@ -82,7 +68,10 @@ export function footerLines(
     contextText(ctx.getContextUsage()),
     ...SHOWN.flatMap((key) => {
       const text = statuses.get(key);
-      return text === undefined ? [] : [shortStatus(key, text)];
+      if (text === undefined) {
+        return [];
+      }
+      return [key === "pi-effort-thinking" ? effortText(text) : text];
     }),
   ]
     .filter((part) => part.length > 0)
@@ -90,14 +79,10 @@ export function footerLines(
   return [
     twoEnds(
       theme.fg("text", branch === null ? folder : `${folder} (${branch})`),
-      theme.fg("dim", shortModel(ctx.model?.id)),
+      theme.fg("dim", modelText(ctx.model?.provider, ctx.model?.id)),
       width,
     ),
-    twoEnds(
-      theme.fg("dim", stats),
-      theme.fg("dim", shortSession(ctx.sessionManager.getSessionId())),
-      width,
-    ),
+    twoEnds(theme.fg("dim", stats), theme.fg("dim", ctx.sessionManager.getSessionId()), width),
   ];
 }
 
