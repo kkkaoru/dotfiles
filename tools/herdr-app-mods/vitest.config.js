@@ -13,6 +13,7 @@ const OWN = [
   "system-stats",
   "agent-limits",
   "tabs-clock",
+  "pane-branch",
 ];
 
 export default defineConfig({

@@ -7,6 +7,7 @@ const defaults = () => ({
   spaces: [],
   machines: [],
   focused: null,
+  home: "/Users/me",
   theme: {},
   shared: {},
   props: null,
@@ -47,6 +48,7 @@ export const panes = () => host.panes;
 export const spaces = () => host.spaces;
 export const machines = () => host.machines;
 export const focused = () => host.focused;
+export const home = () => host.home;
 export const theme = () => host.theme;
 export const shared = (key) => host.shared[key];
 export const props = () => host.props;
