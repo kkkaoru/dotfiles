@@ -51,11 +51,18 @@ finished never reads `100.00%`. The percentage is padded to the width of `100.00
 line up down the tree, and a subtask reads as the deeper indent after it.
 
 Colours come from the active pi theme, so the Dracula palette is used here: green for finished work,
-purple for what is running (and for the tree's own bar), red for a blocked task, the comment colour
-for the rest, and the dim colour for the part of a bar that is still empty. Only the widget is
-coloured; the tool's answer and `/timeline` stay plain text. A task that has subtasks takes their weighted score instead of its own status, so a
-parent is finished only when its children are. A leaf counts `done` as 1, `active` as 0.5,
-`blocked` and `pending` as 0.
+purple for what is running, red for a blocked task, the comment colour for the rest, and the dim
+colour for the part of a bar that is still empty. Only the widget is coloured; the tool's answer and
+`/timeline` stay plain text.
+
+The tree's own bar is drawn in segments, as the reference package draws its dock bar: the finished
+part fills it in green, and the cells of what remains take the colour of the state they are in —
+purple while a task runs, red for blocked work, dim for work not started. Plain text keeps the
+`█`/`░` split, so a tool answer still says how much is left without a colour to read.
+
+A task that has subtasks takes their weighted score instead of its own status, so a parent is
+finished only when its children are. A leaf counts `done` as 1, `active` as 0.5, `blocked` and
+`pending` as 0.
 
 ## Translation
 

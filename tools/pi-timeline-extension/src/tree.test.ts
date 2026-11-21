@@ -5,11 +5,15 @@ import {
   ageText,
   EMPTY_TIMELINE,
   parseTimeline,
+  parts,
   progress,
   renderTimeline,
   updateTask,
   type Timeline,
 } from "./tree.ts";
+
+/** Names the role it was given, so a test can read which colour each piece took. */
+const named = (role: string, text: string): string => `${role}(${text})`;
 
 const built = (): Timeline => {
   const first = addTask(EMPTY_TIMELINE, { title: "Fix bug" });
@@ -105,4 +109,13 @@ test("the head carries the tree's age only once it is worth reading", () => {
   expect(renderTimeline(timeline, undefined, 42 * 60_000)[0]).toBe(
     "░░░░░░░░░░ 0.00% · 3 tasks · updated 42m",
   );
+});
+
+test("the tree's bar is drawn in the states its work is in", () => {
+  const child = updateTask(built(), "t2", { status: "done" });
+  const mixed = updateTask(child, "t3", { status: "active" });
+  // T1 takes its child's score, and t3 counts as half done while it runs with weight 3.
+  expect(parts(mixed)).toStrictEqual({ active: 0.375, blocked: 0, done: 0.625, pending: 0 });
+  expect(progress(mixed)).toBe(0.625);
+  expect(renderTimeline(mixed, named)[0]).toBe("done(██████)active(░░░░) muted(62.50%) · 3 tasks");
 });

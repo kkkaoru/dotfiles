@@ -45,6 +45,14 @@ export function ageText(ms: number): string {
 /** How much of a leaf's own weight counts as finished. A task with subtasks takes their score. */
 const SHARE: Readonly<Record<Status, number>> = { active: 0.5, blocked: 0, done: 1, pending: 0 };
 
+/** How the work splits by the state of each part, which is what the reference draws as a segment. */
+export interface Parts {
+  readonly active: number;
+  readonly blocked: number;
+  readonly done: number;
+  readonly pending: number;
+}
+
 const GLYPH: Readonly<Record<Status, string>> = {
   active: "▸",
   blocked: "✖",
@@ -64,22 +72,43 @@ function find(timeline: Timeline, id: string): Task {
   return task;
 }
 
-/** Weighted share of `tasks` that is finished: subtasks replace a task's own status. */
-function share(timeline: Timeline, tasks: readonly Task[]): number {
+/** A leaf's work, split between what it finished and the state the rest is in. */
+function leafParts(status: Status): Parts {
+  const rest = status === "active" || status === "blocked" ? status : "pending";
+  return { active: 0, blocked: 0, done: SHARE[status], pending: 0, [rest]: 1 - SHARE[status] };
+}
+
+/** Weighted split of `tasks`: subtasks replace a task's own status, as the reference measures them. */
+function measure(timeline: Timeline, tasks: readonly Task[]): Parts {
+  const total: Record<keyof Parts, number> = { active: 0, blocked: 0, done: 0, pending: 0 };
   let weight = 0;
-  let done = 0;
   for (const task of tasks) {
     const subtasks = children(timeline, task.id);
-    const value = subtasks.length === 0 ? SHARE[task.status] : share(timeline, subtasks);
+    const value = subtasks.length === 0 ? leafParts(task.status) : measure(timeline, subtasks);
     weight += task.weight;
-    done += task.weight * value;
+    for (const key of ["active", "blocked", "done", "pending"] as const) {
+      total[key] += task.weight * value[key];
+    }
   }
-  return weight === 0 ? 0 : done / weight;
+  if (weight === 0) {
+    return { active: 0, blocked: 0, done: 0, pending: 1 };
+  }
+  return {
+    active: total.active / weight,
+    blocked: total.blocked / weight,
+    done: total.done / weight,
+    pending: total.pending / weight,
+  };
+}
+
+/** How the work under `parent` splits by state, so the tree's bar can be drawn in segments. */
+export function parts(timeline: Timeline, parent: string | null = null): Parts {
+  return measure(timeline, children(timeline, parent));
 }
 
 /** Weighted share of the work under `parent` that is finished, from 0 to 1. */
 export function progress(timeline: Timeline, parent: string | null = null): number {
-  return share(timeline, children(timeline, parent));
+  return parts(timeline, parent).done;
 }
 
 export function addTask(
@@ -146,10 +175,31 @@ function bar(value: number, cells: number, role: Role, colour: Colour): string {
   return `${colour(role, "█".repeat(filled))}${colour("empty", "░".repeat(cells - filled))}`;
 }
 
+/** The tree's bar in segments: finished, running, blocked and the rest, each in its own colour. */
+function segments(value: Parts, cells: number, colour: Colour): string {
+  let edge = 0;
+  let drawn = 0;
+  let text = "";
+  // Only finished work fills the bar; running and blocked cells keep theirs in their own colour.
+  for (const [role, glyph] of [
+    ["done", "█"],
+    ["active", "░"],
+    ["blocked", "░"],
+  ] as const) {
+    edge += value[role];
+    const upto = Math.round(edge * cells);
+    if (upto > drawn) {
+      text += colour(role, glyph.repeat(upto - drawn));
+      drawn = upto;
+    }
+  }
+  return drawn >= cells ? text : `${text}${colour("empty", "░".repeat(cells - drawn))}`;
+}
+
 function taskLine(timeline: Timeline, task: Task, colour: Colour): string {
   // The bar opens every line and the percentage follows it at a fixed width, so both line up down
   // The tree; the indent after them still reads the depth.
-  const value = share(timeline, [task]);
+  const value = measure(timeline, [task]).done;
   const percent = colour(task.status, `${formatProgress(value)}%`.padStart(PERCENT_WIDTH));
   const note = task.note === "" ? "" : ` — ${task.note}`;
   return `${bar(value, TASK_CELLS, task.status, colour)} ${percent} ${"  ".repeat(depth(timeline, task))}${GLYPH[task.status]} ${task.id} ${task.title}${note}`;
@@ -172,13 +222,13 @@ export function renderTimeline(
   if (timeline.tasks.length === 0) {
     return ["No tasks."];
   }
-  const value = progress(timeline);
+  const split = parts(timeline);
   // A tree nobody has touched for a while is the one that lies, so its age rides in the head.
   const stale =
     ageMs !== undefined && ageMs >= STALE_AFTER_MS
       ? colour("muted", ` · updated ${ageText(ageMs)}`)
       : "";
-  const head = `${bar(value, HEAD_CELLS, "total", colour)} ${colour("muted", `${formatProgress(value)}%`)} · ${String(timeline.tasks.length)} tasks${stale}`;
+  const head = `${segments(split, HEAD_CELLS, colour)} ${colour("muted", `${formatProgress(split.done)}%`)} · ${String(timeline.tasks.length)} tasks${stale}`;
   return [head, ...lines(timeline, null, [], colour)];
 }
 
