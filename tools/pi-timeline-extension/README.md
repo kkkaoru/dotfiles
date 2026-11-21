@@ -6,7 +6,8 @@ Harness timeline: tasks and subtasks, each with a status, a note and a weight, a
 percentage that says how much of the work is finished.
 
 The agent records the tree with the `timeline` tool, and you can read it at any time with
-`/timeline`. The percentage also sits in the footer status area.
+`/timeline`. While the tree has tasks it is drawn below the editor, so it stays in sight without
+competing for the footer row; the percentage also sits in the footer status area.
 
 ## The tool
 
@@ -37,7 +38,10 @@ resumed session finds its own tree and nothing is shared between sessions. Witho
 (`--no-session`) the tree lives in memory for that run.
 
 Saves are serialized and fire-and-forget: the tool answers immediately, and a failed commit is
-reported once in the chat and then dropped rather than retried. A session that cannot open its
+reported once in the chat and then dropped rather than retried. A sidecar another pi holds, or one
+that cannot be opened, leaves the tree in memory with one warning instead of taking the tree away.
+The open sidecar is shared with a copy that `/reload` leaves behind, so a reload keeps both the tree
+and its lock. A session that cannot open its
 sidecar still runs; the tree just stays empty.
 
 ## Install

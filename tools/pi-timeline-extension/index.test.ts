@@ -1,5 +1,5 @@
 // This TypeScript file is executed with Bun.
-import { chmod, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -12,6 +12,7 @@ interface Harness {
   readonly notify: ReturnType<typeof vi.fn>;
   readonly run: (params: unknown) => Promise<{ content: readonly { text: string }[] }>;
   readonly setStatus: ReturnType<typeof vi.fn>;
+  readonly setWidget: ReturnType<typeof vi.fn>;
   readonly show: () => Promise<void>;
 }
 
@@ -49,9 +50,10 @@ async function start(file?: string): Promise<Harness> {
 
   const notify = vi.fn();
   const setStatus = vi.fn();
+  const setWidget = vi.fn();
   const context = {
     sessionManager: { getSessionFile: () => file },
-    ui: { notify, setStatus },
+    ui: { notify, setStatus, setWidget },
   } as unknown as ExtensionContext;
   await handlers.get("session_start")?.({}, context);
   return {
@@ -59,6 +61,7 @@ async function start(file?: string): Promise<Harness> {
     handlers,
     notify,
     setStatus,
+    setWidget,
     async run(params: unknown) {
       const result = (await tool?.("call", params, undefined, undefined, context)) as {
         content: readonly { text: string }[];
@@ -125,6 +128,56 @@ test("the command shows the tree it keeps", async () => {
   await harness.show();
   expect(harness.notify).toHaveBeenLastCalledWith("0% · 1 tasks\n· t1 Fix bug", "info");
   expect(harness.setStatus).toHaveBeenLastCalledWith("timeline", "0%");
+});
+
+test("the tree keeps a place of its own under the editor", async () => {
+  const harness = await start();
+  // An empty session has nothing to show, and must not leave an empty box behind.
+  expect(harness.setWidget).toHaveBeenLastCalledWith("timeline", undefined, {
+    placement: "belowEditor",
+  });
+  await harness.run({ action: "add", title: "Fix bug" });
+  expect(harness.setWidget).toHaveBeenLastCalledWith("timeline", ["0% · 1 tasks", "· t1 Fix bug"], {
+    placement: "belowEditor",
+  });
+});
+
+test("a copy that a reload leaves behind does not take the sidecar away", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "pi-timeline-"));
+  directories.push(directory);
+  const file = path.join(directory, "session.jsonl");
+  const first = await start(file);
+  await first.run({ action: "add", title: "Fix bug" });
+  // The reloaded copy starts while the previous one is still open, as /reload does.
+  const second = await start(file);
+  expect(second.notify).not.toHaveBeenCalled();
+  expect(second.setStatus).toHaveBeenLastCalledWith("timeline", "0%");
+  expect(second.setWidget).toHaveBeenLastCalledWith("timeline", ["0% · 1 tasks", "· t1 Fix bug"], {
+    placement: "belowEditor",
+  });
+  await first.handlers.get("session_shutdown")?.({}, first.context);
+  const done = await second.run({ action: "update", id: "t1", status: "done" });
+  expect(text(done)).toBe("100% · 1 tasks\n✔ t1 Fix bug");
+  await second.handlers.get("session_shutdown")?.({}, second.context);
+});
+
+test("a sidecar another pi holds leaves the tree in memory, and it is still shown", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "pi-timeline-"));
+  directories.push(directory);
+  const file = path.join(directory, "session.jsonl");
+  // A fresh lock directory is what proper-lockfile leaves while another process holds the sidecar.
+  await mkdir(`${file}.timeline-durable.lock`, { recursive: true });
+  const harness = await start(file);
+  expect(harness.notify).toHaveBeenCalledWith(
+    expect.stringContaining("this session's tree stays in memory"),
+    "warning",
+  );
+  const added = await harness.run({ action: "add", title: "Fix bug" });
+  expect(text(added)).toBe("0% · 1 tasks\n· t1 Fix bug");
+  expect(harness.setWidget).toHaveBeenLastCalledWith("timeline", ["0% · 1 tasks", "· t1 Fix bug"], {
+    placement: "belowEditor",
+  });
+  await harness.handlers.get("session_shutdown")?.({}, harness.context);
 });
 
 test("a session with a file keeps its tree beside it and finds it again", async () => {

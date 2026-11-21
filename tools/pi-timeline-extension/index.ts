@@ -20,6 +20,7 @@ import {
 } from "./src/tree.ts";
 
 const STATUS_KEY = "timeline";
+const WIDGET_KEY = "timeline";
 
 const statusSchema = Type.Union(STATUSES.map((status) => Type.Literal(status)));
 const parameters = Type.Object({
@@ -41,25 +42,95 @@ interface Session {
   timeline: Timeline;
 }
 
+interface Holder {
+  readonly release: () => Promise<void>;
+  readonly store: DurableTimelineStore;
+  refs: number;
+}
+
+/**
+ * The open sidecars live on globalThis: /reload evaluates this module again while the previous copy
+ * still holds the lock, so a second lock would fail and the tree would stop being shown.
+ */
+const HELD_KEY = Symbol.for("dotfiles.timeline.held");
+
+function held(): Map<string, Holder> {
+  const shared = globalThis as typeof globalThis & { [HELD_KEY]?: Map<string, Holder> };
+  shared[HELD_KEY] ??= new Map<string, Holder>();
+  return shared[HELD_KEY];
+}
+
+async function releaseHeld(entry: Holder, directory: string): Promise<void> {
+  entry.refs -= 1;
+  if (entry.refs > 0) {
+    return;
+  }
+  held().delete(directory);
+  try {
+    await entry.store.close();
+  } finally {
+    await entry.release();
+  }
+}
+
+function reuse(directory: string, entry: Holder): Omit<Session, "timeline"> {
+  entry.refs += 1;
+  return { release: async () => releaseHeld(entry, directory), store: entry.store };
+}
+
 function reportWith(context: ExtensionContext): (error: unknown) => void {
   return (error): void => {
     context.ui.notify(`Timeline storage stopped: ${String(error)}`, "error");
   };
 }
 
+/** Open the sidecar this session keeps its tree in, and hold its lock for as long as it is used. */
+async function openSidecar(
+  directory: string,
+  report: (error: unknown) => void,
+): Promise<Omit<Session, "timeline">> {
+  let release: (() => Promise<void>) | undefined = undefined;
+  try {
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    release = await lock(directory, { retries: 0 });
+    const storage = await openNodeJsonlStorage(directory, BACKGROUND_CONTEXT, { fsync: true });
+    const store = await DurableTimelineStore.open(storage, report);
+    const entry: Holder = { refs: 1, release, store };
+    held().set(directory, entry);
+    return { release: async () => releaseHeld(entry, directory), store };
+  } catch (error) {
+    // Release a lock we took so a later session can open the sidecar.
+    await release?.();
+    throw error;
+  }
+}
+
 async function openStore(context: ExtensionContext): Promise<Omit<Session, "timeline">> {
   const file: string | undefined = context.sessionManager.getSessionFile();
   const report = reportWith(context);
-  if (file === undefined) {
+  const inMemory = async (): Promise<Omit<Session, "timeline">> => {
     const store = await DurableTimelineStore.open(new MemoryStorage(), report);
-    return { release: undefined, store };
+    return { release: async () => store.close(), store };
+  };
+  if (file === undefined) {
+    return inMemory();
   }
   // The sidecar stays with the session file, so a resumed session finds its own tree.
   const directory = `${file}.timeline-durable`;
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  const release = await lock(directory, { retries: 0 });
-  const storage = await openNodeJsonlStorage(directory, BACKGROUND_CONTEXT, { fsync: true });
-  return { release, store: await DurableTimelineStore.open(storage, report) };
+  const shared = held().get(directory);
+  if (shared !== undefined) {
+    return reuse(directory, shared);
+  }
+  try {
+    return await openSidecar(directory, report);
+  } catch (error) {
+    // Another pi holds this session's sidecar, or it cannot be opened: a tree in memory beats none.
+    context.ui.notify(
+      `Timeline: this session's tree stays in memory (${String(error)}).`,
+      "warning",
+    );
+    return inMemory();
+  }
 }
 
 function patchOf(params: Params): TaskPatch {
@@ -106,28 +177,39 @@ function apply(active: Session, params: Params): Timeline {
 function show(context: ExtensionContext, timeline: Timeline): void {
   const percent = Math.round(progress(timeline) * 100);
   context.ui.setStatus(STATUS_KEY, `${String(percent)}%`);
+  // The footer row is shared and need not carry this status, so the tree keeps a place of its own.
+  context.ui.setWidget(
+    WIDGET_KEY,
+    timeline.tasks.length === 0 ? undefined : renderTimeline(timeline),
+    { placement: "belowEditor" },
+  );
 }
 
 export default function timelineExtension(pi: ExtensionAPI): void {
   let session: Session | undefined = undefined;
+  let opening: Promise<Session> | undefined = undefined;
 
   const close = async (): Promise<void> => {
     const closing = session;
     session = undefined;
-    try {
-      await closing?.store.close();
-    } finally {
-      await closing?.release?.();
-    }
+    await closing?.release?.();
+  };
+
+  const open = async (context: ExtensionContext): Promise<Session> => {
+    const opened = await openStore(context);
+    const stored: Timeline | undefined = await opened.store.restore();
+    return { ...opened, timeline: stored ?? EMPTY_TIMELINE };
   };
 
   const ensure = async (context: ExtensionContext): Promise<Session> => {
     if (session !== undefined) {
       return session;
     }
-    const opened = await openStore(context);
-    const stored: Timeline | undefined = await opened.store.restore();
-    session = { ...opened, timeline: stored ?? EMPTY_TIMELINE };
+    // Two tool calls can arrive before the store is open; one open serves both.
+    opening ??= open(context).finally(() => {
+      opening = undefined;
+    });
+    session = await opening;
     return session;
   };
 
