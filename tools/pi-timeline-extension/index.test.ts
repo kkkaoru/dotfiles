@@ -5,11 +5,20 @@ import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, expect, test, vi } from "vitest";
 import timelineExtension from "./index.ts";
-import { start } from "./src/harness.ts";
+import { start, type Harness } from "./src/harness.ts";
 import type { Timeline } from "./src/tree.ts";
 import { TranslatedTimeline } from "./src/translate.ts";
 
 const directories: string[] = [];
+
+/** One tool call after another, as pi delivers them, since the count of steps is the point. */
+async function stepCalls(harness: Harness, times: number, toolName = "read"): Promise<void> {
+  if (times === 0) {
+    return;
+  }
+  await harness.handlers.get("tool_call")?.({ toolName }, harness.context);
+  await stepCalls(harness, times - 1, toolName);
+}
 
 afterEach(async () => {
   await Promise.all(
@@ -141,53 +150,38 @@ test("the age is repainted as the tree ages, and stops once it is finished", asy
   }
 });
 
-test("a stale tree is reported to the agent once", async () => {
-  vi.useFakeTimers({ toFake: ["Date"] });
-  try {
-    vi.setSystemTime(new Date(2026, 7, 26, 11, 0));
-    const harness = await start();
-    await harness.run({ action: "add", title: "Fix bug" });
-    await harness.handlers.get("agent_end")?.({}, harness.context);
-    expect(harness.sendMessage).not.toHaveBeenCalled();
-    vi.setSystemTime(new Date(2026, 7, 26, 11, 20));
-    await harness.handlers.get("agent_end")?.({}, harness.context);
-    expect(harness.sendMessage).toHaveBeenCalledWith(
-      {
-        content: expect.stringContaining(
-          "1 unfinished and the tree has not changed for 20m",
-        ) as string,
-        customType: "timeline-nudge",
-        display: false,
-      },
-      { deliverAs: "nextTurn" },
-    );
-    // A later turn does not repeat it while the tree is still untouched.
-    await harness.handlers.get("agent_end")?.({}, harness.context);
-    expect(harness.sendMessage).toHaveBeenCalledTimes(1);
-    // A change earns the next report.
-    vi.setSystemTime(new Date(2026, 7, 26, 11, 50));
-    await harness.run({ action: "update", id: "t1", note: "halfway" });
-    vi.setSystemTime(new Date(2026, 7, 26, 12, 20));
-    await harness.handlers.get("agent_end")?.({}, harness.context);
-    expect(harness.sendMessage).toHaveBeenCalledTimes(2);
-  } finally {
-    vi.useRealTimers();
-  }
+test("a long stretch of work earns one checkpoint notice, mid-turn", async () => {
+  const harness = await start();
+  await harness.run({ action: "add", title: "Fix bug" });
+  await stepCalls(harness, 23);
+  expect(harness.sendMessage).not.toHaveBeenCalled();
+  await stepCalls(harness, 1);
+  expect(harness.sendMessage).toHaveBeenCalledWith(
+    {
+      content: expect.stringContaining("Task progress checkpoint: 1 unfinished") as string,
+      customType: "timeline-nudge",
+      display: false,
+    },
+    { deliverAs: "steer" },
+  );
+  // The count restarted, so the next stretch is reported on its own.
+  await stepCalls(harness, 23);
+  expect(harness.sendMessage).toHaveBeenCalledTimes(1);
+  await stepCalls(harness, 1);
+  expect(harness.sendMessage).toHaveBeenCalledTimes(2);
+  // A timeline call is the checkpoint itself, and its own call is not counted.
+  await harness.run({ action: "update", id: "t1", note: "halfway" });
+  await stepCalls(harness, 1, "timeline");
+  await stepCalls(harness, 23);
+  expect(harness.sendMessage).toHaveBeenCalledTimes(2);
 });
 
 test("a finished tree is never reported", async () => {
-  vi.useFakeTimers({ toFake: ["Date"] });
-  try {
-    vi.setSystemTime(new Date(2026, 7, 26, 11, 0));
-    const harness = await start();
-    await harness.run({ action: "add", title: "Fix bug" });
-    await harness.run({ action: "update", id: "t1", status: "done" });
-    vi.setSystemTime(new Date(2026, 7, 26, 13, 0));
-    await harness.handlers.get("agent_end")?.({}, harness.context);
-    expect(harness.sendMessage).not.toHaveBeenCalled();
-  } finally {
-    vi.useRealTimers();
-  }
+  const harness = await start();
+  await harness.run({ action: "add", title: "Fix bug" });
+  await harness.run({ action: "update", id: "t1", status: "done" });
+  await stepCalls(harness, 30);
+  expect(harness.sendMessage).not.toHaveBeenCalled();
 });
 
 test("a change without the field it needs is refused", async () => {

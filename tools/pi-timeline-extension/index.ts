@@ -7,7 +7,7 @@ import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import { lock } from "proper-lockfile";
 import { Type, type Static } from "typebox";
-import { ageOf, everyTick, NUDGE_TYPE, staleNudge } from "./src/keepalive.ts";
+import { ageOf, checkpoint, everyTick, NUDGE_TYPE } from "./src/keepalive.ts";
 import { DurableTimelineStore, lastWrite } from "./src/store.ts";
 import { plamoDisplayFromSettings } from "./src/live.ts";
 import type { TranslatedTimeline } from "./src/translate.ts";
@@ -66,10 +66,10 @@ interface Opened {
 interface Session extends Opened {
   /** The tree as last painted, so a repaint of the age alone need not translate it again. */
   shown: Timeline;
+  /** Tool calls since the last timeline call, which is how a stale tree is noticed mid-turn. */
+  steps: number;
   timeline: Timeline;
   updatedAt: number;
-  /** Set when the agent was reminded, so one stale tree is not reported over and over. */
-  nudgedAt: number | undefined;
 }
 
 interface Holder {
@@ -241,8 +241,8 @@ function storeSession(): Store {
     return {
       ...opened,
       shown: timeline,
+      steps: 0,
       timeline,
-      nudgedAt: undefined,
       updatedAt: opened.updatedAt ?? Date.now(),
     };
   };
@@ -328,20 +328,22 @@ export default function timelineExtension(pi: ExtensionAPI, options: Options = {
     label: "Timeline",
     description:
       "Record this session's task tree and its progress: add a task or subtask, change a task's status, or read the tree.",
-    promptSnippet: "Record the task tree and how far each task has got",
+    promptSnippet: "Plan multi-step work as a task tree, and keep it current as the work moves",
     promptGuidelines: [
-      'Use timeline with action "add" to break work into tasks and subtasks before starting it, and action "update" to mark each one active, done or blocked as you go.',
-      'Use timeline with action "list" when you need the current plan, its ids and its progress.',
+      'Before substantive multi-step work, reuse this goal\'s tree or break the work into tasks and checkable subtasks with timeline action "add". Group work by deliverable.',
+      "At meaningful checkpoints, mark what finished as done, keep the current task active with a short note of its result, and add tasks when the scope changes. Preserve completed work.",
+      "Verify a task before marking it done; a blocked task keeps a note saying what blocks it, and a dependency is rechecked once before the blocker is recorded again.",
+      'Before a final answer on planned work, save progress and use timeline action "list" to confirm what remains; use it also when you need the plan\'s ids.',
     ],
     parameters,
     async execute(_toolCallId, params, _signal, _onUpdate, context) {
       const active = await store.ensure(context);
       const next: Timeline = apply(active, params);
-      // Only a real change moves the tree's age and earns the next stale reminder.
+      // The call is the checkpoint itself, and only a real change moves the tree's age.
+      active.steps = 0;
       if (next !== active.timeline) {
         active.timeline = next;
         active.updatedAt = Date.now();
-        active.nudgedAt = undefined;
       }
       active.store.save(active.timeline);
       show(context, active);
@@ -381,13 +383,18 @@ export default function timelineExtension(pi: ExtensionAPI, options: Options = {
     await store.close();
     paint(context);
   });
-  pi.on("agent_end", async (_event, context) => {
+  // A turn can run for an hour, so a stale tree is reported mid-turn instead of at its end.
+  pi.on("tool_call", async (event, context) => {
+    if (event.toolName === "timeline") {
+      return;
+    }
     const active = await store.ensure(context);
-    const nudge = staleNudge(active, Date.now());
-    if (nudge !== undefined) {
+    active.steps += 1;
+    const notice = checkpoint(active);
+    if (notice !== undefined) {
       pi.sendMessage(
-        { content: nudge, customType: NUDGE_TYPE, display: false },
-        { deliverAs: "nextTurn" },
+        { content: notice, customType: NUDGE_TYPE, display: false },
+        { deliverAs: "steer" },
       );
     }
   });

@@ -17,10 +17,16 @@ The widget is only useful while it says something true, so it carries its own ag
 after the last change, the head adds `· updated 42m`, repainted once a minute (`1m`, `59m`, `1h`,
 `1d`), so a frozen tree looks frozen instead of authoritative.
 
-When a turn ends with unfinished tasks and the tree has not changed for 15 minutes, the agent is
-told once — a hidden `timeline-nudge` message asking it to mark what finished as done and record the
-next step. A change clears that reminder, so the next stale stretch is reported again; a tree with
-every task done is never reported.
+A turn can run for an hour, so the reminder arrives mid-turn: after 24 tool calls without a
+`timeline` call, and while tasks are unfinished, the agent is steered once with a hidden
+`timeline-nudge` message — a task progress checkpoint asking it to mark what finished as done, keep
+the current task active with a note, and add tasks if the scope changed. Any `timeline` call
+restarts the count, and a tree with every task done is never reported.
+
+The agent is also told, in the tool's own guidelines, how the reference package plans work: break
+multi-step work into checkable tasks before starting, update at meaningful checkpoints, verify a
+task before marking it done, recheck a blocked dependency once, and save progress before a final
+answer.
 
 ## The tool
 
