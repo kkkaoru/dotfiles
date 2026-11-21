@@ -60,7 +60,7 @@ it("records a bounded next check and clears the overdue notice", () => {
     hidden: false,
   });
   expect(result.text).toContain("tmux check-in recorded");
-  expect(result.text).toContain("Next check-in: 10-26 23:30 (30 min).");
+  expect(result.text).toContain("Next check-in: 23:30 (30 min).");
   expect(result.text).toContain("does not stop it or prove completion");
 });
 

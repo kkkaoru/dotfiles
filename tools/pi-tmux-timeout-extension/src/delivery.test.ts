@@ -38,7 +38,7 @@ it("normalizes completion identity into one bounded naming line", () => {
 
   expect(sendUserMessage).toHaveBeenCalledWith(
     expect.stringMatching(
-      /^08-25 23:55 → 08-26 02:15 \| cat > \/tmp\/test\.py <<'PY' print\('ok'\)[^\n]{0,160}\nlog: \/tmp\/pi-tmux-test\/output\.log\nstatus: \/tmp\/pi-tmux-test\/exit-status$/u,
+      /^08-25 23:55 → 02:15 \| cat > \/tmp\/test\.py <<'PY' print\('ok'\)[^\n]{0,160}\nlog: \/tmp\/pi-tmux-test\/output\.log\nstatus: \/tmp\/pi-tmux-test\/exit-status$/u,
     ),
     { deliverAs: "followUp" },
   );

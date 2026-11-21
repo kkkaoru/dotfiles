@@ -5,8 +5,17 @@ import { formatLocalTimestamp, shouldBackgroundClaudexBash, shouldDetachBash } f
 it("formats timestamps in the execution environment timezone", () => {
   const localDate = new Date(2026, 7, 25, 23, 14, 59);
 
-  expect(formatLocalTimestamp(localDate, "submitted")).toBe("08-25 23:14");
+  expect(formatLocalTimestamp(localDate, "submitted", new Date(2026, 7, 24))).toBe("08-25 23:14");
   expect(formatLocalTimestamp(localDate, "completed")).toBe("23:14");
+});
+
+it("leaves the date out of a time from today", () => {
+  const localDate = new Date(2026, 7, 25, 23, 14, 59);
+
+  expect(formatLocalTimestamp(localDate, "submitted", new Date(2026, 7, 25, 9))).toBe("23:14");
+  expect(formatLocalTimestamp(localDate, "submitted", new Date(2027, 7, 25, 9))).toBe(
+    "08-25 23:14",
+  );
 });
 
 it("uses a thirty-second foreground budget for Pi bash calls", () => {

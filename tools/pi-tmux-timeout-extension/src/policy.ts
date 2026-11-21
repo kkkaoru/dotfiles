@@ -64,9 +64,18 @@ function shouldRunInBackground(input: MutableBashInput, longRunningTimeout: numb
   );
 }
 
-export function formatLocalTimestamp(date: Date, format: "completed" | "submitted"): string {
+/** Today's times need no date, so a running row stays short; another day keeps `MM-DD`. */
+export function formatLocalTimestamp(
+  date: Date,
+  format: "completed" | "submitted",
+  now: Date = new Date(),
+): string {
   const time = `${twoDigits(date.getHours())}:${twoDigits(date.getMinutes())}`;
-  return format === "completed"
+  const today =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+  return format === "completed" || today
     ? time
     : `${twoDigits(date.getMonth() + 1)}-${twoDigits(date.getDate())} ${time}`;
 }

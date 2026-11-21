@@ -41,7 +41,7 @@ it("shows active tmux tasks until they complete", () => {
 
   expect(setStatus).toHaveBeenLastCalledWith("tmux-running", "tmux:1");
   expect(setWidget).toHaveBeenLastCalledWith("tmux-running-tasks", [
-    "⏳ 08-26 11:14 → 08-26 11:20 run a long verification",
+    "⏳ 11:14 → 11:20 run a long verification",
   ]);
 
   display.update([
@@ -56,9 +56,7 @@ it("shows active tmux tasks until they complete", () => {
       taskCommand: "legacy job",
     },
   ]);
-  expect(setWidget).toHaveBeenLastCalledWith("tmux-running-tasks", [
-    "⏳ 08-26 11:14 → 08-26 11:16 legacy job",
-  ]);
+  expect(setWidget).toHaveBeenLastCalledWith("tmux-running-tasks", ["⏳ 11:14 → 11:16 legacy job"]);
 
   display.update([]);
   expect(setStatus).toHaveBeenLastCalledWith("tmux-running", undefined);
@@ -92,7 +90,7 @@ it("distinguishes overdue jobs from jobs still within their estimate", () => {
     },
   ]);
   expect(setWidget).toHaveBeenLastCalledWith("tmux-running-tasks", [
-    "⚠ overdue 08-26 11:14 → 08-26 11:20 run a long verification",
+    "⚠ overdue 11:14 → 11:20 run a long verification",
   ]);
 });
 
