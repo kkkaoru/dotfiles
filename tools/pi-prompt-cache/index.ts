@@ -19,9 +19,13 @@ import { DurableLedgerStore } from "./src/store.ts";
 
 const STATUS_KEY = "prompt-cache";
 
-interface Session {
-  readonly release: (() => Promise<void>) | undefined;
+interface Opened {
   readonly store: DurableLedgerStore;
+  /** Ends this copy's use of the ledger; the last copy closes the store and releases the lock. */
+  readonly release: () => Promise<void>;
+}
+
+interface Session extends Opened {
   ledger: Ledger;
   /** The last request's prefix, so the next one can be compared with it. */
   previous: Fingerprint | undefined;
@@ -29,6 +33,39 @@ interface Session {
   pending: Part;
   /** Whether a miss with an unchanged prefix was already reported in this session. */
   reported: boolean;
+}
+
+interface Held extends Opened {
+  refs: number;
+}
+
+/**
+ * A reload evaluates this module again while the previous copy still holds the sidecar, so its
+ * holders live on globalThis and the reloaded copy reuses them instead of taking a second lock.
+ */
+const HELD_KEY = Symbol.for("dotfiles.prompt-cache.held");
+
+function held(): Map<string, Held> {
+  const shared = globalThis as typeof globalThis & { [HELD_KEY]?: Map<string, Held> };
+  shared[HELD_KEY] ??= new Map<string, Held>();
+  return shared[HELD_KEY];
+}
+
+async function releaseHeld(directory: string): Promise<void> {
+  const entry = held().get(directory);
+  if (entry === undefined) {
+    return;
+  }
+  entry.refs -= 1;
+  if (entry.refs > 0) {
+    return;
+  }
+  held().delete(directory);
+  try {
+    await entry.store.close();
+  } finally {
+    await entry.release?.();
+  }
 }
 
 interface Usage {
@@ -49,25 +86,35 @@ function reportWith(context: ExtensionContext): (error: unknown) => void {
   };
 }
 
-async function openStore(
-  context: ExtensionContext,
-): Promise<Omit<Session, "ledger" | "pending" | "previous" | "reported">> {
+function reuse(directory: string, entry: Held): Opened {
+  entry.refs += 1;
+  return { release: async () => releaseHeld(directory), store: entry.store };
+}
+
+async function openStore(context: ExtensionContext): Promise<Opened> {
   const file: string | undefined = context.sessionManager.getSessionFile();
   const report = reportWith(context);
-  const inMemory = async (): Promise<
-    Omit<Session, "ledger" | "pending" | "previous" | "reported">
-  > => ({ release: undefined, store: await DurableLedgerStore.open(new MemoryStorage(), report) });
+  const inMemory = async (): Promise<Opened> => {
+    const store = await DurableLedgerStore.open(new MemoryStorage(), report);
+    return { release: async () => store.close(), store };
+  };
   if (file === undefined) {
     return inMemory();
   }
   // The sidecar stays with the session file, so a resumed session keeps its own hit rate.
   const directory = `${file}.cache-durable`;
+  const shared = held().get(directory);
+  if (shared !== undefined) {
+    return reuse(directory, shared);
+  }
   let release: (() => Promise<void>) | undefined = undefined;
   try {
     await mkdir(directory, { recursive: true, mode: 0o700 });
     release = await lock(directory, { retries: 0 });
     const storage = await openNodeJsonlStorage(directory, BACKGROUND_CONTEXT, { fsync: true });
-    return { release, store: await DurableLedgerStore.open(storage, report) };
+    const store = await DurableLedgerStore.open(storage, report);
+    held().set(directory, { refs: 1, release, store });
+    return { release: async () => releaseHeld(directory), store };
   } catch (error) {
     // Another pi writes this session's ledger, or the sidecar cannot be opened. Keeping the ledger
     // In memory beats failing every request; release a lock we took so nothing blocks later.
@@ -115,11 +162,7 @@ export default function promptCacheExtension(pi: ExtensionAPI): void {
     }
     const closing = session;
     session = null;
-    try {
-      await closing?.store.close();
-    } finally {
-      await closing?.release?.();
-    }
+    await closing?.release();
   };
 
   const ensure = async (context: ExtensionContext): Promise<Session> => {

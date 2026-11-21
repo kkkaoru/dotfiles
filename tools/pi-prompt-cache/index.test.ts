@@ -135,6 +135,28 @@ test("the ledger survives a reload of the same session", async () => {
   );
 });
 
+test("a reload reuses the ledger its previous copy still holds", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "pi-prompt-cache-"));
+  directories.push(directory);
+  const file = path.join(directory, "session.jsonl");
+
+  const first = await start(file);
+  await first.run("before_provider_request", request([{ role: "user", content: "a" }]));
+  await first.run("message_end", answer(100, 900));
+
+  // A reload evaluates the module again before the previous copy is shut down.
+  const second = await start(file);
+  expect(second.notify).not.toHaveBeenCalled();
+  await second.run("message_end", answer(100, 900));
+  expect(second.setStatus).toHaveBeenLastCalledWith("prompt-cache", "cache 90%");
+
+  // The first copy letting go leaves the second one its ledger, and its shutdown frees the lock.
+  await first.run("session_shutdown", {});
+  await second.run("message_end", answer(100, 900));
+  expect(second.setStatus).toHaveBeenLastCalledWith("prompt-cache", "cache 90%");
+  await second.run("session_shutdown", {});
+});
+
 test("a save that fails is reported to the user", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "pi-prompt-cache-"));
   directories.push(directory);
