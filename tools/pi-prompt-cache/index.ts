@@ -209,7 +209,7 @@ export default function promptCacheExtension(pi: ExtensionAPI): void {
     if (row.part !== null) {
       context.ui.notify(
         `Cache break: ${String(row.prompt)} tokens recomputed after the ${row.part} changed.`,
-        "warning",
+        "info",
       );
     } else if (!active.reported) {
       active.reported = true;

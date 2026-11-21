@@ -87,7 +87,8 @@ export class DurableLedgerStore {
 
   #enqueue(change: () => Promise<void>): void {
     if (this.#closed) {
-      throw new Error("Pi Durable ledger store is closed.");
+      // A save that lands after shutdown cannot be written anywhere; the session is already gone.
+      return;
     }
     this.#pending = this.#pending
       .then(async () => {

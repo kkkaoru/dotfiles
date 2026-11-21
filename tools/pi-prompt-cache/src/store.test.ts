@@ -62,11 +62,12 @@ test("only the last save is what a reopened store reads", async () => {
   await second.close();
 });
 
-test("a closed store refuses writes, and closing twice is harmless", async () => {
+test("a write that lands after shutdown is dropped, and closing twice is harmless", async () => {
   const active = await DurableLedgerStore.open(new MemoryStorage(), vi.fn());
   await active.close();
   await active.close();
-  expect(() => active.save(EMPTY_LEDGER)).toThrow("Pi Durable ledger store is closed.");
+  // A save racing the shutdown has nowhere to go; it must not surface as an error.
+  expect(() => active.save(EMPTY_LEDGER)).not.toThrow();
 });
 
 /** The same storage, except that every commit fails the way a full disk would. */

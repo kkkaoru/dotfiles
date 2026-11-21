@@ -83,7 +83,7 @@ test("a recomputed prompt names the part that changed", async () => {
   await box.run("message_end", answer(20_000, 400));
   expect(box.notify).toHaveBeenCalledWith(
     "Cache break: 20400 tokens recomputed after the messages changed.",
-    "warning",
+    "info",
   );
 });
 

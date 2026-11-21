@@ -38,6 +38,12 @@ test("each part is named, earliest first", () => {
   expect(changedPart(previous, everything)).toBe("system");
 });
 
+test("a model switch is a break even when the prompt is unchanged", () => {
+  const previous = fingerprint({ ...base, model: "a" });
+  expect(changedPart(previous, fingerprint({ ...base, model: "b" }))).toBe("model");
+  expect(changedPart(previous, fingerprint({ ...base, model: "a" }))).toBeNull();
+});
+
 test("a shorter history is a break", () => {
   const previous = fingerprint(base);
   const shorter = fingerprint({ ...base, messages: base.messages.slice(0, 1) });

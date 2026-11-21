@@ -9,13 +9,16 @@ percentage sits in the status line as `cache 93%`.
 A line appears in the chat when a prompt of 8000 tokens or more came back mostly uncached:
 
 - `Cache break: 79403 tokens recomputed after the tools changed.` — the request itself changed the
-  prefix: a tool definition, the system prompt, or an earlier message.
+  prefix: the model, a tool definition, the system prompt, or an earlier message. Informational: the
+  cost was the change you asked for.
 - `Cache miss: … although the prefix was unchanged; the provider dropped it.` — nothing in the
-  request changed, so the entry was evicted or the request landed on another instance. Reported
-  once per session, because repeating it would only repeat the same fact.
+  request changed, so the entry was evicted or the request landed on another instance. This one is a
+  warning, because it is the only case that costs tokens for no reason. Reported once per session,
+  because repeating it would only repeat the same fact.
 
-The prefix is fingerprinted as three parts — system prompt, tool definitions, and every message
-except the newest one — so a normal turn (which only appends) never counts as a change.
+The prefix is fingerprinted as four parts — model, system prompt, tool definitions, and the messages
+— so a normal turn (which only appends) never counts as a change, and switching model is named as
+the cause instead of being blamed on the provider.
 
 The ledger is a Pi Durable document in `<session file>.cache-durable/`, so `/resume` and
 `/reload` keep the same numbers. It holds the newest 200 requests.
