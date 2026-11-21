@@ -158,6 +158,12 @@ test("a reply without a model or a cache write is still measured", async () => {
   expect(box.setStatus).toHaveBeenLastCalledWith("prompt-cache", "cache 0%");
 });
 
+test("usage that reports only a cache read still counts as the prompt", async () => {
+  const box = await start();
+  await box.run("message_end", { message: { role: "assistant", usage: { cacheRead: 50 } } });
+  expect(box.setStatus).toHaveBeenLastCalledWith("prompt-cache", "cache 100%");
+});
+
 test("a session without a file keeps its ledger in memory", async () => {
   const box = await start();
   await box.command("");

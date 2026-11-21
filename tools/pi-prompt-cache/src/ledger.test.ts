@@ -78,6 +78,7 @@ test("a stored ledger is read back, and anything unreadable is empty", () => {
   expect(parseLedger("null")).toStrictEqual(EMPTY_LEDGER);
   expect(parseLedger("[]")).toStrictEqual(EMPTY_LEDGER);
   expect(parseLedger('{"rows":"x"}')).toStrictEqual(EMPTY_LEDGER);
+  expect(parseLedger('{"rows":[null,"x"]}')).toStrictEqual(EMPTY_LEDGER);
   const stored = JSON.stringify({
     rows: [{ at: 1 }, { at: 1, cached: 1, model: "m", part: "x", prompt: 1 }],
   });
