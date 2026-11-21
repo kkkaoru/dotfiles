@@ -5,7 +5,7 @@ import type { ExtensionAPI, ExtensionContext, ThemeColor } from "@earendil-works
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import { lock } from "proper-lockfile";
-import { ageOf, checkpoint, everyTick, NUDGE_TYPE } from "./src/keepalive.ts";
+import { adoption, ageOf, checkpoint, everyTick, NUDGE_TYPE } from "./src/keepalive.ts";
 import { DurableTimelineStore, lastWrite } from "./src/store.ts";
 import { plamoDisplayFromSettings } from "./src/live.ts";
 import type { TranslatedTimeline } from "./src/translate.ts";
@@ -47,6 +47,8 @@ interface Session extends Opened {
   shown: Timeline;
   /** Tool calls since the last timeline call, which is how a stale tree is noticed mid-turn. */
   steps: number;
+  /** Whether this session was already asked to record a tree. */
+  asked: boolean;
   updatedAt: number;
 }
 
@@ -175,6 +177,7 @@ function storeSession(): Store {
       board,
       shown: activeTree(board),
       steps: 0,
+      asked: false,
       updatedAt: opened.updatedAt ?? Date.now(),
     };
   };
@@ -200,7 +203,12 @@ export interface Options {
 }
 
 type Draw = (context: ExtensionContext, active: Session) => void;
-type Painter = Record<"localise" | "repaint" | "show", Draw>;
+/** Show answers whether the tree is on screen, which is what paces the age tick. */
+interface Painter {
+  readonly localise: Draw;
+  readonly repaint: Draw;
+  readonly show: (context: ExtensionContext, active: Session) => boolean;
+}
 
 /** Everything that paints the tree, so the extension itself stays a wiring of handlers. */
 function painter(display: TranslatedTimeline | undefined): Painter {
@@ -226,17 +234,16 @@ function painter(display: TranslatedTimeline | undefined): Painter {
       });
   };
 
-  const show = (context: ExtensionContext, active: Session): void => {
+  const show = (context: ExtensionContext, active: Session): boolean => {
     const timeline = activeTree(active.board);
+    const shown = shows(timeline);
     const percent = Math.round(progress(timeline) * 100);
     context.ui.setStatus(STATUS_KEY, `${String(percent)}%`);
     active.shown = timeline;
     // English first, so a slow translation never leaves the tree blank.
-    paint(
-      context,
-      shows(timeline) ? renderTimeline(timeline, colourOf(context), ageOf(active)) : undefined,
-    );
+    paint(context, shown ? renderTimeline(timeline, colourOf(context), ageOf(active)) : undefined);
     localise(context, active);
+    return shown;
   };
 
   /** The age moves even while nothing changes, so the head is repainted on its own. */
@@ -298,31 +305,38 @@ export default function timelineExtension(pi: ExtensionAPI, options: Options = {
   const store = storeSession();
   const { repaint, show } = painter(display);
 
-  registerTimelineTool(pi, store, show);
-
-  pi.registerCommand("timeline", {
-    description: "Show this session's task tree and its progress",
-    handler: async (_args, context) => {
-      const active = await store.ensure(context);
-      show(context, active);
-      context.ui.notify(boardText(active.board), "info");
-    },
-  });
-
   const ticker: { stop?: () => void } = {};
   const stopTicker = (): void => {
     ticker.stop?.();
     delete ticker.stop;
   };
 
+  /** The age only moves while a tree is on screen, so the tick lives exactly as long as the tree. */
+  const draw = (context: ExtensionContext, active: Session): void => {
+    if (!show(context, active)) {
+      stopTicker();
+      return;
+    }
+    ticker.stop ??= everyTick(() => {
+      repaint(context, active);
+    });
+  };
+
+  registerTimelineTool(pi, store, draw);
+
+  pi.registerCommand("timeline", {
+    description: "Show this session's task tree and its progress",
+    handler: async (_args, context) => {
+      const active = await store.ensure(context);
+      draw(context, active);
+      context.ui.notify(boardText(active.board), "info");
+    },
+  });
+
   pi.on("session_start", async (_event, context) => {
     stopTicker();
     await store.close();
-    const active = await store.ensure(context);
-    show(context, active);
-    ticker.stop = everyTick(() => {
-      repaint(context, active);
-    });
+    draw(context, await store.ensure(context));
   });
   pi.on("session_shutdown", async (_event, context) => {
     stopTicker();
@@ -336,7 +350,8 @@ export default function timelineExtension(pi: ExtensionAPI, options: Options = {
     }
     const active = await store.ensure(context);
     active.steps += 1;
-    const notice = checkpoint(active, activeTree(active.board));
+    const timeline = activeTree(active.board);
+    const notice = adoption(active, timeline) ?? checkpoint(active, timeline);
     if (notice !== undefined) {
       pi.sendMessage(
         { content: notice, customType: NUDGE_TYPE, display: false },

@@ -8,6 +8,11 @@ export const NUDGE_TYPE = "timeline-nudge";
  * mid-turn rather than at the end of one.
  */
 export const STEPS_BEFORE_NUDGE = 24;
+/**
+ * Tool calls before a session that has no tree at all is asked once to record one: without it the
+ * tree only appeared when a person asked for it.
+ */
+export const STEPS_BEFORE_ADOPTION = 8;
 /** How often the head's age is brought up to date, since only a change would repaint it. */
 export const TICK_MS = 60_000;
 
@@ -16,6 +21,8 @@ export interface Tracked {
   /** Tool calls since the last timeline call. */
   steps: number;
   updatedAt: number;
+  /** Whether this session was already asked to record a tree. */
+  asked: boolean;
 }
 
 /** How long ago the tree changed, which is what the head says. */
@@ -30,6 +37,18 @@ export function everyTick(paint: () => void): () => void {
   return () => {
     globalThis.clearInterval(timer);
   };
+}
+
+/**
+ * The one notice a session earns for working without ever recording a tree, so the plan is drawn
+ * without a person asking for it.
+ */
+export function adoption(tracked: Tracked, timeline: Timeline): string | undefined {
+  if (tracked.asked || timeline.tasks.length > 0 || tracked.steps < STEPS_BEFORE_ADOPTION) {
+    return undefined;
+  }
+  tracked.asked = true;
+  return 'This session has no task tree yet. Record the plan with the timeline tool — action "start" for the goal, then "add" each task — so progress is read from the tree instead of from the tmux rows. Keep it current as the work moves.';
 }
 
 /**
