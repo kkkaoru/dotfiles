@@ -21,14 +21,15 @@ competing for the footer row; the percentage also sits in the footer status area
 
 ```
 ██████░░░░ 62.50% · 3 tasks
-· t1 Fix bug ██████ 100.00%
-  ✔ t2 Read code ██████ 100.00%
-▸ t3 Ship ███░░░  50.00% — waiting on review
+██████ · t1 Fix bug 100.00%
+██████   ✔ t2 Read code 100.00%
+███░░░ ▸ t3 Ship 50.00% — waiting on review
 ```
 
-Every line carries its own bar and percentage, as the Harness timeline draws them: the tree's bar is
-longer than a task's, the number keeps two decimals, and work that is not finished never reads
-`100.00%`. A task that has subtasks takes their weighted score instead of its own status, so a
+Every line opens with its own bar and ends its title with the percentage, as the Harness timeline
+draws them: the tree's bar is longer than a task's, the number keeps two decimals, and work that is
+not finished never reads `100.00%`. The bars line up in a column, so a subtask reads as the deeper
+indent after its bar. A task that has subtasks takes their weighted score instead of its own status, so a
 parent is finished only when its children are. A leaf counts `done` as 1, `active` as 0.5,
 `blocked` and `pending` as 0.
 

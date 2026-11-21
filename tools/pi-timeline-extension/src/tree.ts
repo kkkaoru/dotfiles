@@ -125,11 +125,11 @@ function bar(value: number, cells: number): string {
 }
 
 function taskLine(timeline: Timeline, task: Task): string {
-  // The Harness puts a short bar before a right-aligned percentage, so a parent and a leaf match.
+  // The bar opens every line, so the bars line up in a column and the indented glyph reads the depth.
   const value = share(timeline, [task]);
-  const percent = `${formatProgress(value)}%`.padStart(7);
+  const percent = `${formatProgress(value)}%`;
   const note = task.note === "" ? "" : ` — ${task.note}`;
-  return `${"  ".repeat(depth(timeline, task))}${GLYPH[task.status]} ${task.id} ${task.title} ${bar(value, TASK_CELLS)} ${percent}${note}`;
+  return `${bar(value, TASK_CELLS)} ${"  ".repeat(depth(timeline, task))}${GLYPH[task.status]} ${task.id} ${task.title} ${percent}${note}`;
 }
 
 function lines(timeline: Timeline, parent: string | null, out: string[]): string[] {
