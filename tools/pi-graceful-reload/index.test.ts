@@ -12,6 +12,47 @@ interface Scenario {
   readonly startLeaf?: string;
   readonly currentLeaf?: string;
   readonly editor?: string;
+  /** The session's entries, when the test needs a branch more detailed than one appended answer. */
+  readonly entries?: readonly Entry[];
+}
+
+interface Entry {
+  readonly id: string;
+  readonly parentId: string | null;
+  readonly type: string;
+  readonly message?: { readonly role: string };
+}
+
+/** The branch a run leaves behind: the leaf it started from, then the answer it appended. */
+function branch(scenario: Scenario): readonly Entry[] {
+  if (scenario.entries !== undefined) {
+    return scenario.entries;
+  }
+  if (scenario.startLeaf === undefined || scenario.currentLeaf === undefined) {
+    return [];
+  }
+  return [
+    {
+      id: scenario.startLeaf,
+      parentId: null,
+      type: "message",
+      message: { role: "user" },
+    },
+    {
+      id: scenario.currentLeaf,
+      parentId: scenario.startLeaf,
+      type: "message",
+      message: { role: "assistant" },
+    },
+  ];
+}
+
+function isPromptEntry(entry: Entry | undefined): boolean {
+  return (
+    entry !== undefined &&
+    (entry.type === "custom_message" ||
+      (entry.type === "message" && entry.message?.role === "user"))
+  );
 }
 
 interface Fake {
@@ -23,6 +64,9 @@ interface Fake {
 function fake(scenario: Scenario): Fake {
   const calls: string[] = [];
   let leaf: string | null = scenario.startLeaf ?? null;
+  const entries = new Map<string, Entry>(
+    branch(scenario).map((entry) => [entry.id, entry] as const),
+  );
   const handlers = new Map<string, (event: unknown, ctx: ExtensionCommandContext) => void>();
   const ctx = {
     // A run that ignores the abort stays live, so the session never becomes idle.
@@ -38,6 +82,7 @@ function fake(scenario: Scenario): Fake {
     },
     sessionManager: {
       getLeafId: () => leaf,
+      getEntry: (id: string) => entries.get(id),
     },
     navigateTree: async (targetId: string) => {
       calls.push(`navigate:${targetId}`);
@@ -46,7 +91,10 @@ function fake(scenario: Scenario): Fake {
         throw scenario.navigateError;
       }
       leaf = targetId;
-      return { cancelled: false, editorText: "the interrupted prompt" };
+      // pi answers a prompt's text to the editor, and nothing for an answer.
+      return isPromptEntry(entries.get(targetId))
+        ? { cancelled: false, editorText: "the interrupted prompt" }
+        : { cancelled: false };
     },
     reload: async () => {
       calls.push("reload");
@@ -184,4 +232,82 @@ test("reports a rejection that is not an Error", async () => {
   const { calls, run } = fake({ idle: false, reloadError: "still streaming" });
   await run();
   expect(calls.at(-1)).toBe("notify:error:graceful-reload: still streaming");
+});
+
+test("the interrupted prompt comes back to the editor instead of vanishing", async () => {
+  // pi emits agent_start before it persists the prompt, so the run started at the previous answer.
+  const { calls, run } = fake({
+    idle: false,
+    startLeaf: "answer-1",
+    currentLeaf: "answer-2",
+    entries: [
+      { id: "question-1", parentId: null, type: "message", message: { role: "user" } },
+      { id: "answer-1", parentId: "question-1", type: "message", message: { role: "assistant" } },
+      { id: "question-2", parentId: "answer-1", type: "message", message: { role: "user" } },
+      { id: "answer-2", parentId: "question-2", type: "message", message: { role: "assistant" } },
+    ],
+  });
+  await run();
+  // The leaf moves to question-2's parent, so the earlier answer stays in the session.
+  expect(calls).toStrictEqual([
+    "abort",
+    "waitForIdle",
+    "navigate:question-2",
+    "setEditorText:the interrupted prompt",
+    "reload",
+  ]);
+});
+
+test("a run that appended only output reverts to where it started", async () => {
+  const { calls, run } = fake({
+    idle: false,
+    startLeaf: "answer-1",
+    currentLeaf: "result-1",
+    entries: [
+      { id: "answer-1", parentId: null, type: "message", message: { role: "assistant" } },
+      { id: "answer-2", parentId: "answer-1", type: "message", message: { role: "assistant" } },
+      { id: "result-1", parentId: "answer-2", type: "toolResult" },
+    ],
+  });
+  await run();
+  expect(calls).toStrictEqual(["abort", "waitForIdle", "navigate:answer-1", "reload"]);
+});
+
+test("a message an extension injected is dropped without taking the editor", async () => {
+  const { calls, run } = fake({
+    idle: false,
+    startLeaf: "answer-1",
+    currentLeaf: "answer-2",
+    entries: [
+      { id: "answer-1", parentId: null, type: "message", message: { role: "assistant" } },
+      { id: "nudge-1", parentId: "answer-1", type: "custom_message" },
+      { id: "answer-2", parentId: "nudge-1", type: "message", message: { role: "assistant" } },
+    ],
+  });
+  await run();
+  expect(calls).toStrictEqual(["abort", "waitForIdle", "navigate:answer-1", "reload"]);
+});
+
+test("a branch that no longer descends from where the run started is left alone", async () => {
+  const { calls, run } = fake({
+    idle: false,
+    startLeaf: "answer-1",
+    currentLeaf: "answer-9",
+    entries: [{ id: "answer-9", parentId: null, type: "message", message: { role: "assistant" } }],
+  });
+  await run();
+  expect(calls).toStrictEqual(["abort", "waitForIdle", "reload"]);
+});
+
+test("an entry the session no longer holds is not navigated to", async () => {
+  const { calls, run } = fake({
+    idle: false,
+    startLeaf: "answer-1",
+    currentLeaf: "answer-9",
+    entries: [
+      { id: "answer-9", parentId: "gone", type: "message", message: { role: "assistant" } },
+    ],
+  });
+  await run();
+  expect(calls).toStrictEqual(["abort", "waitForIdle", "reload"]);
 });

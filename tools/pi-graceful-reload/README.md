@@ -12,6 +12,14 @@ the session returns to where it stood when that run started, and the prompt that
 back into the editor, so the work can run again instead of stopping half-finished. Finally it
 reloads.
 
+pi reports the leaf from _before_ the prompt (`agent_start` fires ahead of the prompt being
+persisted), so the revert navigates to the interrupted prompt itself: pi moves the leaf back to the
+answer before it and returns that prompt's text for the editor. Navigating to the recorded leaf
+instead would drop the prompt along with the partial answer, which is how an interrupted turn used
+to disappear. A message an extension injected is dropped the same way, without taking the editor.
+If the branch has moved away from where the run started, nothing is reverted: the reload still
+happens, but no other work is dropped.
+
 If a tool ignores the abort and the run is still live after three seconds, pi's own guard wins: the
 revert is skipped, and the command reports the refusal in a warning line instead of reloading. An
 editor that already holds text keeps it.
