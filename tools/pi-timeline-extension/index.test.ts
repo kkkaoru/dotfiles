@@ -5,6 +5,7 @@ import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, expect, test, vi } from "vitest";
 import timelineExtension from "./index.ts";
+import { TranslatedTimeline } from "./src/translate.ts";
 
 interface Harness {
   readonly context: ExtensionContext;
@@ -24,7 +25,7 @@ afterEach(async () => {
   );
 });
 
-async function start(file?: string): Promise<Harness> {
+async function start(file?: string, display?: TranslatedTimeline): Promise<Harness> {
   const handlers = new Map<string, (event: unknown, context: ExtensionContext) => Promise<void>>();
   let tool:
     | ((
@@ -36,17 +37,20 @@ async function start(file?: string): Promise<Harness> {
       ) => Promise<unknown>)
     | undefined;
   let command: ((args: string, context: ExtensionContext) => Promise<void>) | undefined;
-  timelineExtension({
-    on: (name: string, handler: (event: unknown, context: ExtensionContext) => Promise<void>) => {
-      handlers.set(name, handler);
-    },
-    registerCommand: (_name: string, definition: { handler: typeof command }) => {
-      command = definition.handler;
-    },
-    registerTool: (definition: { execute: typeof tool }) => {
-      tool = definition.execute;
-    },
-  } as unknown as ExtensionAPI);
+  timelineExtension(
+    {
+      on: (name: string, handler: (event: unknown, context: ExtensionContext) => Promise<void>) => {
+        handlers.set(name, handler);
+      },
+      registerCommand: (_name: string, definition: { handler: typeof command }) => {
+        command = definition.handler;
+      },
+      registerTool: (definition: { execute: typeof tool }) => {
+        tool = definition.execute;
+      },
+    } as unknown as ExtensionAPI,
+    { display },
+  );
 
   const notify = vi.fn();
   const setStatus = vi.fn();
@@ -211,4 +215,147 @@ test("a save that fails is reported to the user", async () => {
   });
   await chmod(sidecar, 0o700);
   await harness.handlers.get("session_shutdown")?.({}, harness.context);
+});
+
+test("the tree is painted in the reader's language once the translation lands", async () => {
+  const display = new TranslatedTimeline("ja", {
+    complete: async (source: string): Promise<string> => `【${source}】`,
+  });
+  const harness = await start(undefined, display);
+  await harness.run({ action: "add", title: "Fix bug" });
+  // The English is on screen at once, so a slow server never leaves the tree blank.
+  expect(harness.setWidget).toHaveBeenCalledWith("timeline", ["0% · 1 tasks", "· t1 Fix bug"], {
+    placement: "belowEditor",
+  });
+  await vi.waitFor(() => {
+    expect(harness.setWidget).toHaveBeenLastCalledWith(
+      "timeline",
+      ["0% · 1 tasks", "· t1 【Fix bug】"],
+      { placement: "belowEditor" },
+    );
+  });
+});
+
+test("a text is translated once, and only new text reaches the server", async () => {
+  const asked: string[] = [];
+  const display = new TranslatedTimeline("ja", {
+    complete: async (source: string): Promise<string> => {
+      asked.push(source);
+      return `【${source}】`;
+    },
+  });
+  const harness = await start(undefined, display);
+  await harness.run({ action: "add", title: "Fix bug" });
+  await vi.waitFor(() => {
+    expect(asked).toStrictEqual(["Fix bug"]);
+  });
+  await harness.run({ action: "update", id: "t1", status: "done" });
+  await harness.run({ action: "update", id: "t1", note: "in review" });
+  await vi.waitFor(() => {
+    expect(asked).toStrictEqual(["Fix bug", "in review"]);
+  });
+});
+
+test("a text the server could not translate is retried, and the English stays meanwhile", async () => {
+  let attempts = 0;
+  const display = new TranslatedTimeline("ja", {
+    complete: async (source: string): Promise<string | null> => {
+      attempts += 1;
+      return attempts === 1 ? null : `【${source}】`;
+    },
+  });
+  const harness = await start(undefined, display);
+  await harness.run({ action: "add", title: "Fix bug" });
+  await vi.waitFor(() => {
+    expect(attempts).toBe(1);
+  });
+  expect(harness.setWidget).toHaveBeenLastCalledWith("timeline", ["0% · 1 tasks", "· t1 Fix bug"], {
+    placement: "belowEditor",
+  });
+  await harness.run({ action: "update", id: "t1", status: "active" });
+  await vi.waitFor(() => {
+    expect(harness.setWidget).toHaveBeenLastCalledWith(
+      "timeline",
+      ["50% · 1 tasks", "▸ t1 【Fix bug】"],
+      { placement: "belowEditor" },
+    );
+  });
+});
+
+test("a translation that lands after a newer tree is discarded", async () => {
+  const waiting = new Map<string, ((value: string | null) => void)[]>();
+  const display = new TranslatedTimeline("ja", {
+    complete: async (source: string): Promise<string | null> =>
+      new Promise<string | null>((resolve) => {
+        waiting.set(source, [...(waiting.get(source) ?? []), resolve]);
+      }),
+  });
+  const harness = await start(undefined, display);
+  await harness.run({ action: "add", title: "First" });
+  await harness.run({ action: "add", title: "Second" });
+  const answer = (source: string, index: number, value: string): void => {
+    const queue = waiting.get(source) ?? [];
+    queue[index]?.(value);
+  };
+  // The newer tree's translation lands first, then the older one must not bring it back.
+  answer("First", 1, "【First】");
+  answer("Second", 0, "【Second】");
+  await vi.waitFor(() => {
+    expect(harness.setWidget).toHaveBeenLastCalledWith(
+      "timeline",
+      ["0% · 2 tasks", "· t1 【First】", "· t2 【Second】"],
+      { placement: "belowEditor" },
+    );
+  });
+  answer("First", 0, "【First】");
+  await vi.waitFor(() => {
+    expect(harness.setWidget).toHaveBeenLastCalledWith(
+      "timeline",
+      ["0% · 2 tasks", "· t1 【First】", "· t2 【Second】"],
+      { placement: "belowEditor" },
+    );
+  });
+});
+
+test("a resumed session paints the restored tree in the reader's language", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "pi-timeline-"));
+  directories.push(directory);
+  const file = path.join(directory, "session.jsonl");
+  const display = new TranslatedTimeline("ja", {
+    complete: async (source: string): Promise<string> => `【${source}】`,
+  });
+  const first = await start(file, display);
+  await first.run({ action: "add", title: "Fix bug" });
+  await first.handlers.get("session_shutdown")?.({}, first.context);
+
+  // A restart resumes the session file: no tool call is made before the tree is shown again.
+  const second = await start(file, display);
+  await vi.waitFor(() => {
+    expect(second.setWidget).toHaveBeenLastCalledWith(
+      "timeline",
+      ["0% · 1 tasks", "· t1 【Fix bug】"],
+      { placement: "belowEditor" },
+    );
+  });
+  await second.handlers.get("session_shutdown")?.({}, second.context);
+});
+
+test("an extension given no display reads the reader's settings itself", async () => {
+  const handlers = new Map<string, (event: unknown, context: ExtensionContext) => Promise<void>>();
+  const setWidget = vi.fn();
+  timelineExtension({
+    on: (name: string, handler: (event: unknown, context: ExtensionContext) => Promise<void>) => {
+      handlers.set(name, handler);
+    },
+    registerCommand: () => undefined,
+    registerTool: () => undefined,
+  } as unknown as ExtensionAPI);
+  const context = {
+    sessionManager: { getSessionFile: () => undefined },
+    ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget },
+  } as unknown as ExtensionContext;
+  await handlers.get("session_start")?.({}, context);
+  // An empty tree is nothing to draw, and nothing to translate.
+  expect(setWidget).toHaveBeenLastCalledWith("timeline", undefined, { placement: "belowEditor" });
+  await handlers.get("session_shutdown")?.({}, context);
 });

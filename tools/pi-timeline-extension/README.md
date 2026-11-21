@@ -30,6 +30,22 @@ A task that has subtasks takes their weighted score instead of its own status, s
 finished only when its children are. A leaf counts `done` as 1, `active` as 0.5, `blocked` and
 `pending` as 0.
 
+## Translation
+
+The tree is drawn in the language `tools/pi-plamo-translate` gives you (`replyLanguage`, default
+`ja`), so a task reads the same way as the reply that created it. Only titles and notes are sent;
+the rest of the line stays as it is.
+
+- The English tree is painted first and the Japanese replaces it when the translation lands, so a
+  server that is still starting never leaves the tree blank.
+- Each text is translated once and then kept, so a repaint of an unchanged task costs nothing.
+- A text the server could not translate stays English and is asked again on the next paint — a
+  restart that left the model stopped therefore heals itself.
+- A translation that lands after a newer tree was drawn is dropped, so the widget never goes back to
+  an older tree.
+- The local server is started on demand through `pi-plamo-translate`'s own code. With
+  `replyLanguage: "off"` nothing is translated and no request is made.
+
 ## Storage
 
 The tree is committed to Pi Durable before it is shown. With a session file it lives in

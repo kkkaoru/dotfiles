@@ -8,6 +8,8 @@ import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/n
 import { lock } from "proper-lockfile";
 import { Type, type Static } from "typebox";
 import { DurableTimelineStore } from "./src/store.ts";
+import { plamoDisplayFromSettings } from "./src/live.ts";
+import type { TranslatedTimeline } from "./src/translate.ts";
 import {
   addTask,
   EMPTY_TIMELINE,
@@ -174,18 +176,17 @@ function apply(active: Session, params: Params): Timeline {
   }
 }
 
-function show(context: ExtensionContext, timeline: Timeline): void {
-  const percent = Math.round(progress(timeline) * 100);
-  context.ui.setStatus(STATUS_KEY, `${String(percent)}%`);
+function paint(context: ExtensionContext, lines: string[] | undefined): void {
   // The footer row is shared and need not carry this status, so the tree keeps a place of its own.
-  context.ui.setWidget(
-    WIDGET_KEY,
-    timeline.tasks.length === 0 ? undefined : renderTimeline(timeline),
-    { placement: "belowEditor" },
-  );
+  context.ui.setWidget(WIDGET_KEY, lines, { placement: "belowEditor" });
 }
 
-export default function timelineExtension(pi: ExtensionAPI): void {
+interface Store {
+  readonly close: () => Promise<void>;
+  readonly ensure: (context: ExtensionContext) => Promise<Session>;
+}
+
+function storeSession(): Store {
   let session: Session | undefined = undefined;
   let opening: Promise<Session> | undefined = undefined;
 
@@ -213,6 +214,45 @@ export default function timelineExtension(pi: ExtensionAPI): void {
     return session;
   };
 
+  return { close, ensure };
+}
+
+export interface Options {
+  /** Injected in tests; the real one talks to the PLaMo server that pi-plamo-translate runs. */
+  readonly display?: TranslatedTimeline | undefined;
+}
+
+export default function timelineExtension(pi: ExtensionAPI, options: Options = {}): void {
+  const display = "display" in options ? options.display : plamoDisplayFromSettings();
+  const store = storeSession();
+  let generation = 0;
+
+  const localise = (context: ExtensionContext, timeline: Timeline): void => {
+    if (display === undefined || timeline.tasks.length === 0) {
+      return;
+    }
+    const mine = (generation += 1);
+    display
+      .translate(timeline)
+      .then((translated) => {
+        // A newer tree is already drawn, and its own translation is on the way.
+        if (mine === generation) {
+          paint(context, renderTimeline(translated));
+        }
+      })
+      .catch(() => {
+        // Translate() answers the English itself, so there is nothing left to report here.
+      });
+  };
+
+  const show = (context: ExtensionContext, timeline: Timeline): void => {
+    const percent = Math.round(progress(timeline) * 100);
+    context.ui.setStatus(STATUS_KEY, `${String(percent)}%`);
+    // English first, so a slow translation never leaves the tree blank.
+    paint(context, timeline.tasks.length === 0 ? undefined : renderTimeline(timeline));
+    localise(context, timeline);
+  };
+
   pi.registerTool({
     name: "timeline",
     label: "Timeline",
@@ -225,7 +265,7 @@ export default function timelineExtension(pi: ExtensionAPI): void {
     ],
     parameters,
     async execute(_toolCallId, params, _signal, _onUpdate, context) {
-      const active = await ensure(context);
+      const active = await store.ensure(context);
       active.timeline = apply(active, params);
       active.store.save(active.timeline);
       show(context, active.timeline);
@@ -239,18 +279,18 @@ export default function timelineExtension(pi: ExtensionAPI): void {
   pi.registerCommand("timeline", {
     description: "Show this session's task tree and its progress",
     handler: async (_args, context) => {
-      const active = await ensure(context);
+      const active = await store.ensure(context);
       show(context, active.timeline);
       context.ui.notify(renderTimeline(active.timeline).join("\n"), "info");
     },
   });
 
   pi.on("session_start", async (_event, context) => {
-    await close();
-    const active = await ensure(context);
+    await store.close();
+    const active = await store.ensure(context);
     show(context, active.timeline);
   });
   pi.on("session_shutdown", async () => {
-    await close();
+    await store.close();
   });
 }
