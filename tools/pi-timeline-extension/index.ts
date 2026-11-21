@@ -7,7 +7,8 @@ import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import { lock } from "proper-lockfile";
 import { Type, type Static } from "typebox";
-import { DurableTimelineStore } from "./src/store.ts";
+import { ageOf, everyTick, NUDGE_TYPE, staleNudge } from "./src/keepalive.ts";
+import { DurableTimelineStore, lastWrite } from "./src/store.ts";
 import { plamoDisplayFromSettings } from "./src/live.ts";
 import type { TranslatedTimeline } from "./src/translate.ts";
 import {
@@ -25,7 +26,6 @@ import {
 
 const STATUS_KEY = "timeline";
 const WIDGET_KEY = "timeline";
-
 /** Dracula, through pi's own theme: green finished, purple running, red blocked, comment for the rest. */
 const TOKEN: Readonly<Record<Role, ThemeColor>> = {
   active: "accent",
@@ -56,10 +56,20 @@ const parameters = Type.Object({
 });
 type Params = Static<typeof parameters>;
 
-interface Session {
+/** A store and when its sidecar last changed, which is what the head's age is measured from. */
+interface Opened {
   readonly release: (() => Promise<void>) | undefined;
   readonly store: DurableTimelineStore;
+  readonly updatedAt: number | undefined;
+}
+
+interface Session extends Opened {
+  /** The tree as last painted, so a repaint of the age alone need not translate it again. */
+  shown: Timeline;
   timeline: Timeline;
+  updatedAt: number;
+  /** Set when the agent was reminded, so one stale tree is not reported over and over. */
+  nudgedAt: number | undefined;
 }
 
 interface Holder {
@@ -93,9 +103,13 @@ async function releaseHeld(entry: Holder, directory: string): Promise<void> {
   }
 }
 
-function reuse(directory: string, entry: Holder): Omit<Session, "timeline"> {
+async function reuse(directory: string, entry: Holder): Promise<Opened> {
   entry.refs += 1;
-  return { release: async () => releaseHeld(entry, directory), store: entry.store };
+  return {
+    release: async () => releaseHeld(entry, directory),
+    store: entry.store,
+    updatedAt: await lastWrite(directory),
+  };
 }
 
 function reportWith(context: ExtensionContext): (error: unknown) => void {
@@ -105,10 +119,7 @@ function reportWith(context: ExtensionContext): (error: unknown) => void {
 }
 
 /** Open the sidecar this session keeps its tree in, and hold its lock for as long as it is used. */
-async function openSidecar(
-  directory: string,
-  report: (error: unknown) => void,
-): Promise<Omit<Session, "timeline">> {
+async function openSidecar(directory: string, report: (error: unknown) => void): Promise<Opened> {
   let release: (() => Promise<void>) | undefined = undefined;
   try {
     await mkdir(directory, { recursive: true, mode: 0o700 });
@@ -117,7 +128,11 @@ async function openSidecar(
     const store = await DurableTimelineStore.open(storage, report);
     const entry: Holder = { refs: 1, release, store };
     held().set(directory, entry);
-    return { release: async () => releaseHeld(entry, directory), store };
+    return {
+      release: async () => releaseHeld(entry, directory),
+      store,
+      updatedAt: await lastWrite(directory),
+    };
   } catch (error) {
     // Release a lock we took so a later session can open the sidecar.
     await release?.();
@@ -125,12 +140,12 @@ async function openSidecar(
   }
 }
 
-async function openStore(context: ExtensionContext): Promise<Omit<Session, "timeline">> {
+async function openStore(context: ExtensionContext): Promise<Opened> {
   const file: string | undefined = context.sessionManager.getSessionFile();
   const report = reportWith(context);
-  const inMemory = async (): Promise<Omit<Session, "timeline">> => {
+  const inMemory = async (): Promise<Opened> => {
     const store = await DurableTimelineStore.open(new MemoryStorage(), report);
-    return { release: async () => store.close(), store };
+    return { release: async () => store.close(), store, updatedAt: undefined };
   };
   if (file === undefined) {
     return inMemory();
@@ -222,7 +237,14 @@ function storeSession(): Store {
   const open = async (context: ExtensionContext): Promise<Session> => {
     const opened = await openStore(context);
     const stored: Timeline | undefined = await opened.store.restore();
-    return { ...opened, timeline: stored ?? EMPTY_TIMELINE };
+    const timeline: Timeline = stored ?? EMPTY_TIMELINE;
+    return {
+      ...opened,
+      shown: timeline,
+      timeline,
+      nudgedAt: undefined,
+      updatedAt: opened.updatedAt ?? Date.now(),
+    };
   };
 
   const ensure = async (context: ExtensionContext): Promise<Session> => {
@@ -245,12 +267,15 @@ export interface Options {
   readonly display?: TranslatedTimeline | undefined;
 }
 
-export default function timelineExtension(pi: ExtensionAPI, options: Options = {}): void {
-  const display = "display" in options ? options.display : plamoDisplayFromSettings();
-  const store = storeSession();
+type Draw = (context: ExtensionContext, active: Session) => void;
+type Painter = Record<"localise" | "repaint" | "show", Draw>;
+
+/** Everything that paints the tree, so the extension itself stays a wiring of handlers. */
+function painter(display: TranslatedTimeline | undefined): Painter {
   let generation = 0;
 
-  const localise = (context: ExtensionContext, timeline: Timeline): void => {
+  const localise = (context: ExtensionContext, active: Session): void => {
+    const { timeline } = active;
     if (display === undefined || !shows(timeline)) {
       return;
     }
@@ -260,7 +285,8 @@ export default function timelineExtension(pi: ExtensionAPI, options: Options = {
       .then((translated) => {
         // A newer tree is already drawn, and its own translation is on the way.
         if (mine === generation) {
-          paint(context, renderTimeline(translated, colourOf(context)));
+          active.shown = translated;
+          paint(context, renderTimeline(translated, colourOf(context), ageOf(active)));
         }
       })
       .catch(() => {
@@ -268,13 +294,34 @@ export default function timelineExtension(pi: ExtensionAPI, options: Options = {
       });
   };
 
-  const show = (context: ExtensionContext, timeline: Timeline): void => {
-    const percent = Math.round(progress(timeline) * 100);
+  const show = (context: ExtensionContext, active: Session): void => {
+    const percent = Math.round(progress(active.timeline) * 100);
     context.ui.setStatus(STATUS_KEY, `${String(percent)}%`);
+    active.shown = active.timeline;
     // English first, so a slow translation never leaves the tree blank.
-    paint(context, shows(timeline) ? renderTimeline(timeline, colourOf(context)) : undefined);
-    localise(context, timeline);
+    paint(
+      context,
+      shows(active.timeline)
+        ? renderTimeline(active.timeline, colourOf(context), ageOf(active))
+        : undefined,
+    );
+    localise(context, active);
   };
+
+  /** The age moves even while nothing changes, so the head is repainted on its own. */
+  const repaint = (context: ExtensionContext, active: Session): void => {
+    if (shows(active.timeline)) {
+      paint(context, renderTimeline(active.shown, colourOf(context), ageOf(active)));
+    }
+  };
+
+  return { localise, repaint, show };
+}
+
+export default function timelineExtension(pi: ExtensionAPI, options: Options = {}): void {
+  const display = "display" in options ? options.display : plamoDisplayFromSettings();
+  const store = storeSession();
+  const { repaint, show } = painter(display);
 
   pi.registerTool({
     name: "timeline",
@@ -289,9 +336,15 @@ export default function timelineExtension(pi: ExtensionAPI, options: Options = {
     parameters,
     async execute(_toolCallId, params, _signal, _onUpdate, context) {
       const active = await store.ensure(context);
-      active.timeline = apply(active, params);
+      const next: Timeline = apply(active, params);
+      // Only a real change moves the tree's age and earns the next stale reminder.
+      if (next !== active.timeline) {
+        active.timeline = next;
+        active.updatedAt = Date.now();
+        active.nudgedAt = undefined;
+      }
       active.store.save(active.timeline);
-      show(context, active.timeline);
+      show(context, active);
       return {
         content: [{ type: "text", text: renderTimeline(active.timeline).join("\n") }],
         details: { progress: progress(active.timeline), tasks: active.timeline.tasks.length },
@@ -303,18 +356,39 @@ export default function timelineExtension(pi: ExtensionAPI, options: Options = {
     description: "Show this session's task tree and its progress",
     handler: async (_args, context) => {
       const active = await store.ensure(context);
-      show(context, active.timeline);
+      show(context, active);
       context.ui.notify(renderTimeline(active.timeline).join("\n"), "info");
     },
   });
 
+  const ticker: { stop?: () => void } = {};
+  const stopTicker = (): void => {
+    ticker.stop?.();
+    delete ticker.stop;
+  };
+
   pi.on("session_start", async (_event, context) => {
+    stopTicker();
     await store.close();
     const active = await store.ensure(context);
-    show(context, active.timeline);
+    show(context, active);
+    ticker.stop = everyTick(() => {
+      repaint(context, active);
+    });
   });
   pi.on("session_shutdown", async (_event, context) => {
+    stopTicker();
     await store.close();
     paint(context);
+  });
+  pi.on("agent_end", async (_event, context) => {
+    const active = await store.ensure(context);
+    const nudge = staleNudge(active, Date.now());
+    if (nudge !== undefined) {
+      pi.sendMessage(
+        { content: nudge, customType: NUDGE_TYPE, display: false },
+        { deliverAs: "nextTurn" },
+      );
+    }
   });
 }

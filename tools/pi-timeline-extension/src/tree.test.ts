@@ -2,6 +2,7 @@
 import { expect, test } from "vitest";
 import {
   addTask,
+  ageText,
   EMPTY_TIMELINE,
   parseTimeline,
   progress,
@@ -92,4 +93,16 @@ test("a stored tree is read back, and anything else is refused", () => {
   expect(parseTimeline(JSON.stringify(timeline))).toStrictEqual(timeline);
   expect(() => parseTimeline("null")).toThrow("Invalid timeline state.");
   expect(() => parseTimeline('{"tasks":1}')).toThrow("Invalid timeline state.");
+});
+
+test("the head carries the tree's age only once it is worth reading", () => {
+  expect(ageText(0)).toBe("1m");
+  expect(ageText(59 * 60_000)).toBe("59m");
+  expect(ageText(60 * 60_000)).toBe("1h");
+  expect(ageText(25 * 3_600_000)).toBe("1d");
+  const timeline = built();
+  expect(renderTimeline(timeline, undefined, 2 * 60_000)[0]).toBe("░░░░░░░░░░ 0.00% · 3 tasks");
+  expect(renderTimeline(timeline, undefined, 42 * 60_000)[0]).toBe(
+    "░░░░░░░░░░ 0.00% · 3 tasks · updated 42m",
+  );
 });

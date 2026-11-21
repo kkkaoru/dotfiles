@@ -11,6 +11,17 @@ without competing for the footer row; the percentage also sits in the footer sta
 task is done the widget goes away, since there is nothing left to track, and `/timeline` still prints
 the finished tree.
 
+## A tree that goes stale
+
+The widget is only useful while it says something true, so it carries its own age. Five minutes
+after the last change, the head adds `· updated 42m`, repainted once a minute (`1m`, `59m`, `1h`,
+`1d`), so a frozen tree looks frozen instead of authoritative.
+
+When a turn ends with unfinished tasks and the tree has not changed for 15 minutes, the agent is
+told once — a hidden `timeline-nudge` message asking it to mark what finished as done and record the
+next step. A change clears that reminder, so the next stale stretch is reported again; a tree with
+every task done is never reported.
+
 ## The tool
 
 | action   | fields                                           |

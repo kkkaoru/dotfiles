@@ -29,6 +29,19 @@ export interface TaskPatch {
 
 export const EMPTY_TIMELINE: Timeline = { tasks: [] };
 
+/** Younger than this, the tree's age is not worth the head's width. */
+export const STALE_AFTER_MS = 5 * 60_000;
+
+/** How long ago the tree changed, in the shortest form a head can carry. */
+export function ageText(ms: number): string {
+  const minutes = Math.max(1, Math.floor(ms / 60_000));
+  if (minutes < 60) {
+    return `${String(minutes)}m`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `${String(hours)}h` : `${String(Math.floor(hours / 24))}d`;
+}
+
 /** How much of a leaf's own weight counts as finished. A task with subtasks takes their score. */
 const SHARE: Readonly<Record<Status, number>> = { active: 0.5, blocked: 0, done: 1, pending: 0 };
 
@@ -151,12 +164,21 @@ function lines(timeline: Timeline, parent: string | null, out: string[], colour:
 }
 
 /** The tree as lines: progress first, then each task indented under its parent, with its id. */
-export function renderTimeline(timeline: Timeline, colour: Colour = PLAIN): string[] {
+export function renderTimeline(
+  timeline: Timeline,
+  colour: Colour = PLAIN,
+  ageMs?: number,
+): string[] {
   if (timeline.tasks.length === 0) {
     return ["No tasks."];
   }
   const value = progress(timeline);
-  const head = `${bar(value, HEAD_CELLS, "total", colour)} ${colour("muted", `${formatProgress(value)}%`)} · ${String(timeline.tasks.length)} tasks`;
+  // A tree nobody has touched for a while is the one that lies, so its age rides in the head.
+  const stale =
+    ageMs !== undefined && ageMs >= STALE_AFTER_MS
+      ? colour("muted", ` · updated ${ageText(ageMs)}`)
+      : "";
+  const head = `${bar(value, HEAD_CELLS, "total", colour)} ${colour("muted", `${formatProgress(value)}%`)} · ${String(timeline.tasks.length)} tasks${stale}`;
   return [head, ...lines(timeline, null, [], colour)];
 }
 

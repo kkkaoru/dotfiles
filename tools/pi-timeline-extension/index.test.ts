@@ -5,18 +5,9 @@ import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, expect, test, vi } from "vitest";
 import timelineExtension from "./index.ts";
+import { start } from "./src/harness.ts";
 import type { Timeline } from "./src/tree.ts";
 import { TranslatedTimeline } from "./src/translate.ts";
-
-interface Harness {
-  readonly context: ExtensionContext;
-  readonly handlers: Map<string, (event: unknown, context: ExtensionContext) => Promise<void>>;
-  readonly notify: ReturnType<typeof vi.fn>;
-  readonly run: (params: unknown) => Promise<{ content: readonly { text: string }[] }>;
-  readonly setStatus: ReturnType<typeof vi.fn>;
-  readonly setWidget: ReturnType<typeof vi.fn>;
-  readonly show: () => Promise<void>;
-}
 
 const directories: string[] = [];
 
@@ -25,63 +16,6 @@ afterEach(async () => {
     directories.splice(0).map(async (dir) => rm(dir, { force: true, recursive: true })),
   );
 });
-
-async function start(
-  file?: string,
-  display?: TranslatedTimeline,
-  fg: (token: string, text: string) => string = (_token, text) => text,
-): Promise<Harness> {
-  const handlers = new Map<string, (event: unknown, context: ExtensionContext) => Promise<void>>();
-  let tool:
-    | ((
-        id: string,
-        params: unknown,
-        signal: undefined,
-        update: undefined,
-        ctx: ExtensionContext,
-      ) => Promise<unknown>)
-    | undefined;
-  let command: ((args: string, context: ExtensionContext) => Promise<void>) | undefined;
-  timelineExtension(
-    {
-      on: (name: string, handler: (event: unknown, context: ExtensionContext) => Promise<void>) => {
-        handlers.set(name, handler);
-      },
-      registerCommand: (_name: string, definition: { handler: typeof command }) => {
-        command = definition.handler;
-      },
-      registerTool: (definition: { execute: typeof tool }) => {
-        tool = definition.execute;
-      },
-    } as unknown as ExtensionAPI,
-    { display },
-  );
-
-  const notify = vi.fn();
-  const setStatus = vi.fn();
-  const setWidget = vi.fn();
-  const context = {
-    sessionManager: { getSessionFile: () => file },
-    ui: { notify, setStatus, setWidget, theme: { fg } },
-  } as unknown as ExtensionContext;
-  await handlers.get("session_start")?.({}, context);
-  return {
-    context,
-    handlers,
-    notify,
-    setStatus,
-    setWidget,
-    async run(params: unknown) {
-      const result = (await tool?.("call", params, undefined, undefined, context)) as {
-        content: readonly { text: string }[];
-      };
-      return result;
-    },
-    async show() {
-      await command?.("", context);
-    },
-  };
-}
 
 const text = (result: { content: readonly { text: string }[] }): string =>
   result.content.map((part) => part.text).join("\n");
@@ -158,6 +92,102 @@ test("shutting the session down takes the widget away", async () => {
   expect(harness.setWidget).toHaveBeenLastCalledWith("timeline", undefined, {
     placement: "belowEditor",
   });
+});
+
+test("the head says how long ago the tree last changed", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    vi.setSystemTime(new Date(2026, 7, 26, 11, 0));
+    const harness = await start();
+    await harness.run({ action: "add", title: "Fix bug" });
+    // Under five minutes the age would only widen the head.
+    expect(harness.setWidget).toHaveBeenLastCalledWith(
+      "timeline",
+      ["░░░░░░░░░░ 0.00% · 1 tasks", "░░░░░░   0.00% · t1 Fix bug"],
+      { placement: "belowEditor" },
+    );
+    vi.setSystemTime(new Date(2026, 7, 26, 11, 42));
+    await harness.show();
+    expect(harness.setWidget).toHaveBeenLastCalledWith(
+      "timeline",
+      ["░░░░░░░░░░ 0.00% · 1 tasks · updated 42m", "░░░░░░   0.00% · t1 Fix bug"],
+      { placement: "belowEditor" },
+    );
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("the age is repainted as the tree ages, and stops once it is finished", async () => {
+  vi.useFakeTimers({ toFake: ["Date", "clearInterval", "setInterval"] });
+  try {
+    vi.setSystemTime(new Date(2026, 7, 26, 11, 0));
+    const harness = await start();
+    await harness.run({ action: "add", title: "Fix bug" });
+    // The tick lands a minute later, so the head says how old the tree is by then.
+    vi.setSystemTime(new Date(2026, 7, 26, 11, 5));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(harness.setWidget).toHaveBeenLastCalledWith(
+      "timeline",
+      ["░░░░░░░░░░ 0.00% · 1 tasks · updated 6m", "░░░░░░   0.00% · t1 Fix bug"],
+      { placement: "belowEditor" },
+    );
+    await harness.run({ action: "update", id: "t1", status: "done" });
+    const painted = harness.setWidget.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(harness.setWidget.mock.calls.length).toBe(painted);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a stale tree is reported to the agent once", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    vi.setSystemTime(new Date(2026, 7, 26, 11, 0));
+    const harness = await start();
+    await harness.run({ action: "add", title: "Fix bug" });
+    await harness.handlers.get("agent_end")?.({}, harness.context);
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+    vi.setSystemTime(new Date(2026, 7, 26, 11, 20));
+    await harness.handlers.get("agent_end")?.({}, harness.context);
+    expect(harness.sendMessage).toHaveBeenCalledWith(
+      {
+        content: expect.stringContaining(
+          "1 unfinished and the tree has not changed for 20m",
+        ) as string,
+        customType: "timeline-nudge",
+        display: false,
+      },
+      { deliverAs: "nextTurn" },
+    );
+    // A later turn does not repeat it while the tree is still untouched.
+    await harness.handlers.get("agent_end")?.({}, harness.context);
+    expect(harness.sendMessage).toHaveBeenCalledTimes(1);
+    // A change earns the next report.
+    vi.setSystemTime(new Date(2026, 7, 26, 11, 50));
+    await harness.run({ action: "update", id: "t1", note: "halfway" });
+    vi.setSystemTime(new Date(2026, 7, 26, 12, 20));
+    await harness.handlers.get("agent_end")?.({}, harness.context);
+    expect(harness.sendMessage).toHaveBeenCalledTimes(2);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("a finished tree is never reported", async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  try {
+    vi.setSystemTime(new Date(2026, 7, 26, 11, 0));
+    const harness = await start();
+    await harness.run({ action: "add", title: "Fix bug" });
+    await harness.run({ action: "update", id: "t1", status: "done" });
+    vi.setSystemTime(new Date(2026, 7, 26, 13, 0));
+    await harness.handlers.get("agent_end")?.({}, harness.context);
+    expect(harness.sendMessage).not.toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("a change without the field it needs is refused", async () => {

@@ -1,4 +1,6 @@
 // This TypeScript file is executed with Bun.
+import { readdir, stat } from "node:fs/promises";
+import path from "node:path";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai";
 import {
@@ -101,4 +103,17 @@ export class DurableTimelineStore {
         this.#report(error);
       });
   }
+}
+
+/** The sidecar's newest write, which is when the tree last changed. */
+export async function lastWrite(directory: string): Promise<number | undefined> {
+  const names = await readdir(directory);
+  const written = names.filter((name) => name.endsWith(".jsonl"));
+  const times = await Promise.all(
+    written.map(async (name) => {
+      const file = await stat(path.join(directory, name));
+      return file.mtimeMs;
+    }),
+  );
+  return times.length === 0 ? undefined : Math.max(...times);
 }
