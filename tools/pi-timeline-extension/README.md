@@ -20,15 +20,17 @@ competing for the footer row; the percentage also sits in the footer status area
 `status` is `pending`, `active`, `done` or `blocked`. Every call answers with the rendered tree:
 
 ```
-63% · 3 tasks
-· t1 Fix bug (100%)
-  ✔ t2 Read code (100%)
-▸ t3 Ship (50%) — waiting on review
+██████░░░░ 62.50% · 3 tasks
+· t1 Fix bug ██████ 100.00%
+  ✔ t2 Read code ██████ 100.00%
+▸ t3 Ship ███░░░  50.00% — waiting on review
 ```
 
-Every line carries its own percentage, so a leaf and a parent read the same way. A task that has
-subtasks takes their weighted score instead of its own status, so a parent is finished only when its
-children are. A leaf counts `done` as 1, `active` as 0.5, `blocked` and `pending` as 0.
+Every line carries its own bar and percentage, as the Harness timeline draws them: the tree's bar is
+longer than a task's, the number keeps two decimals, and work that is not finished never reads
+`100.00%`. A task that has subtasks takes their weighted score instead of its own status, so a
+parent is finished only when its children are. A leaf counts `done` as 1, `active` as 0.5,
+`blocked` and `pending` as 0.
 
 ## Translation
 

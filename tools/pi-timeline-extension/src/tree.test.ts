@@ -80,10 +80,10 @@ test("the tree reads progress, then each task indented under its parent", () => 
     status: "active",
   });
   expect(renderTimeline(timeline)).toStrictEqual([
-    "63% · 3 tasks",
-    "· t1 Fix bug (100%)",
-    "  ✔ t2 Read code (100%)",
-    "▸ t3 Ship (50%) — waiting on review",
+    "██████░░░░ 62.50% · 3 tasks",
+    "· t1 Fix bug ██████ 100.00%",
+    "  ✔ t2 Read code ██████ 100.00%",
+    "▸ t3 Ship ███░░░  50.00% — waiting on review",
   ]);
 });
 

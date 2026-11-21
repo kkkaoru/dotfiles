@@ -107,11 +107,29 @@ function depth(timeline: Timeline, task: Task): number {
   return level;
 }
 
+/** Cells in the tree's bar, and in a task's own: the Harness draws the tree's bar wider. */
+const HEAD_CELLS = 10;
+const TASK_CELLS = 6;
+/** The Harness keeps unfinished work below 100 at its two decimals. */
+const INCOMPLETE_LIMIT = 99.99;
+
+/** The Harness's formatProgress: two decimals, and work that is not finished never reads 100. */
+function formatProgress(value: number): string {
+  const percent = Math.max(0, Math.min(1, value)) * 100;
+  return Math.min(percent, value < 1 ? INCOMPLETE_LIMIT : 100).toFixed(2);
+}
+
+function bar(value: number, cells: number): string {
+  const filled = Math.round(Math.max(0, Math.min(1, value)) * cells);
+  return `${"█".repeat(filled)}${"░".repeat(cells - filled)}`;
+}
+
 function taskLine(timeline: Timeline, task: Task): string {
-  // Every line carries its own share, so a parent's score and a leaf's status read the same way.
-  const percent = Math.round(share(timeline, [task]) * 100);
+  // The Harness puts a short bar before a right-aligned percentage, so a parent and a leaf match.
+  const value = share(timeline, [task]);
+  const percent = `${formatProgress(value)}%`.padStart(7);
   const note = task.note === "" ? "" : ` — ${task.note}`;
-  return `${"  ".repeat(depth(timeline, task))}${GLYPH[task.status]} ${task.id} ${task.title} (${String(percent)}%)${note}`;
+  return `${"  ".repeat(depth(timeline, task))}${GLYPH[task.status]} ${task.id} ${task.title} ${bar(value, TASK_CELLS)} ${percent}${note}`;
 }
 
 function lines(timeline: Timeline, parent: string | null, out: string[]): string[] {
@@ -127,8 +145,8 @@ export function renderTimeline(timeline: Timeline): string[] {
   if (timeline.tasks.length === 0) {
     return ["No tasks."];
   }
-  const percent = Math.round(progress(timeline) * 100);
-  const head = `${String(percent)}% · ${String(timeline.tasks.length)} tasks`;
+  const value = progress(timeline);
+  const head = `${bar(value, HEAD_CELLS)} ${formatProgress(value)}% · ${String(timeline.tasks.length)} tasks`;
   return [head, ...lines(timeline, null, [])];
 }
 
