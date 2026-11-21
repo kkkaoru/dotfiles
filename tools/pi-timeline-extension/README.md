@@ -22,13 +22,13 @@ competing for the footer row; the percentage also sits in the footer status area
 ```
 63% · 3 tasks
 · t1 Fix bug (100%)
-  ✔ t2 Read code
-▸ t3 Ship — waiting on review
+  ✔ t2 Read code (100%)
+▸ t3 Ship (50%) — waiting on review
 ```
 
-A task that has subtasks takes their weighted score instead of its own status, so a parent is
-finished only when its children are. A leaf counts `done` as 1, `active` as 0.5, `blocked` and
-`pending` as 0.
+Every line carries its own percentage, so a leaf and a parent read the same way. A task that has
+subtasks takes their weighted score instead of its own status, so a parent is finished only when its
+children are. A leaf counts `done` as 1, `active` as 0.5, `blocked` and `pending` as 0.
 
 ## Translation
 

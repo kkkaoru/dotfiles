@@ -82,8 +82,8 @@ test("the tree reads progress, then each task indented under its parent", () => 
   expect(renderTimeline(timeline)).toStrictEqual([
     "63% · 3 tasks",
     "· t1 Fix bug (100%)",
-    "  ✔ t2 Read code",
-    "▸ t3 Ship — waiting on review",
+    "  ✔ t2 Read code (100%)",
+    "▸ t3 Ship (50%) — waiting on review",
   ]);
 });
 

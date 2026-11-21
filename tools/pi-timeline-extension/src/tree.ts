@@ -108,11 +108,10 @@ function depth(timeline: Timeline, task: Task): number {
 }
 
 function taskLine(timeline: Timeline, task: Task): string {
-  const subtasks = children(timeline, task.id);
-  const shareText =
-    subtasks.length === 0 ? "" : ` (${String(Math.round(share(timeline, subtasks) * 100))}%)`;
+  // Every line carries its own share, so a parent's score and a leaf's status read the same way.
+  const percent = Math.round(share(timeline, [task]) * 100);
   const note = task.note === "" ? "" : ` — ${task.note}`;
-  return `${"  ".repeat(depth(timeline, task))}${GLYPH[task.status]} ${task.id} ${task.title}${shareText}${note}`;
+  return `${"  ".repeat(depth(timeline, task))}${GLYPH[task.status]} ${task.id} ${task.title} (${String(percent)}%)${note}`;
 }
 
 function lines(timeline: Timeline, parent: string | null, out: string[]): string[] {

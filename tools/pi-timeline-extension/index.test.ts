@@ -85,11 +85,11 @@ test("the tool records a tree and reports its progress as a status", async () =>
   const harness = await start();
   expect(harness.setStatus).toHaveBeenLastCalledWith("timeline", "0%");
   const added = await harness.run({ action: "add", title: "Fix bug" });
-  expect(text(added)).toBe("0% · 1 tasks\n· t1 Fix bug");
+  expect(text(added)).toBe("0% · 1 tasks\n· t1 Fix bug (0%)");
   const done = await harness.run({ action: "update", id: "t1", status: "done" });
-  expect(text(done)).toBe("100% · 1 tasks\n✔ t1 Fix bug");
+  expect(text(done)).toBe("100% · 1 tasks\n✔ t1 Fix bug (100%)");
   expect(harness.setStatus).toHaveBeenLastCalledWith("timeline", "100%");
-  expect(text(await harness.run({ action: "list" }))).toBe("100% · 1 tasks\n✔ t1 Fix bug");
+  expect(text(await harness.run({ action: "list" }))).toBe("100% · 1 tasks\n✔ t1 Fix bug (100%)");
 });
 
 test("every field of a change is applied", async () => {
@@ -103,7 +103,7 @@ test("every field of a change is applied", async () => {
     title: "Fix the bug",
     weight: 3,
   });
-  expect(text(result)).toBe("50% · 1 tasks\n▸ t1 Fix the bug — in review");
+  expect(text(result)).toBe("50% · 1 tasks\n▸ t1 Fix the bug (50%) — in review");
 });
 
 test("a subtask is added under its parent, with the weight it was given", async () => {
@@ -115,7 +115,7 @@ test("a subtask is added under its parent, with the weight it was given", async 
     title: "Read code",
     weight: 2,
   });
-  expect(text(result)).toBe("0% · 2 tasks\n· t1 Fix bug (0%)\n  · t2 Read code");
+  expect(text(result)).toBe("0% · 2 tasks\n· t1 Fix bug (0%)\n  · t2 Read code (0%)");
 });
 
 test("a change without the field it needs is refused", async () => {
@@ -130,7 +130,7 @@ test("the command shows the tree it keeps", async () => {
   const harness = await start();
   await harness.run({ action: "add", title: "Fix bug" });
   await harness.show();
-  expect(harness.notify).toHaveBeenLastCalledWith("0% · 1 tasks\n· t1 Fix bug", "info");
+  expect(harness.notify).toHaveBeenLastCalledWith("0% · 1 tasks\n· t1 Fix bug (0%)", "info");
   expect(harness.setStatus).toHaveBeenLastCalledWith("timeline", "0%");
 });
 
@@ -141,9 +141,13 @@ test("the tree keeps a place of its own under the editor", async () => {
     placement: "belowEditor",
   });
   await harness.run({ action: "add", title: "Fix bug" });
-  expect(harness.setWidget).toHaveBeenLastCalledWith("timeline", ["0% · 1 tasks", "· t1 Fix bug"], {
-    placement: "belowEditor",
-  });
+  expect(harness.setWidget).toHaveBeenLastCalledWith(
+    "timeline",
+    ["0% · 1 tasks", "· t1 Fix bug (0%)"],
+    {
+      placement: "belowEditor",
+    },
+  );
 });
 
 test("a copy that a reload leaves behind does not take the sidecar away", async () => {
@@ -156,12 +160,16 @@ test("a copy that a reload leaves behind does not take the sidecar away", async 
   const second = await start(file);
   expect(second.notify).not.toHaveBeenCalled();
   expect(second.setStatus).toHaveBeenLastCalledWith("timeline", "0%");
-  expect(second.setWidget).toHaveBeenLastCalledWith("timeline", ["0% · 1 tasks", "· t1 Fix bug"], {
-    placement: "belowEditor",
-  });
+  expect(second.setWidget).toHaveBeenLastCalledWith(
+    "timeline",
+    ["0% · 1 tasks", "· t1 Fix bug (0%)"],
+    {
+      placement: "belowEditor",
+    },
+  );
   await first.handlers.get("session_shutdown")?.({}, first.context);
   const done = await second.run({ action: "update", id: "t1", status: "done" });
-  expect(text(done)).toBe("100% · 1 tasks\n✔ t1 Fix bug");
+  expect(text(done)).toBe("100% · 1 tasks\n✔ t1 Fix bug (100%)");
   await second.handlers.get("session_shutdown")?.({}, second.context);
 });
 
@@ -177,10 +185,14 @@ test("a sidecar another pi holds leaves the tree in memory, and it is still show
     "warning",
   );
   const added = await harness.run({ action: "add", title: "Fix bug" });
-  expect(text(added)).toBe("0% · 1 tasks\n· t1 Fix bug");
-  expect(harness.setWidget).toHaveBeenLastCalledWith("timeline", ["0% · 1 tasks", "· t1 Fix bug"], {
-    placement: "belowEditor",
-  });
+  expect(text(added)).toBe("0% · 1 tasks\n· t1 Fix bug (0%)");
+  expect(harness.setWidget).toHaveBeenLastCalledWith(
+    "timeline",
+    ["0% · 1 tasks", "· t1 Fix bug (0%)"],
+    {
+      placement: "belowEditor",
+    },
+  );
   await harness.handlers.get("session_shutdown")?.({}, harness.context);
 });
 
@@ -195,7 +207,7 @@ test("a session with a file keeps its tree beside it and finds it again", async 
 
   const second = await start(file);
   expect(second.setStatus).toHaveBeenLastCalledWith("timeline", "100%");
-  expect(text(await second.run({ action: "list" }))).toBe("100% · 1 tasks\n✔ t1 Fix bug");
+  expect(text(await second.run({ action: "list" }))).toBe("100% · 1 tasks\n✔ t1 Fix bug (100%)");
   await second.handlers.get("session_shutdown")?.({}, second.context);
 });
 
@@ -224,13 +236,17 @@ test("the tree is painted in the reader's language once the translation lands", 
   const harness = await start(undefined, display);
   await harness.run({ action: "add", title: "Fix bug" });
   // The English is on screen at once, so a slow server never leaves the tree blank.
-  expect(harness.setWidget).toHaveBeenCalledWith("timeline", ["0% · 1 tasks", "· t1 Fix bug"], {
-    placement: "belowEditor",
-  });
+  expect(harness.setWidget).toHaveBeenCalledWith(
+    "timeline",
+    ["0% · 1 tasks", "· t1 Fix bug (0%)"],
+    {
+      placement: "belowEditor",
+    },
+  );
   await vi.waitFor(() => {
     expect(harness.setWidget).toHaveBeenLastCalledWith(
       "timeline",
-      ["0% · 1 tasks", "· t1 【Fix bug】"],
+      ["0% · 1 tasks", "· t1 【Fix bug】 (0%)"],
       { placement: "belowEditor" },
     );
   });
@@ -269,14 +285,18 @@ test("a text the server could not translate is retried, and the English stays me
   await vi.waitFor(() => {
     expect(attempts).toBe(1);
   });
-  expect(harness.setWidget).toHaveBeenLastCalledWith("timeline", ["0% · 1 tasks", "· t1 Fix bug"], {
-    placement: "belowEditor",
-  });
+  expect(harness.setWidget).toHaveBeenLastCalledWith(
+    "timeline",
+    ["0% · 1 tasks", "· t1 Fix bug (0%)"],
+    {
+      placement: "belowEditor",
+    },
+  );
   await harness.run({ action: "update", id: "t1", status: "active" });
   await vi.waitFor(() => {
     expect(harness.setWidget).toHaveBeenLastCalledWith(
       "timeline",
-      ["50% · 1 tasks", "▸ t1 【Fix bug】"],
+      ["50% · 1 tasks", "▸ t1 【Fix bug】 (50%)"],
       { placement: "belowEditor" },
     );
   });
@@ -303,7 +323,7 @@ test("a translation that lands after a newer tree is discarded", async () => {
   await vi.waitFor(() => {
     expect(harness.setWidget).toHaveBeenLastCalledWith(
       "timeline",
-      ["0% · 2 tasks", "· t1 【First】", "· t2 【Second】"],
+      ["0% · 2 tasks", "· t1 【First】 (0%)", "· t2 【Second】 (0%)"],
       { placement: "belowEditor" },
     );
   });
@@ -311,7 +331,7 @@ test("a translation that lands after a newer tree is discarded", async () => {
   await vi.waitFor(() => {
     expect(harness.setWidget).toHaveBeenLastCalledWith(
       "timeline",
-      ["0% · 2 tasks", "· t1 【First】", "· t2 【Second】"],
+      ["0% · 2 tasks", "· t1 【First】 (0%)", "· t2 【Second】 (0%)"],
       { placement: "belowEditor" },
     );
   });
@@ -333,7 +353,7 @@ test("a resumed session paints the restored tree in the reader's language", asyn
   await vi.waitFor(() => {
     expect(second.setWidget).toHaveBeenLastCalledWith(
       "timeline",
-      ["0% · 1 tasks", "· t1 【Fix bug】"],
+      ["0% · 1 tasks", "· t1 【Fix bug】 (0%)"],
       { placement: "belowEditor" },
     );
   });
