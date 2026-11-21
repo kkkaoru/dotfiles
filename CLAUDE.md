@@ -111,9 +111,11 @@ integrations. These instructions apply to agents working here, including pi and 
   footer (`pi-gateway-cost`), the `x-session-affinity` header that keeps a session's Workers AI
   prompt prefix cached (`pi-cf-affinity`), the two-line footer that replaces pi's own row and
   ends with the session id (`pi-compact-footer`), the session's prompt cache hit rate and the
-  requests that broke the prefix (`pi-prompt-cache`), and `/graceful-reload`, which aborts a running
-  response and reloads instead of asking to wait (`pi-graceful-reload`). They are linked by
-  `create-symlinks.sh`.
+  requests that broke the prefix (`pi-prompt-cache`), `/graceful-reload`, which aborts a running
+  response and reloads instead of asking to wait (`pi-graceful-reload`), and one graph of how the
+  session, its goal and loop, its tmux jobs, its timeline tree and its files relate, kept beside the
+  session file (`pi-relations-extension`; `relations` tool, or `bun cli.ts` from a shell). They are
+  linked by `create-symlinks.sh`.
 - `tools/pi-my-antigravity/` — Subscription-backed Antigravity (Cloud Code Assist) provider that
   mirrors the official `agy` CLI wire format (`bun run check`). Sends the system prompt as the
   leading user turn because the backend 429s third-party prompts in `systemInstruction`.
@@ -218,6 +220,7 @@ Verification is component-specific; the root package does not provide a universa
 - `tools/pi-cf-affinity-extension/`: `bun run check`
 - `tools/pi-prompt-cache/`: `bun run check`
 - `tools/pi-graceful-reload/`: `bun run check`
+- `tools/pi-relations-extension/`: `bun run check`
 - `.config/herdr-app/mods/`: `bun run check` in `tools/herdr-app-mods/` (lint, format, per-file 95% coverage)
 - Other components: inspect their `package.json` and README for required checks.
 - Shell changes: check syntax; for all changes, run `git diff --check`.
