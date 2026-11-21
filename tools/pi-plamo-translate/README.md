@@ -71,9 +71,15 @@ rate.
 Starting the server is only half of a cold start. Measured on this Mac, a cold server answers
 `/v1/models` after 2.2 s, but its first completion takes 3.9 s while MLX compiles kernels, and the
 second 0.04 s. So once the server answers, the mod sends one throwaway completion and only then
-reports it ready: the session start already asks for the server, and that ~4 s now passes while you
-are still typing instead of in front of your first translation. A warm-up that fails is ignored —
-the first translation then simply pays the cost itself.
+reports it ready. The launch starts as soon as pi loads this package — before `session_start`, which
+waits for pi to restore the session — so both waits pass while pi is still starting up and you are
+still typing, instead of in front of your first translation. A warm-up that fails is ignored: the
+first translation then simply pays the cost itself.
+
+The model is ~1 GB resident, so the server does not stay: it exits after `PLAMO_IDLE_MINUTES`
+(default 10, `0` keeps it) with no request in flight, and the next translation starts it again.
+That lives in `scripts/plamo-mlx-server.py`, so the Claude mod gets the same behaviour, and nothing
+starts the server at login or while pi is not running.
 
 ## Check
 

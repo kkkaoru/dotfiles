@@ -14,6 +14,7 @@ import {
   startSession,
   translateInput,
   translateText,
+  warmServer,
   type Runtime,
   type UiSink,
 } from "./runtime.ts";
@@ -370,6 +371,31 @@ test("reply translation off ignores assistant messages", () => {
   );
   scheduleReply(box, { role: "assistant", content: [{ type: "text", text: "Add a tab" }] });
   expect(box.pending.size).toBe(0);
+});
+
+test("the package warms the server before any session exists", async () => {
+  const warmed = { count: 0 };
+  const box = runtime(
+    async () => "x",
+    () => {
+      warmed.count += 1;
+      return Promise.resolve(true);
+    },
+  );
+  warmServer(box);
+  await Promise.resolve();
+  expect(warmed.count).toBe(1);
+});
+
+test("a warm-up that fails before there is a UI stays silent", async () => {
+  /** The package loads before the session exists, so a failure here has nowhere to go. */
+  const box = runtime(
+    async () => "x",
+    () => Promise.reject(new Error("refused")),
+  );
+  expect(() => warmServer(box)).not.toThrow();
+  await Promise.resolve();
+  expect(box.warned).toBe(false);
 });
 
 test("session start captures the renderer and warms the server", async () => {

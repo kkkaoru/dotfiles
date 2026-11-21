@@ -356,6 +356,14 @@ export function scheduleReply(
   });
 }
 
+/**
+ * Warm the server as soon as pi loads the package. There is no UI yet, so a failure is silent here:
+ * `translateText` still warns once and passes text through on the first translation.
+ */
+export function warmServer(runtime: Runtime): void {
+  runtime.server.ensure().catch(() => null);
+}
+
 export function startSession(runtime: Runtime, ctx: SessionContextLike): void {
   runtime.ui = ctx.ui;
   runtime.resumedIds = recentResumedIds(runtime, ctx);

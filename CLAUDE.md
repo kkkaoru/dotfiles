@@ -16,6 +16,10 @@ integrations. These instructions apply to agents working here, including pi and 
   after adding a key so every Mac can read every file.
 - `./scripts/setup-executor.sh` — Register shared Executor integrations.
   `--approve-registration` explicitly permits registration and connection creation only.
+- `./scripts/pi-executor.sh [status|on|off] [--host <ssh-alias>]` — Turn pi's `executor` MCP
+  server in `~/.pi/agent/mcp.json` on or off. It is on unless that entry carries
+  `"enabled": false`; use `off` on a machine without Executor Desktop, e.g. `--host my-win`.
+  The edit runs under bun on the target, so nothing else is needed there.
 - `./scripts/executor-cloudflare-auth.sh <cloudflare-integration>` — Start the service's
   OAuth setup and open the authorization page. Login and consent are the user's actions.
 - `./scripts/setup-omlx.sh` — Download Qwen3.8-27B-4bit and DFlash2, then restart oMLX.
@@ -67,6 +71,16 @@ integrations. These instructions apply to agents working here, including pi and 
   (no colab URL yet). Read-only; it never starts a server. `tools/pi-strata-lifecycle` runs it at
   session start and every minute and lists only the endpoints that are awake in the pi footer
   (`awake: win bonsai ~2m`), warning when the idle timer is about to stop one still in use.
+- `./scripts/tb-panic-mitigation.sh [status|apply|revert]` — Apply or undo the two mitigations tried
+  for this Mac's recurring `ACIO0` Thunderbolt firmware panic (`assert_id=2548`) with the OWC
+  Thunderbolt 5 Hub attached: High Power Mode off (`pmset -a powermode 0`) and IP over Thunderbolt
+  off (`Thunderbolt Bridge`). `apply`/`revert` ask for an admin password. Neither is a proven fix,
+  and other Thunderbolt hubs keep working with the bridge off.
+- `./scripts/tb-watch.sh [log|show|tail|install|uninstall]` — Append one-line Thunderbolt/USB4
+  snapshots (boot id, uptime, hub present, hub ROM, link speed/width, panic count and last panic)
+  to `~/Library/Logs/tb-watch.log`; `install` starts a 5-minute launchd agent
+  `com.kkkaoru.tb-watch` at background priority (~0.1 s of CPU per run). Evidence only: it cannot
+  prevent the `ACIO0` assert.
 - `./init-ssh.sh` — Initialize SSH configuration.
 - `./scripts/cf-remote-access.sh <label> [--agent]` — Publish one machine's SSH server as
   `<label>.kkk4oru.com` through a remotely managed Cloudflare Tunnel plus an Access application
@@ -116,7 +130,9 @@ integrations. These instructions apply to agents working here, including pi and 
   text Claude shows you (default ja) with PLaMo 3 Translate on a local `mlx_lm.server` or llama.cpp
   `llama-server` (`bun run check`).
 - `tools/pi-plamo-translate/` — pi package with the same server: you see Japanese, typed Japanese
-  becomes English, and the agent reads and writes English (`bun run check`).
+  becomes English, and the agent reads and writes English (`bun run check`). It warms the server as
+  soon as pi loads the package, and `scripts/plamo-mlx-server.py` exits after `PLAMO_IDLE_MINUTES`
+  (default 10) with no request, so the ~1 GB model does not stay in memory; the Claude mod shares both.
 - `tools/herdr-app-mods/` — Tests, oxlint and oxfmt for the Herdr.app mods in
   `.config/herdr-app/mods/` (host modules mocked); every mod file keeps >=95% coverage.
 - `tools/dsh-dracula-theme/` — A DeepSeek Harness bundle (no build step) that

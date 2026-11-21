@@ -33,6 +33,42 @@ from mlx_lm import server  # noqa: E402 - after the class attribute is set
 CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "plamo-translate")
 CACHE_LIMIT = 20000
 COMPLETIONS = "/v1/completions"
+# The model is ~1 GB resident and nothing needs it between translations, so an idle server exits
+# and the Mac gets the memory back. 0 disables the exit.
+IDLE_MINUTES = float(os.environ.get("PLAMO_IDLE_MINUTES", "10") or 0)
+IDLE_CHECK_SECONDS = 15
+
+
+class Activity:
+    """When the last request finished and how many are running, so an idle server can exit."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.in_flight = 0
+        self.last = time.monotonic()
+
+    def enter(self) -> None:
+        with self.lock:
+            self.in_flight += 1
+            self.last = time.monotonic()
+
+    def leave(self) -> None:
+        with self.lock:
+            self.in_flight -= 1
+            self.last = time.monotonic()
+
+    def idle(self, minutes: float) -> bool:
+        with self.lock:
+            return self.in_flight == 0 and time.monotonic() - self.last >= minutes * 60
+
+
+def watch_idle(activity: Activity, minutes: float) -> None:
+    while True:
+        time.sleep(min(IDLE_CHECK_SECONDS, minutes * 60))
+        if activity.idle(minutes):
+            # Every cached completion is already on disk, so there is nothing to flush. The next
+            # translation starts the server again, paying the 2.2 s load and 3.9 s first inference.
+            os._exit(0)
 
 
 def cache_file() -> str:
@@ -159,12 +195,19 @@ class Capture:
         return getattr(self.stream, name)
 
 
-def install(cache: CompletionCache) -> None:
+def install(cache: CompletionCache, activity: Activity) -> None:
     original_post = server.APIHandler.do_POST
     # Resolved before the assignment below, or the fallback would call this wrapper again.
     original_get = server.APIHandler.do_GET
 
     def do_post(self) -> None:
+        activity.enter()
+        try:
+            handle_post(self)
+        finally:
+            activity.leave()
+
+    def handle_post(self) -> None:
         if self.path != COMPLETIONS:
             original_post(self)
             return
@@ -241,6 +284,13 @@ def install(cache: CompletionCache) -> None:
         self.wfile.write(body)
 
     def do_GET(self) -> None:
+        activity.enter()
+        try:
+            handle_get(self)
+        finally:
+            activity.leave()
+
+    def handle_get(self) -> None:
         if self.path == "/cache/stats":
             body = json.dumps(
                 {"entries": len(cache.entries), "hits": cache.hits, "misses": cache.misses}
@@ -261,7 +311,10 @@ def install(cache: CompletionCache) -> None:
 def main() -> int:
     path = cache_file()
     cache = CompletionCache(path, CACHE_LIMIT)
-    install(cache)
+    activity = Activity()
+    install(cache, activity)
+    if IDLE_MINUTES > 0:
+        threading.Thread(target=watch_idle, args=(activity, IDLE_MINUTES), daemon=True).start()
     print(f"completion cache: {len(cache.entries)} entries from {path}", flush=True)
     return server.main()
 

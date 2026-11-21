@@ -8,7 +8,7 @@ import { setTimeout } from "node:timers/promises";
 import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { bindPlamo } from "./src/bind.ts";
 import { EXCLUDE_EVENT } from "./src/policy.ts";
-import { createRuntime, processCaches, type Runtime } from "./src/runtime.ts";
+import { createRuntime, processCaches, warmServer, type Runtime } from "./src/runtime.ts";
 import { createServer, type ServerDeps } from "./src/server.ts";
 import { readPlamoSettings } from "./src/settings.ts";
 
@@ -36,7 +36,7 @@ export default function plamoTranslate(pi: ExtensionAPI): void {
     settings,
     createServer(
       liveDeps((message) => {
-        holder.runtime?.ui.notify(message, "warning");
+        holder.runtime?.ui?.notify(message, "warning");
       }),
       settings.port,
     ),
@@ -44,6 +44,11 @@ export default function plamoTranslate(pi: ExtensionAPI): void {
     processCaches(),
   );
   holder.runtime = runtime;
+  /**
+   * Earlier than session_start, which waits for pi to restore the session: the server needs 2.2 s
+   * to answer and 3.9 s more for its first inference, so starting it here overlaps pi's own start.
+   */
+  warmServer(runtime);
   bindPlamo(
     {
       onSessionStart: (handler) => {
