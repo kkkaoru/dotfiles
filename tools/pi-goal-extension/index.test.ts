@@ -119,6 +119,9 @@ it("registers concise goal/loop authoring guidance without a duplicate skill", (
       expect.stringMatching(
         /Use live tmux notifications rather than model polling/u,
       ),
+      expect.stringMatching(
+        /Give the goal its own timeline tree as soon as it starts/u,
+      ),
     ]),
   );
 });
