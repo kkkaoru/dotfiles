@@ -17,6 +17,13 @@ const MIN_TOKENS = 64;
 const MAX_TOKENS = 4096;
 const READY_TIMEOUT_MS = 60_000;
 const READY_POLL_MS = 500;
+/**
+ * Measured on this Mac: spawn to /v1/models 2.2 s, but the first inference 3.9 s and the second
+ * 0.04 s, because MLX compiles its kernels then. One throwaway completion right after the server
+ * answers pays that, while the user is still typing, instead of in their first translation.
+ */
+const WARM_TEXT = "hello";
+const WARM_LANG = "ja";
 // Requests in flight at once; a new prompt's still goes first. Batching them keeps the GPU fed.
 // One request at a time leaves Apple Silicon's decode memory-bound and idle.
 const PARALLEL_REQUESTS = 8;
@@ -168,42 +175,6 @@ async function waitReady(deps: ServerDeps, port: number, deadline: number): Prom
   return waitReady(deps, port, deadline);
 }
 
-function launch(deps: ServerDeps, spec: SpawnSpec): void {
-  const child = deps.spawn(spec.command, spec.args);
-  child.once("error", (error: Error) => {
-    deps.report(`plamo-translate: starting the PLaMo server failed: ${error.message}`);
-  });
-  child.unref();
-}
-
-async function start(deps: ServerDeps, port: number, state: ServerState): Promise<boolean> {
-  const spec = commandSpec(deps.home, deps.platform, port, deps.exists);
-  if (spec === undefined) {
-    state.failed = true;
-    deps.report(SETUP_HINT);
-    return false;
-  }
-  launch(deps, spec);
-  const ready = await waitReady(deps, port, deps.now() + READY_TIMEOUT_MS);
-  state.failed = !ready;
-  state.starting = null;
-  if (!ready) {
-    deps.report(SETUP_HINT);
-  }
-  return ready;
-}
-
-async function ensure(deps: ServerDeps, port: number, state: ServerState): Promise<boolean> {
-  if (await healthy(deps, port)) {
-    return true;
-  }
-  if (state.failed) {
-    return false;
-  }
-  state.starting ??= start(deps, port, state);
-  return state.starting;
-}
-
 async function complete(
   deps: ServerDeps,
   port: number,
@@ -225,6 +196,50 @@ async function complete(
   }
   const body = await response.json();
   return completionText(body);
+}
+
+function launch(deps: ServerDeps, spec: SpawnSpec): void {
+  const child = deps.spawn(spec.command, spec.args);
+  child.once("error", (error: Error) => {
+    deps.report(`plamo-translate: starting the PLaMo server failed: ${error.message}`);
+  });
+  child.unref();
+}
+
+/** A warm-up that fails is not a failed server: the first translation then simply pays it. */
+async function warm(deps: ServerDeps, port: number): Promise<void> {
+  await complete(deps, port, WARM_TEXT, WARM_LANG).catch(() => null);
+}
+
+async function start(deps: ServerDeps, port: number, state: ServerState): Promise<boolean> {
+  const spec = commandSpec(deps.home, deps.platform, port, deps.exists);
+  if (spec === undefined) {
+    state.failed = true;
+    deps.report(SETUP_HINT);
+    return false;
+  }
+  launch(deps, spec);
+  const ready = await waitReady(deps, port, deps.now() + READY_TIMEOUT_MS);
+  if (ready) {
+    await warm(deps, port);
+  }
+  state.failed = !ready;
+  state.starting = null;
+  if (!ready) {
+    deps.report(SETUP_HINT);
+  }
+  return ready;
+}
+
+async function ensure(deps: ServerDeps, port: number, state: ServerState): Promise<boolean> {
+  if (await healthy(deps, port)) {
+    return true;
+  }
+  if (state.failed) {
+    return false;
+  }
+  state.starting ??= start(deps, port, state);
+  return state.starting;
 }
 
 export function createServer(deps: ServerDeps, port: number): Server {
