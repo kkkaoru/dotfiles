@@ -25,7 +25,11 @@ afterEach(async () => {
   );
 });
 
-async function start(file?: string, display?: TranslatedTimeline): Promise<Harness> {
+async function start(
+  file?: string,
+  display?: TranslatedTimeline,
+  fg: (token: string, text: string) => string = (_token, text) => text,
+): Promise<Harness> {
   const handlers = new Map<string, (event: unknown, context: ExtensionContext) => Promise<void>>();
   let tool:
     | ((
@@ -57,7 +61,7 @@ async function start(file?: string, display?: TranslatedTimeline): Promise<Harne
   const setWidget = vi.fn();
   const context = {
     sessionManager: { getSessionFile: () => file },
-    ui: { notify, setStatus, setWidget },
+    ui: { notify, setStatus, setWidget, theme: { fg } },
   } as unknown as ExtensionContext;
   await handlers.get("session_start")?.({}, context);
   return {
@@ -157,6 +161,20 @@ test("the tree keeps a place of its own under the editor", async () => {
       placement: "belowEditor",
     },
   );
+});
+
+test("the widget takes its colours from the theme, and tool output stays plain", async () => {
+  const harness = await start(undefined, undefined, (token, piece) =>
+    piece === "" ? "" : `${token}|${piece}`,
+  );
+  await harness.run({ action: "add", title: "Fix bug" });
+  expect(harness.setWidget).toHaveBeenLastCalledWith(
+    "timeline",
+    ["dim|░░░░░░░░░░ muted|0.00% · 1 tasks", "dim|░░░░░░ muted|  0.00% · t1 Fix bug"],
+    { placement: "belowEditor" },
+  );
+  const listed = await harness.run({ action: "list" });
+  expect(listed.content[0]?.text).toBe("░░░░░░░░░░ 0.00% · 1 tasks\n░░░░░░   0.00% · t1 Fix bug");
 });
 
 test("a copy that a reload leaves behind does not take the sidecar away", async () => {

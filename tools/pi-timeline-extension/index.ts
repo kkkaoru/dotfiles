@@ -2,7 +2,7 @@
 import { mkdir } from "node:fs/promises";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import { lock } from "proper-lockfile";
@@ -17,12 +17,30 @@ import {
   renderTimeline,
   STATUSES,
   updateTask,
+  type Colour,
+  type Role,
   type TaskPatch,
   type Timeline,
 } from "./src/tree.ts";
 
 const STATUS_KEY = "timeline";
 const WIDGET_KEY = "timeline";
+
+/** Dracula, through pi's own theme: green finished, purple running, red blocked, comment for the rest. */
+const TOKEN: Readonly<Record<Role, ThemeColor>> = {
+  active: "accent",
+  blocked: "error",
+  done: "success",
+  empty: "dim",
+  muted: "muted",
+  pending: "muted",
+  total: "accent",
+};
+
+/** The widget's colours come from the active pi theme, so a switch repaints in the new palette. */
+function colourOf(context: ExtensionContext): Colour {
+  return (role, text) => context.ui.theme.fg(TOKEN[role], text);
+}
 
 const statusSchema = Type.Union(STATUSES.map((status) => Type.Literal(status)));
 const parameters = Type.Object({
@@ -237,7 +255,7 @@ export default function timelineExtension(pi: ExtensionAPI, options: Options = {
       .then((translated) => {
         // A newer tree is already drawn, and its own translation is on the way.
         if (mine === generation) {
-          paint(context, renderTimeline(translated));
+          paint(context, renderTimeline(translated, colourOf(context)));
         }
       })
       .catch(() => {
@@ -249,7 +267,10 @@ export default function timelineExtension(pi: ExtensionAPI, options: Options = {
     const percent = Math.round(progress(timeline) * 100);
     context.ui.setStatus(STATUS_KEY, `${String(percent)}%`);
     // English first, so a slow translation never leaves the tree blank.
-    paint(context, timeline.tasks.length === 0 ? undefined : renderTimeline(timeline));
+    paint(
+      context,
+      timeline.tasks.length === 0 ? undefined : renderTimeline(timeline, colourOf(context)),
+    );
     localise(context, timeline);
   };
 

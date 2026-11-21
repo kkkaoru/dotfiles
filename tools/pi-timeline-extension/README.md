@@ -29,7 +29,12 @@ competing for the footer row; the percentage also sits in the footer status area
 Every line opens with its own bar and the percentage right after it, as the Harness timeline draws
 them: the tree's bar is longer than a task's, the number keeps two decimals, and work that is not
 finished never reads `100.00%`. The percentage is padded to the width of `100.00%`, so its digits
-line up down the tree, and a subtask reads as the deeper indent after it. A task that has subtasks takes their weighted score instead of its own status, so a
+line up down the tree, and a subtask reads as the deeper indent after it.
+
+Colours come from the active pi theme, so the Dracula palette is used here: green for finished work,
+purple for what is running (and for the tree's own bar), red for a blocked task, the comment colour
+for the rest, and the dim colour for the part of a bar that is still empty. Only the widget is
+coloured; the tool's answer and `/timeline` stay plain text. A task that has subtasks takes their weighted score instead of its own status, so a
 parent is finished only when its children are. A leaf counts `done` as 1, `active` as 0.5,
 `blocked` and `pending` as 0.
 

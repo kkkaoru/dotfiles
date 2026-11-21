@@ -13,6 +13,13 @@ export interface Task {
 export interface Timeline {
   readonly tasks: readonly Task[];
 }
+
+/** What a piece of the display stands for, so a theme can give it a colour. */
+export type Role = Status | "empty" | "muted" | "total";
+/** Colour one piece; the default returns it unchanged, which is what tool output and tests use. */
+export type Colour = (role: Role, text: string) => string;
+
+const PLAIN: Colour = (_role, text) => text;
 export interface TaskPatch {
   readonly note?: string;
   readonly status?: Status;
@@ -121,36 +128,36 @@ function formatProgress(value: number): string {
   return Math.min(percent, value < 1 ? INCOMPLETE_LIMIT : 100).toFixed(2);
 }
 
-function bar(value: number, cells: number): string {
+function bar(value: number, cells: number, role: Role, colour: Colour): string {
   const filled = Math.round(Math.max(0, Math.min(1, value)) * cells);
-  return `${"█".repeat(filled)}${"░".repeat(cells - filled)}`;
+  return `${colour(role, "█".repeat(filled))}${colour("empty", "░".repeat(cells - filled))}`;
 }
 
-function taskLine(timeline: Timeline, task: Task): string {
+function taskLine(timeline: Timeline, task: Task, colour: Colour): string {
   // The bar opens every line and the percentage follows it at a fixed width, so both line up down
   // The tree; the indent after them still reads the depth.
   const value = share(timeline, [task]);
-  const percent = `${formatProgress(value)}%`.padStart(PERCENT_WIDTH);
+  const percent = colour(task.status, `${formatProgress(value)}%`.padStart(PERCENT_WIDTH));
   const note = task.note === "" ? "" : ` — ${task.note}`;
-  return `${bar(value, TASK_CELLS)} ${percent} ${"  ".repeat(depth(timeline, task))}${GLYPH[task.status]} ${task.id} ${task.title}${note}`;
+  return `${bar(value, TASK_CELLS, task.status, colour)} ${percent} ${"  ".repeat(depth(timeline, task))}${GLYPH[task.status]} ${task.id} ${task.title}${note}`;
 }
 
-function lines(timeline: Timeline, parent: string | null, out: string[]): string[] {
+function lines(timeline: Timeline, parent: string | null, out: string[], colour: Colour): string[] {
   for (const task of children(timeline, parent)) {
-    out.push(taskLine(timeline, task));
-    lines(timeline, task.id, out);
+    out.push(taskLine(timeline, task, colour));
+    lines(timeline, task.id, out, colour);
   }
   return out;
 }
 
 /** The tree as lines: progress first, then each task indented under its parent, with its id. */
-export function renderTimeline(timeline: Timeline): string[] {
+export function renderTimeline(timeline: Timeline, colour: Colour = PLAIN): string[] {
   if (timeline.tasks.length === 0) {
     return ["No tasks."];
   }
   const value = progress(timeline);
-  const head = `${bar(value, HEAD_CELLS)} ${formatProgress(value)}% · ${String(timeline.tasks.length)} tasks`;
-  return [head, ...lines(timeline, null, [])];
+  const head = `${bar(value, HEAD_CELLS, "total", colour)} ${colour("muted", `${formatProgress(value)}%`)} · ${String(timeline.tasks.length)} tasks`;
+  return [head, ...lines(timeline, null, [], colour)];
 }
 
 export function parseTimeline(text: string): Timeline {
