@@ -110,6 +110,8 @@ function depth(timeline: Timeline, task: Task): number {
 /** Cells in the tree's bar, and in a task's own: the Harness draws the tree's bar wider. */
 const HEAD_CELLS = 10;
 const TASK_CELLS = 6;
+/** `100.00%` is the widest number, so every percentage ends in the same column. */
+const PERCENT_WIDTH = 7;
 /** The Harness keeps unfinished work below 100 at its two decimals. */
 const INCOMPLETE_LIMIT = 99.99;
 
@@ -125,11 +127,12 @@ function bar(value: number, cells: number): string {
 }
 
 function taskLine(timeline: Timeline, task: Task): string {
-  // The bar opens every line, so the bars line up in a column and the indented glyph reads the depth.
+  // The bar opens every line and the percentage follows it at a fixed width, so both line up down
+  // The tree; the indent after them still reads the depth.
   const value = share(timeline, [task]);
-  const percent = `${formatProgress(value)}%`;
+  const percent = `${formatProgress(value)}%`.padStart(PERCENT_WIDTH);
   const note = task.note === "" ? "" : ` — ${task.note}`;
-  return `${bar(value, TASK_CELLS)} ${"  ".repeat(depth(timeline, task))}${GLYPH[task.status]} ${task.id} ${task.title} ${percent}${note}`;
+  return `${bar(value, TASK_CELLS)} ${percent} ${"  ".repeat(depth(timeline, task))}${GLYPH[task.status]} ${task.id} ${task.title}${note}`;
 }
 
 function lines(timeline: Timeline, parent: string | null, out: string[]): string[] {
