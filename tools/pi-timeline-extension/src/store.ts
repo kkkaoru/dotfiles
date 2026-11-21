@@ -10,7 +10,7 @@ import {
   type JsonObject,
   type Storage,
 } from "@earendil-works/pi-durable";
-import { parseTimeline, type Timeline } from "./tree.ts";
+import { parseBoard, type Board } from "./tree.ts";
 
 interface TimelineDocument extends JsonObject {
   state: string;
@@ -49,17 +49,17 @@ export class DurableTimelineStore {
     return new DurableTimelineStore(harness, report);
   }
 
-  async restore(): Promise<Timeline | undefined> {
+  async restore(): Promise<Board | undefined> {
     const doc = await this.#harness.snapshot(DOCUMENT, CONTEXT);
     if (doc === undefined || doc.state === "") {
       return undefined;
     }
-    return parseTimeline(doc.state);
+    return parseBoard(doc.state);
   }
 
-  save(timeline: Timeline): void {
+  save(board: Board): void {
     // Serialize now: the caller's object is mutable.
-    const serialized: string = JSON.stringify(timeline);
+    const serialized: string = JSON.stringify(board);
     this.#enqueue(async () => {
       await this.#harness.commit(async (tx) => {
         const doc = await tx.doc(DOCUMENT);

@@ -1,28 +1,17 @@
 // This TypeScript file is executed with Bun.
 import { mkdir } from "node:fs/promises";
-import { StringEnum } from "@earendil-works/pi-ai";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ExtensionAPI, ExtensionContext, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import { lock } from "proper-lockfile";
-import { Type, type Static } from "typebox";
 import { ageOf, checkpoint, everyTick, NUDGE_TYPE } from "./src/keepalive.ts";
 import { DurableTimelineStore, lastWrite } from "./src/store.ts";
 import { plamoDisplayFromSettings } from "./src/live.ts";
 import type { TranslatedTimeline } from "./src/translate.ts";
-import {
-  addTask,
-  EMPTY_TIMELINE,
-  progress,
-  renderTimeline,
-  STATUSES,
-  updateTask,
-  type Colour,
-  type Role,
-  type TaskPatch,
-  type Timeline,
-} from "./src/tree.ts";
+import { renderTimeline, type Colour, type Role } from "./src/render.ts";
+import { apply, boardText, parameters, shows } from "./src/tool.ts";
+import { activeTree, EMPTY_BOARD, progress, type Board, type Timeline } from "./src/tree.ts";
 
 const STATUS_KEY = "timeline";
 const WIDGET_KEY = "timeline";
@@ -33,7 +22,9 @@ const TOKEN: Readonly<Record<Role, ThemeColor>> = {
   done: "success",
   empty: "dim",
   muted: "muted",
+  paused: "muted",
   pending: "muted",
+  retired: "dim",
   total: "accent",
 };
 
@@ -41,20 +32,6 @@ const TOKEN: Readonly<Record<Role, ThemeColor>> = {
 function colourOf(context: ExtensionContext): Colour {
   return (role, text) => context.ui.theme.fg(TOKEN[role], text);
 }
-
-const statusSchema = Type.Union(STATUSES.map((status) => Type.Literal(status)));
-const parameters = Type.Object({
-  action: StringEnum(["add", "update", "list"] as const),
-  id: Type.Optional(Type.String({ description: "Task id, as shown by list" })),
-  note: Type.Optional(Type.String({ description: "Short note: the result or the blocker" })),
-  parent: Type.Optional(Type.String({ description: "Parent task id, to make this a subtask" })),
-  status: Type.Optional(statusSchema),
-  title: Type.Optional(Type.String({ description: "What the task is" })),
-  weight: Type.Optional(
-    Type.Integer({ description: "Relative size among its siblings, default 1", minimum: 1 }),
-  ),
-});
-type Params = Static<typeof parameters>;
 
 /** A store and when its sidecar last changed, which is what the head's age is measured from. */
 interface Opened {
@@ -64,11 +41,12 @@ interface Opened {
 }
 
 interface Session extends Opened {
-  /** The tree as last painted, so a repaint of the age alone need not translate it again. */
+  /** Every plan of this session, and which one the widget shows. */
+  board: Board;
+  /** The active tree as last painted, so a repaint of the age alone need not translate it again. */
   shown: Timeline;
   /** Tool calls since the last timeline call, which is how a stale tree is noticed mid-turn. */
   steps: number;
-  timeline: Timeline;
   updatedAt: number;
 }
 
@@ -168,52 +146,6 @@ async function openStore(context: ExtensionContext): Promise<Opened> {
   }
 }
 
-function patchOf(params: Params): TaskPatch {
-  return {
-    ...(params.note === undefined ? {} : { note: params.note }),
-    ...(params.status === undefined ? {} : { status: params.status }),
-    ...(params.title === undefined ? {} : { title: params.title }),
-    ...(params.weight === undefined ? {} : { weight: params.weight }),
-  };
-}
-
-function added(timeline: Timeline, params: Params): Timeline {
-  if (params.title === undefined) {
-    throw new Error("action add needs a title.");
-  }
-  return addTask(timeline, {
-    parent: params.parent ?? null,
-    title: params.title,
-    ...(params.weight === undefined ? {} : { weight: params.weight }),
-  }).timeline;
-}
-
-function updated(timeline: Timeline, params: Params): Timeline {
-  if (params.id === undefined) {
-    throw new Error("action update needs an id.");
-  }
-  return updateTask(timeline, params.id, patchOf(params));
-}
-
-function apply(active: Session, params: Params): Timeline {
-  switch (params.action) {
-    case "add": {
-      return added(active.timeline, params);
-    }
-    case "update": {
-      return updated(active.timeline, params);
-    }
-    default: {
-      return active.timeline;
-    }
-  }
-}
-
-/** A tree whose every task is done has nothing left to track, so the editor gets its rows back. */
-function shows(timeline: Timeline): boolean {
-  return timeline.tasks.some((task) => task.status !== "done");
-}
-
 function paint(context: ExtensionContext, lines?: string[]): void {
   // The footer row is shared and need not carry this status, so the tree keeps a place of its own.
   context.ui.setWidget(WIDGET_KEY, lines, { placement: "belowEditor" });
@@ -236,13 +168,13 @@ function storeSession(): Store {
 
   const open = async (context: ExtensionContext): Promise<Session> => {
     const opened = await openStore(context);
-    const stored: Timeline | undefined = await opened.store.restore();
-    const timeline: Timeline = stored ?? EMPTY_TIMELINE;
+    const stored: Board | undefined = await opened.store.restore();
+    const board: Board = stored ?? EMPTY_BOARD;
     return {
       ...opened,
-      shown: timeline,
+      board,
+      shown: activeTree(board),
       steps: 0,
-      timeline,
       updatedAt: opened.updatedAt ?? Date.now(),
     };
   };
@@ -275,7 +207,7 @@ function painter(display: TranslatedTimeline | undefined): Painter {
   let generation = 0;
 
   const localise = (context: ExtensionContext, active: Session): void => {
-    const { timeline } = active;
+    const timeline = activeTree(active.board);
     if (display === undefined || !shows(timeline)) {
       return;
     }
@@ -295,22 +227,21 @@ function painter(display: TranslatedTimeline | undefined): Painter {
   };
 
   const show = (context: ExtensionContext, active: Session): void => {
-    const percent = Math.round(progress(active.timeline) * 100);
+    const timeline = activeTree(active.board);
+    const percent = Math.round(progress(timeline) * 100);
     context.ui.setStatus(STATUS_KEY, `${String(percent)}%`);
-    active.shown = active.timeline;
+    active.shown = timeline;
     // English first, so a slow translation never leaves the tree blank.
     paint(
       context,
-      shows(active.timeline)
-        ? renderTimeline(active.timeline, colourOf(context), ageOf(active))
-        : undefined,
+      shows(timeline) ? renderTimeline(timeline, colourOf(context), ageOf(active)) : undefined,
     );
     localise(context, active);
   };
 
   /** The age moves even while nothing changes, so the head is repainted on its own. */
   const repaint = (context: ExtensionContext, active: Session): void => {
-    if (shows(active.timeline)) {
+    if (shows(activeTree(active.board))) {
       paint(context, renderTimeline(active.shown, colourOf(context), ageOf(active)));
     }
   };
@@ -318,48 +249,63 @@ function painter(display: TranslatedTimeline | undefined): Painter {
   return { localise, repaint, show };
 }
 
-export default function timelineExtension(pi: ExtensionAPI, options: Options = {}): void {
-  const display = "display" in options ? options.display : plamoDisplayFromSettings();
-  const store = storeSession();
-  const { repaint, show } = painter(display);
-
+/** The tool itself: one call records a change, saves it, and answers with the rendered tree. */
+function registerTimelineTool(
+  pi: ExtensionAPI,
+  store: Store,
+  show: (context: ExtensionContext, active: Session) => void,
+): void {
   pi.registerTool({
     name: "timeline",
     label: "Timeline",
     description:
-      "Record this session's task tree and its progress: add a task or subtask, change a task's status, or read the tree.",
+      "Record this session's plan and its progress: start a tree for a goal, add a task or subtask, change a task's status, priority, done units, estimate or note, or read the tree.",
     promptSnippet: "Plan multi-step work as a task tree, and keep it current as the work moves",
     promptGuidelines: [
-      'Before substantive multi-step work, reuse this goal\'s tree or break the work into tasks and checkable subtasks with timeline action "add". Group work by deliverable.',
+      'Before substantive multi-step work, reuse this goal\'s tree or break the work into tasks and checkable subtasks with timeline action "add". Group work by deliverable, and give a new goal its own tree with action "start".',
       "At meaningful checkpoints, mark what finished as done, keep the current task active with a short note of its result, and add tasks when the scope changes. Preserve completed work.",
       "Verify a task before marking it done; a blocked task keeps a note saying what blocks it, and a dependency is rechecked once before the blocker is recorded again.",
+      "Say how big the work is when it is uneven: set a weight relative to its siblings, record a remaining estimate in minutes when you know one, and mark partly finished work with done units (e.g. done [2, 5]). Use P0–P3 when the order matters. A task that leaves the goal is retired, not deleted, and work waiting on someone else is paused or blocked.",
       'Before a final answer on planned work, save progress and use timeline action "list" to confirm what remains; use it also when you need the plan\'s ids.',
     ],
     parameters,
     async execute(_toolCallId, params, _signal, _onUpdate, context) {
       const active = await store.ensure(context);
-      const next: Timeline = apply(active, params);
+      const next: Board = apply(active.board, params);
       // The call is the checkpoint itself, and only a real change moves the tree's age.
       active.steps = 0;
-      if (next !== active.timeline) {
-        active.timeline = next;
+      if (next !== active.board) {
+        active.board = next;
         active.updatedAt = Date.now();
       }
-      active.store.save(active.timeline);
+      active.store.save(active.board);
       show(context, active);
+      const timeline = activeTree(active.board);
       return {
-        content: [{ type: "text", text: renderTimeline(active.timeline).join("\n") }],
-        details: { progress: progress(active.timeline), tasks: active.timeline.tasks.length },
+        content: [{ type: "text", text: boardText(active.board) }],
+        details: {
+          progress: progress(timeline),
+          tasks: timeline.tasks.length,
+          tree: active.board.active,
+        },
       };
     },
   });
+}
+
+export default function timelineExtension(pi: ExtensionAPI, options: Options = {}): void {
+  const display = "display" in options ? options.display : plamoDisplayFromSettings();
+  const store = storeSession();
+  const { repaint, show } = painter(display);
+
+  registerTimelineTool(pi, store, show);
 
   pi.registerCommand("timeline", {
     description: "Show this session's task tree and its progress",
     handler: async (_args, context) => {
       const active = await store.ensure(context);
       show(context, active);
-      context.ui.notify(renderTimeline(active.timeline).join("\n"), "info");
+      context.ui.notify(boardText(active.board), "info");
     },
   });
 
@@ -390,7 +336,7 @@ export default function timelineExtension(pi: ExtensionAPI, options: Options = {
     }
     const active = await store.ensure(context);
     active.steps += 1;
-    const notice = checkpoint(active);
+    const notice = checkpoint(active, activeTree(active.board));
     if (notice !== undefined) {
       pi.sendMessage(
         { content: notice, customType: NUDGE_TYPE, display: false },

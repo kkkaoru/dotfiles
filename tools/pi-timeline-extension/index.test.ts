@@ -54,7 +54,7 @@ test("every field of a change is applied", async () => {
     weight: 3,
   });
   expect(text(result)).toBe(
-    "█████░░░░░ 50.00% · 1 tasks\n███░░░  50.00% ▸ t1 Fix the bug — in review",
+    "░░░░░░░░░░ 0.00% · 1 tasks\n░░░░░░   0.00% ▸ t1 Fix the bug — in review",
   );
 });
 
@@ -380,7 +380,7 @@ test("a text the server could not translate is retried, and the English stays me
   await vi.waitFor(() => {
     expect(harness.setWidget).toHaveBeenLastCalledWith(
       "timeline",
-      ["█████░░░░░ 50.00% · 1 tasks", "███░░░  50.00% ▸ t1 【Fix bug】"],
+      ["░░░░░░░░░░ 0.00% · 1 tasks", "░░░░░░   0.00% ▸ t1 【Fix bug】"],
       { placement: "belowEditor" },
     );
   });

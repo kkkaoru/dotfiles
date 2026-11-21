@@ -28,7 +28,11 @@ export class TranslatedTimeline {
   async translate(timeline: Timeline): Promise<Timeline> {
     await this.#ready();
     const tasks = await Promise.all(timeline.tasks.map(async (task) => this.#task(task)));
-    return { tasks };
+    return {
+      ...timeline,
+      tasks,
+      title: timeline.title === "" ? "" : await this.#one(timeline.title),
+    };
   }
 
   /** A server that a restart left stopped is started here, once, before the first text. */

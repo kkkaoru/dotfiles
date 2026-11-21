@@ -15,7 +15,6 @@ export const TICK_MS = 60_000;
 export interface Tracked {
   /** Tool calls since the last timeline call. */
   steps: number;
-  readonly timeline: Timeline;
   updatedAt: number;
 }
 
@@ -37,14 +36,16 @@ export function everyTick(paint: () => void): () => void {
  * The checkpoint a long stretch of work earns, or undefined while the tree is fresh or finished.
  * The count restarts either way, so the next stretch is reported on its own.
  */
-export function checkpoint(tracked: Tracked): string | undefined {
+export function checkpoint(tracked: Tracked, timeline: Timeline): string | undefined {
   if (tracked.steps < STEPS_BEFORE_NUDGE) {
     return undefined;
   }
   tracked.steps = 0;
-  const unfinished = tracked.timeline.tasks.filter((task) => task.status !== "done").length;
+  const unfinished = timeline.tasks.filter(
+    (task) => task.status !== "done" && task.status !== "retired",
+  ).length;
   if (unfinished === 0) {
     return undefined;
   }
-  return `Task progress checkpoint: ${String(unfinished)} unfinished. Save this goal's tree with the timeline tool — mark what finished as done, keep the current task active with a short note of its result, and add tasks if the scope changed. Use action "list" when choosing the next task.`;
+  return `Task progress checkpoint: ${String(unfinished)} unfinished. Save this goal's tree with the timeline tool — mark what finished as done (with done units when it is partly finished), keep the current task active with a short note of its result, record an estimate when you know one, retire what no longer belongs to the goal, and add tasks if the scope changed. Use action "list" when choosing the next task.`;
 }
