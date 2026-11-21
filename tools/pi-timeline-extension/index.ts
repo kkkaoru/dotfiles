@@ -194,7 +194,12 @@ function apply(active: Session, params: Params): Timeline {
   }
 }
 
-function paint(context: ExtensionContext, lines: string[] | undefined): void {
+/** A tree whose every task is done has nothing left to track, so the editor gets its rows back. */
+function shows(timeline: Timeline): boolean {
+  return timeline.tasks.some((task) => task.status !== "done");
+}
+
+function paint(context: ExtensionContext, lines?: string[]): void {
   // The footer row is shared and need not carry this status, so the tree keeps a place of its own.
   context.ui.setWidget(WIDGET_KEY, lines, { placement: "belowEditor" });
 }
@@ -246,7 +251,7 @@ export default function timelineExtension(pi: ExtensionAPI, options: Options = {
   let generation = 0;
 
   const localise = (context: ExtensionContext, timeline: Timeline): void => {
-    if (display === undefined || timeline.tasks.length === 0) {
+    if (display === undefined || !shows(timeline)) {
       return;
     }
     const mine = (generation += 1);
@@ -267,10 +272,7 @@ export default function timelineExtension(pi: ExtensionAPI, options: Options = {
     const percent = Math.round(progress(timeline) * 100);
     context.ui.setStatus(STATUS_KEY, `${String(percent)}%`);
     // English first, so a slow translation never leaves the tree blank.
-    paint(
-      context,
-      timeline.tasks.length === 0 ? undefined : renderTimeline(timeline, colourOf(context)),
-    );
+    paint(context, shows(timeline) ? renderTimeline(timeline, colourOf(context)) : undefined);
     localise(context, timeline);
   };
 
@@ -311,7 +313,8 @@ export default function timelineExtension(pi: ExtensionAPI, options: Options = {
     const active = await store.ensure(context);
     show(context, active.timeline);
   });
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (_event, context) => {
     await store.close();
+    paint(context);
   });
 }

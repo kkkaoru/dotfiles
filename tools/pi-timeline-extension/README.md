@@ -6,8 +6,10 @@ Harness timeline: tasks and subtasks, each with a status, a note and a weight, a
 percentage that says how much of the work is finished.
 
 The agent records the tree with the `timeline` tool, and you can read it at any time with
-`/timeline`. While the tree has tasks it is drawn below the editor, so it stays in sight without
-competing for the footer row; the percentage also sits in the footer status area.
+`/timeline`. While the tree has unfinished tasks it is drawn below the editor, so it stays in sight
+without competing for the footer row; the percentage also sits in the footer status area. Once every
+task is done the widget goes away, since there is nothing left to track, and `/timeline` still prints
+the finished tree.
 
 ## The tool
 

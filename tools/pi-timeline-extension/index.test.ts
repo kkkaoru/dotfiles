@@ -5,6 +5,7 @@ import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, expect, test, vi } from "vitest";
 import timelineExtension from "./index.ts";
+import type { Timeline } from "./src/tree.ts";
 import { TranslatedTimeline } from "./src/translate.ts";
 
 interface Harness {
@@ -126,6 +127,37 @@ test("a subtask is added under its parent, with the weight it was given", async 
   expect(text(result)).toBe(
     "░░░░░░░░░░ 0.00% · 2 tasks\n░░░░░░   0.00% · t1 Fix bug\n░░░░░░   0.00%   · t2 Read code",
   );
+});
+
+test("a tree whose tasks are all done gives the editor its rows back", async () => {
+  const harness = await start();
+  await harness.run({ action: "add", title: "Fix bug" });
+  await harness.run({ action: "update", id: "t1", status: "done" });
+  expect(harness.setWidget).toHaveBeenLastCalledWith("timeline", undefined, {
+    placement: "belowEditor",
+  });
+  // The finished tree is still there to read.
+  expect(text(await harness.run({ action: "list" }))).toBe(
+    "██████████ 100.00% · 1 tasks\n██████ 100.00% ✔ t1 Fix bug",
+  );
+});
+
+test("a finished tree is not sent for translation", async () => {
+  const translate = vi.fn(async (timeline: Timeline): Promise<Timeline> => timeline);
+  const harness = await start(undefined, { translate } as unknown as TranslatedTimeline);
+  await harness.run({ action: "add", title: "Fix bug" });
+  expect(translate).toHaveBeenCalledTimes(1);
+  await harness.run({ action: "update", id: "t1", status: "done" });
+  expect(translate).toHaveBeenCalledTimes(1);
+});
+
+test("shutting the session down takes the widget away", async () => {
+  const harness = await start();
+  await harness.run({ action: "add", title: "Fix bug" });
+  await harness.handlers.get("session_shutdown")?.({}, harness.context);
+  expect(harness.setWidget).toHaveBeenLastCalledWith("timeline", undefined, {
+    placement: "belowEditor",
+  });
 });
 
 test("a change without the field it needs is refused", async () => {
@@ -294,7 +326,6 @@ test("a text is translated once, and only new text reaches the server", async ()
   await vi.waitFor(() => {
     expect(asked).toStrictEqual(["Fix bug"]);
   });
-  await harness.run({ action: "update", id: "t1", status: "done" });
   await harness.run({ action: "update", id: "t1", note: "in review" });
   await vi.waitFor(() => {
     expect(asked).toStrictEqual(["Fix bug", "in review"]);
