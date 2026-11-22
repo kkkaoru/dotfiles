@@ -53,7 +53,14 @@ public actor ModelRuntime: CompletionProviding {
     public func warmUp() throws -> Double {
         let started = Date()
         let ids = tokenizer.promptIDs(ModelRuntime.warmPrompt, bos: model.config.bosTokenId)
-        try MLX.eval(model.logits(ids: ids))
+        var logits = try model.logits(ids: ids)
+        MLX.eval(logits)
+        // The template prefill leaves the single-token decode step cold, and every request runs it:
+        // measured 26.3 ms for the first request against 19.1 ms for the next one in the same
+        // process. One decode step here moves that cost into the load the caller already waits for.
+        let next = logits.argMax(axis: -1).item(Int32.self)
+        logits = try model.logits(ids: [next])
+        MLX.eval(logits)
         model.resetCache()
         MLXMemory.release()
         return Date().timeIntervalSince(started)

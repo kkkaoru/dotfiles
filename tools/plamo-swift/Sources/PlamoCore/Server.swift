@@ -60,9 +60,9 @@ public actor PlamoServer {
     private var idleTask: Task<Void, Never>?
     private var stopped: CheckedContinuation<Void, Never>?
     private var running = true
-    private var readyContinuation: CheckedContinuation<String, any Error>?
-    private var readyCount = 0
+    private var readyWaiter: CheckedContinuation<Void, any Error>?
     private var bound: [String] = []
+    private var createdSocketPath: String?
 
     /// The server runs on its own queue, so every hop into it is a real thread hop.
     nonisolated public var unownedExecutor: UnownedSerialExecutor {
@@ -93,13 +93,21 @@ public actor PlamoServer {
         do {
             for endpoint in endpoints {
                 try startListener(for: endpoint)
+                try await waitUntilReady()
             }
         } catch {
             stopListeners()
             throw error
         }
-        return try await withCheckedThrowingContinuation { continuation in
-            readyContinuation = continuation
+        startIdleWatch()
+        return bound.joined(separator: " and ")
+    }
+
+    /// Suspends until the listener just started is bound. Endpoints start one at a time: a second
+    /// `serve` must fail on the port before it unlinks the socket of the server that owns it.
+    private func waitUntilReady() async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            readyWaiter = continuation
         }
     }
 
@@ -111,8 +119,8 @@ public actor PlamoServer {
         stopped?.resume()
         stopped = nil
         stopListeners()
-        readyContinuation?.resume(throwing: PlamoError.connectionClosed)
-        readyContinuation = nil
+        readyWaiter?.resume(throwing: PlamoError.connectionClosed)
+        readyWaiter = nil
     }
 
     private func stopListeners() {
@@ -120,10 +128,12 @@ public actor PlamoServer {
             listener.cancel()
         }
         listeners.removeAll()
-        readyCount = 0
         bound.removeAll()
-        if let path = configuration.socketPath {
+        // Only a path this server created may be removed: a failed start must leave the socket of
+        // the server that already owns the port alone.
+        if let path = createdSocketPath {
             try? FileManager.default.removeItem(atPath: path)
+            createdSocketPath = nil
         }
     }
 
@@ -140,6 +150,7 @@ public actor PlamoServer {
             case .unix(let path):
                 // A crash leaves the file behind, and bind refuses an existing path.
                 try? FileManager.default.removeItem(atPath: path)
+                createdSocketPath = path
                 parameters.requiredLocalEndpoint = .unix(path: path)
                 listener = try NWListener(using: parameters)
             }
@@ -254,25 +265,20 @@ public actor PlamoServer {
     private func listenerChanged(_ state: NWListener.State, endpoint: Endpoint, port: UInt16?) {
         switch state {
         case .ready:
-            readyCount += 1
             bound.append(describe(endpoint, port: port))
-            if endpoint != .tcp(0), case .unix(let path) = endpoint {
+            if case .unix(let path) = endpoint {
                 // The socket is the server's own: nobody else may talk to it.
                 try? FileManager.default.setAttributes(
                     [.posixPermissions: 0o600], ofItemAtPath: path)
             }
-            guard readyCount == listeners.count, let continuation = readyContinuation else {
-                return
-            }
-            readyContinuation = nil
-            continuation.resume(returning: bound.joined(separator: " and "))
-            startIdleWatch()
+            readyWaiter?.resume()
+            readyWaiter = nil
         case .failed(let error):
-            readyContinuation?.resume(
+            readyWaiter?.resume(
                 throwing: PlamoError.listener(
                     port: configuration.port ?? 0,
                     reason: "\(endpoint.description): \(error)"))
-            readyContinuation = nil
+            readyWaiter = nil
         default:
             break
         }

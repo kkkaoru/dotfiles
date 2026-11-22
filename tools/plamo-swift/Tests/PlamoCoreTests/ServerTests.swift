@@ -201,6 +201,27 @@ private func boundPort(_ endpoints: String) -> UInt16? {
     await #expect(throws: PlamoError.self) { _ = try await server.start() }
 }
 
+@Test func aSecondServeLeavesALiveSocketPathAlone() async throws {
+    // A second `serve` on the same configuration must fail on the port before it unlinks the socket
+    // file the running server owns: the file it removes must be one it created.
+    let path = "/tmp/plamo-swift-test-\(UUID().uuidString).sock"
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    let first = PlamoServer(
+        router: Router(provider: StubProvider()),
+        configuration: .init(port: anyPort, socketPath: path, idleSeconds: 0))
+    let port = try #require(boundPort(try await first.start()))
+    let second = PlamoServer(
+        router: Router(provider: StubProvider()),
+        configuration: .init(port: port, socketPath: path, idleSeconds: 0))
+    await #expect(throws: PlamoError.self) { _ = try await second.start() }
+    #expect(FileManager.default.fileExists(atPath: path))
+    let fd = try connectUnix(path: path)
+    defer { close(fd) }
+    try send(fd, "GET /v1/models HTTP/1.1\r\nHost: local\r\n\r\n")
+    #expect(try readResponse(fd).contains("plamo-3-translate"))
+    await first.stop()
+}
+
 @Test func reportsAnUnusableSocketPath() async throws {
     // A directory that does not exist cannot hold the socket file, so the start must fail loudly
     // instead of reporting an endpoint nothing is listening on.
