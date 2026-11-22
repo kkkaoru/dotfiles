@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pi-relations-extension — how it works</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfbfa; --fg: #1d1d1f; --muted: #6b6b70; --line: #dcdcd8;
+    --card: #ffffff; --accent: #7a5cff; --code: #f2f1ee;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141416; --fg: #ececf0; --muted: #9a9aa2; --line: #2e2e33;
+      --card: #1b1b1f; --accent: #a795ff; --code: #232329;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0 auto; padding: 3rem 1.5rem 5rem; max-width: 62rem;
+    background: var(--bg); color: var(--fg);
+    font: 16px/1.65 -apple-system, "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+  }
+  h1 { font-size: 1.75rem; line-height: 1.3; margin: 0 0 .4rem; }
+  h2 { font-size: 1.15rem; margin: 2.6rem 0 .8rem; padding-bottom: .35rem; border-bottom: 1px solid var(--line); }
+  h3 { font-size: .95rem; margin: 1.6rem 0 .4rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  p { margin: .6rem 0; }
+  .lede { color: var(--muted); margin: 0 0 2rem; }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .875em; }
+  code { background: var(--code); padding: .1em .35em; border-radius: .3em; }
+  pre { background: var(--code); padding: .9rem 1rem; border-radius: .5rem; overflow-x: auto; line-height: 1.5; }
+  pre code { background: none; padding: 0; }
+  table { border-collapse: collapse; width: 100%; margin: .8rem 0; font-size: .93rem; }
+  th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: .82rem; text-transform: uppercase; letter-spacing: .05em; }
+  td code { white-space: nowrap; }
+
+  .flow { display: grid; gap: .75rem; margin: 1.2rem 0; }
+  .row { display: flex; flex-wrap: wrap; align-items: stretch; gap: .6rem; }
+  .box {
+    flex: 1 1 12rem; background: var(--card); border: 1px solid var(--line);
+    border-radius: .6rem; padding: .7rem .85rem; font-size: .9rem;
+  }
+  .box b { display: block; font-size: .95rem; }
+  .box span { color: var(--muted); font-size: .85rem; }
+  .arrow { align-self: center; color: var(--accent); font-weight: 700; }
+  .note { color: var(--muted); font-size: .9rem; }
+  ol.steps { padding-left: 1.2rem; }
+  ol.steps li { margin: .45rem 0; }
+  .tag { display: inline-block; font-size: .75rem; padding: .05rem .4rem; border: 1px solid var(--line); border-radius: 1rem; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<h1>pi-relations-extension — how it works</h1>
+<p class="lede">One graph per pi session: what the session is, what it planned, what it ran, and what it produced. Stored in Pi Durable beside the session file, written by a tool or a shell command, read back in the same shape.</p>
+
+<h2>The shape of the thing</h2>
+
+<div class="flow">
+  <div class="row">
+    <div class="box"><b>relations tool</b><span>inside pi: add / link / unlink / show / list</span></div>
+    <div class="box"><b>cli.ts</b><span>from a shell: same actions, same graph</span></div>
+  </div>
+  <div class="row"><div class="arrow">↓</div></div>
+  <div class="row">
+    <div class="box"><b>apply(graph, params)</b><span>pure: returns the next graph, or the same one when nothing changes</span></div>
+    <div class="box"><b>answer(graph, params)</b><span>pure: the text this call prints</span></div>
+  </div>
+  <div class="row"><div class="arrow">↓ save · flush</div></div>
+  <div class="row">
+    <div class="box"><b>Pi Durable store</b><span>one document <code>dotfiles.relations</code> v1, holding the graph as JSON</span></div>
+    <div class="box"><b>&lt;session&gt;.relations-durable/</b><span>JSONL files beside the session, like the loop, tmux and timeline sidecars</span></div>
+  </div>
+</div>
+
+<h2>The data model</h2>
+
+<p>A node is a <em>thing</em>, an edge is a <em>statement</em> about two things. There is nothing else.</p>
+
+<pre><code>node  = kind:ref          "tmux:pi-tmux-abc-1"
+edge  = from + relation + to [+ note]
+        "session:01a1fcbf"  "ran"  "tmux:pi-tmux-abc-1"  "panic log parsing"</code></pre>
+
+<table>
+  <thead><tr><th>kind</th><th>names</th><th>example ref</th></tr></thead>
+  <tbody>
+    <tr><td><code>session</code></td><td>the pi session doing the work</td><td><code>01a1fcbf</code></td></tr>
+    <tr><td><code>goal</code></td><td>a persistent goal</td><td><code>relations</code></td></tr>
+    <tr><td><code>loop</code></td><td>a self-paced loop</td><td><code>tb-watch</code></td></tr>
+    <tr><td><code>tmux</code></td><td>a detached job</td><td><code>pi-tmux-abc-1</code></td></tr>
+    <tr><td><code>timeline</code></td><td>a task tree</td><td><code>relations</code></td></tr>
+    <tr><td><code>task</code></td><td>one task in a tree</td><td><code>t3</code></td></tr>
+    <tr><td><code>doc</code></td><td>a document kept in Git</td><td><code>docs/report.md</code></td></tr>
+    <tr><td><code>file</code></td><td>a path in the working tree</td><td><code>tools/pi-relations-extension</code></td></tr>
+  </tbody>
+</table>
+
+<p>A relation is a lower-case verb joined by hyphens — <code>produced</code>, <code>planned</code>, <code>ran</code>, <code>evidenced-by</code>, <code>implemented-by</code>. A ref may contain colons; the first colon splits the kind from the ref.</p>
+
+<h2>Writing, step by step</h2>
+
+<ol class="steps">
+  <li><b>Open.</b> <code>mkdir &lt;session&gt;.relations-durable</code>, take a lock on it, open the JSONL storage with <code>fsync</code>, then open a Pi Durable harness over it.</li>
+  <li><b>Restore.</b> Read the one document; parse its <code>state</code> string back into a graph, refusing anything that is not a valid graph. No document yet means an empty graph.</li>
+  <li><b>Apply.</b> <code>add</code> or <code>link</code> or <code>unlink</code> builds a new graph and never mutates the old one, so “did anything change?” is a reference comparison.</li>
+  <li><b>Save.</b> Serialise <em>now</em>, so a later edit cannot race the write, then queue the commit that puts the string in the document.</li>
+  <li><b>Flush.</b> Wait for the queue; a failed commit is reported to the user and re-thrown, never swallowed.</li>
+  <li><b>Answer.</b> Render the new graph (or one node with both directions of its edges).</li>
+  <li><b>Close.</b> Close the harness and drop the lock, in a <code>finally</code>, so a bad id cannot leave the sidecar held.</li>
+</ol>
+
+<p class="note">Steps 1 and 7 bracket every call, including the CLI's. Eight separate <code>bun cli.ts</code> invocations in a row therefore accumulate one graph — that is the whole persistence test.</p>
+
+<h2>What the design buys</h2>
+
+<table>
+  <thead><tr><th>property</th><th>how</th></tr></thead>
+  <tbody>
+    <tr><td>Idempotent writes</td><td>adding a known node changes nothing; linking the same edge twice only updates its note. The stored graph is untouched when <code>apply</code> returns the same object.</td></tr>
+    <tr><td>Refuses nonsense</td><td>an unknown kind, an empty ref, a relation that is not a lower-case word, or a stored document that does not parse — all throw with a message naming the field.</td></tr>
+    <tr><td>Survives a resume</td><td>the sidecar sits beside the session file, so reopening the session finds the graph where the loop and tmux sidecars already are.</td></tr>
+    <tr><td>No session, no problem</td><td>without a session file the graph lives in memory only — the tool still answers, nothing is written.</td></tr>
+    <tr><td>Honest failure</td><td>a failed commit notifies <code>Relations storage stopped: …</code> and fails the call; the process does not pretend the edge was recorded.</td></tr>
+  </tbody>
+</table>
+
+<h2>Files</h2>
+
+<table>
+  <thead><tr><th>path</th><th>role</th></tr></thead>
+  <tbody>
+    <tr><td><code>index.ts</code></td><td>registers the <code>relations</code> tool; opens, applies, saves, answers, closes</td></tr>
+    <tr><td><code>cli.ts</code></td><td>the same actions from a shell; <code>--session</code> defaults to <code>$PI_SESSION_FILE</code></td></tr>
+    <tr><td><code>src/graph.ts</code></td><td>node and edge types, parsing, validation, the whole rendering</td></tr>
+    <tr><td><code>src/tool.ts</code></td><td>the tool's parameters, and <code>apply</code> / <code>answer</code> as pure functions</td></tr>
+    <tr><td><code>src/store.ts</code></td><td>the Pi Durable document, the serialised save queue, the failure that is reported once</td></tr>
+    <tr><td><code>src/sidecar.ts</code></td><td>sidecar directory, lock, storage, harness — and closing all three in order</td></tr>
+  </tbody>
+</table>
+
+<h2>Using it</h2>
+
+<pre><code>relations list                                      # the whole graph
+relations show session:01a1fcbf                     # one node, both directions
+relations link session:01a1fcbf ran tmux:pi-tmux-1  # creates either endpoint if missing
+relations add doc:docs/report.md --label "the report"
+
+bun tools/pi-relations-extension/cli.ts list        # from a shell
+bun tools/pi-relations-extension/cli.ts link session:$PI_SESSION_ID produced doc:docs/report.md</code></pre>
+
+<p class="note"><span class="tag">check</span> <code>bun run check</code> — format, lint, typecheck, 58 tests, coverage 98.9% statements / 98.26% branches with a 95% per-file gate.</p>
+
+</body>
+</html>
