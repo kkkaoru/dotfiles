@@ -68,15 +68,22 @@ byte-identically in under a millisecond instead of ~100 ms per line (a three-lin
 then 1.2 ms). Sampled requests and `"cache": false` bypass it; `GET /cache/stats` reports the hit
 rate.
 
-Starting the server is only half of a cold start. Measured on this Mac, a cold server answers
-`/v1/models` about a second after the spawn, but its first completion takes ~2.3 s while MLX
-compiles kernels, and later ones 0.04 s. So once the server answers, the mod sends one throwaway
-completion and only then reports it ready — but only when nothing is waiting: a translation that
-has already arrived pays the same compile itself and returns its answer, so warming ahead of it
-would just add ~2.3 s to that wait. Readiness is polled every 50 ms, because it lands under a
-second. The launch starts as soon as pi loads this package — before `session_start`, which waits
-for pi to restore the session — so the wait passes while pi is still starting up and you are still
-typing. A warm-up that fails is ignored: the first translation then simply pays the cost itself.
+Starting the server is only half of a cold start, and the other half is not what it looks like. MLX
+ships its Metal kernels already compiled (`mlx/lib/mlx.metallib` in the wheel): there is no on-disk
+kernel cache, no environment variable to point at one, and nothing to pre-build. Measured in fresh
+processes: `import mlx` 0.06 s, a first matmul 0.18 s then 0.01 s (only the page cache), and once
+the weights are loaded a completion costs 0.11 s — the same as the next one. What the first
+completion really pays is `mlx_lm.server` loading the model inside its generation thread, on that
+request, while `/v1/models` already answered. So `scripts/plamo-mlx-server.py --plamo-prebuild`
+loads the model and answers one completion once, at setup, leaving the weights, the metallib and the
+completion cache in the page cache — kernel-owned, so it survives the idle exit and the next cold
+start reuses it (measured: 9.5 s cold, 8.2 s with it warm). The mods themselves send one throwaway
+completion once the server answers — but only when nothing is waiting: a translation that has
+already arrived pays the same load itself and returns its answer, so warming ahead of it would just
+add that wait. Readiness is polled every 50 ms. The launch starts as soon as pi loads this package —
+before `session_start`, which waits for pi to restore the session — so the wait passes while pi is
+still starting up and you are still typing. A warm-up that fails is ignored: the first translation
+then simply pays the cost itself.
 
 The model is ~1 GB resident, so the server does not stay: it exits after `PLAMO_IDLE_MINUTES`
 (default 10, `0` keeps it) with no translation in flight, and the next translation starts it again.

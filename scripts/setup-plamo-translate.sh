@@ -42,6 +42,12 @@ setup_mlx() {
   fi
   echo "ready: ${MODEL_DIR}"
   install_server
+  # One warm-up run, so the first translation after an install does not pay for reading the weights,
+  # the metallib and the tokenizer from disk (measured here: 9.5 s cold, 8.2 s with them cached).
+  if ! "${BIN_DIR}/plamo-mlx-server" --plamo-prebuild --model "${MODEL_DIR}" --trust-remote-code \
+    >/dev/null 2>&1; then
+    echo "note: the warm-up run failed; the first translation will just take longer"
+  fi
   echo "the mod starts ${BIN_DIR}/plamo-mlx-server on demand (port 18555 by default)"
   echo "benchmark it with scripts/bench-plamo-translate.py --port 18555"
 }

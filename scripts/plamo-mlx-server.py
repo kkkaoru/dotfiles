@@ -30,6 +30,7 @@ import http.server
 import io
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -45,8 +46,9 @@ COMPLETIONS = "/v1/completions"
 # and the Mac gets the memory back. 0 disables the exit.
 IDLE_MINUTES = float(os.environ.get("PLAMO_IDLE_MINUTES", "10") or 0)
 IDLE_CHECK_SECONDS = 15
-# Translations share one short instruction prefix, so two KV caches are enough to keep reusing it.
-PROMPT_CACHES = "2"
+# Translations share one short instruction prefix, so one KV cache keeps reusing it; a second one
+# only holds memory for the life of the process.
+PROMPT_CACHES = "1"
 # Above this, MLX returns freed buffers to the system instead of holding them for the next batch.
 BUFFER_LIMIT = 256 * 1024 * 1024
 
@@ -330,7 +332,54 @@ def bound_buffers() -> None:
     mx.set_cache_limit(BUFFER_LIMIT)
 
 
+def prebuild() -> int:
+    """Load the model and answer one completion, then exit: the setup step that leaves the weights,
+    the metallib and the completion cache in the page cache before the first translation."""
+    import urllib.request  # noqa: PLC0415 - only the prebuild path needs it
+
+    port = 18599
+    start = time.monotonic()
+    process = subprocess.Popen([sys.executable, __file__, *sys.argv[1:], "--port", str(port)])
+    base = f"http://127.0.0.1:{port}"
+    try:
+        while True:
+            try:
+                with urllib.request.urlopen(f"{base}/v1/models", timeout=2):
+                    break
+            except OSError:
+                if time.monotonic() - start > 300:
+                    print("prebuild: the server never became ready", file=sys.stderr)
+                    return 1
+                time.sleep(0.1)
+        ready = time.monotonic() - start
+        body = json.dumps(
+            {"prompt": "<|plamo:bos|><|plamo:user|>hello<|plamo:tag|>", "max_tokens": 8,
+             "temperature": 0}
+        ).encode()
+        request = urllib.request.Request(
+            f"{base}/v1/completions", data=body,
+            headers={"content-type": "application/json"}, method="POST",
+        )
+        asked = time.monotonic()
+        with urllib.request.urlopen(request, timeout=300) as response:
+            response.read()
+        print(
+            f"prebuild: ready in {ready:.2f} s, first completion {time.monotonic() - asked:.2f} s",
+            flush=True,
+        )
+        return 0
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+
+
 def main() -> int:
+    if "--plamo-prebuild" in sys.argv:
+        sys.argv.remove("--plamo-prebuild")
+        return prebuild()
     cap_prompt_cache()
     bound_buffers()
     path = cache_file()
