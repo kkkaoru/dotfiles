@@ -101,6 +101,7 @@ is dominated by graph construction and kernel launches, not by its tokens.
 | one mask table per attention kind, built once per pass, instead of one per layer (16 identical `[queries][keys]` allocations) | 500-token prefill: 3.02 ms build, 2.35 ms of it masks | 0.68–0.79 ms build, 0.29–0.32 ms masks |
 | `F_RDADVISE` over the 478 MB safetensors before the tokenizer decode, so the read starts early and runs on the disk queue | load 0.088 s (0.031 weights) | 0.052–0.061 s (0.020–0.030 weights) |
 | per-step graph build | 0.33 ms | 0.24–0.31 ms |
+| the warm-up runs the 18-token translation template instead of one token, so the first request finds the prefill shapes and masks already built | first completion 28.6 ms (median of 20 fresh processes) | 24.4 ms |
 
 The cold-load case is the one measurement this machine could not produce honestly. Forcing the page
 cache out needs root (`purge`); without it, neither a 24 GB disk write nor 40 GB of anonymous pressure

@@ -47,13 +47,23 @@ public actor ModelRuntime: CompletionProviding {
     }
 
     /// One forward pass compiles the Metal kernels; it is what keeps the first completion cheap.
+    /// The prompt is request-shaped because a single token leaves the multi-token prefill path
+    /// cold: measured 11.1 ms on the first request against 4.3–5.8 ms once that shape is warm.
     /// Returns the seconds the warm-up took.
     public func warmUp() throws -> Double {
         let started = Date()
-        try MLX.eval(model.logits(ids: [model.config.bosTokenId]))
+        let ids = tokenizer.promptIDs(ModelRuntime.warmPrompt, bos: model.config.bosTokenId)
+        try MLX.eval(model.logits(ids: ids))
+        model.resetCache()
         MLXMemory.release()
         return Date().timeIntervalSince(started)
     }
+
+    /// The translation template the mods send, which is what the first completion actually looks
+    /// like; its token count is what makes the warm-up touch the prefill shapes.
+    private static let warmPrompt =
+        "<|plamo:tag|>input<|plamo:key|>lang<|plamo:val|>ja<|plamo:msg|>こんにちは、世界。"
+        + "<|plamo:tag|>output<|plamo:key|>lang<|plamo:val|>en<|plamo:msg|>"
 
     /// One forward pass split into the time the CPU spends building the graph and the time the GPU
     /// spends running it. `bench` uses this to say which side a change actually helped.
