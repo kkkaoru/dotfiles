@@ -16,11 +16,13 @@ const TOKENS_PER_CHAR = 4;
 const MIN_TOKENS = 64;
 const MAX_TOKENS = 4096;
 const READY_TIMEOUT_MS = 60_000;
-const READY_POLL_MS = 500;
+// Readiness lands under a second after the spawn, so a short poll keeps most of that second back.
+const READY_POLL_MS = 50;
 /**
- * Measured on this Mac: spawn to /v1/models 2.2 s, but the first inference 3.9 s and the second
- * 0.04 s, because MLX compiles its kernels then. One throwaway completion right after the server
- * answers pays that, while the user is still typing, instead of in their first translation.
+ * Measured on this Mac: spawn to /v1/models 0.96 s, first inference 2.27 s (MLX compiles its
+ * kernels), later ones 0.04 s. A throwaway completion pays the compile while the user is still
+ * typing — but only when nothing is waiting: a translation that already arrived pays the same
+ * compile itself and returns its answer, so warming first would just add 2.3 s to that wait.
  */
 const WARM_TEXT = "hello";
 const WARM_LANG = "ja";
@@ -68,7 +70,9 @@ export interface ServerDeps {
 
 export interface Server {
   complete(text: string, lang: string): Promise<string | null>;
-  ensure(): Promise<boolean>;
+  /** Start the server if it is not up. `warmFirst` pays the kernel compile now, for a caller that
+   * has no translation waiting yet; a caller with a prompt in hand lets that prompt pay it. */
+  ensure(warmFirst: boolean): Promise<boolean>;
 }
 
 interface ServerState {
@@ -211,7 +215,12 @@ async function warm(deps: ServerDeps, port: number): Promise<void> {
   await complete(deps, port, WARM_TEXT, WARM_LANG).catch(() => null);
 }
 
-async function start(deps: ServerDeps, port: number, state: ServerState): Promise<boolean> {
+async function start(
+  deps: ServerDeps,
+  port: number,
+  state: ServerState,
+  warmFirst: boolean,
+): Promise<boolean> {
   const spec = commandSpec(deps.home, deps.platform, port, deps.exists);
   if (spec === undefined) {
     state.failed = true;
@@ -220,7 +229,7 @@ async function start(deps: ServerDeps, port: number, state: ServerState): Promis
   }
   launch(deps, spec);
   const ready = await waitReady(deps, port, deps.now() + READY_TIMEOUT_MS);
-  if (ready) {
+  if (ready && warmFirst) {
     await warm(deps, port);
   }
   state.failed = !ready;
@@ -231,14 +240,19 @@ async function start(deps: ServerDeps, port: number, state: ServerState): Promis
   return ready;
 }
 
-async function ensure(deps: ServerDeps, port: number, state: ServerState): Promise<boolean> {
+async function ensure(
+  deps: ServerDeps,
+  port: number,
+  state: ServerState,
+  warmFirst: boolean,
+): Promise<boolean> {
   if (await healthy(deps, port)) {
     return true;
   }
   if (state.failed) {
     return false;
   }
-  state.starting ??= start(deps, port, state);
+  state.starting ??= start(deps, port, state, warmFirst);
   return state.starting;
 }
 
@@ -246,7 +260,7 @@ export function createServer(deps: ServerDeps, port: number): Server {
   const state: ServerState = { failed: false, starting: null };
   const enqueue = newestFirst(PARALLEL_REQUESTS);
   return {
-    ensure: () => ensure(deps, port, state),
+    ensure: (warmFirst) => ensure(deps, port, state, warmFirst),
     complete: (text, lang) => enqueue(() => complete(deps, port, text, lang)),
   };
 }

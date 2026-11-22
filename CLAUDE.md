@@ -134,7 +134,8 @@ integrations. These instructions apply to agents working here, including pi and 
 - `tools/pi-plamo-translate/` — pi package with the same server: you see Japanese, typed Japanese
   becomes English, and the agent reads and writes English (`bun run check`). It warms the server as
   soon as pi loads the package, and `scripts/plamo-mlx-server.py` exits after `PLAMO_IDLE_MINUTES`
-  (default 10) with no request, so the ~1 GB model does not stay in memory; the Claude mod shares both.
+  (default 10) with no translation — a `/v1/models` probe does not count — so the ~1 GB model does
+  not stay in memory; the Claude mod shares both.
 - `tools/herdr-app-mods/` — Tests, oxlint and oxfmt for the Herdr.app mods in
   `.config/herdr-app/mods/` (host modules mocked); every mod file keeps >=95% coverage.
 - `tools/dsh-dracula-theme/` — A DeepSeek Harness bundle (no build step) that

@@ -112,7 +112,7 @@ test("a healthy server is not started", async () => {
     },
     18555,
   );
-  expect(await server.ensure()).toBe(true);
+  expect(await server.ensure(true)).toBe(true);
   expect(spawned).toStrictEqual([]);
 });
 
@@ -131,8 +131,8 @@ test("a missing binary fails at once and is not retried", async () => {
     spawn: () => ({ once: () => undefined, unref: () => undefined }),
   };
   const server = createServer(deps, 18555);
-  expect(await server.ensure()).toBe(false);
-  expect(await server.ensure()).toBe(false);
+  expect(await server.ensure(true)).toBe(false);
+  expect(await server.ensure(true)).toBe(false);
   expect(reports).toStrictEqual([SETUP_HINT]);
 });
 
@@ -162,12 +162,42 @@ test("the server is polled until it answers, then warmed", async () => {
     },
     18555,
   );
-  expect(await server.ensure()).toBe(true);
+  expect(await server.ensure(true)).toBe(true);
   // Health is refused, then answers, then one throwaway completion pays MLX's first inference.
   expect(urls).toStrictEqual([
     "http://127.0.0.1:18555/v1/models",
     "http://127.0.0.1:18555/v1/models",
     "http://127.0.0.1:18555/v1/completions",
+  ]);
+});
+
+test("a translation already waiting pays the first inference itself", async () => {
+  const urls: string[] = [];
+  let health = 0;
+  const server = createServer(
+    {
+      exists: () => true,
+      fetch: (url) => {
+        urls.push(url);
+        health += 1;
+        return health === 1
+          ? Promise.reject(Object.assign(new Error("refused"), { code: "ECONNREFUSED" }))
+          : Promise.resolve(response(true, {}));
+      },
+      home: "/Users/x",
+      now: () => 0,
+      platform: "darwin",
+      report: () => undefined,
+      sleep: () => Promise.resolve(),
+      spawn: () => ({ once: () => undefined, unref: () => undefined }),
+    },
+    18555,
+  );
+  // The prompt pays the same compile, so warming first would only add ~2.3 s to its own wait.
+  expect(await server.ensure(false)).toBe(true);
+  expect(urls).toStrictEqual([
+    "http://127.0.0.1:18555/v1/models",
+    "http://127.0.0.1:18555/v1/models",
   ]);
 });
 
@@ -197,7 +227,7 @@ test("a warm-up that fails still leaves the server ready", async () => {
     18555,
   );
   // The first translation then simply pays the cost itself, so this is not a failed server.
-  expect(await server.ensure()).toBe(true);
+  expect(await server.ensure(true)).toBe(true);
   expect(urls).toStrictEqual([
     "http://127.0.0.1:18555/v1/models",
     "http://127.0.0.1:18555/v1/models",
@@ -231,7 +261,7 @@ test("a start that never becomes ready is reported", async () => {
     },
     18555,
   );
-  expect(await server.ensure()).toBe(false);
+  expect(await server.ensure(true)).toBe(false);
   expect(reports).toStrictEqual([
     "plamo-translate: starting the PLaMo server failed: enoent",
     SETUP_HINT,
@@ -252,7 +282,7 @@ test("an unexpected health error propagates", async () => {
     },
     18555,
   );
-  await expect(server.ensure()).rejects.toThrow("dns");
+  await expect(server.ensure(true)).rejects.toThrow("dns");
 });
 
 test("a completion returns the model text", async () => {

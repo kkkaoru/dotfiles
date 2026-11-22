@@ -225,7 +225,7 @@ async function chunkOrNull(runtime: Runtime, text: string, lang: string): Promis
 }
 
 export async function translateText(runtime: Runtime, text: string, lang: string): Promise<string> {
-  if (!(await runtime.server.ensure())) {
+  if (!(await runtime.server.ensure(false))) {
     warnOnce(runtime, SETUP_HINT);
     return text;
   }
@@ -361,14 +361,14 @@ export function scheduleReply(
  * `translateText` still warns once and passes text through on the first translation.
  */
 export function warmServer(runtime: Runtime): void {
-  runtime.server.ensure().catch(() => null);
+  runtime.server.ensure(true).catch(() => null);
 }
 
 export function startSession(runtime: Runtime, ctx: SessionContextLike): void {
   runtime.ui = ctx.ui;
   runtime.resumedIds = recentResumedIds(runtime, ctx);
   ctx.ui.setWidget(WIDGET_KEY, (tui) => holdHost(runtime, tui), { placement: "belowEditor" });
-  runtime.server.ensure().catch((error: unknown) => {
+  runtime.server.ensure(true).catch((error: unknown) => {
     warnOnce(runtime, `plamo-translate: warming the server failed: ${errorMessage(error)}`);
   });
 }

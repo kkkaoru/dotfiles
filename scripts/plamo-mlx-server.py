@@ -14,6 +14,14 @@ deterministic, so the same prompt always yields the same translation: serving it
 byte-identical to running the model, and costs about a millisecond instead of a hundred or more.
 Requests that ask for sampling, or that pass `"cache": false`, bypass it.
 
+Why only completions count as activity: both mods poll `/v1/models` to see whether the server is
+up, so counting a GET as activity meant a health check every few minutes kept the ~1 GB process
+resident forever. A translation is what needs the model; a probe is not.
+
+Why the memory caps: MLX keeps freed buffers in its own cache and only a limit makes it return
+them, so the resident set ratcheted up to the largest batch ever seen; mlx_lm.server's prompt
+cache then holds several KV caches for the life of the process. Neither grows back down on its own.
+
 Run: plamo-mlx-server --model <mlx-dir> --port 18555 --trust-remote-code
 """
 
@@ -37,6 +45,10 @@ COMPLETIONS = "/v1/completions"
 # and the Mac gets the memory back. 0 disables the exit.
 IDLE_MINUTES = float(os.environ.get("PLAMO_IDLE_MINUTES", "10") or 0)
 IDLE_CHECK_SECONDS = 15
+# Translations share one short instruction prefix, so two KV caches are enough to keep reusing it.
+PROMPT_CACHES = "2"
+# Above this, MLX returns freed buffers to the system instead of holding them for the next batch.
+BUFFER_LIMIT = 256 * 1024 * 1024
 
 
 class Activity:
@@ -67,7 +79,7 @@ def watch_idle(activity: Activity, minutes: float) -> None:
         time.sleep(min(IDLE_CHECK_SECONDS, minutes * 60))
         if activity.idle(minutes):
             # Every cached completion is already on disk, so there is nothing to flush. The next
-            # translation starts the server again, paying the 2.2 s load and 3.9 s first inference.
+            # translation starts the server again, paying the load and the first inference.
             os._exit(0)
 
 
@@ -284,11 +296,8 @@ def install(cache: CompletionCache, activity: Activity) -> None:
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        activity.enter()
-        try:
-            handle_get(self)
-        finally:
-            activity.leave()
+        # Deliberately not counted as activity: a readiness probe must not keep the model resident.
+        handle_get(self)
 
     def handle_get(self) -> None:
         if self.path == "/cache/stats":
@@ -308,7 +317,22 @@ def install(cache: CompletionCache, activity: Activity) -> None:
     server.APIHandler.send_hit = send_hit
 
 
+def cap_prompt_cache() -> None:
+    """Two KV caches unless the caller chose a number: each extra one is memory held for good."""
+    if not any(argument.startswith("--prompt-cache-size") for argument in sys.argv):
+        sys.argv += ["--prompt-cache-size", PROMPT_CACHES]
+
+
+def bound_buffers() -> None:
+    """Cap MLX's buffer cache, which otherwise keeps every peak allocation until the process exits."""
+    import mlx.core as mx  # noqa: PLC0415 - mlx_lm imports it anyway; keep the import local
+
+    mx.set_cache_limit(BUFFER_LIMIT)
+
+
 def main() -> int:
+    cap_prompt_cache()
+    bound_buffers()
     path = cache_file()
     cache = CompletionCache(path, CACHE_LIMIT)
     activity = Activity()

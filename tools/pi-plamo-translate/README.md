@@ -69,17 +69,24 @@ then 1.2 ms). Sampled requests and `"cache": false` bypass it; `GET /cache/stats
 rate.
 
 Starting the server is only half of a cold start. Measured on this Mac, a cold server answers
-`/v1/models` after 2.2 s, but its first completion takes 3.9 s while MLX compiles kernels, and the
-second 0.04 s. So once the server answers, the mod sends one throwaway completion and only then
-reports it ready. The launch starts as soon as pi loads this package — before `session_start`, which
-waits for pi to restore the session — so both waits pass while pi is still starting up and you are
-still typing, instead of in front of your first translation. A warm-up that fails is ignored: the
-first translation then simply pays the cost itself.
+`/v1/models` about a second after the spawn, but its first completion takes ~2.3 s while MLX
+compiles kernels, and later ones 0.04 s. So once the server answers, the mod sends one throwaway
+completion and only then reports it ready — but only when nothing is waiting: a translation that
+has already arrived pays the same compile itself and returns its answer, so warming ahead of it
+would just add ~2.3 s to that wait. Readiness is polled every 50 ms, because it lands under a
+second. The launch starts as soon as pi loads this package — before `session_start`, which waits
+for pi to restore the session — so the wait passes while pi is still starting up and you are still
+typing. A warm-up that fails is ignored: the first translation then simply pays the cost itself.
 
 The model is ~1 GB resident, so the server does not stay: it exits after `PLAMO_IDLE_MINUTES`
-(default 10, `0` keeps it) with no request in flight, and the next translation starts it again.
-That lives in `scripts/plamo-mlx-server.py`, so the Claude mod gets the same behaviour, and nothing
-starts the server at login or while pi is not running.
+(default 10, `0` keeps it) with no translation in flight, and the next translation starts it again.
+A `/v1/models` probe does not count as activity: both mods poll it, and counting the poll kept the
+process alive forever (measured: still running 100 s after the last translation with
+`PLAMO_IDLE_MINUTES=1`). Memory is capped too — MLX frees buffers only up to `mx.set_cache_limit`
+(256 MB here) and the prompt cache holds two KV caches — so RSS stays at ~1.03 GB across requests,
+8 concurrent ones included, instead of ratcheting up. That lives in `scripts/plamo-mlx-server.py`,
+so the Claude mod gets the same behaviour, and nothing starts the server at login or while pi is
+not running.
 
 ## Check
 

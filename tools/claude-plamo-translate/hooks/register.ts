@@ -70,7 +70,8 @@ const WINDOWS: string = 'Windows_NT'
 // PLaMo's own markers end a translation; llama-server does not stop on them by itself.
 const STOP: readonly string[] = ['<|plamo:tag|>', '<|plamo:bos|>']
 const READY_TIMEOUT_MS: number = 60_000
-const READY_POLL_MS: number = 500
+// Readiness lands under a second after the spawn, so a short poll keeps most of that second back.
+const READY_POLL_MS: number = 50
 // Every text block of the session's responses, the ones between tool calls included.
 const MAX_REPLIES: number = 200
 // Every question, header, label and description of the session's newest dialogs.
