@@ -84,6 +84,7 @@ taken out of the chain for a controlled period, and has not been tried on anothe
   Thunderbolt tunnelling (USB, DisplayPort, PCIe) is unaffected.
 - `power` — `standby`, `autopoweroff`, `hibernatemode`, `womp`, `powernap` and `tcpkeepalive`
   all 0, so the Mac neither enters deep standby/hibernation nor wakes for network access.
+  `pmset` warns that disabling TCP keep-alive while asleep stops "Find My Mac" from working.
 
 Neither of the first two is a proven fix. **The 2026-11-22 01:57 panic happened with both of
 those active** (`powermode 0` set at 23:43, bridge disabled), so they do not prevent it — the
@@ -95,8 +96,9 @@ where the Mac enters standby, and the hub's `JHL9580` controller is documented c
 states while idle with no downstream devices. Cost: no hibernate, no wake for network access and
 no Power Nap; normal display sleep and Thunderbolt tunnelling are unchanged.
 
-Current state: `powermode 0`, `Thunderbolt Bridge` disabled, power tier **not** applied yet —
-run `./scripts/tb-panic-mitigation.sh power` (asks for an admin password) to test it.
+Current state (applied 2026-11-22 15:4x JST): `powermode 0`, `Thunderbolt Bridge` disabled,
+`standby=0 powernap=0 hibernatemode=0 tcpkeepalive=0 womp=0`. `Find My Mac` is degraded while the
+Mac sleeps, and there is no hibernate image if the battery runs flat in sleep.
 
 After the 01:57 reboot `tb-watch.log` recorded `hub=no` for the first hour, then `hub=yes` again
 at `ROM 98`, `speed=2,8`, `width=1,2`: the hub was out of the chain for that hour and the machine
@@ -136,8 +138,8 @@ macOS update is the other half.
 
 ## Next steps
 
-1. Apply the power tier and watch `tb-watch.log` for a week: does the panic interval lengthen?
-   Revert with `power-revert` if a wake-on-LAN or hibernate behaviour is missed.
+1. Watch `tb-watch.log` for a week with the power tier applied: does the panic interval lengthen?
+   Revert with `power-revert` if wake-on-LAN, Find My Mac or hibernate behaviour is missed.
 2. Read `tb-watch.log` after two or three days: is `hub=` stable, and does it flap on its own?
 3. Decide the controlled test: hub out of the chain for a day, or the hub on another Mac.
 4. Open the OWC case with the panic files, `ROM 98` / `EEPROM 2`, and the idle-power-state report.
