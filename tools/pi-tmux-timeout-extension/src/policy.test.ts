@@ -1,6 +1,20 @@
 // This TypeScript file is executed with Bun.
 import { expect, it } from "vitest";
-import { formatLocalTimestamp, shouldBackgroundClaudexBash, shouldDetachBash } from "./policy.ts";
+import {
+  delayFirstCommandReason,
+  formatLocalTimestamp,
+  shouldBackgroundClaudexBash,
+  shouldDetachBash,
+} from "./policy.ts";
+
+it("refuses a detached job whose first step is a sleep timer", () => {
+  expect(delayFirstCommandReason("sleep 600; date")).toMatch(/loop_wakeup/u);
+  expect(delayFirstCommandReason("cd /tmp && sleep 5 && tail -3 log")).toMatch(/tmux_check_in/u);
+  expect(delayFirstCommandReason("sleep 0.5s")).toBeDefined();
+  expect(delayFirstCommandReason("cd /tmp && bun run check")).toBeUndefined();
+  expect(delayFirstCommandReason("echo sleep 10")).toBeUndefined();
+  expect(delayFirstCommandReason("tail -f log")).toBeUndefined();
+});
 
 it("formats timestamps in the execution environment timezone", () => {
   const localDate = new Date(2026, 7, 25, 23, 14, 59);

@@ -47,7 +47,7 @@ it("registers and executes the parallel tmux tool", async () => {
   const controller = new globalThis.AbortController();
   const result = await tool.execute(
     "call-1",
-    { command: "sleep 60", estimatedDurationSeconds: 600, timeoutSeconds: 900 },
+    { command: "echo 60", estimatedDurationSeconds: 600, timeoutSeconds: 900 },
     controller.signal,
   );
   expect(exec).toHaveBeenCalledOnce();
@@ -194,7 +194,7 @@ it("clears old task displays while retaining background tracking", async () => {
   if (command === undefined || tool === undefined) {
     throw new Error("Tmux task controls were not registered");
   }
-  await tool.execute("call-1", { command: "sleep 60" }, undefined);
+  await tool.execute("call-1", { command: "echo 60" }, undefined);
   await command.handler("clear", context);
 
   expect(notify).toHaveBeenCalledWith("Cleared 1 tmux task display(s).", "info");
@@ -224,7 +224,7 @@ it("reports tmux launch failures", async () => {
   tmuxTimeoutExtension(host, {
     events: { subscribe: (): (() => void) => (): void => undefined },
   });
-  await expect(tool?.execute("call-1", { command: "sleep 60" }, undefined)).rejects.toThrow(
+  await expect(tool?.execute("call-1", { command: "echo 60" }, undefined)).rejects.toThrow(
     "tmux unavailable",
   );
 });
@@ -249,10 +249,10 @@ it("falls back through stdout and a generic tmux launch error", async () => {
   tmuxTimeoutExtension(host, {
     events: { subscribe: (): (() => void) => (): void => undefined },
   });
-  await expect(tool?.execute("call-1", { command: "sleep 60" }, undefined)).rejects.toThrow(
+  await expect(tool?.execute("call-1", { command: "echo 60" }, undefined)).rejects.toThrow(
     "tmux stdout failure",
   );
-  await expect(tool?.execute("call-2", { command: "sleep 60" }, undefined)).rejects.toThrow(
+  await expect(tool?.execute("call-2", { command: "echo 60" }, undefined)).rejects.toThrow(
     "Failed to start tmux command",
   );
 });
@@ -381,7 +381,7 @@ it("delivers a real completion callback after lifecycle handlers return", async 
     ui: { notify: vi.fn(), setStatus: vi.fn(), setWidget: vi.fn() },
   };
   handlers.get("session_start")?.({}, context);
-  await state.tool?.execute("call-1", { command: "sleep 60" }, undefined);
+  await state.tool?.execute("call-1", { command: "echo 60" }, undefined);
   handlers.get("session_before_compact")?.({}, context);
   state.completionSignal?.();
   expect(sendUserMessage).not.toHaveBeenCalled();

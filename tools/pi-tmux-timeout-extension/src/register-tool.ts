@@ -1,6 +1,7 @@
 // This TypeScript file is executed with Bun.
 import type { TmuxExtensionHost } from "../index.ts";
 import { shellLoopWarnings } from "./log-cap.ts";
+import { delayFirstCommandReason } from "./policy.ts";
 import { TMUX_LAUNCH_TIMEOUT_MILLISECONDS, type TmuxLaunch, type TmuxRuntime } from "./tmux.ts";
 import { tmuxExecSchema } from "./tool-schema.ts";
 
@@ -41,6 +42,10 @@ export function registerTmuxTool(host: TmuxExtensionHost, runtime: TmuxRuntime):
     ],
     promptSnippet: "Run potentially blocking or duration-uncertain shell work without blocking pi",
     async execute(_toolCallId, params, signal) {
+      const delay: string | undefined = delayFirstCommandReason(params.command);
+      if (delay !== undefined) {
+        throw new Error(delay);
+      }
       const launch: TmuxLaunch = runtime.createLaunch(params.command, {
         ...(params.estimatedDurationSeconds === undefined
           ? {}

@@ -80,6 +80,19 @@ export function formatLocalTimestamp(
     : `${twoDigits(date.getMonth() + 1)}-${twoDigits(date.getDate())} ${time}`;
 }
 
+const DELAY_FIRST_COMMAND = /^\s*(?:cd\s+[^;&|]+?&&\s*)*sleep\s+\d+(?:\.\d+)?[smhd]?\b/u;
+
+/**
+ * A detached job that only sleeps is a poll, not work: the completion notice already wakes the agent.
+ * Refuse it so a timer cannot stand in for loop pacing.
+ */
+export function delayFirstCommandReason(command: string): string | undefined {
+  if (!DELAY_FIRST_COMMAND.test(command)) {
+    return undefined;
+  }
+  return "tmux_exec cannot start with sleep: a timer is not a job. Return control now and let the completion notice wake you; for a later check use loop_wakeup (or goal_wait), and for a running job past its estimate use tmux_check_in.";
+}
+
 export function shouldDetachBash(input: MutableBashInput): boolean {
   return shouldRunInBackground(input, PI_LONG_RUNNING_TIMEOUT_SECONDS);
 }
