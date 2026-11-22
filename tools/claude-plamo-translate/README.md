@@ -64,9 +64,10 @@ them.
 
 3. Start a new session, or run `/reload-plugins` in a running one.
 
-When nothing answers on port 18555, the mod starts `~/.local/bin/plamo-mlx-server` if it exists,
-otherwise `llama-server` (`llama-server.exe` on Windows, under `%USERPROFILE%` when `HOME` is
-unset).
+When nothing answers on port 18555, the mod starts `~/.local/bin/plamo-swift` if it exists (MLX
+Swift: 0.55 GB resident instead of 1 GB, ready in 0.15 s, identical output), then
+`~/.local/bin/plamo-mlx-server`, then `llama-server` (`llama-server.exe` on Windows, under
+`%USERPROFILE%` when `HOME` is unset).
 
 On macOS that server also caches greedy completions on disk (`~/.cache/plamo-translate/`), keyed by
 the prompt, the token limit and the model's `config.json`: the mods re-translate the same text

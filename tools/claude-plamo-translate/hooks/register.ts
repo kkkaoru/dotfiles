@@ -58,8 +58,11 @@ interface CompletionBody {
 
 const OFF: string = 'off'
 const HOST: string = 'http://127.0.0.1'
-// Written by scripts/setup-plamo-translate.sh: scripts/plamo-mlx-server.py, mlx-lm with a listen
-// backlog that holds eight requests.
+// Written by scripts/setup-plamo-translate.sh: tools/plamo-swift on MLX Swift, 0.55 GB resident
+// instead of 1 GB and ready in 0.15 s.
+const SWIFT_SERVER: string = '.local/bin/plamo-swift'
+// The Python fallback: scripts/plamo-mlx-server.py, mlx-lm with a listen backlog that holds eight
+// requests.
 const MLX_SERVER: string = '.local/bin/plamo-mlx-server'
 const MLX_MODEL: string = '.local/share/plamo-translate/plamo-3-translate-0.8b-mlx-4bit'
 const LLAMA_SERVER: string = '.local/share/plamo-translate/llama.cpp/llama-server'
@@ -153,6 +156,15 @@ async function waitReady(engine: EngineInterface, port: number, deadline: number
   return waitReady(engine, port, deadline)
 }
 
+const swiftArgv = (home: string, port: number): string[] => [
+  `${home}/${SWIFT_SERVER}`,
+  'serve',
+  '--model',
+  `${home}/${MLX_MODEL}`,
+  '--port',
+  String(port),
+]
+
 const mlxArgv = (home: string, port: number): string[] => [
   `${home}/${MLX_SERVER}`,
   '--model',
@@ -175,6 +187,9 @@ const llamaArgv = (home: string, port: number, os: string | undefined): string[]
 // Windows has no HOME unless Git Bash started the session.
 async function serverArgv(engine: EngineInterface, port: number): Promise<string[]> {
   const home = `${(await engine.env.get('HOME')) ?? (await engine.env.get('USERPROFILE'))}`
+  if (await engine.fs.exists(`${home}/${SWIFT_SERVER}`)) {
+    return swiftArgv(home, port)
+  }
   return (await engine.fs.exists(`${home}/${MLX_SERVER}`))
     ? mlxArgv(home, port)
     : llamaArgv(home, port, await engine.env.get('OS'))
