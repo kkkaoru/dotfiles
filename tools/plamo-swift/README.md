@@ -138,11 +138,13 @@ memory: 60 MB held instead of 631 MB, for hours; the reload still lands ahead of
 the process, the tokenizer and the compiled kernels are already there.
 
 A Metal API does not shorten that 16 ms. `MTLIOCommandQueue` would read the same page-cached file no
-faster than the pread pool, and it cannot skip the upload the 16 ms is spent on; keeping the weights
-in an `MTLBuffer` the first eval copies from, or in a purgeable buffer that outlives the release,
-would put the 478 MB back into the idle footprint — the one thing the state exists to avoid. The
-loader itself has 1.5 ms in it, and the rest is a memory-system-bound upload, so nothing was changed
-for this path.
+faster than the pread pool, and it cannot skip the upload the 16 ms is spent on. Keeping the weights
+across the release would skip it: MLX adopts a foreign pointer without copying — `array(void*, …)`
+calls `MetalAllocator::make_buffer`, which wraps the pointer with `newBufferWithBytesNoCopy` — so a
+retained 478 MB `MTLBuffer` can be re-adopted as the model's weights with no read and no upload.
+That is a residency trade, not a speed-up: 478 MB held for hours, purgeable only under memory
+pressure, which is exactly when the next request needs it back, to save ~16 ms once per idle gap.
+The loader itself has 1.5 ms in it, so nothing was changed for this path.
 
 ### How the lukewarm state works
 
