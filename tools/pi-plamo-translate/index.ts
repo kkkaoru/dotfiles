@@ -57,6 +57,11 @@ export default function plamoTranslate(pi: ExtensionAPI): void {
           handler(ctx);
         });
       },
+      onSessionShutdown: (handler) => {
+        pi.on("session_shutdown", () => {
+          handler();
+        });
+      },
       onInput: (handler) => {
         pi.on("input", (event, ctx) => handler(event, ctx));
       },

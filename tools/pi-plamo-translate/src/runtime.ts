@@ -364,6 +364,16 @@ export function warmServer(runtime: Runtime): void {
   runtime.server.ensure(true).catch(() => null);
 }
 
+/**
+ * Drops everything the old session owned. The UI a reload replaced is dead, so a background
+ * translation must not touch it: the sink goes silent until the next session_start binds one.
+ */
+export function endSession(runtime: Runtime): void {
+  runtime.ui = silent;
+  runtime.host = null;
+  runtime.progress = { done: 0, total: 0, shown: false, waiting: false };
+}
+
 export function startSession(runtime: Runtime, ctx: SessionContextLike): void {
   runtime.ui = ctx.ui;
   runtime.resumedIds = recentResumedIds(runtime, ctx);

@@ -8,6 +8,7 @@ import type {
 import { DISPLAY_TYPES } from "./policy.ts";
 import {
   displayOf,
+  endSession,
   excludeText,
   installRule,
   scheduleReply,
@@ -20,6 +21,7 @@ import {
 
 export interface PlamoHooks {
   onSessionStart(handler: (ctx: SessionContextLike) => void): void;
+  onSessionShutdown(handler: () => void): void;
   onInput(
     handler: (event: InputEvent, ctx: { readonly ui: UiSink }) => Promise<InputEventResult>,
   ): void;
@@ -37,6 +39,9 @@ export interface PlamoHooks {
 export function bindPlamo(hooks: PlamoHooks, runtime: Runtime): void {
   hooks.onSessionStart((ctx) => {
     startSession(runtime, ctx);
+  });
+  hooks.onSessionShutdown(() => {
+    endSession(runtime);
   });
   hooks.onInput((event, ctx) => translateInput(runtime, event, ctx.ui));
   hooks.onBeforeAgent((sections) => {

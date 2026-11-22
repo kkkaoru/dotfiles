@@ -7,6 +7,7 @@ import type { Server } from "./server.ts";
 
 interface Stored {
   session: ((ctx: SessionContextLike) => void) | undefined;
+  shutdown: (() => void) | undefined;
   input: ((event: InputEvent, ctx: { readonly ui: UiSink }) => Promise<unknown>) | undefined;
   rule: ((sections: Record<string, string>) => void) | undefined;
   reply: ((message: { readonly role: string }) => void) | undefined;
@@ -17,6 +18,7 @@ interface Stored {
 function capture(): { readonly hooks: PlamoHooks; readonly stored: Stored } {
   const stored: Stored = {
     session: undefined,
+    shutdown: undefined,
     input: undefined,
     rule: undefined,
     reply: undefined,
@@ -28,6 +30,9 @@ function capture(): { readonly hooks: PlamoHooks; readonly stored: Stored } {
     hooks: {
       onSessionStart: (handler) => {
         stored.session = handler;
+      },
+      onSessionShutdown: (handler) => {
+        stored.shutdown = handler;
       },
       onInput: (handler) => {
         stored.input = handler;
@@ -101,4 +106,22 @@ test("the hooks translate prompts and leave a stream in English", async () => {
       { ui: sink },
     ),
   ).toStrictEqual({ action: "continue" });
+});
+
+test("a shutdown releases the UI a reload replaced", () => {
+  const captured = capture();
+  const sink: UiSink = {
+    notify: () => undefined,
+    setStatus: () => undefined,
+    setWidget: () => undefined,
+  };
+  const box = createRuntime({ replyLanguage: "ja", promptLanguage: "en", port: 18555 }, {
+    complete: async () => "x",
+    ensure: async () => true,
+  } satisfies Server);
+  bindPlamo(captured.hooks, box);
+  captured.stored.session?.({ ui: sink });
+  expect(box.ui).toBe(sink);
+  captured.stored.shutdown?.();
+  expect(box.ui).not.toBe(sink);
 });
