@@ -2,6 +2,7 @@
 import { ActivityProvider, announceTask, type ActivityBus } from "./src/goal-activity.ts";
 import type { Static, TSchema } from "typebox";
 import { registerCheckInTool } from "./src/check-in.ts";
+import { assertNotDelayFirst } from "./src/policy.ts";
 import { registerTmuxTool } from "./src/register-tool.ts";
 import { durableTmuxHost } from "./src/durable-host.ts";
 import { eventToolCallId, toolResultFailed } from "./src/tool-event.ts";
@@ -149,6 +150,7 @@ class AutomaticTmuxRewriter {
     if (toolCallId === undefined || extracted === undefined) {
       return;
     }
+    assertNotDelayFirst(extracted.input.command);
     const launch: TmuxLaunch | undefined = this.#runtime.rewriteLongBash(extracted.input);
     if (launch === undefined) {
       return;

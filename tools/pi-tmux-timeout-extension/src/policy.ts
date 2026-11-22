@@ -93,6 +93,13 @@ export function delayFirstCommandReason(command: string): string | undefined {
   return "tmux_exec cannot start with sleep: a timer is not a job. Return control now and let the completion notice wake you; for a later check use loop_wakeup (or goal_wait), and for a running job past its estimate use tmux_check_in.";
 }
 
+export function assertNotDelayFirst(command: string): void {
+  const delay: string | undefined = delayFirstCommandReason(command);
+  if (delay !== undefined) {
+    throw new Error(delay);
+  }
+}
+
 export function shouldDetachBash(input: MutableBashInput): boolean {
   return shouldRunInBackground(input, PI_LONG_RUNNING_TIMEOUT_SECONDS);
 }
