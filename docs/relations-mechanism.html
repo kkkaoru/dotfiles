@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="en">
+<html lang="ja">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>pi-relations-extension — how it works</title>
+<title>pi-relations-extension の仕組み</title>
 <style>
   :root {
     color-scheme: light dark;
@@ -20,23 +20,23 @@
   body {
     margin: 0 auto; padding: 3rem 1.5rem 5rem; max-width: 62rem;
     background: var(--bg); color: var(--fg);
-    font: 16px/1.65 -apple-system, "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+    font: 16px/1.75 -apple-system, "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
   }
-  h1 { font-size: 1.75rem; line-height: 1.3; margin: 0 0 .4rem; }
-  h2 { font-size: 1.15rem; margin: 2.6rem 0 .8rem; padding-bottom: .35rem; border-bottom: 1px solid var(--line); }
-  h3 { font-size: .95rem; margin: 1.6rem 0 .4rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  h1 { font-size: 1.7rem; line-height: 1.35; margin: 0 0 .4rem; }
+  h2 { font-size: 1.15rem; margin: 2.8rem 0 .8rem; padding-bottom: .35rem; border-bottom: 1px solid var(--line); }
+  h3 { font-size: .95rem; margin: 1.6rem 0 .4rem; color: var(--muted); }
   p { margin: .6rem 0; }
   .lede { color: var(--muted); margin: 0 0 2rem; }
   code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .875em; }
   code { background: var(--code); padding: .1em .35em; border-radius: .3em; }
-  pre { background: var(--code); padding: .9rem 1rem; border-radius: .5rem; overflow-x: auto; line-height: 1.5; }
+  pre { background: var(--code); padding: .9rem 1rem; border-radius: .5rem; overflow-x: auto; line-height: 1.6; }
   pre code { background: none; padding: 0; }
   table { border-collapse: collapse; width: 100%; margin: .8rem 0; font-size: .93rem; }
   th, td { text-align: left; padding: .5rem .6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { color: var(--muted); font-weight: 600; font-size: .82rem; text-transform: uppercase; letter-spacing: .05em; }
+  th { color: var(--muted); font-weight: 600; font-size: .82rem; }
   td code { white-space: nowrap; }
 
-  .flow { display: grid; gap: .75rem; margin: 1.2rem 0; }
+  .flow { display: grid; gap: .7rem; margin: 1.2rem 0; }
   .row { display: flex; flex-wrap: wrap; align-items: stretch; gap: .6rem; }
   .box {
     flex: 1 1 12rem; background: var(--card); border: 1px solid var(--line);
@@ -45,112 +45,338 @@
   .box b { display: block; font-size: .95rem; }
   .box span { color: var(--muted); font-size: .85rem; }
   .arrow { align-self: center; color: var(--accent); font-weight: 700; }
-  .note { color: var(--muted); font-size: .9rem; }
-  ol.steps { padding-left: 1.2rem; }
-  ol.steps li { margin: .45rem 0; }
+
+  figure { margin: 1.4rem 0; }
+  figcaption { color: var(--muted); font-size: .85rem; margin-top: .4rem; }
+  svg { width: 100%; height: auto; display: block; }
+  svg .node { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+  svg .node-hi { fill: var(--card); stroke: var(--accent); stroke-width: 1.6; }
+  svg .edge { stroke: var(--accent); stroke-width: 1.3; fill: none; opacity: .85; }
+  svg .arrow-head { fill: var(--accent); }
+  svg .id { fill: var(--fg); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  svg .lbl { fill: var(--muted); font-size: 11.5px; paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
+  svg .step { fill: var(--accent); }
+  svg .step-t { fill: var(--bg); font-size: 11px; font-weight: 700; }
+  svg .title { fill: var(--fg); font-size: 13px; font-weight: 600; }
+  svg .note { fill: var(--muted); font-size: 11.5px; }
+  svg .rail { stroke: var(--line); stroke-width: 1.5; }
+
+  .note-p { color: var(--muted); font-size: .9rem; }
   .tag { display: inline-block; font-size: .75rem; padding: .05rem .4rem; border: 1px solid var(--line); border-radius: 1rem; color: var(--muted); }
 </style>
 </head>
 <body>
 
-<h1>pi-relations-extension — how it works</h1>
-<p class="lede">One graph per pi session: what the session is, what it planned, what it ran, and what it produced. Stored in Pi Durable beside the session file, written by a tool or a shell command, read back in the same shape.</p>
+<h1>pi-relations-extension の仕組み</h1>
+<p class="lede">pi のセッション 1 つにつきグラフ 1 枚。そのセッションが何で、何を計画し、何を走らせ、何を生んだか。保存先はセッション ファイルの隣の Pi Durable。書くのはツールかシェルコマンド、読むのは同じ形で。</p>
 
-<h2>The shape of the thing</h2>
+<h2>全体像</h2>
 
 <div class="flow">
   <div class="row">
-    <div class="box"><b>relations tool</b><span>inside pi: add / link / unlink / show / list</span></div>
-    <div class="box"><b>cli.ts</b><span>from a shell: same actions, same graph</span></div>
+    <div class="box"><b>relations ツール</b><span>pi の中から: add / link / unlink / show / list</span></div>
+    <div class="box"><b>cli.ts</b><span>シェルから: 同じ操作、同じグラフ</span></div>
   </div>
   <div class="row"><div class="arrow">↓</div></div>
   <div class="row">
-    <div class="box"><b>apply(graph, params)</b><span>pure: returns the next graph, or the same one when nothing changes</span></div>
-    <div class="box"><b>answer(graph, params)</b><span>pure: the text this call prints</span></div>
+    <div class="box"><b>apply(graph, params)</b><span>純粋関数。次のグラフを返す。変化が無ければ同じオブジェクトをそのまま返す</span></div>
+    <div class="box"><b>answer(graph, params)</b><span>純粋関数。この呼び出しが表示するテキスト</span></div>
   </div>
   <div class="row"><div class="arrow">↓ save · flush</div></div>
   <div class="row">
-    <div class="box"><b>Pi Durable store</b><span>one document <code>dotfiles.relations</code> v1, holding the graph as JSON</span></div>
-    <div class="box"><b>&lt;session&gt;.relations-durable/</b><span>JSONL files beside the session, like the loop, tmux and timeline sidecars</span></div>
+    <div class="box"><b>Pi Durable ストア</b><span>ドキュメント 1 つ <code>dotfiles.relations</code> v1 に、グラフを JSON 文字列で</span></div>
+    <div class="box"><b>&lt;session&gt;.relations-durable/</b><span>セッションの隣の JSONL。loop・tmux・timeline のサイドカーと同じ並び</span></div>
   </div>
 </div>
 
-<h2>The data model</h2>
+<h2>データモデル</h2>
 
-<p>A node is a <em>thing</em>, an edge is a <em>statement</em> about two things. There is nothing else.</p>
+<p>ノードは「物」、エッジは「2 つの物についての文」。それ以外は何も無い。</p>
 
 <pre><code>node  = kind:ref          "tmux:pi-tmux-abc-1"
 edge  = from + relation + to [+ note]
-        "session:01a1fcbf"  "ran"  "tmux:pi-tmux-abc-1"  "panic log parsing"</code></pre>
+        "session:01a1fcbf"  "ran"  "tmux:pi-tmux-abc-1"  "パニックログの解析"</code></pre>
 
 <table>
-  <thead><tr><th>kind</th><th>names</th><th>example ref</th></tr></thead>
+  <thead><tr><th>kind</th><th>指すもの</th><th>ref の例</th></tr></thead>
   <tbody>
-    <tr><td><code>session</code></td><td>the pi session doing the work</td><td><code>01a1fcbf</code></td></tr>
-    <tr><td><code>goal</code></td><td>a persistent goal</td><td><code>relations</code></td></tr>
-    <tr><td><code>loop</code></td><td>a self-paced loop</td><td><code>tb-watch</code></td></tr>
-    <tr><td><code>tmux</code></td><td>a detached job</td><td><code>pi-tmux-abc-1</code></td></tr>
-    <tr><td><code>timeline</code></td><td>a task tree</td><td><code>relations</code></td></tr>
-    <tr><td><code>task</code></td><td>one task in a tree</td><td><code>t3</code></td></tr>
-    <tr><td><code>doc</code></td><td>a document kept in Git</td><td><code>docs/report.md</code></td></tr>
-    <tr><td><code>file</code></td><td>a path in the working tree</td><td><code>tools/pi-relations-extension</code></td></tr>
+    <tr><td><code>session</code></td><td>作業している pi セッション</td><td><code>01a1fcbf</code></td></tr>
+    <tr><td><code>goal</code></td><td>持続するゴール</td><td><code>relations</code></td></tr>
+    <tr><td><code>loop</code></td><td>自走するループ</td><td><code>tb-watch</code></td></tr>
+    <tr><td><code>tmux</code></td><td>切り離されたジョブ</td><td><code>pi-tmux-abc-1</code></td></tr>
+    <tr><td><code>timeline</code></td><td>タスクツリー</td><td><code>relations</code></td></tr>
+    <tr><td><code>task</code></td><td>ツリー内のタスク 1 つ</td><td><code>t3</code></td></tr>
+    <tr><td><code>doc</code></td><td>Git で管理する文書</td><td><code>docs/report.md</code></td></tr>
+    <tr><td><code>file</code></td><td>作業ツリーのパス</td><td><code>tools/pi-relations-extension</code></td></tr>
   </tbody>
 </table>
 
-<p>A relation is a lower-case verb joined by hyphens — <code>produced</code>, <code>planned</code>, <code>ran</code>, <code>evidenced-by</code>, <code>implemented-by</code>. A ref may contain colons; the first colon splits the kind from the ref.</p>
+<p>関係名は小文字の語をハイフンでつないだもの — <code>produced</code>、<code>planned</code>、<code>ran</code>、<code>evidenced-by</code>、<code>implemented-by</code>。ref の中にコロンは入ってよい。最初のコロンだけが kind と ref の境目。</p>
 
-<h2>Writing, step by step</h2>
+<h2>グラフの例</h2>
 
-<ol class="steps">
-  <li><b>Open.</b> <code>mkdir &lt;session&gt;.relations-durable</code>, take a lock on it, open the JSONL storage with <code>fsync</code>, then open a Pi Durable harness over it.</li>
-  <li><b>Restore.</b> Read the one document; parse its <code>state</code> string back into a graph, refusing anything that is not a valid graph. No document yet means an empty graph.</li>
-  <li><b>Apply.</b> <code>add</code> or <code>link</code> or <code>unlink</code> builds a new graph and never mutates the old one, so “did anything change?” is a reference comparison.</li>
-  <li><b>Save.</b> Serialise <em>now</em>, so a later edit cannot race the write, then queue the commit that puts the string in the document.</li>
-  <li><b>Flush.</b> Wait for the queue; a failed commit is reported to the user and re-thrown, never swallowed.</li>
-  <li><b>Answer.</b> Render the new graph (or one node with both directions of its edges).</li>
-  <li><b>Close.</b> Close the harness and drop the lock, in a <code>finally</code>, so a bad id cannot leave the sidecar held.</li>
-</ol>
+<figure>
+<svg viewBox="0 0 980 420" role="img" aria-label="関係グラフの例">
+  <defs>
+    <marker id="head" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="arrow-head" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
 
-<p class="note">Steps 1 and 7 bracket every call, including the CLI's. Eight separate <code>bun cli.ts</code> invocations in a row therefore accumulate one graph — that is the whole persistence test.</p>
+  <rect class="node-hi" x="20" y="170" width="215" height="56" rx="9"/>
+  <text class="id" x="34" y="194">session:a1b2c3d4</text>
+  <text class="lbl" x="34" y="212">作業中のセッション</text>
 
-<h2>What the design buys</h2>
+  <line class="edge" x1="235" y1="186" x2="392" y2="42" marker-end="url(#head)"/>
+  <line class="edge" x1="235" y1="192" x2="392" y2="112" marker-end="url(#head)"/>
+  <line class="edge" x1="235" y1="198" x2="392" y2="182" marker-end="url(#head)"/>
+  <line class="edge" x1="235" y1="204" x2="392" y2="252" marker-end="url(#head)"/>
+  <line class="edge" x1="235" y1="212" x2="392" y2="342" marker-end="url(#head)"/>
+
+  <text class="lbl" x="252" y="100">produced</text>
+  <text class="lbl" x="252" y="140">produced</text>
+  <text class="lbl" x="252" y="180">produced</text>
+  <text class="lbl" x="252" y="240">ran</text>
+  <text class="lbl" x="252" y="300">planned</text>
+
+  <rect class="node" x="392" y="20" width="360" height="44" rx="8"/>
+  <text class="id" x="404" y="47">doc:docs/report.md</text>
+
+  <rect class="node" x="392" y="90" width="360" height="44" rx="8"/>
+  <text class="id" x="404" y="117">doc:docs/report.ja.md</text>
+
+  <rect class="node" x="392" y="160" width="360" height="44" rx="8"/>
+  <text class="id" x="404" y="187">doc:docs/report.pdf</text>
+
+  <rect class="node" x="392" y="230" width="360" height="44" rx="8"/>
+  <text class="id" x="404" y="257">tmux:pi-tmux-1</text>
+
+  <rect class="node" x="392" y="320" width="255" height="44" rx="8"/>
+  <text class="id" x="404" y="347">timeline:plan</text>
+
+  <rect class="node" x="712" y="320" width="248" height="44" rx="8"/>
+  <text class="id" x="724" y="347">file:tools/example</text>
+
+  <line class="edge" x1="647" y1="342" x2="704" y2="342" marker-end="url(#head)"/>
+  <text class="lbl" x="632" y="322">implemented-by</text>
+</svg>
+<figcaption>1 つのセッションが残した 5 本のエッジ。左が起点、矢印が関係の向き、矢印の上の語が関係名。エッジを引いた時点で両端のノードが無ければ、その場で作られる。</figcaption>
+</figure>
+
+<h2>依存関係の表し方</h2>
+
+<p>「A が B に依存する」は専用の仕組みではなく、<b>向きのあるエッジ 1 本</b>。関係名が依存の種類を言い、矢印の向きが「どちらが前提か」を言う。ツールは関係名を予約語として扱わないので、語彙は自分で決めてよい。</p>
+
+<figure>
+<svg viewBox="0 0 900 300" role="img" aria-label="依存の連鎖の例">
+  <defs>
+    <marker id="head2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="arrow-head" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+
+  <text class="lbl" x="20" y="24">実行の連鎖</text>
+  <rect class="node" x="20" y="36" width="230" height="48" rx="8"/>
+  <text class="id" x="34" y="65">session:a1b2c3d4</text>
+  <rect class="node" x="335" y="36" width="230" height="48" rx="8"/>
+  <text class="id" x="349" y="65">tmux:pi-tmux-1</text>
+  <rect class="node" x="650" y="36" width="230" height="48" rx="8"/>
+  <text class="id" x="664" y="65">doc:docs/log.txt</text>
+  <line class="edge" x1="252" y1="60" x2="327" y2="60" marker-end="url(#head2)"/>
+  <text class="lbl" x="268" y="50">ran</text>
+  <line class="edge" x1="567" y1="60" x2="642" y2="60" marker-end="url(#head2)"/>
+  <text class="lbl" x="570" y="50">produced</text>
+
+  <text class="lbl" x="20" y="140">計画の連鎖</text>
+  <rect class="node" x="20" y="152" width="230" height="48" rx="8"/>
+  <text class="id" x="34" y="181">goal:relations</text>
+  <rect class="node" x="335" y="152" width="230" height="48" rx="8"/>
+  <text class="id" x="349" y="181">timeline:plan</text>
+  <rect class="node" x="650" y="152" width="230" height="48" rx="8"/>
+  <text class="id" x="664" y="181">file:tools/example</text>
+  <line class="edge" x1="252" y1="176" x2="327" y2="176" marker-end="url(#head2)"/>
+  <text class="lbl" x="262" y="166">planned</text>
+  <line class="edge" x1="567" y1="176" x2="642" y2="176" marker-end="url(#head2)"/>
+  <text class="lbl" x="565" y="166">implemented-by</text>
+
+  <text class="note" x="20" y="248">前提が先、結果が後。逆向きに読みたければ <tspan class="id">show</tspan> が入ってくるエッジを <tspan class="id">&lt;- relation from</tspan> で並べる。</text>
+  <text class="note" x="20" y="272">ツールは鎖を解釈しない。閉包も循環検出も順序付けもしない — 1 ホップをそのまま返すだけ。</text>
+</svg>
+<figcaption>同じ「依存」でも、実行の連鎖（走った → 生んだ）と計画の連鎖（狙った → 実装された）は別のエッジとして並ぶ。2 つを結ぶのは <code>session</code> や <code>doc</code> の共有であって、ツールの推論ではない。</figcaption>
+</figure>
 
 <table>
-  <thead><tr><th>property</th><th>how</th></tr></thead>
+  <thead><tr><th>知りたいこと</th><th>書くエッジ</th></tr></thead>
   <tbody>
-    <tr><td>Idempotent writes</td><td>adding a known node changes nothing; linking the same edge twice only updates its note. The stored graph is untouched when <code>apply</code> returns the same object.</td></tr>
-    <tr><td>Refuses nonsense</td><td>an unknown kind, an empty ref, a relation that is not a lower-case word, or a stored document that does not parse — all throw with a message naming the field.</td></tr>
-    <tr><td>Survives a resume</td><td>the sidecar sits beside the session file, so reopening the session finds the graph where the loop and tmux sidecars already are.</td></tr>
-    <tr><td>No session, no problem</td><td>without a session file the graph lives in memory only — the tool still answers, nothing is written.</td></tr>
-    <tr><td>Honest failure</td><td>a failed commit notifies <code>Relations storage stopped: …</code> and fails the call; the process does not pretend the edge was recorded.</td></tr>
+    <tr><td>この作業は何を狙ったか</td><td><code>session:…</code> → <code>pursued</code> → <code>goal:…</code></td></tr>
+    <tr><td>ゴールをどう回したか</td><td><code>goal:…</code> → <code>tracked-by</code> → <code>loop:…</code></td></tr>
+    <tr><td>何を走らせたか</td><td><code>session:…</code> → <code>ran</code> → <code>tmux:…</code></td></tr>
+    <tr><td>何が生まれたか</td><td><code>tmux:…</code> → <code>produced</code> → <code>doc:…</code></td></tr>
+    <tr><td>何を根拠にしたか</td><td><code>doc:…</code> → <code>evidenced-by</code> → <code>file:…</code></td></tr>
+    <tr><td>計画を何が実装したか</td><td><code>timeline:…</code> → <code>implemented-by</code> → <code>file:…</code></td></tr>
+    <tr><td>順番の前提</td><td><code>task:t3</code> → <code>blocked-by</code> → <code>task:t2</code></td></tr>
+    <tr><td>片方が消えたら困る</td><td><code>tmux:…</code> → <code>depends-on</code> → <code>file:…</code></td></tr>
   </tbody>
 </table>
 
-<h2>Files</h2>
+<p class="note-p">関係名に制約は「小文字で始まり、小文字・数字・ハイフンのみ」だけ。だから <code>blocked-by</code> も <code>depends-on</code> も同じ重さで並ぶ。意味の強さを区別したいなら、関係名の語彙を決めて README に書くのが唯一の方法。</p>
+
+<h2>書き込みの流れ</h2>
+
+<figure>
+<svg viewBox="0 0 900 400" role="img" aria-label="書き込みの 7 ステップ">
+  <line class="rail" x1="40" y1="26" x2="40" y2="372"/>
+
+  <circle class="step" cx="40" cy="30" r="12"/>
+  <text class="step-t" x="36" y="34">1</text>
+  <text class="title" x="66" y="27">mkdir + lock</text>
+  <text class="note" x="66" y="44">サイドカーのディレクトリを作り、ロックを取る</text>
+
+  <circle class="step" cx="40" cy="88" r="12"/>
+  <text class="step-t" x="36" y="92">2</text>
+  <text class="title" x="66" y="85">restore</text>
+  <text class="note" x="66" y="102">ドキュメントを読み、JSON をグラフに戻す。無ければ空のグラフ</text>
+
+  <circle class="step" cx="40" cy="146" r="12"/>
+  <text class="step-t" x="36" y="150">3</text>
+  <text class="title" x="66" y="143">apply</text>
+  <text class="note" x="66" y="160">新しいグラフを組み立てる。元のグラフは書き換えない</text>
+
+  <circle class="step" cx="40" cy="204" r="12"/>
+  <text class="step-t" x="36" y="208">4</text>
+  <text class="title" x="66" y="201">save</text>
+  <text class="note" x="66" y="218">いまシリアライズし、コミットをキューに積む（後からの編集に追い越されない）</text>
+
+  <circle class="step" cx="40" cy="262" r="12"/>
+  <text class="step-t" x="36" y="266">5</text>
+  <text class="title" x="66" y="259">flush</text>
+  <text class="note" x="66" y="276">キューの完了を待つ。失敗は利用者に通知し、呼び出し元へ投げ直す</text>
+
+  <circle class="step" cx="40" cy="320" r="12"/>
+  <text class="step-t" x="36" y="324">6</text>
+  <text class="title" x="66" y="317">answer</text>
+  <text class="note" x="66" y="334">グラフ全体、または 1 ノードと両方向のエッジを描画</text>
+
+  <circle class="step" cx="40" cy="372" r="12"/>
+  <text class="step-t" x="36" y="376">7</text>
+  <text class="title" x="66" y="369">close</text>
+  <text class="note" x="66" y="386">finally でハーネスを閉じ、ロックを離す</text>
+</svg>
+<figcaption>どの呼び出しも 1 と 7 で挟まれる。CLI も同じ。だから <code>bun cli.ts</code> を 8 回続けて実行しても、グラフは 1 枚に積み上がる。</figcaption>
+</figure>
+
+<h2>アクションごとの挙動</h2>
+
+<p>読み取りは 1 バイトも書かない。書き込みは「グラフが別物になったときだけ」起きる — <code>apply</code> が同じオブジェクトを返したら <code>save</code> も呼ばない。</p>
 
 <table>
-  <thead><tr><th>path</th><th>role</th></tr></thead>
+  <thead><tr><th>action</th><th>必須</th><th>書くか</th><th>返すもの</th></tr></thead>
   <tbody>
-    <tr><td><code>index.ts</code></td><td>registers the <code>relations</code> tool; opens, applies, saves, answers, closes</td></tr>
-    <tr><td><code>cli.ts</code></td><td>the same actions from a shell; <code>--session</code> defaults to <code>$PI_SESSION_FILE</code></td></tr>
-    <tr><td><code>src/graph.ts</code></td><td>node and edge types, parsing, validation, the whole rendering</td></tr>
-    <tr><td><code>src/tool.ts</code></td><td>the tool's parameters, and <code>apply</code> / <code>answer</code> as pure functions</td></tr>
-    <tr><td><code>src/store.ts</code></td><td>the Pi Durable document, the serialised save queue, the failure that is reported once</td></tr>
-    <tr><td><code>src/sidecar.ts</code></td><td>sidecar directory, lock, storage, harness — and closing all three in order</td></tr>
+    <tr><td><code>add</code></td><td><code>id</code></td><td>ノードが新規、または label が変わったときだけ</td><td>グラフ全体</td></tr>
+    <tr><td><code>link</code></td><td><code>from</code> <code>relation</code> <code>to</code></td><td>その 3 つ組が新規、または note が変わったときだけ。端点が無ければ裸のノードとして作る</td><td>グラフ全体</td></tr>
+    <tr><td><code>unlink</code></td><td><code>from</code> <code>relation</code> <code>to</code></td><td>一致するエッジがあったときだけ。無ければ無視（エラーにしない）</td><td>グラフ全体</td></tr>
+    <tr><td><code>show</code></td><td><code>id</code></td><td>書かない。ノードが無ければ <code>No node …</code> で失敗</td><td>そのノード 1 つ＋出るエッジと入るエッジ</td></tr>
+    <tr><td><code>list</code></td><td>無し</td><td>書かない</td><td>全ノードを id 昇順に、各ノードの<b>出る</b>エッジだけ</td></tr>
   </tbody>
 </table>
 
-<h2>Using it</h2>
+<h3>入力の正規化と検証</h3>
 
-<pre><code>relations list                                      # the whole graph
-relations show session:01a1fcbf                     # one node, both directions
-relations link session:01a1fcbf ran tmux:pi-tmux-1  # creates either endpoint if missing
-relations add doc:docs/report.md --label "the report"
+<table>
+  <thead><tr><th>対象</th><th>決まり</th></tr></thead>
+  <tbody>
+    <tr><td>id</td><td>前後の空白を落とし、<b>最初の</b>コロンで kind と ref に割る。ref の中のコロンはそのまま。kind が既知で ref が空でなければ通る</td></tr>
+    <tr><td>relation</td><td><code>^[a-z][a-z0-9-]*$</code>。空白は落とす。大文字・空白・アンダースコアは拒む</td></tr>
+    <tr><td>label / note</td><td>前後の空白を落とし、空文字は「無し」として捨てる（<code>""</code> は保存されない）</td></tr>
+    <tr><td>同じ 3 つ組の link</td><td>エッジを置き換える。note を省けば note も消える。位置は末尾に移る</td></tr>
+    <tr><td>保存内容の読み戻し</td><td>ノードのキーと <code>ref</code> の不一致、未知の kind、配列でない edges — どれも <code>TypeError</code> で開くこと自体が失敗する</td></tr>
+  </tbody>
+</table>
 
-bun tools/pi-relations-extension/cli.ts list        # from a shell
+<h3>失敗したときの挙動</h3>
+
+<table>
+  <thead><tr><th>起きること</th><th>結果</th></tr></thead>
+  <tbody>
+    <tr><td>コミットが失敗</td><td>利用者に 1 度だけ通知（<code>Relations storage stopped: …</code>）、<code>flush</code> がその失敗を投げ、呼び出しは失敗する。以降の保存はキューで捨てられる（同じ通知を繰り返さない）</td></tr>
+    <tr><td><code>close</code> のとき</td><td>すでに通知済みの失敗を投げ直さない。ハーネスは必ず閉じ、ロックも必ず離す</td></tr>
+    <tr><td>ツール呼び出しと CLI が同時</td><td>サイドカーのロックで直列化。3 回までリトライし、取れなければその呼び出しが失敗する（黙って上書きしない）</td></tr>
+    <tr><td>前のプロセスが残したロック</td><td>proper-lockfile が古いロックを引き継ぐ。だから異常終了のあとでも次の呼び出しは通る</td></tr>
+    <tr><td>セッション ファイルが無い</td><td>メモリ上のストアで動く。ツールは答えるが、終われば何も残らない</td></tr>
+    <tr><td>閉じたストアへの保存</td><td><code>Pi Durable relations store is closed.</code> で失敗する</td></tr>
+  </tbody>
+</table>
+
+<p class="note-p">ツールの応答には <code>details</code> として <code>{ nodes, edges }</code> の件数も付く。だから「書けたつもり」ではなく、件数が増えたことを呼び出し側で確かめられる。</p>
+
+<h2>保存場所</h2>
+
+<figure>
+<pre class="tree"><code>&lt;session&gt;.jsonl                  ← pi のセッション本体
+├── .loop-durable/               ← ループの状態
+├── .tmux-durable/               ← tmux ジョブの所有関係
+├── .timeline-durable/           ← タスクツリー
+└── .relations-durable/          ← このツールのグラフ
+    ├── main.jsonl               ← Pi Durable のコミット列
+    └── doc-2.jsonl              ← ドキュメント本体（<code>dotfiles.relations</code>）</code></pre>
+<figcaption>セッション ファイルと同じ場所に並ぶので、セッションを開き直せばそのまま見つかる。セッション ファイルが無いときはメモリ上だけで動き、何も書かない。</figcaption>
+</figure>
+
+<h2>設計がもたらすもの</h2>
+
+<table>
+  <thead><tr><th>性質</th><th>どうやって</th></tr></thead>
+  <tbody>
+    <tr><td>書き込みが冪等</td><td>既知のノードをもう一度 add しても何も変わらない。同じエッジを 2 回 link しても note が更新されるだけ。<code>apply</code> が同じオブジェクトを返したら、保存自体を行わない。</td></tr>
+    <tr><td>でたらめを拒む</td><td>未知の kind、空の ref、小文字の語でない関係名、壊れた保存内容 — どれも該当フィールド名を挙げて例外になる。</td></tr>
+    <tr><td>再開に耐える</td><td>サイドカーはセッション ファイルの隣。loop や tmux のサイドカーと同じ扱いなので、再開したセッションがそのまま読める。</td></tr>
+    <tr><td>セッションが無くても動く</td><td>セッション ファイルが無ければグラフはメモリのみ。ツールは答えるが、ディスクには何も残らない。</td></tr>
+    <tr><td>失敗を隠さない</td><td>コミットが失敗すれば <code>Relations storage stopped: …</code> を通知し、呼び出しも失敗させる。書けたふりをしない。</td></tr>
+  </tbody>
+</table>
+
+<h2>ファイル構成</h2>
+
+<table>
+  <thead><tr><th>パス</th><th>役割</th></tr></thead>
+  <tbody>
+    <tr><td><code>index.ts</code></td><td><code>relations</code> ツールを登録する。開く → apply → 保存 → 表示 → 閉じる</td></tr>
+    <tr><td><code>cli.ts</code></td><td>シェルから同じ操作。<code>--session</code> の既定は <code>$PI_SESSION_FILE</code></td></tr>
+    <tr><td><code>src/graph.ts</code></td><td>ノードとエッジの型、解析、検証、描画のすべて</td></tr>
+    <tr><td><code>src/tool.ts</code></td><td>ツールのパラメータと、純粋関数 <code>apply</code> / <code>answer</code></td></tr>
+    <tr><td><code>src/store.ts</code></td><td>Pi Durable ドキュメント、直列化した保存キュー、一度だけ報告される失敗</td></tr>
+    <tr><td><code>src/sidecar.ts</code></td><td>サイドカーのディレクトリ、ロック、ストレージ、ハーネス — そしてその順番どおりの後始末</td></tr>
+  </tbody>
+</table>
+
+<h2>使い方</h2>
+
+<pre><code>relations list                                      # グラフ全体
+relations show session:01a1fcbf                     # 1 ノードと両方向
+relations link session:01a1fcbf ran tmux:pi-tmux-1  # 端点が無ければ作る
+relations add doc:docs/report.md --label "報告書"
+
+bun tools/pi-relations-extension/cli.ts list        # シェルから
 bun tools/pi-relations-extension/cli.ts link session:$PI_SESSION_ID produced doc:docs/report.md</code></pre>
 
-<p class="note"><span class="tag">check</span> <code>bun run check</code> — format, lint, typecheck, 58 tests, coverage 98.9% statements / 98.26% branches with a 95% per-file gate.</p>
+<p class="note-p"><span class="tag">check</span> <code>bun run check</code> — 整形、lint、型検査、テスト 58 件、カバレッジ 98.9% statements / 98.26% branches（ファイル単位で 95% の下限）。</p>
+
+<!-- ファイルが変わったら自動で読み直す。http で配信したときだけ動く（file:// は取得できない）。 -->
+<script>
+  (() => {
+    if (!/^https?:$/.test(location.protocol)) return;
+    let known;
+    const tick = async () => {
+      try {
+        const text = await (await fetch(location.href, { cache: "no-store" })).text();
+        if (known === undefined) known = text;
+        else if (text !== known) return location.reload();
+      } catch {}
+      setTimeout(tick, 1000);
+    };
+    tick();
+  })();
+</script>
 
 </body>
 </html>
