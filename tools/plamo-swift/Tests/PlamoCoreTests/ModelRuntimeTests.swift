@@ -34,6 +34,20 @@ private func runtime(_ name: String) throws -> ModelRuntime {
     #expect(completion.seconds >= 0)
 }
 
+@Test func releasesTheWeightsAndReadsThemAgain() async throws {
+    let model = try runtime("runtime-lukewarm")
+    #expect(await model.isWarm)
+    #expect(await model.releaseWeights())
+    #expect(await model.isWarm == false)
+    // A second release has nothing to do, so the server can call it on every idle tick.
+    #expect(await model.releaseWeights() == false)
+    // The lukewarm state must answer: the weights come back on the next request, without a restart.
+    let completion = try await model.complete(
+        CompletionRequest(prompt: "hello", maxTokens: 3, stop: []))
+    #expect(await model.isWarm)
+    #expect(completion.tokens > 0)
+}
+
 @Test func trimsTheCompletionAtTheFirstStopMarker() async throws {
     let model = try runtime("runtime-stop")
     let completion = try await model.complete(

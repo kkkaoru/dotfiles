@@ -16,8 +16,9 @@ an order of magnitude, at equal steady-state speed and equal output.
   listener on `127.0.0.1:<port>` and, with `--socket`, a second on a Unix socket. Requests are
   served concurrently on a task group, so a second translation never waits for the first.
 - `Sources/plamo-swift/main.swift` — `tokenize`, `load`, `debug`, `generate`, `serve`; the server
-  answers `GET /v1/models`, `POST /v1/completions` and `POST /v1/chat/completions`, and exits after
-  `--idle-seconds` without a completion, exactly like `scripts/plamo-mlx-server.py`.
+  answers `GET /v1/models`, `POST /v1/completions` and `POST /v1/chat/completions`, exits after
+  `--idle-seconds` without a completion, exactly like `scripts/plamo-mlx-server.py`, and drops the
+  weights into a lukewarm state after `--lukewarm-seconds` (default 60) of the same idle.
 - `Tests/PlamoCoreTests/` — tokenizer, options, HTTP parsing and the router's status codes
   (`swift test`, 18 tests).
 
@@ -80,7 +81,11 @@ fixed part and the per-token part separate:
 | decode, per step | 0.24–0.31 ms graph build + 2.56–2.87 ms GPU |
 | decode, per step at a 722-token context | 0.29 ms graph build + 3.07 ms GPU |
 | load, page cache warm | 0.052 s total: 0.023 weights, 0.028 warm-up |
+| launch to `/v1/models` answering (listener first, warm-up in flight) | 0.067 s |
+| first completion in a fresh process | 0.372 s |
 | resident / physical footprint while serving | 560 / 632 MB |
+| resident / physical footprint in the lukewarm state | 81 / 60 MB |
+| first request after the lukewarm release | 0.373 s |
 | peak physical footprint during a long prefill | 1052 MB |
 | compressed | 0 B |
 
@@ -102,6 +107,31 @@ is dominated by graph construction and kernel launches, not by its tokens.
 | `F_RDADVISE` over the 478 MB safetensors before the tokenizer decode, so the read starts early and runs on the disk queue | load 0.088 s (0.031 weights) | 0.052–0.061 s (0.020–0.030 weights) |
 | per-step graph build | 0.33 ms | 0.24–0.31 ms |
 | the warm-up runs the 18-token translation template instead of one token, so the first request finds the prefill shapes and masks already built | first completion 28.6 ms (median of 20 fresh processes) | 24.4 ms |
+| the listener starts before the warm-up, so `/v1/models` answers while the first forward pass runs | ready 0.696 s (warm-up finished first) | ready 0.067 s, first completion 0.372 s |
+| the lukewarm state drops the weights and the Metal cache after `--lukewarm-seconds` idle | 631 MB phys while serving, held until the process exits | 60 MB phys; the next request reads the weights again in 0.373 s, steady decode unchanged |
+
+### Lukewarm
+
+`serve --lukewarm-seconds <s>` (default 60) releases the weights and the Metal buffer cache after
+that much idle, using the same watcher that implements the idle exit, so the state is entered without
+a restart and is left by the next request, which reads the weights back. The process keeps its
+compiled kernels, tokenizer and completion cache.
+
+`scripts/measure-lukewarm.py` (port 18558, so the live server keeps serving) measures it. Every
+prompt carries a nonce: a repeated prompt is answered from the completion cache in about a
+millisecond and would hide the reload entirely — the first version of this measurement reported
+560 MB and a 1 ms reload because of exactly that.
+
+| | warm | lukewarm |
+| --- | --- | --- |
+| resident set | 562 MB | 81 MB |
+| physical footprint | 631 MB | 60 MB |
+| steady completion (32 tokens) | 0.179 s median | 0.122 s median after the reload |
+| next request | — | 0.373 s, the same as a fresh process's first completion |
+
+So the memory goes back to 9.5% of the warm footprint, and the price is one cold first completion
+for the first request after the release — paid once per idle stretch rather than per process start,
+and without a process spawn, a tokenizer decode or a kernel compile.
 
 The cold-load case is the one measurement this machine could not produce honestly. Forcing the page
 cache out needs root (`purge`); without it, neither a 24 GB disk write nor 40 GB of anonymous pressure

@@ -26,17 +26,21 @@ public actor PlamoServer {
         public var port: UInt16?
         public var socketPath: String?
         public var idleSeconds: Double
+        /// Idle time after which the weights are released; 0 keeps them resident.
+        public var lukewarmSeconds: Double
         public var idleCheckInterval: Double
 
         public init(
             port: UInt16? = Invocation.defaultPort,
             socketPath: String? = nil,
             idleSeconds: Double = Invocation.defaultIdleSeconds,
+            lukewarmSeconds: Double = Invocation.defaultLukewarmSeconds,
             idleCheckInterval: Double = 5
         ) {
             self.port = port
             self.socketPath = socketPath
             self.idleSeconds = idleSeconds
+            self.lukewarmSeconds = lukewarmSeconds
             self.idleCheckInterval = idleCheckInterval
         }
 
@@ -54,10 +58,12 @@ public actor PlamoServer {
     private let router: Router
     private let configuration: Configuration
     private let onIdle: @Sendable () -> Void
+    private let onLukewarm: @Sendable () async -> Void
     private let queue = DispatchSerialQueue(label: "plamo-swift.server")
     private var listeners: [NWListener] = []
     private var idle = IdleTracker()
     private var idleTask: Task<Void, Never>?
+    private var lukewarm = false
     private var stopped: CheckedContinuation<Void, Never>?
     private var running = true
     private var readyWaiter: CheckedContinuation<Void, any Error>?
@@ -70,13 +76,16 @@ public actor PlamoServer {
     }
 
     /// `onIdle` is where the process ends: production passes `exit(0)`, the tests count the calls.
+    /// `onLukewarm` releases the weights after a shorter idle and is where memory goes back.
     public init(
         router: Router,
         configuration: Configuration = Configuration(),
+        onLukewarm: @escaping @Sendable () async -> Void = {},
         onIdle: @escaping @Sendable () -> Void = { exit(0) }
     ) {
         self.router = router
         self.configuration = configuration
+        self.onLukewarm = onLukewarm
         self.onIdle = onIdle
     }
 
@@ -182,7 +191,11 @@ public actor PlamoServer {
         do {
             while true {
                 let request = try await readRequest(connection, buffer: &buffer)
+                Timing.mark("req.read")
                 idle.touch()
+                // The runtime reloads on its own; this only stops the watcher from releasing the
+                // weights again while the request is in flight.
+                lukewarm = false
                 idle.setBusy(true)
                 let response = await router.respond(to: request)
                 idle.setBusy(false)
@@ -302,7 +315,9 @@ public actor PlamoServer {
 
     /// Exits only after a full idle interval with no request in flight.
     private func startIdleWatch() {
-        guard idleTask == nil, configuration.idleSeconds > 0 else { return }
+        guard idleTask == nil,
+            configuration.idleSeconds > 0 || configuration.lukewarmSeconds > 0
+        else { return }
         let interval = configuration.idleCheckInterval
         idleTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -310,15 +325,26 @@ public actor PlamoServer {
                 guard let self else { return }
                 // Keep watching while the server is busy or recently used; only the expiry ends it.
                 if await self.idleExpired() { return }
+                await self.enterLukewarmIfIdle()
             }
         }
     }
 
     private func idleExpired() -> Bool {
-        guard idle.shouldExit(now: Date(), idleSeconds: configuration.idleSeconds) else {
-            return false
-        }
+        guard configuration.idleSeconds > 0,
+            idle.shouldExit(now: Date(), idleSeconds: configuration.idleSeconds)
+        else { return false }
         onIdle()
         return true
+    }
+
+    /// Releases the weights after a shorter idle than the exit: the process stays, the memory goes,
+    /// and the next request reads the weights again instead of starting a process.
+    private func enterLukewarmIfIdle() async {
+        guard !lukewarm, configuration.lukewarmSeconds > 0, !idle.busy,
+            Date().timeIntervalSince(idle.lastActivity) > configuration.lukewarmSeconds
+        else { return }
+        lukewarm = true
+        await onLukewarm()
     }
 }

@@ -15,6 +15,8 @@ public enum Command: String, CaseIterable, Sendable {
 public struct Invocation: Sendable {
     public static let defaultPort: UInt16 = 18_555
     public static let defaultIdleSeconds: Double = 600
+    /// Release the weights after this much idle instead of waiting for the exit timeout.
+    public static let defaultLukewarmSeconds: Double = 60
     public static let defaultMaxTokens = 64
 
     public let command: Command
@@ -24,6 +26,7 @@ public struct Invocation: Sendable {
     /// The Unix socket the server also listens on; nil when only the loopback port is used.
     public let socketPath: String?
     public let idleSeconds: Double
+    public let lukewarmSeconds: Double
     public let maxTokens: Int
     public let prompt: String
 
@@ -34,6 +37,7 @@ public struct Invocation: Sendable {
         port: UInt16 = Invocation.defaultPort,
         socketPath: String? = nil,
         idleSeconds: Double = Invocation.defaultIdleSeconds,
+        lukewarmSeconds: Double = Invocation.defaultLukewarmSeconds,
         maxTokens: Int = Invocation.defaultMaxTokens,
         prompt: String = ""
     ) {
@@ -43,6 +47,7 @@ public struct Invocation: Sendable {
         self.port = port
         self.socketPath = socketPath
         self.idleSeconds = idleSeconds
+        self.lukewarmSeconds = lukewarmSeconds
         self.maxTokens = maxTokens
         self.prompt = prompt
     }
@@ -86,6 +91,9 @@ public struct Invocation: Sendable {
             socketPath: try Invocation.socket(values["socket"]),
             idleSeconds: try Invocation.positive(values["idle-seconds"], name: "idle-seconds")
                 ?? Invocation.defaultIdleSeconds,
+            lukewarmSeconds: try Invocation.positive(
+                values["lukewarm-seconds"], name: "lukewarm-seconds")
+                ?? Invocation.defaultLukewarmSeconds,
             maxTokens: try Invocation.count(values["max-tokens"], name: "max-tokens"),
             // `--prompt` used to land in `values` and never be read, so `generate`, `debug` and
             // `bench` ran on an empty prompt and printed the model's answer to nothing.

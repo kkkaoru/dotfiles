@@ -108,8 +108,7 @@ internal func run(_ invocation: Invocation) async throws {
         let started = Date()
         let runtime = try makeRuntime(invocation)
         let loaded = Date().timeIntervalSince(started)
-        let warm = try await runtime.warmUp()
-        print(loadReport(loaded: loaded, warm: warm))
+        Timing.mark("runtime")
         let server = PlamoServer(
             // Repeats are the common case: the mods re-translate a redrawn or scrolled screen.
             router: Router(
@@ -117,9 +116,17 @@ internal func run(_ invocation: Invocation) async throws {
             configuration: .init(
                 port: invocation.port,
                 socketPath: invocation.socketPath,
-                idleSeconds: invocation.idleSeconds))
+                idleSeconds: invocation.idleSeconds,
+                lukewarmSeconds: invocation.lukewarmSeconds),
+            onLukewarm: { await runtime.releaseWeights() })
+        // The listener comes before the warm-up: the mods poll /v1/models, and a request that
+        // arrives mid-warm-up waits for the same kernels the warm-up is compiling anyway.
         let endpoints = try await server.start()
+        Timing.mark("listening")
         print("ready on \(endpoints)")
+        let warm = try await runtime.warmUp()
+        Timing.mark("warm-up")
+        print(loadReport(loaded: loaded, warm: warm))
         // The listeners own their queues; this suspends until the idle timer stops the server. A
         // bare withCheckedContinuation here was never resumed, so the process outlived its idle
         // timeout and kept 560 MB resident. (dispatchMain() would trap: async main is on the main
@@ -129,6 +136,7 @@ internal func run(_ invocation: Invocation) async throws {
 }
 
 internal let invocation: Invocation
+Timing.mark("process")
 do {
     invocation = try Invocation(arguments: Array(CommandLine.arguments.dropFirst()))
 } catch {
@@ -136,6 +144,7 @@ do {
     exit(1)
 }
 MLXMemory.configure()
+Timing.mark("mlx")
 do {
     try await run(invocation)
 } catch {

@@ -255,6 +255,7 @@ public final class PlamoModel {
         produced.reserveCapacity(maxTokens)
         for _ in 0..<maxTokens {
             let next = logits.argMax(axis: -1).item(Int32.self)
+            if produced.isEmpty { Timing.mark("gen.prefill") }
             if stopIDs.contains(next) { break }
             produced.append(next)
             logits = try self.logits(ids: [next])
