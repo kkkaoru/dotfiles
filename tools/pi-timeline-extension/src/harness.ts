@@ -13,6 +13,8 @@ export interface Harness {
   readonly setStatus: ReturnType<typeof vi.fn>;
   readonly setWidget: ReturnType<typeof vi.fn>;
   readonly show: () => Promise<void>;
+  /** The lines the widget would draw at `width`, from its last paint. */
+  readonly widgetLines: (width?: number) => string[];
 }
 
 /** The extension wired to a fake pi, so a test can call its tool, command and handlers. */
@@ -70,6 +72,17 @@ export async function start(
     sendMessage,
     setStatus,
     setWidget,
+    widgetLines(width = 200) {
+      const last = setWidget.mock.calls.at(-1) as [string, unknown] | undefined;
+      const content = last?.[1];
+      if (typeof content !== "function") {
+        return [];
+      }
+      const component = (
+        content as (tui?: unknown, theme?: unknown) => { render: (width: number) => string[] }
+      )();
+      return component.render(width);
+    },
     async run(params: unknown) {
       const result = (await registered.tool?.("call", params, undefined, undefined, context)) as {
         content: readonly { text: string }[];

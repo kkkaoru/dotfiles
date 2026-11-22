@@ -2,6 +2,7 @@
 import { mkdir } from "node:fs/promises";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import type { ExtensionAPI, ExtensionContext, ThemeColor } from "@earendil-works/pi-coding-agent";
+import { wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { MemoryStorage } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import { lock } from "proper-lockfile";
@@ -148,9 +149,22 @@ async function openStore(context: ExtensionContext): Promise<Opened> {
   }
 }
 
+/** Rows the widget draws: a line too long for the width continues on the next row, uncut. */
+function fitting(lines: readonly string[]): Component {
+  return {
+    invalidate: (): void => undefined,
+    render: (width: number): readonly string[] =>
+      lines.flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width))),
+  };
+}
+
 function paint(context: ExtensionContext, lines?: string[]): void {
   // The footer row is shared and need not carry this status, so the tree keeps a place of its own.
-  context.ui.setWidget(WIDGET_KEY, lines, { placement: "belowEditor" });
+  // Pi breaks a plain string line at whatever column the terminal has.
+  // This component breaks its own rows instead, so a long line continues below uncut.
+  const widget: (() => Component) | undefined =
+    lines === undefined ? undefined : () => fitting(lines);
+  context.ui.setWidget(WIDGET_KEY, widget, { placement: "belowEditor" });
 }
 
 interface Store {

@@ -3,6 +3,7 @@ import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, expect, test, vi } from "vitest";
 import timelineExtension from "./index.ts";
 import { start, type Harness } from "./src/harness.ts";
@@ -110,18 +111,16 @@ test("the head says how long ago the tree last changed", async () => {
     const harness = await start();
     await harness.run({ action: "add", title: "Fix bug" });
     // Under five minutes the age would only widen the head.
-    expect(harness.setWidget).toHaveBeenLastCalledWith(
-      "timeline",
-      ["░░░░░░░░░░ 0.00% · 1 tasks", "░░░░░░   0.00% · t1 Fix bug"],
-      { placement: "belowEditor" },
-    );
+    expect(harness.widgetLines()).toStrictEqual([
+      "░░░░░░░░░░ 0.00% · 1 tasks",
+      "░░░░░░   0.00% · t1 Fix bug",
+    ]);
     vi.setSystemTime(new Date(2026, 7, 26, 11, 42));
     await harness.show();
-    expect(harness.setWidget).toHaveBeenLastCalledWith(
-      "timeline",
-      ["░░░░░░░░░░ 0.00% · 1 tasks · updated 42m", "░░░░░░   0.00% · t1 Fix bug"],
-      { placement: "belowEditor" },
-    );
+    expect(harness.widgetLines()).toStrictEqual([
+      "░░░░░░░░░░ 0.00% · 1 tasks · updated 42m",
+      "░░░░░░   0.00% · t1 Fix bug",
+    ]);
   } finally {
     vi.useRealTimers();
   }
@@ -136,11 +135,10 @@ test("the age is repainted as the tree ages, and stops once it is finished", asy
     // The tick lands a minute later, so the head says how old the tree is by then.
     vi.setSystemTime(new Date(2026, 7, 26, 11, 5));
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(harness.setWidget).toHaveBeenLastCalledWith(
-      "timeline",
-      ["░░░░░░░░░░ 0.00% · 1 tasks · updated 6m", "░░░░░░   0.00% · t1 Fix bug"],
-      { placement: "belowEditor" },
-    );
+    expect(harness.widgetLines()).toStrictEqual([
+      "░░░░░░░░░░ 0.00% · 1 tasks · updated 6m",
+      "░░░░░░   0.00% · t1 Fix bug",
+    ]);
     await harness.run({ action: "update", id: "t1", status: "done" });
     const painted = harness.setWidget.mock.calls.length;
     await vi.advanceTimersByTimeAsync(60_000);
@@ -210,13 +208,10 @@ test("the tree keeps a place of its own under the editor", async () => {
     placement: "belowEditor",
   });
   await harness.run({ action: "add", title: "Fix bug" });
-  expect(harness.setWidget).toHaveBeenLastCalledWith(
-    "timeline",
-    ["░░░░░░░░░░ 0.00% · 1 tasks", "░░░░░░   0.00% · t1 Fix bug"],
-    {
-      placement: "belowEditor",
-    },
-  );
+  expect(harness.widgetLines()).toStrictEqual([
+    "░░░░░░░░░░ 0.00% · 1 tasks",
+    "░░░░░░   0.00% · t1 Fix bug",
+  ]);
 });
 
 test("the widget takes its colours from the theme, and tool output stays plain", async () => {
@@ -224,11 +219,10 @@ test("the widget takes its colours from the theme, and tool output stays plain",
     piece === "" ? "" : `${token}|${piece}`,
   );
   await harness.run({ action: "add", title: "Fix bug" });
-  expect(harness.setWidget).toHaveBeenLastCalledWith(
-    "timeline",
-    ["dim|░░░░░░░░░░ muted|0.00% · 1 tasks", "dim|░░░░░░ muted|  0.00% · t1 Fix bug"],
-    { placement: "belowEditor" },
-  );
+  expect(harness.widgetLines()).toStrictEqual([
+    "dim|░░░░░░░░░░ muted|0.00% · 1 tasks",
+    "dim|░░░░░░ muted|  0.00% · t1 Fix bug",
+  ]);
   const listed = await harness.run({ action: "list" });
   expect(listed.content[0]?.text).toBe("░░░░░░░░░░ 0.00% · 1 tasks\n░░░░░░   0.00% · t1 Fix bug");
 });
@@ -243,13 +237,10 @@ test("a copy that a reload leaves behind does not take the sidecar away", async 
   const second = await start(file);
   expect(second.notify).not.toHaveBeenCalled();
   expect(second.setStatus).toHaveBeenLastCalledWith("timeline", "0%");
-  expect(second.setWidget).toHaveBeenLastCalledWith(
-    "timeline",
-    ["░░░░░░░░░░ 0.00% · 1 tasks", "░░░░░░   0.00% · t1 Fix bug"],
-    {
-      placement: "belowEditor",
-    },
-  );
+  expect(second.widgetLines()).toStrictEqual([
+    "░░░░░░░░░░ 0.00% · 1 tasks",
+    "░░░░░░   0.00% · t1 Fix bug",
+  ]);
   await first.handlers.get("session_shutdown")?.({}, first.context);
   const done = await second.run({ action: "update", id: "t1", status: "done" });
   expect(text(done)).toBe("██████████ 100.00% · 1 tasks\n██████ 100.00% ✔ t1 Fix bug");
@@ -269,13 +260,10 @@ test("a sidecar another pi holds leaves the tree in memory, and it is still show
   );
   const added = await harness.run({ action: "add", title: "Fix bug" });
   expect(text(added)).toBe("░░░░░░░░░░ 0.00% · 1 tasks\n░░░░░░   0.00% · t1 Fix bug");
-  expect(harness.setWidget).toHaveBeenLastCalledWith(
-    "timeline",
-    ["░░░░░░░░░░ 0.00% · 1 tasks", "░░░░░░   0.00% · t1 Fix bug"],
-    {
-      placement: "belowEditor",
-    },
-  );
+  expect(harness.widgetLines()).toStrictEqual([
+    "░░░░░░░░░░ 0.00% · 1 tasks",
+    "░░░░░░   0.00% · t1 Fix bug",
+  ]);
   await harness.handlers.get("session_shutdown")?.({}, harness.context);
 });
 
@@ -321,19 +309,15 @@ test("the tree is painted in the reader's language once the translation lands", 
   const harness = await start(undefined, display);
   await harness.run({ action: "add", title: "Fix bug" });
   // The English is on screen at once, so a slow server never leaves the tree blank.
-  expect(harness.setWidget).toHaveBeenCalledWith(
-    "timeline",
-    ["░░░░░░░░░░ 0.00% · 1 tasks", "░░░░░░   0.00% · t1 Fix bug"],
-    {
-      placement: "belowEditor",
-    },
-  );
+  expect(harness.widgetLines()).toStrictEqual([
+    "░░░░░░░░░░ 0.00% · 1 tasks",
+    "░░░░░░   0.00% · t1 Fix bug",
+  ]);
   await vi.waitFor(() => {
-    expect(harness.setWidget).toHaveBeenLastCalledWith(
-      "timeline",
-      ["░░░░░░░░░░ 0.00% · 1 tasks", "░░░░░░   0.00% · t1 【Fix bug】"],
-      { placement: "belowEditor" },
-    );
+    expect(harness.widgetLines()).toStrictEqual([
+      "░░░░░░░░░░ 0.00% · 1 tasks",
+      "░░░░░░   0.00% · t1 【Fix bug】",
+    ]);
   });
 });
 
@@ -369,20 +353,16 @@ test("a text the server could not translate is retried, and the English stays me
   await vi.waitFor(() => {
     expect(attempts).toBe(1);
   });
-  expect(harness.setWidget).toHaveBeenLastCalledWith(
-    "timeline",
-    ["░░░░░░░░░░ 0.00% · 1 tasks", "░░░░░░   0.00% · t1 Fix bug"],
-    {
-      placement: "belowEditor",
-    },
-  );
+  expect(harness.widgetLines()).toStrictEqual([
+    "░░░░░░░░░░ 0.00% · 1 tasks",
+    "░░░░░░   0.00% · t1 Fix bug",
+  ]);
   await harness.run({ action: "update", id: "t1", status: "active" });
   await vi.waitFor(() => {
-    expect(harness.setWidget).toHaveBeenLastCalledWith(
-      "timeline",
-      ["░░░░░░░░░░ 0.00% · 1 tasks", "░░░░░░   0.00% ▸ t1 【Fix bug】"],
-      { placement: "belowEditor" },
-    );
+    expect(harness.widgetLines()).toStrictEqual([
+      "░░░░░░░░░░ 0.00% · 1 tasks",
+      "░░░░░░   0.00% ▸ t1 【Fix bug】",
+    ]);
   });
 });
 
@@ -405,27 +385,19 @@ test("a translation that lands after a newer tree is discarded", async () => {
   answer("First", 1, "【First】");
   answer("Second", 0, "【Second】");
   await vi.waitFor(() => {
-    expect(harness.setWidget).toHaveBeenLastCalledWith(
-      "timeline",
-      [
-        "░░░░░░░░░░ 0.00% · 2 tasks",
-        "░░░░░░   0.00% · t1 【First】",
-        "░░░░░░   0.00% · t2 【Second】",
-      ],
-      { placement: "belowEditor" },
-    );
+    expect(harness.widgetLines()).toStrictEqual([
+      "░░░░░░░░░░ 0.00% · 2 tasks",
+      "░░░░░░   0.00% · t1 【First】",
+      "░░░░░░   0.00% · t2 【Second】",
+    ]);
   });
   answer("First", 0, "【First】");
   await vi.waitFor(() => {
-    expect(harness.setWidget).toHaveBeenLastCalledWith(
-      "timeline",
-      [
-        "░░░░░░░░░░ 0.00% · 2 tasks",
-        "░░░░░░   0.00% · t1 【First】",
-        "░░░░░░   0.00% · t2 【Second】",
-      ],
-      { placement: "belowEditor" },
-    );
+    expect(harness.widgetLines()).toStrictEqual([
+      "░░░░░░░░░░ 0.00% · 2 tasks",
+      "░░░░░░   0.00% · t1 【First】",
+      "░░░░░░   0.00% · t2 【Second】",
+    ]);
   });
 });
 
@@ -443,11 +415,10 @@ test("a resumed session paints the restored tree in the reader's language", asyn
   // A restart resumes the session file: no tool call is made before the tree is shown again.
   const second = await start(file, display);
   await vi.waitFor(() => {
-    expect(second.setWidget).toHaveBeenLastCalledWith(
-      "timeline",
-      ["░░░░░░░░░░ 0.00% · 1 tasks", "░░░░░░   0.00% · t1 【Fix bug】"],
-      { placement: "belowEditor" },
-    );
+    expect(second.widgetLines()).toStrictEqual([
+      "░░░░░░░░░░ 0.00% · 1 tasks",
+      "░░░░░░   0.00% · t1 【Fix bug】",
+    ]);
   });
   await second.handlers.get("session_shutdown")?.({}, second.context);
 });
@@ -470,4 +441,14 @@ test("an extension given no display reads the reader's settings itself", async (
   // An empty tree is nothing to draw, and nothing to translate.
   expect(setWidget).toHaveBeenLastCalledWith("timeline", undefined, { placement: "belowEditor" });
   await handlers.get("session_shutdown")?.({}, context);
+});
+
+test("a narrow window breaks a long row onto the next line instead of cutting it", async () => {
+  const harness = await start();
+  await harness.run({ action: "add", title: "A title that needs more than a narrow window has" });
+  const painted = harness.widgetLines(24);
+  // One row per wrapped piece, none wider than the window, and the tail of the title survives.
+  expect(painted.length).toBeGreaterThan(2);
+  expect(painted.every((line) => visibleWidth(line) <= 24)).toBe(true);
+  expect(painted.join("")).toContain("narrow window has");
 });
