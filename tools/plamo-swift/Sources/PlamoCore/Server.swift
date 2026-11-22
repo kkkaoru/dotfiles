@@ -58,6 +58,8 @@ public actor PlamoServer {
     private var listeners: [NWListener] = []
     private var idle = IdleTracker()
     private var idleTask: Task<Void, Never>?
+    private var stopped: CheckedContinuation<Void, Never>?
+    private var running = true
     private var readyContinuation: CheckedContinuation<String, any Error>?
     private var readyCount = 0
     private var bound: [String] = []
@@ -101,8 +103,11 @@ public actor PlamoServer {
     }
 
     public func stop() {
+        running = false
         idleTask?.cancel()
         idleTask = nil
+        stopped?.resume()
+        stopped = nil
         stopListeners()
         readyContinuation?.resume(throwing: PlamoError.connectionClosed)
         readyContinuation = nil
@@ -182,11 +187,15 @@ public actor PlamoServer {
         }
     }
 
-    private func readRequest(_ connection: NWConnection, buffer: inout Data) async throws
+    private func readRequest(
+        _ connection: NWConnection, buffer: inout Data
+    ) async throws
         -> HTTPRequest
     {
         while HTTPRequestParser.headerEnd(in: buffer) == nil {
-            guard let chunk = try await receive(connection) else { throw PlamoError.connectionClosed }
+            guard let chunk = try await receive(connection) else {
+                throw PlamoError.connectionClosed
+            }
             buffer.append(chunk)
             guard buffer.count <= HTTPRequestParser.maximumBodyBytes else {
                 throw PlamoError.invalidRequest(reason: "request too large")
@@ -198,7 +207,9 @@ public actor PlamoServer {
         let head = Data(buffer.prefix(end))
         let length = try HTTPRequestParser.contentLength(head: head)
         while buffer.count - end < length {
-            guard let chunk = try await receive(connection) else { throw PlamoError.connectionClosed }
+            guard let chunk = try await receive(connection) else {
+                throw PlamoError.connectionClosed
+            }
             buffer.append(chunk)
         }
         let body = Data(buffer.dropFirst(end).prefix(length))
@@ -226,13 +237,15 @@ public actor PlamoServer {
 
     private func send(_ connection: NWConnection, _ data: Data) async throws {
         try await withCheckedThrowingContinuation { continuation in
-            connection.send(content: data, completion: .contentProcessed { error in
-                if error == nil {
-                    continuation.resume()
-                } else {
-                    continuation.resume(throwing: PlamoError.connectionClosed)
-                }
-            })
+            connection.send(
+                content: data,
+                completion: .contentProcessed { error in
+                    if error == nil {
+                        continuation.resume()
+                    } else {
+                        continuation.resume(throwing: PlamoError.connectionClosed)
+                    }
+                })
         }
     }
 
@@ -270,6 +283,15 @@ public actor PlamoServer {
         return endpoint.description
     }
 
+    /// Suspends until `stop()`. The idle timer is what normally ends it, so the process does not
+    /// outlive its last request — the tests pass their own `onIdle` and resume it directly.
+    public func waitUntilStopped() async {
+        guard running else { return }
+        await withCheckedContinuation { continuation in
+            stopped = continuation
+        }
+    }
+
     /// Exits only after a full idle interval with no request in flight.
     private func startIdleWatch() {
         guard idleTask == nil, configuration.idleSeconds > 0 else { return }
@@ -277,7 +299,9 @@ public actor PlamoServer {
         idleTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(interval))
-                guard let self, await self.idleExpired() else { return }
+                guard let self else { return }
+                // Keep watching while the server is busy or recently used; only the expiry ends it.
+                if await self.idleExpired() { return }
             }
         }
     }

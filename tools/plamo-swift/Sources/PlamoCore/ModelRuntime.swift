@@ -29,6 +29,9 @@ public actor ModelRuntime: CompletionProviding {
 
     public init(modelDirectory: URL, tokenizerBlob: URL) throws {
         let meta = tokenizerBlob.deletingPathExtension().appendingPathExtension("json")
+        // Ask the kernel for the weights before the tokenizer decode runs: a cold start reads 478 MB
+        // from disk, and the tokenizer work is free cover for the first part of that read.
+        Prefetch.weights(in: modelDirectory)
         tokenizer = try PlamoTokenizer(blob: tokenizerBlob, meta: meta)
         model = try PlamoModel.load(directory: modelDirectory)
     }
@@ -40,6 +43,48 @@ public actor ModelRuntime: CompletionProviding {
         try MLX.eval(model.logits(ids: [model.config.bosTokenId]))
         MLXMemory.release()
         return Date().timeIntervalSince(started)
+    }
+
+    /// One forward pass split into the time the CPU spends building the graph and the time the GPU
+    /// spends running it. `bench` uses this to say which side a change actually helped.
+    public struct ForwardTiming: Sendable {
+        public let tokens: Int
+        public let build: Double
+        public let eval: Double
+    }
+
+    public var layerCount: Int { model.config.numHiddenLayers }
+    public var windowSize: Int { model.config.windowSize }
+
+    public func timePrefill(_ ids: [Int32]) throws -> ForwardTiming {
+        model.resetCache()
+        let buildStarted = Date()
+        let logits = try model.logits(ids: ids)
+        let build = Date().timeIntervalSince(buildStarted)
+        let evalStarted = Date()
+        MLX.eval(logits)
+        return ForwardTiming(
+            tokens: ids.count, build: build, eval: Date().timeIntervalSince(evalStarted))
+    }
+
+    /// Decode steps after a prefill of `prompt`, averaged per step.
+    public func timeDecode(prompt: [Int32], steps: Int) throws -> ForwardTiming {
+        model.resetCache()
+        var logits = try model.logits(ids: prompt)
+        MLX.eval(logits)
+        var build = 0.0
+        var eval = 0.0
+        for _ in 0..<steps {
+            let next = logits.argMax(axis: -1).item(Int32.self)
+            let buildStarted = Date()
+            logits = try model.logits(ids: [next])
+            build += Date().timeIntervalSince(buildStarted)
+            let evalStarted = Date()
+            MLX.eval(logits)
+            eval += Date().timeIntervalSince(evalStarted)
+        }
+        let count = Double(max(steps, 1))
+        return ForwardTiming(tokens: steps, build: build / count, eval: eval / count)
     }
 
     public func complete(_ request: CompletionRequest) async throws -> Completion {
@@ -56,7 +101,8 @@ public actor ModelRuntime: CompletionProviding {
             }
         }
         return Completion(
-            text: text, tokens: produced.count, seconds: Date().timeIntervalSince(started))
+            text: text, promptTokens: promptIDs.count, tokens: produced.count,
+            seconds: Date().timeIntervalSince(started))
     }
 
     public func encode(_ text: String) -> [Int32] {

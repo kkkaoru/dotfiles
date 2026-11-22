@@ -41,15 +41,15 @@ public struct Router: Sendable {
             completion = try await provider.complete(
                 CompletionRequest(
                     prompt: body.prompt ?? "",
-                    maxTokens: try Router.maxTokens(body.max_tokens, default: defaultMaxTokens),
+                    maxTokens: try Router.maxTokens(body.maxTokens, default: defaultMaxTokens),
                     stop: stop))
         } catch {
             return Router.failure(error)
         }
         let payload = CompletionPayload(
             id: Router.modelID, object: "text_completion", model: Router.modelID,
-            choices: [.init(index: 0, text: completion.text, finish_reason: "stop")],
-            usage: .init(completion: completion.tokens))
+            choices: [.init(index: 0, text: completion.text, finishReason: "stop")],
+            usage: .init(prompt: completion.promptTokens, completion: completion.tokens))
         return Router.encode(payload)
     }
 
@@ -66,7 +66,7 @@ public struct Router: Sendable {
             completion = try await provider.complete(
                 CompletionRequest(
                     prompt: prompt,
-                    maxTokens: try Router.maxTokens(body.max_tokens, default: defaultMaxTokens),
+                    maxTokens: try Router.maxTokens(body.maxTokens, default: defaultMaxTokens),
                     stop: []))
         } catch {
             return Router.failure(error)
@@ -77,9 +77,9 @@ public struct Router: Sendable {
                 .init(
                     index: 0,
                     message: .init(role: "assistant", content: completion.text),
-                    finish_reason: "stop")
+                    finishReason: "stop")
             ],
-            usage: .init(completion: completion.tokens))
+            usage: .init(prompt: completion.promptTokens, completion: completion.tokens))
         return Router.encode(payload)
     }
 
@@ -112,26 +112,27 @@ public struct Router: Sendable {
     private static func error(status: String, message: String) -> HTTPResponse {
         let escaped = message.replacingOccurrences(of: "\"", with: "\\\"")
         return HTTPResponse(
-            status: status, body: #"{"error":{"message":"\#(escaped)","type":"invalid_request_error"}}"#)
+            status: status,
+            body: #"{"error":{"message":"\#(escaped)","type":"invalid_request_error"}}"#)
     }
 
     // MARK: - Bodies
 
     private struct CompletionBody: Decodable {
         let prompt: String?
-        let max_tokens: Int?
+        let maxTokens: Int?
         let stop: StopSequence?
 
         private enum CodingKeys: String, CodingKey {
             case prompt
-            case max_tokens
+            case maxTokens = "max_tokens"
             case stop
         }
 
         init(from decoder: any Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             prompt = try container.decodeIfPresent(String.self, forKey: .prompt)
-            max_tokens = try container.decodeIfPresent(Int.self, forKey: .max_tokens)
+            maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens)
             stop = try container.decodeIfPresent(StopSequence.self, forKey: .stop)
         }
     }
@@ -164,17 +165,29 @@ public struct Router: Sendable {
         }
 
         let messages: [Message]
-        let max_tokens: Int?
+        let maxTokens: Int?
+
+        private enum CodingKeys: String, CodingKey {
+            case messages
+            case maxTokens = "max_tokens"
+        }
     }
 
     private struct Usage: Encodable {
-        let prompt_tokens = 0
-        let completion_tokens: Int
-        let total_tokens: Int
+        let promptTokens: Int
+        let completionTokens: Int
+        let totalTokens: Int
 
-        init(completion: Int) {
-            completion_tokens = completion
-            total_tokens = completion
+        private enum CodingKeys: String, CodingKey {
+            case promptTokens = "prompt_tokens"
+            case completionTokens = "completion_tokens"
+            case totalTokens = "total_tokens"
+        }
+
+        init(prompt: Int, completion: Int) {
+            promptTokens = prompt
+            completionTokens = completion
+            totalTokens = prompt + completion
         }
     }
 
@@ -182,7 +195,13 @@ public struct Router: Sendable {
         struct Choice: Encodable {
             let index: Int
             let text: String
-            let finish_reason: String
+            let finishReason: String
+
+            private enum CodingKeys: String, CodingKey {
+                case index
+                case text
+                case finishReason = "finish_reason"
+            }
         }
 
         let id: String
@@ -202,7 +221,13 @@ public struct Router: Sendable {
         struct Choice: Encodable {
             let index: Int
             let message: Message
-            let finish_reason: String
+            let finishReason: String
+
+            private enum CodingKeys: String, CodingKey {
+                case index
+                case message
+                case finishReason = "finish_reason"
+            }
         }
 
         let id: String

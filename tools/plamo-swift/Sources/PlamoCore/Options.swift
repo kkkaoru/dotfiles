@@ -1,12 +1,13 @@
 import Foundation
 
-/// The five things the binary can do. Parsing rejects anything else instead of silently serving.
+/// The six things the binary can do. Parsing rejects anything else instead of silently serving.
 public enum Command: String, CaseIterable, Sendable {
     case tokenize
     case load
     case generate
     case serve
     case debug
+    case bench
 }
 
 /// A fully validated command line: every value is already the type the caller needs, so nothing
@@ -74,7 +75,8 @@ public struct Invocation: Sendable {
         guard let command = Command(rawValue: name) else { throw PlamoError.unknownCommand(name) }
         guard let model = values["model"] else { throw PlamoError.missingOption(name: "model") }
         let modelDirectory = URL(fileURLWithPath: model)
-        let blob = values["tokenizer"] ?? modelDirectory.appendingPathComponent("tokenizer.bin").path
+        let blob =
+            values["tokenizer"] ?? modelDirectory.appendingPathComponent("tokenizer.bin").path
         self.init(
             command: command,
             modelDirectory: modelDirectory,
@@ -84,7 +86,9 @@ public struct Invocation: Sendable {
             idleSeconds: try Invocation.positive(values["idle-seconds"], name: "idle-seconds")
                 ?? Invocation.defaultIdleSeconds,
             maxTokens: try Invocation.count(values["max-tokens"], name: "max-tokens"),
-            prompt: positional.joined(separator: " "))
+            // `--prompt` used to land in `values` and never be read, so `generate`, `debug` and
+            // `bench` ran on an empty prompt and printed the model's answer to nothing.
+            prompt: ([values["prompt"]] + positional).compactMap { $0 }.joined(separator: " "))
     }
 
     private static func port(_ raw: String?) throws -> UInt16 {

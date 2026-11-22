@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import PlamoCore
 
 @Test func parsesServeCommand() throws {
@@ -14,6 +15,19 @@ import Testing
     #expect(invocation.idleSeconds == 30)
     #expect(invocation.maxTokens == 8)
     #expect(invocation.prompt == "hello world")
+}
+
+@Test func readsThePromptFlag() throws {
+    // The flag used to be parsed and never read: generate and bench then ran on an empty prompt.
+    let invocation = try Invocation(arguments: [
+        "bench", "--model", "/m", "--prompt", "translate this",
+    ])
+    #expect(invocation.prompt == "translate this")
+}
+
+@Test func joinsThePromptFlagWithPositionalWords() throws {
+    let invocation = try Invocation(arguments: ["generate", "--model", "/m", "--prompt", "a", "b"])
+    #expect(invocation.prompt == "a b")
 }
 
 @Test func parsesDefaults() throws {
@@ -77,5 +91,8 @@ func rejectsBadNumbers(_ arguments: [String]) {
 }
 
 @Test func commandNamesMatchTheBinary() {
-    #expect(Command.allCases.map(\.rawValue) == ["tokenize", "load", "generate", "serve", "debug"])
+    #expect(
+        Command.allCases.map(\.rawValue) == [
+            "tokenize", "load", "generate", "serve", "debug", "bench",
+        ])
 }

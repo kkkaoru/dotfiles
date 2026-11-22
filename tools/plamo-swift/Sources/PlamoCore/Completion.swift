@@ -3,11 +3,14 @@ import Foundation
 /// One finished translation: the text, how many tokens produced it, and how long the decode took.
 public struct Completion: Sendable, Equatable {
     public let text: String
+    /// Tokens the caller sent: reported as `usage.prompt_tokens`, which clients bill from.
+    public let promptTokens: Int
     public let tokens: Int
     public let seconds: Double
 
-    public init(text: String, tokens: Int, seconds: Double) {
+    public init(text: String, promptTokens: Int = 0, tokens: Int, seconds: Double) {
         self.text = text
+        self.promptTokens = promptTokens
         self.tokens = tokens
         self.seconds = seconds
     }

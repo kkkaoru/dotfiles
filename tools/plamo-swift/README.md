@@ -75,18 +75,37 @@ fixed part and the per-token part separate:
 | step | measurement |
 | --- | --- |
 | transport, `GET /v1/models` on a kept-alive connection | 0.43 ms |
-| prefill, 195-char template prompt (~50 tokens) | 11.1 ms |
-| prefill, 1974-char prompt (~500 tokens) | 31.8 ms |
-| decode | 4.5 ms/token, flat from 50 to 550 tokens of context |
-| load, page cache warm | 26 ms |
+| prefill, 195-char template prompt (23 tokens) | 0.34 ms graph build + 23.1 ms GPU |
+| prefill, 1974-char prompt (~500 tokens) | 0.75 ms graph build + 37.7 ms GPU |
+| decode, per step | 0.24–0.31 ms graph build + 2.56–2.87 ms GPU |
+| decode, per step at a 722-token context | 0.29 ms graph build + 3.07 ms GPU |
+| load, page cache warm | 0.052 s total: 0.023 weights, 0.028 warm-up |
 | resident / physical footprint while serving | 560 / 632 MB |
 | peak physical footprint during a long prefill | 1052 MB |
 | compressed | 0 B |
 
+`plamo-swift bench --model <dir> --prompt <text>` prints these numbers, splitting every forward
+pass into the time the CPU spends building the graph and the time the GPU spends running it.
+
 Decode is bandwidth-bound: the 4-bit weights are about 0.5 GB and every step streams them once, so
 the effective bandwidth is ~111 GB/s and only fewer bits or fewer steps (speculative decoding) would
-move it. Prefill is the opposite shape — 0.047 ms/token marginal but ~8.6 ms fixed per forward pass —
-so a short translation is dominated by graph construction and kernel launches, not by its tokens.
+move it. It stays flat from 23 to 722 tokens of context, which also rules out the KV concatenation
+as the bound: at 722 tokens that copy is ~45 MB per step, under 10% of the 3 ms. Prefill is the
+opposite shape — 0.047 ms/token marginal but ~8.6 ms fixed per forward pass — so a short translation
+is dominated by graph construction and kernel launches, not by its tokens.
+
+### What was changed for these numbers
+
+| change | before | after |
+| --- | --- | --- |
+| one mask table per attention kind, built once per pass, instead of one per layer (16 identical `[queries][keys]` allocations) | 500-token prefill: 3.02 ms build, 2.35 ms of it masks | 0.68–0.79 ms build, 0.29–0.32 ms masks |
+| `F_RDADVISE` over the 478 MB safetensors before the tokenizer decode, so the read starts early and runs on the disk queue | load 0.088 s (0.031 weights) | 0.052–0.061 s (0.020–0.030 weights) |
+| per-step graph build | 0.33 ms | 0.24–0.31 ms |
+
+The cold-load case is the one measurement this machine could not produce honestly: forcing the page
+cache out needs root (`purge`), and neither a 24 GB disk write nor 40 GB of anonymous pressure moved
+the file-backed page count (`vm_stat` stayed at ~3.7 GB), so every "cold" load still read at 8–19 GB/s
+and the numbers were warm ones. The prefetch is in place for the real cold path; it is unmeasured here.
 
 ## Shared memory, prefix reuse and the Metal knobs, evaluated
 
@@ -102,7 +121,7 @@ above or from the research in this section:
 | MLX `Memory.cacheLimit` | already 32 MB instead of the device maximum; the measured peak footprint is prefill activations, not cache | none | kept |
 | wired-memory tickets (`WiredMemoryManager`) | none: compressed is 0 B and nothing pages out | pins memory a burst could otherwise return | rejected |
 | `asyncEval` overlap | tokenization is under 1 ms of a 25 ms request, and each decode step needs the previous argmax | a second in-flight graph and its memory | rejected |
-| mmap the safetensors instead of reading them | load is already 26 ms warm; only a cold page cache would gain | unpacking 4-bit weights through a mapped window | rejected |
+| mmap the safetensors instead of reading them | load is already 26 ms warm; only a cold page cache would gain | unpacking 4-bit weights through a mapped window | rejected in favour of `F_RDADVISE`, which keeps the read path unchanged and cannot fail a start |
 | dropping `Memory.clearCache()` after every completion | 24.8 → 23.6 ms on repeats, inside the noise | up to the 32 MB cache limit stays resident | done: the cache limit bounds it, so the per-request clear was removed |
 
 `CachingProvider` wraps the runtime in `serve`. Every request the router answers is greedy, so the

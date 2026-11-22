@@ -63,6 +63,37 @@ func run(_ invocation: Invocation) async throws {
                 completion.seconds))
         print(completion.text)
 
+    case .bench:
+        let started = Date()
+        let runtime = try makeRuntime(invocation)
+        let loaded = Date().timeIntervalSince(started)
+        let warm = try await runtime.warmUp()
+        print(loadReport(loaded: loaded, warm: warm))
+        let ids = await runtime.encode(invocation.prompt)
+        guard !ids.isEmpty else { throw PlamoError.invalidRequest(reason: "empty prompt") }
+        let long = Array(Array(repeating: ids, count: 500 / ids.count + 1).joined().prefix(500))
+        for padded in [ids, long] {
+            // One forward pass now builds at most two tables (full and sliding), not one per layer.
+            let maskStarted = Date()
+            _ = try Mask.causal(queries: padded.count, keys: padded.count, window: nil)
+            _ = try Mask.causal(
+                queries: padded.count, keys: min(padded.count, await runtime.windowSize),
+                window: await runtime.windowSize)
+            let mask = Date().timeIntervalSince(maskStarted)
+            let timing = try await runtime.timePrefill(padded)
+            print(
+                String(
+                    format: "prefill %4d tokens: build %6.2f ms, eval %7.2f ms, masks %6.3f ms",
+                    timing.tokens, timing.build * 1000, timing.eval * 1000, mask * 1000))
+        }
+        // One decode loop per process: two in a row segfaults inside MLX, and the context length is
+        // already the caller's prompt, so a long prompt measures the long-context step.
+        let decode = try await runtime.timeDecode(prompt: ids, steps: 32)
+        print(
+            String(
+                format: "decode per step at %d tokens: build %6.2f ms, eval %6.2f ms", ids.count,
+                decode.build * 1000, decode.eval * 1000))
+
     case .serve:
         let started = Date()
         let runtime = try makeRuntime(invocation)
@@ -79,9 +110,10 @@ func run(_ invocation: Invocation) async throws {
                 idleSeconds: invocation.idleSeconds))
         let endpoints = try await server.start()
         print("ready on \(endpoints)")
-        // The listeners own their queues; suspending this task forever is what keeps the process up.
-        // dispatchMain() here traps: async main already runs on the main queue.
-        await withCheckedContinuation { (_: CheckedContinuation<Void, Never>) in }
+        // The listeners own their queues; this suspends until the idle timer stops the server. A bare
+        // withCheckedContinuation here was never resumed, so the process outlived its idle timeout
+        // and kept 560 MB resident. (dispatchMain() would trap: async main is on the main queue.)
+        await server.waitUntilStopped()
     }
 }
 

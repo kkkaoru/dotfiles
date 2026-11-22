@@ -114,19 +114,26 @@ public final class PlamoModel {
     public var position: Int { seen }
 
     /// logits of the last position, and the KV cache grows by `ids.count` tokens.
-    public func logits(ids: [Int32], onStage: ((String, MLXArray) -> Void)? = nil) throws -> MLXArray {
+    public func logits(
+        ids: [Int32], onStage: ((String, MLXArray) -> Void)? = nil
+    ) throws -> MLXArray {
         guard !ids.isEmpty else { throw PlamoError.invalidRequest(reason: "empty token list") }
         let length = ids.count
         var hidden = embedTokens.embed(MLXArray(ids)).reshaped([1, length, config.hiddenSize])
         onStage?("embed", hidden)
         let start = seen
         let queryPositions = (start..<(start + length)).map { $0 }
+        // One table per attention kind instead of one per layer: every layer used to rebuild the same
+        // [queries][keys] values, which is 16 identical allocations on every prefill.
+        let masks = try prefillMasks(queries: length, start: start)
 
         for (index, layer) in layers.enumerated() {
             let residual = hidden
             var h = norm(hidden, layer.preMixerNorm)
             onStage?("L\(index).pre_mixer", h)
-            h = try attention(h, layer: layer, index: index, positions: queryPositions)
+            h = try attention(
+                h, layer: layer, index: index, positions: queryPositions,
+                mask: layer.fullAttention ? masks.full : masks.sliding)
             onStage?("L\(index).mixer", h)
             hidden = residual + norm(h, layer.postMixerNorm)
 
@@ -143,12 +150,34 @@ public final class PlamoModel {
         return lmHead.matmul(last)
     }
 
+    /// The masks a prefill needs. Full attention sees every cached key; a sliding layer holds at most
+    /// `windowSize`, so the whole pass needs at most these two tables.
+    private func prefillMasks(
+        queries: Int, start: Int
+    ) throws
+        -> (full: MLXArray?, sliding: MLXArray?)
+    {
+        guard queries > 1 else { return (nil, nil) }
+        let dtype = embedTokens.activationDType
+        let total = start + queries
+        func table(keys: Int, window: Int?) throws -> MLXArray {
+            let values = try Mask.causal(queries: queries, keys: keys, window: window)
+            // The mask has to carry the activation dtype: the model runs in bfloat16 and MLX will not
+            // promote a float32 mask into it.
+            return MLXArray(values).reshaped([1, 1, queries, keys]).asType(dtype)
+        }
+        return (
+            try table(keys: total, window: nil),
+            try table(keys: min(total, config.windowSize), window: config.windowSize)
+        )
+    }
+
     private func norm(_ x: MLXArray, _ weight: MLXArray) -> MLXArray {
         MLXFast.rmsNorm(x, weight: weight, eps: config.rmsNormEps)
     }
 
     private func attention(
-        _ x: MLXArray, layer: Layer, index: Int, positions: [Int]
+        _ x: MLXArray, layer: Layer, index: Int, positions: [Int], mask: MLXArray?
     ) throws -> MLXArray {
         let heads = config.numAttentionHeads
         let kvHeads = config.numKeyValueHeads
@@ -191,16 +220,8 @@ public final class PlamoModel {
         k = rotate(k, cos: kCos, sin: kSin)
 
         // One query token attends to every cached key, and a trimmed sliding cache holds at most
-        // `windowSize` of them, so only a multi-token prefill needs a mask.
-        var mask: MLXArray? = nil
-        if length > 1 {
-            let values = try Mask.causal(
-                queries: length, keys: keyCount,
-                window: layer.fullAttention ? nil : config.windowSize)
-            // The mask has to carry the activation dtype: the model runs in bfloat16 and MLX will not
-            // promote a float32 mask into it.
-            mask = MLXArray(values).reshaped([1, 1, length, keyCount]).asType(q.dtype)
-        }
+        // `windowSize` of them, so only a multi-token prefill needs a mask — and that one is built
+        // once for the whole pass.
         var out = MLXFast.scaledDotProductAttention(
             queries: q, keys: k, values: v, scale: 1 / Float(headDim).squareRoot(), mask: mask)
         out = out.transposed(0, 2, 1, 3).reshaped([1, length, qDim])
