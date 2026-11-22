@@ -139,6 +139,32 @@ export function applyOutcome(
   host.registerProvider(provider, { baseUrl: `${outcome.url}/v1` });
 }
 
+/**
+ * A pre-warm must not block the model switch, so its outcome waits for the next hook. A ctx
+ * captured in a promise continuation is stale after /reload or a session replacement, and using it
+ * crashes pi, so only plain data crosses the boundary.
+ */
+function createPendingOutcomes(host: ColabLifecycleHost): {
+  readonly set: (outcome: EnsureOutcome, provider: string) => void;
+  readonly apply: (ctx: ColabContext) => void;
+} {
+  let pending: { readonly outcome: EnsureOutcome; readonly provider: string } | undefined =
+    undefined;
+  return {
+    set: (outcome, provider) => {
+      pending = { outcome, provider };
+    },
+    apply: (ctx) => {
+      if (pending === undefined) {
+        return;
+      }
+      const { outcome, provider } = pending;
+      pending = undefined;
+      applyOutcome(host, ctx, outcome, provider);
+    },
+  };
+}
+
 export function createColabExtension(
   host: ColabLifecycleHost,
   deps: Deps,
@@ -154,7 +180,10 @@ export function createColabExtension(
     ctx.ui.setStatus(PROVIDER, active ? await runtime.usageText() : undefined);
   };
 
+  const pending = createPendingOutcomes(host);
+
   const touchIfColab = (_event: unknown, ctx: ColabContext): void => {
+    pending.apply(ctx);
     if (isColabModel(ctx.model)) {
       runtime.touch();
     } else if (isStrataColabModel(ctx.model)) {
@@ -196,13 +225,13 @@ export function createColabExtension(
     if (provider === STRATA_PROVIDER) {
       strataRuntime
         .ensureUp()
-        .then((outcome) => applyOutcome(host, ctx, outcome, STRATA_PROVIDER))
+        .then((outcome) => pending.set(outcome, STRATA_PROVIDER))
         .catch(() => false);
       return;
     }
     runtime
       .ensureUp()
-      .then((outcome) => applyOutcome(host, ctx, outcome, PROVIDER))
+      .then((outcome) => pending.set(outcome, PROVIDER))
       .catch(() => false);
   });
 

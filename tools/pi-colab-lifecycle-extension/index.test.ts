@@ -155,7 +155,9 @@ it("pre-warms Colab when switching into google-colab", async () => {
     { model: { provider: "google-colab" } },
     context("google-colab"),
   );
-  await vi.waitFor(() => {
+  // The switch is not blocked: the pre-warm's outcome lands on the next hook, never a captured ctx.
+  await vi.waitFor(async () => {
+    await handlers.get("before_provider_request")?.({}, context("google-colab"));
     expect(registerProvider).toHaveBeenCalledTimes(1);
   });
 });
@@ -178,6 +180,7 @@ it("swallows a failed pre-warm", async () => {
   await vi.waitFor(() => {
     expect(deps.run).toHaveBeenCalled();
   });
+  await handlers.get("before_provider_request")?.({}, context("google-colab"));
   expect(registerProvider).not.toHaveBeenCalled();
 });
 
@@ -252,7 +255,8 @@ it("pre-warms strata-colab when selected and warns when unavailable", async () =
   const { handlers, registerProvider } = harness(liveDeps(), failDeps);
   const ctx = context("strata-colab");
   await handlers.get("model_select")?.({ model: { provider: "strata-colab" } }, ctx);
-  await vi.waitFor(() => {
+  await vi.waitFor(async () => {
+    await handlers.get("before_provider_request")?.({}, ctx);
     expect(ctx.ui.notify).toHaveBeenCalledWith(
       expect.stringContaining("strata-colab unavailable"),
       "warning",
