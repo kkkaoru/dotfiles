@@ -443,12 +443,12 @@ test("an extension given no display reads the reader's settings itself", async (
   await handlers.get("session_shutdown")?.({}, context);
 });
 
-test("a narrow window breaks a long row onto the next line instead of cutting it", async () => {
+test("a narrow window cuts a long row instead of letting it run into the next", async () => {
   const harness = await start();
   await harness.run({ action: "add", title: "A title that needs more than a narrow window has" });
   const painted = harness.widgetLines(24);
-  // One row per wrapped piece, none wider than the window, and the tail of the title survives.
-  expect(painted.length).toBeGreaterThan(2);
+  // One row per task: the head and t1, neither wider than the window, the note cut at its edge.
+  expect(painted).toHaveLength(2);
   expect(painted.every((line) => visibleWidth(line) <= 24)).toBe(true);
-  expect(painted.join("")).toContain("narrow window has");
+  expect(painted[1]).toContain("\u2026");
 });
