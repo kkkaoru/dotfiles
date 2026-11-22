@@ -21,7 +21,10 @@ let package = Package(
         .testTarget(
             name: "PlamoCoreTests",
             dependencies: ["PlamoCore"],
-            path: "Tests/PlamoCoreTests"
+            path: "Tests/PlamoCoreTests",
+            // The fixtures are read through #filePath, so they are source, not bundle resources;
+            // without this the coverage build stops on "2 file(s) which are unhandled".
+            exclude: ["Fixtures"]
         ),
     ]
 )

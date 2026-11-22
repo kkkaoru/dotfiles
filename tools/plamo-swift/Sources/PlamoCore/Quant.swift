@@ -42,7 +42,7 @@ public struct Quant {
     public func matmul(_ x: MLXArray) -> MLXArray {
         switch storage {
         case .quantized(let weight, let scales, let biases):
-            return MLX.quantizedMatmul(
+            return MLX.quantizedMM(
                 x, weight, scales: scales, biases: biases, transpose: true,
                 groupSize: Quant.groupSize, bits: Quant.bits)
         case .dense(let weight):
