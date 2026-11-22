@@ -55,7 +55,6 @@ public actor ModelRuntime: CompletionProviding {
                 break
             }
         }
-        MLXMemory.release()
         return Completion(
             text: text, tokens: produced.count, seconds: Date().timeIntervalSince(started))
     }
@@ -69,7 +68,9 @@ public actor ModelRuntime: CompletionProviding {
     }
 
     /// Stage-by-stage norms for `debug`: the numbers the Python server prints for the same prompt.
-    public func stages(prompt: String) throws -> (stages: [(String, [Float])], top: [Float], ids: [Int32]) {
+    public func stages(
+        prompt: String
+    ) throws -> (stages: [(String, [Float])], top: [Float], ids: [Int32]) {
         var captured = [(String, [Float])]()
         let ids = tokenizer.promptIDs(prompt, bos: model.config.bosTokenId)
         let scores = try model.logits(ids: ids) { stage, hidden in

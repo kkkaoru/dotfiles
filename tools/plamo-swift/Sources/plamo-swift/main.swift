@@ -43,8 +43,10 @@ func run(_ invocation: Invocation) async throws {
         let top = result.top.enumerated().sorted { $0.element > $1.element }.prefix(5)
         print("prompt ids: \(result.ids)")
         print("eos: \(await runtime.eosTokenIDs)")
-        print("top: " + top.map { "\($0.offset):\(String(format: "%.3f", $0.element))" }
-            .joined(separator: " "))
+        print(
+            "top: "
+                + top.map { "\($0.offset):\(String(format: "%.3f", $0.element))" }
+                .joined(separator: " "))
 
     case .generate:
         let started = Date()
@@ -68,7 +70,9 @@ func run(_ invocation: Invocation) async throws {
         let warm = try await runtime.warmUp()
         print(loadReport(loaded: loaded, warm: warm))
         let server = PlamoServer(
-            router: Router(provider: runtime, defaultMaxTokens: invocation.maxTokens),
+            // Repeats are the common case: the mods re-translate a redrawn or scrolled screen.
+            router: Router(
+                provider: CachingProvider(inner: runtime), defaultMaxTokens: invocation.maxTokens),
             configuration: .init(
                 port: invocation.port,
                 socketPath: invocation.socketPath,
