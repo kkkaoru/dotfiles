@@ -4,7 +4,9 @@ import { plamoPrompt } from "../../claude-plamo-translate/hooks/translate.ts";
 import { isRecord } from "./settings.ts";
 
 const HOST = "http://127.0.0.1";
-const SWIFT_SERVER = ".local/bin/plamo-swift";
+// The real binary, not the ~/.local/bin/plamo-swift wrapper: a wrapper whose target is gone must
+// Fall through to the next server at once, not spawn and wait 60 s for a port that never answers.
+const SWIFT_SERVER = ".local/share/plamo-swift/plamo-swift";
 const SWIFT_SOCKET = ".local/share/plamo-swift/plamo.sock";
 const MLX_SERVER = ".local/bin/plamo-mlx-server";
 const MLX_MODEL = ".local/share/plamo-translate/plamo-3-translate-0.8b-mlx-4bit";

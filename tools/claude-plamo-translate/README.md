@@ -64,7 +64,8 @@ them.
 
 3. Start a new session, or run `/reload-plugins` in a running one.
 
-When nothing answers on port 18555, the mod starts `~/.local/bin/plamo-swift` if it exists (MLX
+When nothing answers on port 18555, the mod starts `~/.local/share/plamo-swift/plamo-swift` if it
+exists (MLX
 Swift: 0.55 GB resident instead of 1 GB, ready in 0.15 s, identical output), then
 `~/.local/bin/plamo-mlx-server`, then `llama-server` (`llama-server.exe` on Windows, under
 `%USERPROFILE%` when `HOME` is unset).

@@ -59,8 +59,9 @@ interface CompletionBody {
 const OFF: string = 'off'
 const HOST: string = 'http://127.0.0.1'
 // Written by scripts/setup-plamo-translate.sh: tools/plamo-swift on MLX Swift, 0.55 GB resident
-// instead of 1 GB and ready in 0.15 s.
-const SWIFT_SERVER: string = '.local/bin/plamo-swift'
+// instead of 1 GB and ready in 0.15 s. The real binary, not the ~/.local/bin wrapper: a wrapper
+// whose target is gone must fall through to mlx_lm at once instead of waiting out the timeout.
+const SWIFT_SERVER: string = '.local/share/plamo-swift/plamo-swift'
 // The Python fallback: scripts/plamo-mlx-server.py, mlx-lm with a listen backlog that holds eight
 // requests.
 const MLX_SERVER: string = '.local/bin/plamo-mlx-server'

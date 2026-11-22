@@ -21,7 +21,7 @@ function response(ok: boolean, body: unknown, status = 200): ResponseLike {
 
 test("the Swift server is preferred when its binary exists", () => {
   expect(commandSpec("/Users/x", "darwin", 18555, () => true)).toStrictEqual({
-    command: "/Users/x/.local/bin/plamo-swift",
+    command: "/Users/x/.local/share/plamo-swift/plamo-swift",
     args: [
       "serve",
       "--model",
@@ -30,6 +30,28 @@ test("the Swift server is preferred when its binary exists", () => {
       "18555",
       "--socket",
       "/Users/x/.local/share/plamo-swift/plamo.sock",
+    ],
+  });
+});
+
+test("a wrapper whose binary is gone falls back to mlx_lm", () => {
+  expect(
+    commandSpec(
+      "/Users/x",
+      "darwin",
+      18555,
+      (file) =>
+        file === "/Users/x/.local/bin/plamo-swift" ||
+        file === "/Users/x/.local/bin/plamo-mlx-server",
+    ),
+  ).toStrictEqual({
+    command: "/Users/x/.local/bin/plamo-mlx-server",
+    args: [
+      "--model",
+      "/Users/x/.local/share/plamo-translate/plamo-3-translate-0.8b-mlx-4bit",
+      "--port",
+      "18555",
+      "--trust-remote-code",
     ],
   });
 });

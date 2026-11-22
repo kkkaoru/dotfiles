@@ -82,8 +82,9 @@ TOOLCHAINS=com.apple.dt.toolchain.Metal.32023.922.4 swift build -c release
 `--tokenizer` defaults to `tokenizer.bin` inside `--model`, which is where
 `scripts/setup-plamo-translate.sh` puts the dump.
 
-Both translate mods start `~/.local/bin/plamo-swift` (the wrapper that script writes) when it
-exists and fall back to `plamo-mlx-server`, then to llama.cpp, when it does not. The pi mod also
+Both translate mods start `~/.local/share/plamo-swift/plamo-swift` — the binary itself, not the
+`~/.local/bin/plamo-swift` wrapper, so a wrapper whose target is missing falls through at once — and
+fall back to `plamo-mlx-server`, then to llama.cpp, when the binary is absent. The pi mod also
 passes `--socket ~/.local/share/plamo-swift/plamo.sock` and sends its requests over that socket once
 the file exists: 23.3 ms per translation against 23.4 ms over loopback TCP on an M5 Pro, because
 decode dominates and the round trip is 0.1 ms of it. The socket is there so the transport costs

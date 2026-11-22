@@ -55,7 +55,8 @@ Options live under `pi-plamo-translate` in `~/.pi/agent/settings.json`:
 | `promptLanguage` | `en`    | Language your prompts are translated into. `off` disables it.         |
 | `port`           | `18555` | Local PLaMo server, started on demand and shared with the Claude mod. |
 
-The server is `~/.local/bin/plamo-swift` when `scripts/setup-plamo-translate.sh` installed it (MLX
+The server is `~/.local/share/plamo-swift/plamo-swift` when `scripts/setup-plamo-translate.sh`
+installed it (MLX
 Swift: 0.55 GB resident instead of 1 GB, ready in 0.15 s, identical output), and
 `plamo-mlx-server` when it did not. With the Swift server the mod also passes
 `--socket ~/.local/share/plamo-swift/plamo.sock` and sends every request over that socket once the
