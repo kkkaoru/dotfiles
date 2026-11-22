@@ -293,7 +293,7 @@ it("blocks only for owned tasks whose notices are pending", () => {
   expect(runtime.state?.status).toBe("complete");
   tmux.stop();
 });
-it("names the owned task that blocks completion", () => {
+it("closes a goal whose only owned job already finished with its notice queued", () => {
   const { host, runtime } = setup();
   const tmux: ActivityProvider = new ActivityProvider(host.bus, () => ({
     source: "tmux",
@@ -301,6 +301,22 @@ it("names the owned task that blocks completion", () => {
     pendingDelivery: true,
     pendingTasks: ["owned"],
     tasks: [],
+  }));
+  tmux.start("session");
+  runtime.start({ objective: "task", tokenBudget: null });
+  announceTask(host.bus, { sessionId: "session", name: "owned" });
+
+  expect(() => runtime.update("complete", "claimed done")).not.toThrow();
+  expect(runtime.state?.status).toBe("complete");
+  tmux.stop();
+});
+it("names the owned task that blocks completion", () => {
+  const { host, runtime } = setup();
+  const tmux: ActivityProvider = new ActivityProvider(host.bus, () => ({
+    source: "tmux",
+    ownsContinuation: false,
+    pendingDelivery: false,
+    tasks: ["owned"],
   }));
   tmux.start("session");
   runtime.start({ objective: "task", tokenBudget: null });
@@ -432,7 +448,7 @@ it("does not count repeated failed tools as progress toward the goal", () => {
 
 it.each([
   { pendingTasks: ["unrelated"], owned: true, waiting: false },
-  { pendingTasks: ["owned"], owned: true, waiting: true },
+  { pendingTasks: ["owned"], owned: true, waiting: false },
   { pendingTasks: [], owned: true, waiting: false },
   { pendingTasks: undefined, owned: true, waiting: true },
   { pendingTasks: undefined, owned: false, waiting: false },

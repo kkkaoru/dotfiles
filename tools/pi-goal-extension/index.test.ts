@@ -200,8 +200,8 @@ it("summarizes restored ownership in tools and prompts without weakening complet
     source: "tmux",
     ownsContinuation: false,
     pendingDelivery: true,
-    pendingTasks: ["pi-tmux-session-511"],
-    tasks: [],
+    pendingTasks: [],
+    tasks: ["pi-tmux-session-511"],
   }));
   activity.start("session");
   await expect(

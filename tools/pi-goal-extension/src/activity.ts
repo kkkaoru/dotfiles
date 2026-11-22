@@ -30,16 +30,13 @@ export function pendingOwnedTasks(
   if (snapshot.source !== "tmux") {
     return [];
   }
+  // Only a running job blocks; a pending notice belongs to a job that already finished.
   // Older publishers cannot identify pending notices; conservatively wait for owned tasks.
-  const aggregatePending =
-    snapshot.pendingTasks === undefined && snapshot.pendingDelivery;
+  if (snapshot.pendingTasks === undefined && snapshot.pendingDelivery) {
+    return [...new Set(owned)];
+  }
   // A goal that recorded the same task in several revisions would otherwise report it twice.
-  return [...new Set(owned)].filter(
-    (name) =>
-      aggregatePending ||
-      snapshot.tasks.includes(name) ||
-      snapshot.pendingTasks?.includes(name) === true,
-  );
+  return [...new Set(owned)].filter((name) => snapshot.tasks.includes(name));
 }
 
 const QUERY = "pi:goal:activity-query:v1";

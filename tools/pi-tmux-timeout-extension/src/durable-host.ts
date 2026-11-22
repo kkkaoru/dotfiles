@@ -203,11 +203,12 @@ export function durableTmuxHost(original: TmuxExtensionHost): TmuxExtensionHost 
       session.pending.add(sessionName);
       const state = session.requireState();
       state.save(TMUX_COMPLETED_ENTRY_TYPE, { sessionName, completion }, () => {
+        // Drop the name even for a replaced session, or it reports as a running task forever.
+        session.pending.delete(sessionName);
         if (session.state !== state) {
           return;
         }
         deliver();
-        session.pending.delete(sessionName);
       });
     },
     sendUserMessage: (text, options) => {

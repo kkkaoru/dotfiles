@@ -113,6 +113,18 @@ it("reports a still-running task once when the goal recorded it twice", () => {
   expect(pendingOwnedTasks(snapshot, ["task", "task"])).toStrictEqual(["task"]);
   expect(pendingOwnedTasks(snapshot, ["task", "done"])).toStrictEqual(["task"]);
 });
+it("does not report a finished job whose completion notice is still queued", () => {
+  // Blocking on it would deadlock a goal: the notice is only delivered once the agent is idle, and
+  // the goal keeps the agent busy until it can claim completion.
+  const snapshot = {
+    source: "tmux" as const,
+    ownsContinuation: false,
+    pendingDelivery: true,
+    pendingTasks: ["task"],
+    tasks: [],
+  };
+  expect(pendingOwnedTasks(snapshot, ["task"])).toStrictEqual([]);
+});
 it.each([null, {}, { sessionId: 1 }, { sessionId: "s", name: 1 }])(
   "ignores malformed launch notice",
   (value) => {
