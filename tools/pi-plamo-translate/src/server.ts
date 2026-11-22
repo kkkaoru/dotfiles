@@ -203,11 +203,31 @@ export function completionText(body: unknown): string | null {
   return choiceText(choices[0]);
 }
 
+/** The socket is a shortcut, not the only way in: a second `serve` unlinks the live server's path
+ *  before it discovers the port is taken, so a stale file refuses while TCP still answers. Probing
+ *  only the socket would then read a healthy server as down, spawn one that cannot bind, wait out
+ *  the deadline and warn. A rejected socket attempt costs one connect and is retried over TCP. */
+async function call(
+  deps: ServerDeps,
+  port: number,
+  path: string,
+  init?: RequestInitLike,
+): Promise<ResponseLike> {
+  const url = `${HOST}:${String(port)}${path}`;
+  const socketPath = transport(deps);
+  if (socketPath === undefined) {
+    return deps.fetch(url, init);
+  }
+  try {
+    return await deps.fetch(url, { ...init, socketPath });
+  } catch {
+    return deps.fetch(url, init);
+  }
+}
+
 async function healthy(deps: ServerDeps, port: number): Promise<boolean> {
   try {
-    const models = await deps.fetch(`${HOST}:${String(port)}/v1/models`, {
-      socketPath: transport(deps),
-    });
+    const models = await call(deps, port, "/v1/models");
     return models.ok;
   } catch (error: unknown) {
     if (isRefused(error)) {
@@ -234,7 +254,7 @@ async function complete(
   text: string,
   lang: string,
 ): Promise<string | null> {
-  const response = await deps.fetch(`${HOST}:${String(port)}/v1/completions`, {
+  const response = await call(deps, port, "/v1/completions", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -243,7 +263,6 @@ async function complete(
       temperature: TEMPERATURE,
       stop: STOP,
     }),
-    socketPath: transport(deps),
   });
   if (!response.ok) {
     throw new Error(`plamo-translate: completion failed: ${String(response.status)}`);

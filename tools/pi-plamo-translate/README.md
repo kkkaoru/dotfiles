@@ -62,7 +62,9 @@ Swift: 0.55 GB resident instead of 1 GB, ready in 0.15 s, identical output), and
 `--socket ~/.local/share/plamo-swift/plamo.sock` and sends every request over that socket once the
 file exists: 23.3 ms per translation against 23.4 ms over loopback TCP on an M5 Pro, so the socket
 buys little today — decode dominates — but the transport stops competing with whatever else is on
-the network stack.
+the network stack. That file can go stale (a second `serve` unlinks the live server's path before it
+finds the port taken), and then it refuses while TCP still answers: the mod retries the same request
+over the port rather than reading a healthy server as down.
 
 Up to eight translations run at once, a new prompt's first: batching them is what keeps an Apple
 Silicon GPU busy. `mlx_lm.server` batches them into one decode loop, so eight translations finish in

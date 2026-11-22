@@ -219,6 +219,33 @@ test("requests stay on the port while the socket is absent", async () => {
   expect(paths).toStrictEqual([undefined, undefined]);
 });
 
+test("a stale socket file falls back to the port instead of reading the server as down", async () => {
+  const socketPath = "/Users/x/.local/share/plamo-swift/plamo.sock";
+  const paths: (string | undefined)[] = [];
+  const server = createServer(
+    {
+      exists: (path) => path === socketPath,
+      fetch: (_url, init) => {
+        paths.push(init?.socketPath);
+        if (init?.socketPath !== undefined) {
+          return Promise.reject(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }));
+        }
+        return Promise.resolve(response(true, { choices: [{ text: "hi" }] }));
+      },
+      home: "/Users/x",
+      now: () => 0,
+      platform: "darwin",
+      report: () => undefined,
+      sleep: () => Promise.resolve(),
+      spawn: () => ({ once: () => undefined, unref: () => undefined }),
+    },
+    18555,
+  );
+  expect(await server.ensure(false)).toBe(true);
+  expect(await server.complete("hello", "ja")).toBe("hi");
+  expect(paths).toStrictEqual([socketPath, undefined, socketPath, undefined]);
+});
+
 test("the server is polled until it answers, then warmed", async () => {
   const calls = { count: 0 };
   const urls: string[] = [];
@@ -232,7 +259,7 @@ test("the server is polled until it answers, then warmed", async () => {
       fetch: (url) => {
         calls.count += 1;
         urls.push(url);
-        return calls.count === 1
+        return calls.count <= 2
           ? Promise.reject(Object.assign(new Error("refused"), { code: "ECONNREFUSED" }))
           : Promise.resolve(response(true, {}));
       },
@@ -246,8 +273,9 @@ test("the server is polled until it answers, then warmed", async () => {
     18555,
   );
   expect(await server.ensure(true)).toBe(true);
-  // Health is refused, then answers, then one throwaway completion pays MLX's first inference.
+  // A down server refuses on both transports, then answers; the warm-up pays the first inference.
   expect(urls).toStrictEqual([
+    "http://127.0.0.1:18555/v1/models",
     "http://127.0.0.1:18555/v1/models",
     "http://127.0.0.1:18555/v1/models",
     "http://127.0.0.1:18555/v1/completions",
@@ -296,7 +324,7 @@ test("a warm-up that fails still leaves the server ready", async () => {
           return Promise.resolve(response(false, {}, 500));
         }
         health += 1;
-        return health === 1
+        return health <= 2
           ? Promise.reject(Object.assign(new Error("refused"), { code: "ECONNREFUSED" }))
           : Promise.resolve(response(true, {}));
       },
@@ -312,6 +340,7 @@ test("a warm-up that fails still leaves the server ready", async () => {
   // The first translation then simply pays the cost itself, so this is not a failed server.
   expect(await server.ensure(true)).toBe(true);
   expect(urls).toStrictEqual([
+    "http://127.0.0.1:18555/v1/models",
     "http://127.0.0.1:18555/v1/models",
     "http://127.0.0.1:18555/v1/models",
     "http://127.0.0.1:18555/v1/completions",
