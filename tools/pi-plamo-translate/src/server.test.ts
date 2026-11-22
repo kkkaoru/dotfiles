@@ -19,8 +19,30 @@ function response(ok: boolean, body: unknown, status = 200): ResponseLike {
   };
 }
 
-test("mlx is preferred when its server binary exists", () => {
+test("the Swift server is preferred when its binary exists", () => {
   expect(commandSpec("/Users/x", "darwin", 18555, () => true)).toStrictEqual({
+    command: "/Users/x/.local/bin/plamo-swift",
+    args: [
+      "serve",
+      "--model",
+      "/Users/x/.local/share/plamo-translate/plamo-3-translate-0.8b-mlx-4bit",
+      "--port",
+      "18555",
+      "--socket",
+      "/Users/x/.local/share/plamo-swift/plamo.sock",
+    ],
+  });
+});
+
+test("mlx_lm is used when the Swift server is absent", () => {
+  expect(
+    commandSpec(
+      "/Users/x",
+      "darwin",
+      18555,
+      (file) => file === "/Users/x/.local/bin/plamo-mlx-server",
+    ),
+  ).toStrictEqual({
     command: "/Users/x/.local/bin/plamo-mlx-server",
     args: [
       "--model",
@@ -80,6 +102,9 @@ test("a missing server binary is reported", () => {
 
 test("a refused connection is recognized through its cause and aggregate errors", () => {
   expect(isRefused({ code: "ECONNREFUSED" })).toBe(true);
+  expect(isRefused({ code: "ENOENT" })).toBe(true);
+  expect(isRefused({ code: "ConnectionRefused" })).toBe(true);
+  expect(isRefused({ code: "FailedToOpenSocket" })).toBe(true);
   expect(isRefused({ cause: { code: "ECONNREFUSED" } })).toBe(true);
   expect(isRefused({ errors: [{ code: "ECONNREFUSED" }] })).toBe(true);
   expect(isRefused(new Error("other"))).toBe(false);
@@ -134,6 +159,42 @@ test("a missing binary fails at once and is not retried", async () => {
   expect(await server.ensure(true)).toBe(false);
   expect(await server.ensure(true)).toBe(false);
   expect(reports).toStrictEqual([SETUP_HINT]);
+});
+
+function recordingServer(exists: (path: string) => boolean, paths: (string | undefined)[]) {
+  return createServer(
+    {
+      exists,
+      fetch: (_url, init) => {
+        paths.push(init?.socketPath);
+        return Promise.resolve(response(true, { choices: [{ text: "hi" }] }));
+      },
+      home: "/Users/x",
+      now: () => 0,
+      platform: "darwin",
+      report: () => undefined,
+      sleep: () => Promise.resolve(),
+      spawn: () => ({ once: () => undefined, unref: () => undefined }),
+    },
+    18555,
+  );
+}
+
+test("requests go over the socket once the Swift server created it", async () => {
+  const socketPath = "/Users/x/.local/share/plamo-swift/plamo.sock";
+  const paths: (string | undefined)[] = [];
+  const server = recordingServer((path) => path === socketPath, paths);
+  expect(await server.ensure(false)).toBe(true);
+  expect(await server.complete("hello", "ja")).toBe("hi");
+  expect(paths).toStrictEqual([socketPath, socketPath]);
+});
+
+test("requests stay on the port while the socket is absent", async () => {
+  const paths: (string | undefined)[] = [];
+  const server = recordingServer(() => false, paths);
+  expect(await server.ensure(false)).toBe(true);
+  expect(await server.complete("hello", "ja")).toBe("hi");
+  expect(paths).toStrictEqual([undefined, undefined]);
 });
 
 test("the server is polled until it answers, then warmed", async () => {

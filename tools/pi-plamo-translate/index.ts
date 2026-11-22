@@ -9,13 +9,14 @@ import { getAgentDir, type ExtensionAPI } from "@earendil-works/pi-coding-agent"
 import { bindPlamo } from "./src/bind.ts";
 import { EXCLUDE_EVENT } from "./src/policy.ts";
 import { createRuntime, processCaches, warmServer, type Runtime } from "./src/runtime.ts";
-import { createServer, type ServerDeps } from "./src/server.ts";
+import { createServer, PARALLEL_REQUESTS, type ServerDeps } from "./src/server.ts";
+import { plamoFetch } from "./src/socket.ts";
 import { readPlamoSettings } from "./src/settings.ts";
 
 function liveDeps(report: (message: string) => void): ServerDeps {
   return {
     exists: existsSync,
-    fetch: async (url, init) => globalThis.fetch(url, init),
+    fetch: plamoFetch(PARALLEL_REQUESTS),
     home: homedir(),
     now: () => Date.now(),
     platform: process.platform,

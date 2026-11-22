@@ -55,6 +55,14 @@ Options live under `pi-plamo-translate` in `~/.pi/agent/settings.json`:
 | `promptLanguage` | `en`    | Language your prompts are translated into. `off` disables it.         |
 | `port`           | `18555` | Local PLaMo server, started on demand and shared with the Claude mod. |
 
+The server is `~/.local/bin/plamo-swift` when `scripts/setup-plamo-translate.sh` installed it (MLX
+Swift: 0.55 GB resident instead of 1 GB, ready in 0.15 s, identical output), and
+`plamo-mlx-server` when it did not. With the Swift server the mod also passes
+`--socket ~/.local/share/plamo-swift/plamo.sock` and sends every request over that socket once the
+file exists: 23.3 ms per translation against 23.4 ms over loopback TCP on an M5 Pro, so the socket
+buys little today — decode dominates — but the transport stops competing with whatever else is on
+the network stack.
+
 Up to eight translations run at once, a new prompt's first: batching them is what keeps an Apple
 Silicon GPU busy. `mlx_lm.server` batches them into one decode loop, so eight translations finish in
 about a third of the time eight sequential ones take (measured: 107 ms vs 305 ms), at a per-request

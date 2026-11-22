@@ -4,6 +4,8 @@ import { plamoPrompt } from "../../claude-plamo-translate/hooks/translate.ts";
 import { isRecord } from "./settings.ts";
 
 const HOST = "http://127.0.0.1";
+const SWIFT_SERVER = ".local/bin/plamo-swift";
+const SWIFT_SOCKET = ".local/share/plamo-swift/plamo.sock";
 const MLX_SERVER = ".local/bin/plamo-mlx-server";
 const MLX_MODEL = ".local/share/plamo-translate/plamo-3-translate-0.8b-mlx-4bit";
 const LLAMA_SERVER = ".local/share/plamo-translate/llama.cpp/llama-server";
@@ -19,16 +21,16 @@ const READY_TIMEOUT_MS = 60_000;
 // Readiness lands under a second after the spawn, so a short poll keeps most of that second back.
 const READY_POLL_MS = 50;
 /**
- * Measured on this Mac: spawn to /v1/models 0.96 s, first inference 2.27 s (MLX compiles its
- * kernels), later ones 0.04 s. A throwaway completion pays the compile while the user is still
- * typing — but only when nothing is waiting: a translation that already arrived pays the same
- * compile itself and returns its answer, so warming first would just add 2.3 s to that wait.
+ * Measured on this Mac with the Swift server: spawn to /v1/models 0.15 s, first inference 0.17 s
+ * (it compiles its kernels while loading), later ones 0.04 s; the Python fallback pays 2.8 s on
+ * its first request. Warming while the user is still typing is nearly free with Swift, but only
+ * happens when nothing is waiting: a translation that already arrived pays that cost itself.
  */
 const WARM_TEXT = "hello";
 const WARM_LANG = "ja";
 // Requests in flight at once; a new prompt's still goes first. Batching them keeps the GPU fed.
 // One request at a time leaves Apple Silicon's decode memory-bound and idle.
-const PARALLEL_REQUESTS = 8;
+export const PARALLEL_REQUESTS = 8;
 
 export const SETUP_HINT =
   "plamo-translate: the PLaMo server is not reachable; run scripts/setup-plamo-translate.sh. Text is passed through untranslated.";
@@ -50,9 +52,11 @@ export interface ResponseLike {
 }
 
 export interface RequestInitLike {
-  readonly body: string;
-  readonly headers: Record<string, string>;
-  readonly method: string;
+  readonly body?: string;
+  readonly headers?: Record<string, string>;
+  readonly method?: string;
+  /** A Unix socket to send the request over; without it the URL's host and port are used. */
+  readonly socketPath?: string | undefined;
 }
 
 export type FetchLike = (url: string, init?: RequestInitLike) => Promise<ResponseLike>;
@@ -85,6 +89,34 @@ const maxTokens = (text: string): number =>
 
 const joined = (home: string, relative: string): string => `${home}/${relative}`;
 
+/** Where the Swift server listens: beside its binary, so every mod of this user finds it. */
+export function socketPathOf(home: string): string {
+  return joined(home, SWIFT_SOCKET);
+}
+
+/** The socket once the Swift server has created it; the Python and llama.cpp fallbacks only have a port. */
+function transport(deps: ServerDeps): string | undefined {
+  const socketPath = socketPathOf(deps.home);
+  return deps.exists(socketPath) ? socketPath : undefined;
+}
+
+// The Swift port of the same weights: 0.55 GB resident instead of 1 GB and 0.15 s to ready.
+// The setup script installs it; the Python server stays the fallback.
+function swiftSpec(home: string, port: number, command: string): SpawnSpec {
+  return {
+    command,
+    args: [
+      "serve",
+      "--model",
+      joined(home, MLX_MODEL),
+      "--port",
+      String(port),
+      "--socket",
+      socketPathOf(home),
+    ],
+  };
+}
+
 function mlxSpec(home: string, port: number, command: string): SpawnSpec {
   return {
     command,
@@ -105,6 +137,10 @@ export function commandSpec(
   port: number,
   exists: (path: string) => boolean,
 ): SpawnSpec | undefined {
+  const swift = joined(home, SWIFT_SERVER);
+  if (exists(swift)) {
+    return swiftSpec(home, port, swift);
+  }
   const mlx = joined(home, MLX_SERVER);
   if (exists(mlx)) {
     return mlxSpec(home, port, mlx);
@@ -121,7 +157,16 @@ function codeOf(error: unknown): unknown {
 }
 
 export function isRefused(error: unknown): boolean {
-  if (codeOf(error) === "ECONNREFUSED") {
+  const code = codeOf(error);
+  // ENOENT is a socket the server has not created yet: also "not up".
+  // Bun's fetch spells the TCP refusal "ConnectionRefused" and a missing socket "FailedToOpenSocket".
+  // Node uses ECONNREFUSED and ENOENT.
+  if (
+    code === "ECONNREFUSED" ||
+    code === "ConnectionRefused" ||
+    code === "ENOENT" ||
+    code === "FailedToOpenSocket"
+  ) {
     return true;
   }
   if (!isRecord(error)) {
@@ -158,7 +203,9 @@ export function completionText(body: unknown): string | null {
 
 async function healthy(deps: ServerDeps, port: number): Promise<boolean> {
   try {
-    const models = await deps.fetch(`${HOST}:${String(port)}/v1/models`);
+    const models = await deps.fetch(`${HOST}:${String(port)}/v1/models`, {
+      socketPath: transport(deps),
+    });
     return models.ok;
   } catch (error: unknown) {
     if (isRefused(error)) {
@@ -194,6 +241,7 @@ async function complete(
       temperature: TEMPERATURE,
       stop: STOP,
     }),
+    socketPath: transport(deps),
   });
   if (!response.ok) {
     throw new Error(`plamo-translate: completion failed: ${String(response.status)}`);
