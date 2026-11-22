@@ -102,10 +102,14 @@ is dominated by graph construction and kernel launches, not by its tokens.
 | `F_RDADVISE` over the 478 MB safetensors before the tokenizer decode, so the read starts early and runs on the disk queue | load 0.088 s (0.031 weights) | 0.052–0.061 s (0.020–0.030 weights) |
 | per-step graph build | 0.33 ms | 0.24–0.31 ms |
 
-The cold-load case is the one measurement this machine could not produce honestly: forcing the page
-cache out needs root (`purge`), and neither a 24 GB disk write nor 40 GB of anonymous pressure moved
-the file-backed page count (`vm_stat` stayed at ~3.7 GB), so every "cold" load still read at 8–19 GB/s
-and the numbers were warm ones. The prefetch is in place for the real cold path; it is unmeasured here.
+The cold-load case is the one measurement this machine could not produce honestly. Forcing the page
+cache out needs root (`purge`); without it, neither a 24 GB disk write nor 40 GB of anonymous pressure
+moved the file-backed page count (`vm_stat` stayed at ~3.7 GB), so every "cold" load still read the
+weights at 8–19 GB/s. A read of the 501 MB file with `F_NOCACHE` set, which bypasses the unified
+buffer cache, still measured 34.65 GB/s — this SSD answers a sequential read from its own cache, so
+the number says nothing about a cold device read either. What is left is the mechanism: the prefetch
+issues `F_RDADVISE` before the tokenizer decode and returns immediately, so a real cold read overlaps
+that 20–30 ms of work instead of following it. It is unmeasured here, and no claim is made for it.
 
 ## Shared memory, prefix reuse and the Metal knobs, evaluated
 
