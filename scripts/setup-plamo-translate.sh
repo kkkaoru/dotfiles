@@ -1,7 +1,8 @@
 #!/bin/bash
 # Set up PLaMo 3 Translate 0.8B for tools/claude-plamo-translate and tools/pi-plamo-translate. Safe to run again:
 # finished steps are skipped.
-#   macOS:              mlx-lm and the MLX 4-bit model, served by scripts/plamo-mlx-server.py
+#   macOS:              mlx-lm and the MLX 4-bit model; tools/plamo-swift (MLX Swift) serves them,
+#                       scripts/plamo-mlx-server.py stays the fallback
 #   Linux, Windows:     llama.cpp's Vulkan build (GeForce and Radeon alike) and the official GGUF
 #   (Git Bash)
 
@@ -42,25 +43,74 @@ setup_mlx() {
   fi
   echo "ready: ${MODEL_DIR}"
   install_server
+  install_swift
   # One warm-up run, so the first translation after an install does not pay for reading the weights,
   # the metallib and the tokenizer from disk (measured here: 9.5 s cold, 8.2 s with them cached).
-  if ! "${BIN_DIR}/plamo-mlx-server" --plamo-prebuild --model "${MODEL_DIR}" --trust-remote-code \
-    >/dev/null 2>&1; then
-    echo "note: the warm-up run failed; the first translation will just take longer"
+  if [ -x "${BIN_DIR}/plamo-swift" ]; then
+    "${BIN_DIR}/plamo-swift" load --model "${MODEL_DIR}" >/dev/null \
+      || echo "note: the warm-up run failed; the first translation will just take longer"
+    echo "the mod starts ${BIN_DIR}/plamo-swift on demand (port 18555 by default)"
+  else
+    if ! "${BIN_DIR}/plamo-mlx-server" --plamo-prebuild --model "${MODEL_DIR}" --trust-remote-code \
+      >/dev/null 2>&1; then
+      echo "note: the warm-up run failed; the first translation will just take longer"
+    fi
+    echo "the mod starts ${BIN_DIR}/plamo-mlx-server on demand (port 18555 by default)"
   fi
-  echo "the mod starts ${BIN_DIR}/plamo-mlx-server on demand (port 18555 by default)"
   echo "benchmark it with scripts/bench-plamo-translate.py --port 18555"
 }
 
 # mlx_lm.server with a listen backlog that holds the mods' burst of eight requests: the stock one
-# resets some of them, and a reset leaves that line untranslated.
+# resets some of them, and a reset leaves that line untranslated. This wrapper is also what older
+# mod builds call, so it hands over to the Swift server whenever that one is installed.
 install_server() {
   install -m 755 "${SCRIPT_DIR}/plamo-mlx-server.py" "${DATA_DIR}/plamo-mlx-server.py"
   cat > "${BIN_DIR}/plamo-mlx-server" <<EOF
 #!/bin/sh
+if [ -x "\${HOME}/.local/bin/plamo-swift" ] && [ "\${1:-}" != "--plamo-prebuild" ]; then
+  exec "\${HOME}/.local/bin/plamo-swift" serve "\$@"
+fi
 exec "\${HOME}/.local/share/uv/tools/mlx-lm/bin/python" "${DATA_DIR}/plamo-mlx-server.py" "\$@"
 EOF
   chmod +x "${BIN_DIR}/plamo-mlx-server"
+}
+
+# The Metal toolchain is a cryptex XcodeDefault does not resolve, so the build needs its bundle id.
+metal_toolchain() {
+  local toolchain
+  toolchain="$(xcrun --find metal 2>/dev/null)" || return 1
+  toolchain="${toolchain%/usr/bin/metal}"
+  [ -n "${toolchain}" ] || return 1
+  /usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${toolchain}/Info.plist" 2>/dev/null
+}
+
+# tools/plamo-swift serves the same weights on MLX Swift: 0.55 GB resident instead of 1 GB, ready in
+# 0.15 s, and output that matches mlx_lm token for token. The mods prefer it.
+install_swift() {
+  local source="${SCRIPT_DIR}/../tools/plamo-swift"
+  if [ ! -f "${source}/Package.swift" ] || ! command -v swift >/dev/null 2>&1; then
+    echo "note: no Swift toolchain or tools/plamo-swift; the Python server stays the default"
+    return 0
+  fi
+  if ! (cd "${source}" && TOOLCHAINS="${PLAMO_SWIFT_TOOLCHAINS:-$(metal_toolchain || true)}" \
+    swift build -c release >/dev/null); then
+    echo "note: the Swift build failed; run xcodebuild -downloadComponent MetalToolchain and retry,"
+    echo "      or pass PLAMO_SWIFT_TOOLCHAINS=<toolchain id>; the Python server stays the default"
+    return 0
+  fi
+  rm -rf "${DATA_DIR}/plamo-swift"
+  mkdir -p "${DATA_DIR}/plamo-swift"
+  install -m 755 "${source}/.build/release/plamo-swift" "${DATA_DIR}/plamo-swift/plamo-swift"
+  # MLX looks for its metallib beside the executable, so the resource bundle travels with it.
+  cp -R "${source}/.build/release/mlx-swift_Cmlx.bundle" "${DATA_DIR}/plamo-swift/"
+  cat > "${BIN_DIR}/plamo-swift" <<EOF
+#!/bin/sh
+exec "\${HOME}/.local/share/plamo-swift/plamo-swift" "\$@"
+EOF
+  chmod +x "${BIN_DIR}/plamo-swift"
+  # The Swift server reads the tokenizer trie from beside the weights.
+  "${HOME}/.local/share/uv/tools/mlx-lm/bin/python" "${source}/scripts/dump-tokenizer.py" \
+    "${MODEL_DIR}" "${MODEL_DIR}/tokenizer.bin"
 }
 
 # $1: the release asset's platform part, e.g. ubuntu-vulkan-x64.tar.gz or win-vulkan-x64.zip
