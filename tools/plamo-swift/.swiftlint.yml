@@ -1,0 +1,57 @@
+# SwiftLint configuration. scripts/check.sh runs it with --strict, so a warning fails the check.
+excluded:
+  - .build
+
+line_length:
+  warning: 100
+  error: 120
+  ignores_comments: false
+
+file_length:
+  warning: 500
+  error: 700
+
+type_body_length:
+  warning: 300
+  error: 400
+
+function_body_length:
+  warning: 60
+  error: 90
+
+cyclomatic_complexity:
+  warning: 12
+  error: 18
+
+identifier_name:
+  min_length: 1
+  max_length: 50
+
+opt_in_rules:
+  - closure_spacing
+  - contains_over_first_not_nil
+  - convenience_type
+  - empty_count
+  - empty_string
+  - explicit_acl
+  - explicit_init
+  - explicit_top_level_acl
+  - fatal_error_message
+  - force_unwrapping
+  - identical_operands
+  - implicitly_unwrapped_optional
+  - legacy_multiple
+  - lower_acl_than_parent
+  - missing_docs
+  - modifier_order
+  - number_separator
+  - operator_usage_whitespace
+  - prefer_zero_over_explicit_init
+  - redundant_nil_coalescing
+  - sorted_imports
+  - strict_fileprivate
+  - unavailable_function
+  - unneeded_parentheses_in_closure_argument
+  - untyped_error_in_catch
+  - unused_import
+  - yoda_condition

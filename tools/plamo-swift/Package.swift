@@ -8,14 +8,20 @@ let package = Package(
         .package(url: "https://github.com/ml-explore/mlx-swift.git", from: "0.33.0")
     ],
     targets: [
+        .target(
+            name: "PlamoCore",
+            dependencies: [.product(name: "MLX", package: "mlx-swift")],
+            path: "Sources/PlamoCore"
+        ),
         .executableTarget(
             name: "plamo-swift",
-            dependencies: [
-                .product(name: "MLX", package: "mlx-swift"),
-                .product(name: "MLXNN", package: "mlx-swift"),
-                .product(name: "MLXRandom", package: "mlx-swift"),
-            ],
+            dependencies: ["PlamoCore"],
             path: "Sources/plamo-swift"
-        )
+        ),
+        .testTarget(
+            name: "PlamoCoreTests",
+            dependencies: ["PlamoCore"],
+            path: "Tests/PlamoCoreTests"
+        ),
     ]
 )

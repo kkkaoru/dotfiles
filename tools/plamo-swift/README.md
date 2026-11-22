@@ -7,14 +7,19 @@ an order of magnitude, at equal steady-state speed and equal output.
 
 ## What it is
 
-- `Sources/plamo-swift/Tokenizer.swift` — replays PLaMo 3's Unigram trie; `scripts/dump-tokenizer.py`
+- `Sources/PlamoCore/Tokenizer.swift` — replays PLaMo 3's Unigram trie; `scripts/dump-tokenizer.py`
   dumps the trie from the model's own `tokenization_plamo.py` so the Swift side only walks it.
-- `Sources/plamo-swift/Model.swift` — the plamo3 decoder: quantized 4-bit affine (group 64) matmuls,
+- `Sources/PlamoCore/Model.swift` — the plamo3 decoder: quantized 4-bit affine (group 64) matmuls,
   the four distinct RMSNorm offsets, GQA with q/k norm before RoPE, sliding-window and full attention
   alternating every 8 layers, KV cache with window trimming.
+- `Sources/PlamoCore/Server.swift` — HTTP/1.1 on Network.framework, keep-alive included: one
+  listener on `127.0.0.1:<port>` and, with `--socket`, a second on a Unix socket. Requests are
+  served concurrently on a task group, so a second translation never waits for the first.
 - `Sources/plamo-swift/main.swift` — `tokenize`, `load`, `debug`, `generate`, `serve`; the server
   answers `GET /v1/models`, `POST /v1/completions` and `POST /v1/chat/completions`, and exits after
   `--idle-seconds` without a completion, exactly like `scripts/plamo-mlx-server.py`.
+- `Tests/PlamoCoreTests/` — tokenizer, options, HTTP parsing and the router's status codes
+  (`swift test`, 18 tests).
 
 ## Parity
 
@@ -71,7 +76,15 @@ TOOLCHAINS=com.apple.dt.toolchain.Metal.32023.922.4 swift build -c release
   ~/.local/share/plamo-translate/plamo-3-translate-0.8b-mlx-4bit /tmp/plamo-tokenizer.bin
 .build/release/plamo-swift serve \
   --model ~/.local/share/plamo-translate/plamo-3-translate-0.8b-mlx-4bit \
-  --tokenizer /tmp/plamo-tokenizer.bin --port 18555 --idle-seconds 600
+  --port 18555 --idle-seconds 600 --socket ~/.local/share/plamo-swift/plamo.sock
 ```
 
-The translate mods still start `plamo-mlx-server`; pointing them at this binary is a separate change.
+`--tokenizer` defaults to `tokenizer.bin` inside `--model`, which is where
+`scripts/setup-plamo-translate.sh` puts the dump.
+
+Both translate mods start `~/.local/bin/plamo-swift` (the wrapper that script writes) when it
+exists and fall back to `plamo-mlx-server`, then to llama.cpp, when it does not. The pi mod also
+passes `--socket ~/.local/share/plamo-swift/plamo.sock` and sends its requests over that socket once
+the file exists: 23.3 ms per translation against 23.4 ms over loopback TCP on an M5 Pro, because
+decode dominates and the round trip is 0.1 ms of it. The socket is there so the transport costs
+nothing as the machine gets busier, not because it is the bottleneck today.

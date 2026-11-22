@@ -1,0 +1,10 @@
+{
+  "boundary_char": "\uee00",
+  "boundary_token_id": 10000000,
+  "unknown_score": -10000000,
+  "invalid_score": -20000000,
+  "special_pattern": "(<\\|plamo:[^|\\s]{0,64}\\|>)",
+  "break_pattern": "((.)\\2{3,}| {2,})",
+  "tokens": 268,
+  "table_rows": 146
+}
