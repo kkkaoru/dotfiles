@@ -111,7 +111,9 @@ integrations. These instructions apply to agents working here, including pi and 
   footer (`pi-gateway-cost`), the `x-session-affinity` header that keeps a session's Workers AI
   prompt prefix cached (`pi-cf-affinity`), the two-line footer that replaces pi's own row and
   ends with the session id (`pi-compact-footer`), the session's prompt cache hit rate and the
-  requests that broke the prefix (`pi-prompt-cache`), `/graceful-reload`, which aborts a running
+  requests that broke the prefix (`pi-prompt-cache`), a retry of a request that failed on a
+  connection the peer had already closed, so a reused keep-alive socket no longer ends a turn with
+  `Error: Connection error.` (`pi-fetch-retry`), `/graceful-reload`, which aborts a running
   response and reloads instead of asking to wait (`pi-graceful-reload`), and one graph of how the
   session, its goal and loop, its tmux jobs, its timeline tree and its files relate, kept beside the
   session file and filled automatically whenever one of those tools runs (`pi-relations-extension`;

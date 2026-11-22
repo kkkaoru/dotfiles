@@ -210,7 +210,7 @@ fi
 # ~/.pi is a top-level symlink to this repository. Keep repository-owned
 # extensions inside the managed tree so a fresh clone still installs them.
 mkdir -p "${DOTPATH}/.pi/agent/extensions" "${DOTPATH}/.pi/agent/packages"
-for extension in cf-affinity colab-lifecycle compact-footer gateway-cost goal graceful-reload image-budget loop omlx-lifecycle prompt-cache relations strata-lifecycle timeline tmux-timeout; do
+for extension in cf-affinity colab-lifecycle compact-footer fetch-retry gateway-cost goal graceful-reload image-budget loop omlx-lifecycle prompt-cache relations strata-lifecycle timeline tmux-timeout; do
   extension_path="${DOTPATH}/tools/pi-${extension}-extension"
   [ -d "$extension_path" ] || extension_path="${DOTPATH}/tools/pi-${extension}"
   if [ -d "$extension_path" ]; then
