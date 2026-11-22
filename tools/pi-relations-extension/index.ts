@@ -1,5 +1,6 @@
 // This TypeScript file is executed with Bun.
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { edgesForCall, recordEdges } from "./src/record.ts";
 import { openRelations } from "./src/sidecar.ts";
 import { answer, apply, parameters } from "./src/tool.ts";
 
@@ -7,6 +8,18 @@ const DESCRIPTION =
   "Record how this session's goal, loop, tmux jobs, timeline tree and files relate, in this session's own Pi Durable store, and read it back.";
 
 export default function relationsExtension(pi: ExtensionAPI): void {
+  // The four components this graph joins are tools, so their calls are the moment to record:
+  // Nobody has to remember to link a goal, a loop, a job or a plan by hand.
+  pi.on("tool_result", async (event, context) => {
+    const edges = edgesForCall({
+      sessionId: context.sessionManager.getSessionId(),
+      toolName: event.toolName,
+      input: event.input,
+      details: event.details,
+    });
+    await recordEdges(context.sessionManager.getSessionFile(), edges);
+  });
+
   pi.registerTool({
     name: "relations",
     label: "Relations",

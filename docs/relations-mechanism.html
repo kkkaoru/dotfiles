@@ -221,6 +221,40 @@ edge  = from + relation + to [+ note]
 
 <p class="note-p">関係名に制約は「小文字で始まり、小文字・数字・ハイフンのみ」だけ。だから <code>blocked-by</code> も <code>depends-on</code> も同じ重さで並ぶ。意味の強さを区別したいなら、関係名の語彙を決めて README に書くのが唯一の方法。</p>
 
+<h2>自動で記録される関係</h2>
+
+<p>ゴール・ループ・tmux・タイムラインのツールが終わるたび、その呼び出しが含む関係がグラフに足されます。手で <code>link</code> する必要はありません。拡張は <code>tool_result</code> を 1 つ購読し、ツール名・引数・返り値から <code>edgesForCall</code> で関係を決め、<code>recordEdges</code> で書きます。</p>
+
+<table>
+  <thead><tr><th>ツール</th><th>足す関係</th><th>note</th></tr></thead>
+  <tbody>
+    <tr><td><code>start_goal</code> <code>get_goal</code> <code>goal_wait</code></td><td><code>session —pursued→ goal:&lt;id&gt;</code></td><td>目的（160 文字まで）</td></tr>
+    <tr><td><code>update_goal</code></td><td><code>session —pursued→ goal</code> と <code>goal —completed|blocked→ session</code></td><td>reason</td></tr>
+    <tr><td><code>loop_wakeup</code></td><td><code>session —looped→ loop:&lt;session id&gt;</code></td><td>reason</td></tr>
+    <tr><td><code>loop_complete</code></td><td><code>session —looped→ loop</code> と <code>loop —completed→ session</code></td><td>reason</td></tr>
+    <tr><td><code>tmux_exec</code></td><td><code>session —ran→ tmux:&lt;tmux のセッション名&gt;</code></td><td>実行したコマンド</td></tr>
+    <tr><td><code>tmux_check_in</code></td><td><code>session —ran→ tmux:&lt;tmux のセッション名&gt;</code></td><td>なし</td></tr>
+    <tr><td><code>timeline</code></td><td><code>session —planned→ timeline:&lt;tree&gt;</code>。<code>add</code> なら <code>timeline —contains→ task:&lt;tree&gt;/&lt;id&gt;</code> も</td><td>title</td></tr>
+  </tbody>
+</table>
+
+<h3>書くときの約束</h3>
+
+<ul>
+  <li>冪等。同じ関係を 2 度書いても 1 本で、グラフが変わらなければコミットもしない。</li>
+  <li>note は 160 文字で切る。目的やコマンドの全文を毎コミットに載せないため。</li>
+  <li>ループは 1 セッション 1 本なので <code>loop:&lt;session id&gt;</code>。タイムラインの既定ツリーは <code>tree-1</code> で、呼び出しが <code>tree</code> を指定すればそちら。</li>
+  <li>失敗は黙る。ロック競合やディスク不足は捨て、ツール呼び出しは成功したまま。保存エラーを見たいときは <code>relations</code> ツールで書く。</li>
+</ul>
+
+<h3>記録しないもの</h3>
+
+<ul>
+  <li>推測。ゴールがまだ無ければ id が無いので何も書かない。起動に失敗した tmux はセッション名が無いので何も書かない。</li>
+  <li>関係の解釈。足すだけで、閉包・循環検出・順序付けはしない。<code>show</code> は 1 ホップだけ。</li>
+  <li>上の 8 ツール以外の呼び出し。ファイルやドキュメントの関係は今までどおり <code>link</code> で書く。</li>
+</ul>
+
 <h2>書き込みの流れ</h2>
 
 <figure>
@@ -340,10 +374,11 @@ edge  = from + relation + to [+ note]
 <table>
   <thead><tr><th>パス</th><th>役割</th></tr></thead>
   <tbody>
-    <tr><td><code>index.ts</code></td><td><code>relations</code> ツールを登録する。開く → apply → 保存 → 表示 → 閉じる</td></tr>
+    <tr><td><code>index.ts</code></td><td><code>relations</code> ツールを登録し、<code>tool_result</code> で自動記録する。開く → apply → 保存 → 表示 → 閉じる</td></tr>
     <tr><td><code>cli.ts</code></td><td>シェルから同じ操作。<code>--session</code> の既定は <code>$PI_SESSION_FILE</code></td></tr>
     <tr><td><code>src/graph.ts</code></td><td>ノードとエッジの型、解析、検証、描画のすべて</td></tr>
     <tr><td><code>src/tool.ts</code></td><td>ツールのパラメータと、純粋関数 <code>apply</code> / <code>answer</code></td></tr>
+    <tr><td><code>src/record.ts</code></td><td>ツール呼び出しから関係を決める <code>edgesForCall</code> と、黙って書く <code>recordEdges</code></td></tr>
     <tr><td><code>src/store.ts</code></td><td>Pi Durable ドキュメント、直列化した保存キュー、一度だけ報告される失敗</td></tr>
     <tr><td><code>src/sidecar.ts</code></td><td>サイドカーのディレクトリ、ロック、ストレージ、ハーネス — そしてその順番どおりの後始末</td></tr>
   </tbody>
@@ -359,7 +394,7 @@ relations add doc:docs/report.md --label "報告書"
 bun tools/pi-relations-extension/cli.ts list        # シェルから
 bun tools/pi-relations-extension/cli.ts link session:$PI_SESSION_ID produced doc:docs/report.md</code></pre>
 
-<p class="note-p"><span class="tag">check</span> <code>bun run check</code> — 整形、lint、型検査、テスト 58 件、カバレッジ 98.9% statements / 98.26% branches（ファイル単位で 95% の下限）。</p>
+<p class="note-p"><span class="tag">check</span> <code>bun run check</code> — 整形、lint、型検査、テスト 79 件、カバレッジ 99.2% statements / 98.75% branches（ファイル単位で 95% の下限）。</p>
 
 <!-- ファイルが変わったら自動で読み直す。http で配信したときだけ動く（file:// は取得できない）。 -->
 <script>

@@ -5,8 +5,28 @@ ran, the timeline tree it planned, and the files or docs it produced. It lives i
 [Pi Durable](https://www.npmjs.com/package/@earendil-works/pi-durable) storage beside the session
 file (`.relations-durable`), like the loop, tmux and timeline sidecars, so a resumed session finds it.
 
-A node id is `kind:ref`, where the kind is one of `session`, `goal`, `loop`, `tmux`, `timeline`,
-`task`, `doc` or `file`. An edge is `from` + a lower-case relation + `to`, with an optional note.
+## Automatic recording
+
+Nobody links the goal, the loop, a job or a plan by hand: the extension subscribes to
+`tool_result` and records what each of those tools did, so `relations list` shows one picture.
+
+| Tool | Edge added | Note |
+| --- | --- | --- |
+| `start_goal` `get_goal` `goal_wait` | `session —pursued→ goal:<id>` | the objective, clipped to 160 characters |
+| `update_goal` | the pursuit, plus `goal —completed\|blocked→ session` | the reason |
+| `loop_wakeup` | `session —looped→ loop:<session id>` | the reason |
+| `loop_complete` | the loop, plus `loop —completed→ session` | the reason |
+| `tmux_exec` | `session —ran→ tmux:<tmux session>` | the command |
+| `tmux_check_in` | `session —ran→ tmux:<tmux session>` | none |
+| `timeline` | `session —planned→ timeline:<tree>`, plus `timeline —contains→ task:<tree>/<id>` for `add` | the title |
+
+A loop is one per session, so its id is the session id; a timeline call that names no tree is
+`tree-1`. Nothing is inferred beyond the call: a goal tool that found no goal, or a tmux launch
+that never started, records nothing. Recording is idempotent and silent — a lock held elsewhere or
+a full disk is dropped, because the tool call it observed has already answered. Only these eight
+tools are recorded; a file or document edge is still a `relations link`.
+
+The graph is one hop: recorded edges are added, never interpreted.
 
 ```
 relations list                                     # the whole graph

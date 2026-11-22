@@ -33,6 +33,7 @@ vi.mock("./src/sidecar.ts", () => ({
 function register(): { execute: (...args: unknown[]) => Promise<unknown> } {
   let tool: { execute: (...args: unknown[]) => Promise<unknown> } | undefined;
   relationsExtension({
+    on: () => undefined,
     registerTool: (candidate: { execute: (...args: unknown[]) => Promise<unknown> }) => {
       tool = candidate;
     },
