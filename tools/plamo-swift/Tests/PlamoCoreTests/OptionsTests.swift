@@ -94,13 +94,21 @@ func rejectsBadPort(_ arguments: [String]) {
 }
 
 @Test(arguments: [
-    ["serve", "--model", "/m", "--idle-seconds", "0"],
+    ["serve", "--model", "/m", "--idle-seconds", "-1"],
     ["serve", "--model", "/m", "--idle-seconds", "soon"],
+    ["serve", "--model", "/m", "--lukewarm-seconds", "0"],
     ["serve", "--model", "/m", "--max-tokens", "0"],
     ["serve", "--model", "/m", "--max-tokens", "many"],
 ])
 func rejectsBadNumbers(_ arguments: [String]) {
     #expect(throws: PlamoError.self) { try Invocation(arguments: arguments) }
+}
+
+/// 0 is the "never exit" the mods use: the lukewarm state is 60 MB, cheaper than a later spawn.
+@Test func acceptsAnIdleExitOfNever() throws {
+    let invocation = try Invocation(arguments: ["serve", "--model", "/m", "--idle-seconds", "0"])
+    #expect(invocation.idleSeconds == 0)
+    #expect(invocation.lukewarmSeconds == Invocation.defaultLukewarmSeconds)
 }
 
 @Test func commandNamesMatchTheBinary() {

@@ -27,6 +27,9 @@ integrations. These instructions apply to agents working here, including pi and 
   and `tools/pi-plamo-translate`
   (run once per machine; the model is not in Git): mlx-lm + MLX 4-bit on macOS, llama.cpp's Vulkan
   build + the official GGUF on Linux and Windows (Git Bash).
+- `./scripts/plamo-swift-service.sh install|uninstall|status` — Run `plamo-swift serve` at login as
+  `com.kkkaoru.plamo-swift` (RunAtLoad, KeepAlive, `--idle-seconds 0`) so both translate mods find a
+  warm server instead of spawning one. After a minute idle it holds the lukewarm state, ~60 MB.
 - `./scripts/setup-herdr-app.sh` — After `./create-symlinks.sh`, set up Herdr.app: build the font
   `settings.json` names (if missing) and switch the open window to the `main-emoji` layout.
 - `./scripts/build-udev-gothic-light.sh [Light|ExtraLight|Thin]` — Build UDEV Gothic <weight> 35NFLG

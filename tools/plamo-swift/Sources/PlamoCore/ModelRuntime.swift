@@ -73,6 +73,7 @@ public actor ModelRuntime: CompletionProviding {
     @discardableResult
     public func releaseWeights() -> Bool {
         guard model != nil else { return false }
+        Timing.mark("lukewarm.begin")
         model = nil
         MLXMemory.release()
         Timing.mark("lukewarm")

@@ -54,20 +54,22 @@ actor LukewarmHits {
         configuration: .init(
             port: nil,
             socketPath: directory.appendingPathComponent("plamo.sock").path,
-            idleSeconds: 0.8,
+            idleSeconds: 3,
             lukewarmSeconds: 0.1,
             idleCheckInterval: 0.05),
         onLukewarm: { await hits.record() },
         onIdle: { box.stop() })
     box.server = server
     _ = try await server.start()
-    // Wait for the release instead of racing the idle exit: a loaded machine can starve the watcher
-    // past `idleSeconds`, which stops the server before the first release ever runs.
+    // Wait for the release instead of racing the idle exit: the idle exit is 3 s and the release
+    // 0.1 s, so a loaded machine can starve the watcher for a while without skipping the release.
     let deadline = Date().addingTimeInterval(5)
     while await hits.isEmpty && Date() < deadline {
         try await Task.sleep(for: .milliseconds(20))
     }
     await server.waitUntilStopped()
-    // Once per idle stretch: a second release would find nothing and only wake the runtime.
-    #expect(await hits.count == 1)
+    // Once per idle stretch: a second release would find nothing and only wake the runtime. The
+    // 3 s idle window keeps ticking after the release, so a repeat would show up here.
+    let releases = await hits.count
+    #expect(releases == 1)
 }

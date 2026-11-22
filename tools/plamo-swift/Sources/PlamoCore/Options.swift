@@ -89,7 +89,7 @@ public struct Invocation: Sendable {
             tokenizerBlob: URL(fileURLWithPath: blob),
             port: try Invocation.port(values["port"]),
             socketPath: try Invocation.socket(values["socket"]),
-            idleSeconds: try Invocation.positive(values["idle-seconds"], name: "idle-seconds")
+            idleSeconds: try Invocation.nonNegative(values["idle-seconds"], name: "idle-seconds")
                 ?? Invocation.defaultIdleSeconds,
             lukewarmSeconds: try Invocation.positive(
                 values["lukewarm-seconds"], name: "lukewarm-seconds")
@@ -119,6 +119,16 @@ public struct Invocation: Sendable {
     private static func positive(_ raw: String?, name: String) throws -> Double? {
         guard let raw else { return nil }
         guard let value = Double(raw), value > 0 else {
+            throw PlamoError.invalidOption(name: name, value: raw)
+        }
+        return value
+    }
+
+    /// Zero means never, which is what `idle-seconds` needs: the lukewarm state costs 60 MB, so a
+    /// caller may prefer to hold it for hours instead of paying a spawn and a reload later.
+    private static func nonNegative(_ raw: String?, name: String) throws -> Double? {
+        guard let raw else { return nil }
+        guard let value = Double(raw), value >= 0 else {
             throw PlamoError.invalidOption(name: name, value: raw)
         }
         return value

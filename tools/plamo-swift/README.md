@@ -83,9 +83,9 @@ fixed part and the per-token part separate:
 | load, page cache warm | 0.052 s total: 0.023 weights, 0.028 warm-up |
 | launch to `/v1/models` answering (listener first, warm-up in flight) | 0.067 s |
 | first completion in a fresh process | 0.372 s |
-| resident / physical footprint while serving | 560 / 632 MB |
-| resident / physical footprint in the lukewarm state | 81 / 60 MB |
-| first request after the lukewarm release | 0.373 s |
+| resident / physical footprint while serving | 558 / 631 MB |
+| resident / physical footprint in the lukewarm state | 78 / 58 MB |
+| first request after the lukewarm release | 0.203 s |
 | peak physical footprint during a long prefill | 1052 MB |
 | compressed | 0 B |
 
@@ -110,28 +110,80 @@ is dominated by graph construction and kernel launches, not by its tokens.
 | the listener starts before the warm-up, so `/v1/models` answers while the first forward pass runs | ready 0.696 s (warm-up finished first) | ready 0.067 s, first completion 0.372 s |
 | the lukewarm state drops the weights and the Metal cache after `--lukewarm-seconds` idle | 631 MB phys while serving, held until the process exits | 60 MB phys; the next request reads the weights again in 0.373 s, steady decode unchanged |
 
-### Lukewarm
+### States: cold, warm, lukewarm
 
-`serve --lukewarm-seconds <s>` (default 60) releases the weights and the Metal buffer cache after
-that much idle, using the same watcher that implements the idle exit, so the state is entered without
-a restart and is left by the next request, which reads the weights back. The process keeps its
-compiled kernels, tokenizer and completion cache.
+| state | what stays resident | footprint |
+| --- | --- | --- |
+| cold | nothing; no process | 0 |
+| warm | weights, tokenizer, compiled kernels, Metal buffer cache, completion cache | 558 MB rss / 631 MB phys |
+| lukewarm | tokenizer, compiled kernels, completion cache | 78 MB rss / 58 MB phys |
 
-`scripts/measure-lukewarm.py` (port 18558, so the live server keeps serving) measures it. Every
+Measured transitions (M5 Pro, release build; a fresh process per column, from `scripts/soak.py` and
+`scripts/measure-lukewarm.py`):
+
+| transition | what happens | measured |
+| --- | --- | --- |
+| cold → ready | spawn, dyld, MLX init, tokenizer decode, weight read, listener | 0.063 s |
+| cold → warm | the above, then the warm-up's first eval compiles the Metal kernels | 0.216 s to the first completion |
+| warm → lukewarm | `--lukewarm-seconds` idle (default 60) plus one idle-check tick (≤5 s), then the weights and the Metal buffer cache are dropped | the release is a `nil` and `Memory.clearCache()`; the state is entered within one tick of the window |
+| lukewarm → warm | the weights are read again; no spawn, no tokenizer decode, no kernel compile | 0.203 s to the first completion |
+
+The reload costs the same wall time as a cold start, because the 478 MB weight read dominates both and
+the compile the lukewarm state saves is already hidden behind the warm-up. What lukewarm buys is the
+memory: 60 MB held instead of 631 MB, for hours, with no restart to get back to full speed.
+
+### How the lukewarm state works
+
+`ModelRuntime` keeps the model as an optional. `releaseWeights()` sets it to `nil` and calls
+`Memory.clearCache()`, which returns the weights and the Metal buffer cache to the system; the next
+request's `current()` loads the directory again. The tokenizer, the completion cache and the compiled
+kernels stay, so the reload is a weight read and nothing else.
+
+The state is entered by the watcher `serve` already runs for `--idle-seconds`: the same tick now also
+releases the weights once per idle stretch, after `--lukewarm-seconds` (default 60, `0` disables) with
+no request. `--idle-seconds 0` never exits, and both translate mods pass `--idle-seconds 14400`, so a
+session's server holds the lukewarm state instead of paying a spawn and a reload per idle gap.
+`PLAMO_TIMING=1` logs `lukewarm.begin`, `lukewarm` and `lukewarm.reload` with their durations.
+
+`scripts/measure-lukewarm.py` (port 18558, so a live server keeps serving) measures the states. Every
 prompt carries a nonce: a repeated prompt is answered from the completion cache in about a
 millisecond and would hide the reload entirely — the first version of this measurement reported
 560 MB and a 1 ms reload because of exactly that.
 
-| | warm | lukewarm |
-| --- | --- | --- |
-| resident set | 562 MB | 81 MB |
-| physical footprint | 631 MB | 60 MB |
-| steady completion (32 tokens) | 0.179 s median | 0.122 s median after the reload |
-| next request | — | 0.373 s, the same as a fresh process's first completion |
+### Soak
 
-So the memory goes back to 9.5% of the warm footprint, and the price is one cold first completion
-for the first request after the release — paid once per idle stretch rather than per process start,
-and without a process spawn, a tokenizer decode or a kernel compile.
+`scripts/soak.py` starts its own server on port 18559, prints the three states, runs 30
+warm→lukewarm→reload cycles and then 240 continuous requests, and reports rss/phys after each phase.
+
+| phase | first | last | min | max | drift |
+| --- | --- | --- | --- | --- | --- |
+| warm, after a burst | 633 | 639 | 633 | 641 | +6 MB |
+| lukewarm, after the release | 59 | 61 | 59 | 61 | +2 MB |
+| continuous, physical | 636 | 636 | 633 | 636 | +0 MB |
+| continuous, resident | 563 | 566 | 563 | 566 | +3 MB |
+
+Thirty cycles of warm → release → reload end 6 MB above where they started, inside a 633–641 MB band
+that does not trend: the last cycle sits below the maximum, and the 240 continuous requests that
+follow are flat to the megabyte (636 MB physical, first and last). The release itself costs 10.58 ms
+(`lukewarm.begin` → `lukewarm` in the `PLAMO_TIMING` marks); the reload lands on the first request
+after it.
+
+The 6 MB is the Metal buffer cache and the allocator's free pages settling at a working set rather
+than at zero — `Memory.clearCache()` returns the weights, not every buffer the allocator keeps for
+reuse. A leak would accumulate across the 30 cycles and keep climbing through the continuous phase;
+neither happens.
+
+### There is no persistent kernel cache
+
+MLX Swift compiles its Metal kernels at the first eval of each process: 582 ms of the 662 ms warm-up
+measured earlier. This version writes no kernel cache to disk, so every new process pays that again.
+Lukewarm keeps the compiled kernels in the process, which is why the reload has no compile step — but
+that only removes time the warm-up had already overlapped, so the transition table above shows the
+reload level with a cold start rather than ahead of it.
+
+A persistent cache would mean an `MTLBinaryArchive` keyed by every kernel variant the model uses,
+with a version check on load; the 582 ms it would save is paid once per process, at the first
+completion, not per request. That trade is not made here.
 
 The cold-load case is the one measurement this machine could not produce honestly. Forcing the page
 cache out needs root (`purge`); without it, neither a 24 GB disk write nor 40 GB of anonymous pressure

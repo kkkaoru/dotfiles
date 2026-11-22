@@ -100,7 +100,9 @@ install_swift() {
   fi
   rm -rf "${DATA_DIR}/plamo-swift"
   mkdir -p "${DATA_DIR}/plamo-swift"
-  install -m 755 "${source}/.build/release/plamo-swift" "${DATA_DIR}/plamo-swift/plamo-swift"
+  install -m 755 "${source}/.build/release/plamo-swift" "${DATA_DIR}/plamo-swift/plamo-swift.new"
+  # Rename over the target: a server still running from the old file keeps its inode.
+  mv -f "${DATA_DIR}/plamo-swift/plamo-swift.new" "${DATA_DIR}/plamo-swift/plamo-swift"
   # MLX looks for its metallib beside the executable, so the resource bundle travels with it.
   cp -R "${source}/.build/release/mlx-swift_Cmlx.bundle" "${DATA_DIR}/plamo-swift/"
   cat > "${BIN_DIR}/plamo-swift" <<EOF
