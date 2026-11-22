@@ -59,6 +59,15 @@ async function fire(event: string, payload: unknown, context: StrataContext = ct
   await handler(payload, context);
 }
 
+/** Publishes what the last probe found: a hook is the only place a live ctx exists. */
+async function publish(): Promise<void> {
+  await fire("agent_end", {});
+}
+
+/** How many times the Mac's Strata start script ran. */
+const warms = (): number =>
+  exec.mock.calls.filter(([command]) => command === path.join(BIN, "strata-local")).length;
+
 beforeEach((): void => {
   exec = vi.fn<ExecFn>();
   notify = vi.fn<NotifyFn>();
@@ -206,6 +215,7 @@ describe("strataLifecycle", () => {
     expect(setStatus.mock.calls).toEqual([
       ["strata", "strata-win: starting..."],
       ["strata", "awake: win"],
+      ["strata", "awake: win"],
     ]);
   });
 
@@ -220,26 +230,20 @@ describe("strataLifecycle", () => {
       timeout: TIMEOUT,
     });
   });
-
   it("does not probe again right after a successful warm", async () => {
     start();
     const warmCtx: StrataContext = { model: { provider: "strata" }, ui: { notify, setStatus } };
     await fire("before_provider_headers", { headers: {} }, warmCtx);
     await fire("before_provider_headers", { headers: {} }, warmCtx);
-    expect(
-      exec.mock.calls.filter(([command]) => command === path.join(BIN, "strata-local")),
-    ).toHaveLength(1);
+    expect(warms()).toBe(1);
   });
-
   it("retries a warm that failed on the next request", async () => {
     start();
     exec.mockResolvedValue({ code: 1, stderr: "down", stdout: "" });
     const warmCtx: StrataContext = { model: { provider: "strata" }, ui: { notify, setStatus } };
     await fire("before_provider_headers", { headers: {} }, warmCtx);
     await fire("before_provider_headers", { headers: {} }, warmCtx);
-    expect(
-      exec.mock.calls.filter(([command]) => command === path.join(BIN, "strata-local")),
-    ).toHaveLength(2);
+    expect(warms()).toBe(2);
   });
 });
 
@@ -254,7 +258,8 @@ describe("strataLifecycle status", () => {
     start();
     exec.mockRejectedValue(new Error("boom"));
     await fire("session_start", {});
-    await vi.waitFor(() => {
+    await vi.waitFor(async () => {
+      await publish();
       expect(notify).toHaveBeenCalledWith("strata status: Error: boom", "warning");
     });
     await fire("session_shutdown", {});
@@ -265,7 +270,10 @@ describe("strataLifecycle status", () => {
     await fire("session_start", {});
     expect(exec).toHaveBeenCalledWith(PROBE, [], { timeout: 40_000 });
     // Every endpoint is cold, which is the normal state: the footer says nothing.
-    expect(setStatus).toHaveBeenCalledWith("strata", undefined);
+    await vi.waitFor(async () => {
+      await publish();
+      expect(setStatus).toHaveBeenCalledWith("strata", undefined);
+    });
   });
 
   it("says when an endpoint went cold between polls", async () => {
@@ -278,6 +286,7 @@ describe("strataLifecycle status", () => {
     await fire("session_start", {});
     exec.mockImplementation(async () => ({ code: 0, stderr: "", stdout: ALL_COLD }));
     await vi.advanceTimersByTimeAsync(60_000);
+    await publish();
     expect(notify).toHaveBeenCalledWith(
       "strata-win: went cold; the next request starts it again",
       "info",
@@ -300,6 +309,7 @@ describe("strataLifecycle status", () => {
     await fire("session_start", {});
     exec.mockRejectedValue(new Error("boom"));
     await vi.advanceTimersByTimeAsync(60_000);
+    await publish();
     expect(notify).toHaveBeenCalledWith("strata status: Error: boom", "warning");
   });
 });
