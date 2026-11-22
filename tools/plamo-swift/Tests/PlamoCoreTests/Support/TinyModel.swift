@@ -1,5 +1,6 @@
 import Foundation
 import MLX
+
 @testable import PlamoCore
 
 /// A two-layer, 8-wide model with the real architecture: small enough to build in memory, complete
@@ -13,7 +14,7 @@ enum TinyModel {
           "num_key_value_heads": 1,
           "head_dim": 4,
           "intermediate_size": 16,
-          "vocab_size": 32,
+          "vocab_size": 300,
           "rms_norm_eps": 1e-5,
           "window_size": 3,
           "sliding_window_pattern": 2,

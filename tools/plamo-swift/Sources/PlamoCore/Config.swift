@@ -2,25 +2,25 @@ import Foundation
 
 /// The checkpoint's `config.json`. Field names are the checkpoint's own, so a model that changes
 /// shape fails at load with `invalidConfig` instead of producing silent garbage.
-public struct PlamoConfig: Decodable, Sendable {
-    public struct RopeParameters: Decodable, Sendable {
-        public let ropeType: String
-        public let ropeTheta: Float
-        public let factor: Float?
-        public let originalMaxPositionEmbeddings: Int?
-        public let betaFast: Float?
-        public let betaSlow: Float?
+public struct PlamoRopeParameters: Decodable, Sendable {
+    public let ropeType: String
+    public let ropeTheta: Float
+    public let factor: Float?
+    public let originalMaxPositionEmbeddings: Int?
+    public let betaFast: Float?
+    public let betaSlow: Float?
 
-        enum CodingKeys: String, CodingKey {
-            case ropeType = "rope_type"
-            case ropeTheta = "rope_theta"
-            case factor
-            case originalMaxPositionEmbeddings = "original_max_position_embeddings"
-            case betaFast = "beta_fast"
-            case betaSlow = "beta_slow"
-        }
+    private enum CodingKeys: String, CodingKey {
+        case ropeType = "rope_type"
+        case ropeTheta = "rope_theta"
+        case factor
+        case originalMaxPositionEmbeddings = "original_max_position_embeddings"
+        case betaFast = "beta_fast"
+        case betaSlow = "beta_slow"
     }
+}
 
+public struct PlamoConfig: Decodable, Sendable {
     public let hiddenSize: Int
     public let numHiddenLayers: Int
     public let numAttentionHeads: Int
@@ -31,11 +31,11 @@ public struct PlamoConfig: Decodable, Sendable {
     public let rmsNormEps: Float
     public let windowSize: Int
     public let slidingWindowPattern: Int
-    public let ropeParameters: [String: RopeParameters]
+    public let ropeParameters: [String: PlamoRopeParameters]
     public let eosTokenId: [Int32]
     public let bosTokenId: Int32
 
-    enum CodingKeys: String, CodingKey {
+    private enum CodingKeys: String, CodingKey {
         case hiddenSize = "hidden_size"
         case numHiddenLayers = "num_hidden_layers"
         case numAttentionHeads = "num_attention_heads"
@@ -61,11 +61,15 @@ public struct PlamoConfig: Decodable, Sendable {
         guard numAttentionHeads > 0 else {
             throw PlamoError.invalidConfig(field: "num_attention_heads")
         }
-        guard numHiddenLayers > 0 else { throw PlamoError.invalidConfig(field: "num_hidden_layers") }
-        guard numKeyValueHeads > 0, numAttentionHeads % numKeyValueHeads == 0 else {
+        guard numHiddenLayers > 0 else {
+            throw PlamoError.invalidConfig(field: "num_hidden_layers")
+        }
+        guard numKeyValueHeads > 0, numAttentionHeads.isMultiple(of: numKeyValueHeads) else {
             throw PlamoError.invalidConfig(field: "num_key_value_heads")
         }
-        guard intermediateSize > 0 else { throw PlamoError.invalidConfig(field: "intermediate_size") }
+        guard intermediateSize > 0 else {
+            throw PlamoError.invalidConfig(field: "intermediate_size")
+        }
         guard vocabSize > 0 else { throw PlamoError.invalidConfig(field: "vocab_size") }
         guard windowSize > 0 else { throw PlamoError.invalidConfig(field: "window_size") }
         guard slidingWindowPattern > 0 else {
@@ -79,7 +83,8 @@ public struct PlamoConfig: Decodable, Sendable {
         }
     }
 
-    /// Loads and validates `config.json`; a missing file is reported as such, not as a decode error.
+    /// Loads and validates `config.json`; a missing file is reported as such, not as a decode
+    /// error.
     public static func load(directory: URL) throws -> PlamoConfig {
         let url = directory.appendingPathComponent("config.json")
         guard FileManager.default.fileExists(atPath: url.path) else {

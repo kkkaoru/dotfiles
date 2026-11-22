@@ -5,15 +5,25 @@ import MLX
 /// MLX's Metal buffer cache. The default limit is the device's recommended maximum, so a burst of
 /// prefills leaves hundreds of MB the server never asks for again.
 public enum MLXMemory {
-    public static let defaultCacheLimitBytes = 32 * 1024 * 1024
+    /// 32 MB: enough for one decode step's buffers, far below the device maximum.
+    public static let defaultCacheLimitBytes = 32 * 1_024 * 1_024
 
+    /// Caps the Metal buffer cache so a burst of prefills does not stay resident.
     public static func configure(cacheLimitBytes: Int = MLXMemory.defaultCacheLimitBytes) {
         Memory.cacheLimit = cacheLimitBytes
     }
 
+    /// Returns the cached buffers to the system.
     public static func release() {
         Memory.clearCache()
     }
+}
+
+/// One debug forward pass: the per-stage norms, the final logits and the prompt ids.
+public struct StageTrace: Sendable {
+    public let stages: [(String, [Float])]
+    public let top: [Float]
+    public let ids: [Int32]
 }
 
 /// The model and its tokenizer, owned by one actor that runs on its own serial queue: a decode step
@@ -23,14 +33,14 @@ public actor ModelRuntime: CompletionProviding {
     private let tokenizer: PlamoTokenizer
     private let queue = DispatchSerialQueue(label: "plamo-swift.model")
 
-    public nonisolated var unownedExecutor: UnownedSerialExecutor {
+    nonisolated public var unownedExecutor: UnownedSerialExecutor {
         queue.asUnownedSerialExecutor()
     }
 
     public init(modelDirectory: URL, tokenizerBlob: URL) throws {
         let meta = tokenizerBlob.deletingPathExtension().appendingPathExtension("json")
-        // Ask the kernel for the weights before the tokenizer decode runs: a cold start reads 478 MB
-        // from disk, and the tokenizer work is free cover for the first part of that read.
+        // Ask the kernel for the weights before the tokenizer decode runs: a cold start reads
+        // 478 MB from disk, and the tokenizer work is free cover for the first part of that read.
         Prefetch.weights(in: modelDirectory)
         tokenizer = try PlamoTokenizer(blob: tokenizerBlob, meta: meta)
         model = try PlamoModel.load(directory: modelDirectory)
@@ -114,16 +124,14 @@ public actor ModelRuntime: CompletionProviding {
     }
 
     /// Stage-by-stage norms for `debug`: the numbers the Python server prints for the same prompt.
-    public func stages(
-        prompt: String
-    ) throws -> (stages: [(String, [Float])], top: [Float], ids: [Int32]) {
+    public func stages(prompt: String) throws -> StageTrace {
         var captured = [(String, [Float])]()
         let ids = tokenizer.promptIDs(prompt, bos: model.config.bosTokenId)
         let scores = try model.logits(ids: ids) { stage, hidden in
             let last = hidden[0..., (hidden.dim(1) - 1)..<hidden.dim(1), 0...]
             captured.append((stage, last.asArray(Float.self)))
         }
-        return (captured, scores.asArray(Float.self), ids)
+        return StageTrace(stages: captured, top: scores.asArray(Float.self), ids: ids)
     }
 
     public var eosTokenIDs: [Int32] {

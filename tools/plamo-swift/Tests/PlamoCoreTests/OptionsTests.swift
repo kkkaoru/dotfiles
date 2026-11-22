@@ -11,7 +11,7 @@ import Testing
     #expect(invocation.command == .serve)
     #expect(invocation.modelDirectory.path == "/models/plamo")
     #expect(invocation.tokenizerBlob.path == "/models/plamo/tokenizer.bin")
-    #expect(invocation.port == 1234)
+    #expect(invocation.port == 1_234)
     #expect(invocation.idleSeconds == 30)
     #expect(invocation.maxTokens == 8)
     #expect(invocation.prompt == "hello world")
@@ -44,6 +44,19 @@ import Testing
         "tokenize", "--model", "/m", "--tokenizer", "/blobs/t.bin",
     ])
     #expect(invocation.tokenizerBlob.path == "/blobs/t.bin")
+}
+
+@Test func readsAnAbsoluteSocketPath() throws {
+    let invocation = try Invocation(arguments: [
+        "serve", "--model", "/m", "--socket", "/tmp/plamo.sock",
+    ])
+    #expect(invocation.socketPath == "/tmp/plamo.sock")
+}
+
+@Test func rejectsARelativeSocketPath() {
+    #expect(throws: PlamoError.self) {
+        try Invocation(arguments: ["serve", "--model", "/m", "--socket", "plamo.sock"])
+    }
 }
 
 @Test func ignoresValueLessFlags() throws {

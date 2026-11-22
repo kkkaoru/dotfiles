@@ -1,0 +1,9 @@
+# Tests only. SwiftLint reads this file for everything under Tests/ when the root config sets
+# nested_configs: true, so a fixture needs neither an explicit ACL nor a doc comment; the rules
+# that catch real mistakes (line length, force unwraps, optional conversions) stay on.
+disabled_rules:
+  - explicit_acl
+  - explicit_top_level_acl
+  - missing_docs
+  - force_unwrapping
+  - optional_data_string_conversion

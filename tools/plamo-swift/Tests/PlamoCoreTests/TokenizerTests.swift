@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+
 @testable import PlamoCore
 
 /// The blob is little-endian, as `scripts/dump-tokenizer.py` writes it: a reader that guesses the
@@ -13,7 +14,8 @@ import Testing
 
 @Test func rejectsATruncatedBlob() throws {
     let data = try Data(contentsOf: Fixtures.tokenizerBlob)
-    let blob = try Fixtures.temporaryDirectory("tokenizer-truncated").appendingPathComponent("blob.bin")
+    let blob = try Fixtures.temporaryDirectory("tokenizer-truncated").appendingPathComponent(
+        "blob.bin")
     try data.prefix(data.count / 2).write(to: blob)
     #expect(throws: PlamoError.self) {
         try PlamoTokenizer(blob: blob, meta: Fixtures.tokenizerMeta)

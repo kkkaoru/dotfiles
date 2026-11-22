@@ -1,9 +1,11 @@
 import Foundation
 import Testing
+
 @testable import PlamoCore
 
 @Test func readsAContentLengthFromACRLFHead() throws {
-    let head = Data("POST /v1/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\n".utf8)
+    let head = Data(
+        "POST /v1/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\n".utf8)
     #expect(try HTTPRequestParser.contentLength(head: head) == 5)
 }
 

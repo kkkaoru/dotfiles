@@ -1,23 +1,28 @@
 import Foundation
 import MLX
 
+/// The two mask tables a prefill builds: full attention and the sliding window.
+private typealias MaskPair = (full: MLXArray?, sliding: MLXArray?)
+
 /// PLaMo 3 in MLX Swift: the same weights, the same arithmetic, and the KV cache trimmed to the
 /// sliding window so a long conversation does not grow without bound.
+
 public final class PlamoModel {
+    /// One transformer block's weights, already in the activation dtype.
     public struct Layer {
         // Norm weights carry their offsets, baked in at load in the activation dtype.
-        let preMixerNorm: MLXArray
-        let postMixerNorm: MLXArray
-        let preMLPNorm: MLXArray
-        let postMLPNorm: MLXArray
-        let qNorm: MLXArray
-        let kNorm: MLXArray
-        let qkv: Quant
-        let oProj: Quant
-        let gateUp: Quant
-        let downProj: Quant
-        let fullAttention: Bool
-        let rotary: Rotary
+        internal let preMixerNorm: MLXArray
+        internal let postMixerNorm: MLXArray
+        internal let preMLPNorm: MLXArray
+        internal let postMLPNorm: MLXArray
+        internal let qNorm: MLXArray
+        internal let kNorm: MLXArray
+        internal let qkv: Quant
+        internal let oProj: Quant
+        internal let gateUp: Quant
+        internal let downProj: Quant
+        internal let fullAttention: Bool
+        internal let rotary: Rotary
     }
 
     private struct Cache {
@@ -25,6 +30,7 @@ public final class PlamoModel {
         var values: MLXArray
     }
 
+    /// The checkpoint's shape.
     public let config: PlamoConfig
     private let layers: [Layer]
     private let embedTokens: Quant
@@ -33,6 +39,7 @@ public final class PlamoModel {
     private var caches: [Cache?]
     private var seen = 0
 
+    /// Loads `config.json` and `model.safetensors` from `directory`.
     public static func load(directory: URL) throws -> PlamoModel {
         let config = try PlamoConfig.load(directory: directory)
         let url = directory.appendingPathComponent("model.safetensors")
@@ -42,8 +49,8 @@ public final class PlamoModel {
         return try PlamoModel.make(config: config, arrays: loadArrays(url: url))
     }
 
-    /// Builds the model from named arrays: the checkpoint loader and the tests' tiny fixtures differ
-    /// only in where the arrays come from. A missing tensor is reported by name.
+    /// Builds the model from named arrays: the checkpoint loader and the tests' tiny fixtures
+    /// differ only in where the arrays come from. A missing tensor is reported by name.
     public static func make(config: PlamoConfig, arrays: [String: MLXArray]) throws -> PlamoModel {
         try config.validate()
         func array(_ name: String) throws -> MLXArray {
@@ -68,7 +75,7 @@ public final class PlamoModel {
         layers.reserveCapacity(config.numHiddenLayers)
         for index in 0..<config.numHiddenLayers {
             let base = "model.layers.layers.\(index)"
-            let fullAttention = (index + 1) % config.slidingWindowPattern == 0
+            let fullAttention = (index + 1).isMultiple(of: config.slidingWindowPattern)
             layers.append(
                 Layer(
                     preMixerNorm: try shifted("\(base).pre_mixer_norm.weight", 1, dtype),
@@ -105,6 +112,7 @@ public final class PlamoModel {
         self.caches = Array(repeating: nil, count: config.numHiddenLayers)
     }
 
+    /// Drops the KV cache, so the next call prefills from scratch.
     public func resetCache() {
         caches = Array(repeating: nil, count: config.numHiddenLayers)
         seen = 0
@@ -123,8 +131,8 @@ public final class PlamoModel {
         onStage?("embed", hidden)
         let start = seen
         let queryPositions = (start..<(start + length)).map { $0 }
-        // One table per attention kind instead of one per layer: every layer used to rebuild the same
-        // [queries][keys] values, which is 16 identical allocations on every prefill.
+        // One table per attention kind instead of one per layer: every layer used to rebuild the
+        // same [queries][keys] values, which is 16 identical allocations on every prefill.
         let masks = try prefillMasks(queries: length, start: start)
 
         for (index, layer) in layers.enumerated() {
@@ -150,20 +158,16 @@ public final class PlamoModel {
         return lmHead.matmul(last)
     }
 
-    /// The masks a prefill needs. Full attention sees every cached key; a sliding layer holds at most
-    /// `windowSize`, so the whole pass needs at most these two tables.
-    private func prefillMasks(
-        queries: Int, start: Int
-    ) throws
-        -> (full: MLXArray?, sliding: MLXArray?)
-    {
+    /// The masks a prefill needs. Full attention sees every cached key; a sliding layer holds at
+    /// most `windowSize`, so the whole pass needs at most these two tables.
+    private func prefillMasks(queries: Int, start: Int) throws -> MaskPair {
         guard queries > 1 else { return (nil, nil) }
         let dtype = embedTokens.activationDType
         let total = start + queries
         func table(keys: Int, window: Int?) throws -> MLXArray {
             let values = try Mask.causal(queries: queries, keys: keys, window: window)
-            // The mask has to carry the activation dtype: the model runs in bfloat16 and MLX will not
-            // promote a float32 mask into it.
+            // The mask has to carry the activation dtype: the model runs in bfloat16 and MLX will
+            // not promote a float32 mask into it.
             return MLXArray(values).reshaped([1, 1, queries, keys]).asType(dtype)
         }
         return (

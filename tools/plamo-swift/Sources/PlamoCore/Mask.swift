@@ -7,8 +7,8 @@ public enum Mask {
     ///
     /// `keys` may be smaller than `queries`: a sliding layer trims its cache to the window, so a
     /// prompt longer than `windowSize` has fewer cached keys than queries. A query whose own keys
-    /// were trimmed away attends to the oldest key still held, which keeps the row finite — a row of
-    /// pure -infinity would come out of the softmax as NaN and poison the rest of the pass.
+    /// were trimmed away attends to the oldest key still held, which keeps the row finite — a row
+    /// of pure -infinity would come out of the softmax as NaN and poison the rest of the pass.
     public static func causal(queries: Int, keys: Int, window: Int?) throws -> [Float] {
         guard queries > 0, keys > 0 else {
             throw PlamoError.invalidRequest(reason: "mask shape")

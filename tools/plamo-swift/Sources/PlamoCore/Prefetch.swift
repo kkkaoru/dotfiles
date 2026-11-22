@@ -1,13 +1,15 @@
 import Darwin
 import Foundation
 
-/// Warms the page cache for a file before it is read. A cold start pays for 478 MB of weights, and
-/// `F_RDADVISE` hands that read to the kernel ahead of the first `pread`: the work overlaps whatever
-/// runs before the weights are touched, and the read-ahead runs on the disk queue instead of one
-/// blocking copy.
+/// Warms the page cache for a file before it is read. A cold start pays for 478 MB of weights,
+/// and `F_RDADVISE` hands that read to the kernel ahead of the first `pread`: the work overlaps
+/// whatever runs before the weights are touched, and the read-ahead runs on the disk queue
+/// instead of one blocking copy.
 public enum Prefetch {
+    /// The one file a PLaMo checkpoint keeps its weights in.
     public static let weightsName = "model.safetensors"
 
+    /// Advises the kernel about a checkpoint's weights.
     public static func weights(in directory: URL) {
         warm(directory.appendingPathComponent(weightsName))
     }

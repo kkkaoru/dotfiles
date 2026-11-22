@@ -45,6 +45,7 @@ public struct HTTPResponse: Sendable, Equatable {
 /// Parses request bytes. Every failure is a named `PlamoError`, so a malformed request becomes a
 /// 400 instead of a crash or a hang.
 public enum HTTPRequestParser {
+    /// The largest body accepted: a longer `content-length` is a 400.
     public static let maximumBodyBytes = 4 << 20
     private static let terminator = Data("\r\n\r\n".utf8)
     private static let lineBreakText = "\r\n"
@@ -55,6 +56,7 @@ public enum HTTPRequestParser {
         return data.distance(from: data.startIndex, to: range.upperBound)
     }
 
+    /// The `content-length` header, or 0 when the request carries none.
     public static func contentLength(head: Data) throws -> Int {
         guard let value = header("content-length", in: head) else { return 0 }
         guard let length = Int(value), length >= 0, length <= maximumBodyBytes else {
@@ -63,8 +65,11 @@ public enum HTTPRequestParser {
         return length
     }
 
+    /// Splits a complete head and its body into a request.
     public static func parse(head: Data, body: Data) throws -> HTTPRequest {
-        var text = String(decoding: head, as: UTF8.self)
+        guard var text = String(bytes: head, encoding: .utf8) else {
+            throw PlamoError.invalidRequest(reason: "request head is not UTF-8")
+        }
         if text.hasSuffix("\r\n\r\n") { text.removeLast(4) }
         let lines = text.components(separatedBy: lineBreakText)
         guard let requestLine = lines.first else {
@@ -86,8 +91,10 @@ public enum HTTPRequestParser {
         for line in head.split(separator: UInt8(ascii: "\n")) {
             // `\r` is part of every header line: trimming only spaces leaves it in the value, and
             // `Int("195\r")` is nil, which turned every request with a body into a 400.
-            let text = String(decoding: line, as: UTF8.self)
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard
+                let text = String(bytes: line, encoding: .utf8)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            else { continue }
             let pieces = text.split(separator: ":", maxSplits: 1)
             guard pieces.count == 2, pieces[0].lowercased() == name else { continue }
             return pieces[1].trimmingCharacters(in: .whitespacesAndNewlines)

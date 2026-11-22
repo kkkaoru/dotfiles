@@ -1,11 +1,23 @@
 # SwiftLint configuration. scripts/check.sh runs it with --strict, so a warning fails the check.
 excluded:
   - .build
+  # The manifest is a single Package(...) call, not library code.
+  - Package.swift
+
+# Tests/ carries its own .swiftlint.yml (read by default): fixtures need no ACLs or docs.
 
 line_length:
   warning: 100
   error: 120
   ignores_comments: false
+
+# swift-format owns layout: it adds the trailing comma in a multiline collection and breaks a long
+# signature before its brace, so the matching lint rules would fight the formatter.
+trailing_comma:
+  mandatory_comma: true
+disabled_rules:
+  - opening_brace
+  - closure_parameter_position
 
 file_length:
   warning: 500
@@ -53,5 +65,7 @@ opt_in_rules:
   - unavailable_function
   - unneeded_parentheses_in_closure_argument
   - untyped_error_in_catch
-  - unused_import
   - yoda_condition
+
+analyzer_rules:
+  - unused_import

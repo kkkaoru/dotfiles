@@ -13,7 +13,7 @@ public enum Command: String, CaseIterable, Sendable {
 /// A fully validated command line: every value is already the type the caller needs, so nothing
 /// downstream has to parse or guess a default.
 public struct Invocation: Sendable {
-    public static let defaultPort: UInt16 = 18555
+    public static let defaultPort: UInt16 = 18_555
     public static let defaultIdleSeconds: Double = 600
     public static let defaultMaxTokens = 64
 
@@ -47,9 +47,10 @@ public struct Invocation: Sendable {
         self.prompt = prompt
     }
 
-    /// `plamo-swift <command> --model <dir> [--tokenizer <blob>] [--port <port>] [--max-tokens <n>]`
-    /// plus any positional words, which become the prompt. `--tokenizer` defaults to the blob the
-    /// setup script writes beside the weights, so the mods' argv needs nothing else.
+    /// `plamo-swift <command> --model <dir> [--tokenizer <blob>] [--port <port>]`
+    /// `[--max-tokens <n>]` plus any positional words, which become the prompt. `--tokenizer`
+    /// defaults to the blob the setup script writes beside the weights, so the mods' argv needs
+    /// nothing else.
     public init(arguments: [String]) throws {
         var values = [String: String]()
         var positional = [String]()

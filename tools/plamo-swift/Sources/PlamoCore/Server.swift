@@ -49,7 +49,7 @@ public actor PlamoServer {
         }
     }
 
-    private static let maximumChunk = 65536
+    private static let maximumChunk = 65_536
 
     private let router: Router
     private let configuration: Configuration
@@ -64,7 +64,8 @@ public actor PlamoServer {
     private var readyCount = 0
     private var bound: [String] = []
 
-    public nonisolated var unownedExecutor: UnownedSerialExecutor {
+    /// The server runs on its own queue, so every hop into it is a real thread hop.
+    nonisolated public var unownedExecutor: UnownedSerialExecutor {
         queue.asUnownedSerialExecutor()
     }
 
@@ -102,6 +103,7 @@ public actor PlamoServer {
         }
     }
 
+    /// Stops the listeners and resumes `waitUntilStopped`.
     public func stop() {
         running = false
         idleTask?.cancel()

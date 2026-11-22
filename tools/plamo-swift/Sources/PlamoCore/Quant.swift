@@ -6,7 +6,9 @@ import MLX
 /// MLXArray is not Sendable, so neither is this: it lives inside the runtime actor, and only
 /// completions cross that boundary.
 public struct Quant {
+    /// Elements per affine group: the checkpoint's own `group_size`.
     public static let groupSize = 64
+    /// Bits per weight in the 4-bit affine layout.
     public static let bits = 4
 
     private enum Storage {
@@ -16,6 +18,7 @@ public struct Quant {
 
     private let storage: Storage
 
+    /// Reads `<prefix>.weight` and, when present, its scales and biases.
     public init(arrays: [String: MLXArray], prefix: String) throws {
         guard let weight = arrays["\(prefix).weight"] else {
             throw PlamoError.missingModelFile("\(prefix).weight")
@@ -27,11 +30,13 @@ public struct Quant {
         }
     }
 
+    /// Wraps an unquantized weight.
     public init(dense weight: MLXArray) {
         storage = .dense(weight: weight)
     }
 
-    /// The dtype the activations arrive in: the quantized weights' scales, or a dense weight itself.
+    /// The dtype the activations arrive in: the quantized weights' scales, or a dense weight
+    /// itself.
     public var activationDType: DType {
         switch storage {
         case .quantized(_, let scales, _): return scales.dtype
@@ -39,6 +44,7 @@ public struct Quant {
         }
     }
 
+    /// Multiplies `x` by this matrix.
     public func matmul(_ x: MLXArray) -> MLXArray {
         switch storage {
         case .quantized(let weight, let scales, let biases):

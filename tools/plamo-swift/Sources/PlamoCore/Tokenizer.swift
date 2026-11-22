@@ -13,15 +13,6 @@ public final class PlamoTokenizer {
     private static let columns = 4
     private static let byteTokenCount = 256
 
-    private struct Meta: Decodable {
-        let boundary_char: String
-        let boundary_token_id: Int32
-        let unknown_score: Int32
-        let invalid_score: Int32
-        let special_pattern: String
-        let break_pattern: String
-    }
-
     /// A bounds-checked little-endian reader: a truncated or foreign blob throws instead of reading
     /// past the end of the file.
     private struct Reader {
@@ -67,17 +58,19 @@ public final class PlamoTokenizer {
     private let specialPattern: NSRegularExpression
     private let breakPattern: NSRegularExpression
 
+    /// Loads the dumped blob and its metadata; a malformed pair throws rather than half-loading.
     public init(blob: URL, meta: URL) throws {
-        let decoded = try JSONDecoder().decode(Meta.self, from: try Data(contentsOf: meta))
-        guard let boundaryScalar = decoded.boundary_char.unicodeScalars.first else {
+        let decoded = try JSONDecoder().decode(
+            PlamoTokenizerMeta.self, from: try Data(contentsOf: meta))
+        guard let boundaryScalar = decoded.boundaryChar.unicodeScalars.first else {
             throw PlamoError.corruptTokenizerBlob(reason: "empty boundary character")
         }
         boundary = Int32(bitPattern: boundaryScalar.value)
-        boundaryTokenID = decoded.boundary_token_id
-        unknownScore = decoded.unknown_score
-        invalidScore = decoded.invalid_score
-        specialPattern = try NSRegularExpression(pattern: decoded.special_pattern)
-        breakPattern = try NSRegularExpression(pattern: decoded.break_pattern)
+        boundaryTokenID = decoded.boundaryTokenID
+        unknownScore = decoded.unknownScore
+        invalidScore = decoded.invalidScore
+        specialPattern = try NSRegularExpression(pattern: decoded.specialPattern)
+        breakPattern = try NSRegularExpression(pattern: decoded.breakPattern)
 
         var reader = Reader(bytes: [UInt8](try Data(contentsOf: blob)))
         guard try reader.raw(4).elementsEqual(Data("PLT1".utf8)) else {
@@ -131,6 +124,7 @@ public final class PlamoTokenizer {
         return ids.first == bos ? ids : [bos] + ids
     }
 
+    /// Turns ids back into text, dropping the boundary and special tokens.
     public func decode(_ ids: [Int32]) throws -> String {
         var bytes = [UInt8]()
         for id in ids where id != boundaryTokenID {
@@ -190,11 +184,12 @@ public final class PlamoTokenizer {
             let scalar = data[index]
             var row = Int(suffixID)
             while row < rowCount {
-                let key = (Int64(scalar) << 32) | Int64(table[row * PlamoTokenizer.columns + Self.pieceIDColumn])
+                let key =
+                    (Int64(scalar) << 32)
+                    | Int64(table[row * PlamoTokenizer.columns + Self.pieceIDColumn])
                 suffixID = suffixIDs[key] ?? 0
-                if suffixID > 0 || table[row * PlamoTokenizer.columns + Self.scoreColumn] == unknownScore {
-                    break
-                }
+                let rowScore = table[row * PlamoTokenizer.columns + Self.scoreColumn]
+                if suffixID > 0 || rowScore == unknownScore { break }
                 row += 1
             }
 
@@ -220,10 +215,18 @@ public final class PlamoTokenizer {
             index -= 1
         }
 
+        return walk(
+            data, pieceLengths: pieceLengths, tokenIDs: tokenIDs, tokenCount: tokenCounts[0])
+    }
+
+    /// Replays the winning pieces left to right; a position with no token falls back to bytes.
+    private func walk(
+        _ data: [Int32], pieceLengths: [Int32], tokenIDs: [Int32], tokenCount: Int32
+    ) -> [Int32] {
         var ids = [Int32]()
-        ids.reserveCapacity(Int(tokenCounts[0]))
+        ids.reserveCapacity(Int(tokenCount))
         var position = 0
-        while position < count {
+        while position < data.count {
             if tokenIDs[position] >= 0 {
                 if tokenIDs[position] != boundaryTokenID { ids.append(tokenIDs[position]) }
             } else {
@@ -244,5 +247,24 @@ public final class PlamoTokenizer {
     /// UTF-8 length of one scalar: 1 to 4 bytes.
     private static func byteCount(_ scalar: Int32) -> Int {
         1 + (scalar >= 0x80 ? 1 : 0) + (scalar >= 0x800 ? 1 : 0) + (scalar >= 0x10000 ? 1 : 0)
+    }
+}
+
+/// The tokenizer's `blob.json`: the scores and patterns the Python tokenizer carries in code.
+private struct PlamoTokenizerMeta: Decodable {
+    let boundaryChar: String
+    let boundaryTokenID: Int32
+    let unknownScore: Int32
+    let invalidScore: Int32
+    let specialPattern: String
+    let breakPattern: String
+
+    private enum CodingKeys: String, CodingKey {
+        case boundaryChar = "boundary_char"
+        case boundaryTokenID = "boundary_token_id"
+        case unknownScore = "unknown_score"
+        case invalidScore = "invalid_score"
+        case specialPattern = "special_pattern"
+        case breakPattern = "break_pattern"
     }
 }

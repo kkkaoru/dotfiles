@@ -5,7 +5,8 @@ import Foundation
 public struct Router: Sendable {
     public static let modelID = "plamo-3-translate"
     public static let modelsJSON =
-        #"{"object":"list","data":[{"id":"plamo-3-translate","object":"model","created":0,"owned_by":"local"}]}"#
+        #"{"object":"list","data":[{"id":"plamo-3-translate","object":"model","created":0,"#
+        + #""owned_by":"local"}]}"#
 
     private let provider: any CompletionProviding
     private let defaultMaxTokens: Int
@@ -71,14 +72,13 @@ public struct Router: Sendable {
         } catch {
             return Router.failure(error)
         }
+        let choice = ChatChoice(
+            index: 0,
+            message: ChatMessage(role: "assistant", content: completion.text),
+            finishReason: "stop")
         let payload = ChatPayload(
             id: Router.modelID, object: "chat.completion", model: Router.modelID,
-            choices: [
-                .init(
-                    index: 0,
-                    message: .init(role: "assistant", content: completion.text),
-                    finishReason: "stop")
-            ],
+            choices: [choice],
             usage: .init(prompt: completion.promptTokens, completion: completion.tokens))
         return Router.encode(payload)
     }
@@ -92,12 +92,12 @@ public struct Router: Sendable {
     }
 
     private static func encode(_ payload: some Encodable) -> HTTPResponse {
-        do {
-            let data = try JSONEncoder().encode(payload)
-            return HTTPResponse(status: "200 OK", body: String(decoding: data, as: UTF8.self))
-        } catch {
+        guard let data = try? JSONEncoder().encode(payload),
+            let body = String(bytes: data, encoding: .utf8)
+        else {
             return Router.error(status: "500 Internal Server Error", message: "encode failed")
         }
+        return HTTPResponse(status: "200 OK", body: body)
     }
 
     private static func failure(_ error: any Error) -> HTTPResponse {
@@ -115,126 +115,126 @@ public struct Router: Sendable {
             status: status,
             body: #"{"error":{"message":"\#(escaped)","type":"invalid_request_error"}}"#)
     }
+}
 
-    // MARK: - Bodies
+// MARK: - Bodies
 
-    private struct CompletionBody: Decodable {
-        let prompt: String?
-        let maxTokens: Int?
-        let stop: StopSequence?
+private struct CompletionBody: Decodable {
+    let prompt: String?
+    let maxTokens: Int?
+    let stop: StopSequence?
 
-        private enum CodingKeys: String, CodingKey {
-            case prompt
-            case maxTokens = "max_tokens"
-            case stop
-        }
+    private enum CodingKeys: String, CodingKey {
+        case prompt
+        case maxTokens = "max_tokens"
+        case stop
+    }
 
-        init(from decoder: any Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            prompt = try container.decodeIfPresent(String.self, forKey: .prompt)
-            maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens)
-            stop = try container.decodeIfPresent(StopSequence.self, forKey: .stop)
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        prompt = try container.decodeIfPresent(String.self, forKey: .prompt)
+        maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens)
+        stop = try container.decodeIfPresent(StopSequence.self, forKey: .stop)
+    }
+}
+
+/// `stop` is either one string or a list of them, the way OpenAI accepts it.
+private enum StopSequence: Decodable {
+    case one(String)
+    case many([String])
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let many = try? container.decode([String].self) {
+            self = .many(many)
+        } else {
+            self = .one(try container.decode(String.self))
         }
     }
 
-    /// `stop` is either one string or a list of them, the way OpenAI accepts it.
-    private enum StopSequence: Decodable {
-        case one(String)
-        case many([String])
-
-        init(from decoder: any Decoder) throws {
-            let container = try decoder.singleValueContainer()
-            if let many = try? container.decode([String].self) {
-                self = .many(many)
-            } else {
-                self = .one(try container.decode(String.self))
-            }
-        }
-
-        var values: [String] {
-            switch self {
-            case .one(let value): return [value]
-            case .many(let values): return values
-            }
+    var values: [String] {
+        switch self {
+        case .one(let value): return [value]
+        case .many(let values): return values
         }
     }
+}
 
-    private struct ChatBody: Decodable {
-        struct Message: Decodable {
-            let content: String?
-        }
+private struct ChatBody: Decodable {
+    let messages: [ChatMessageBody]
+    let maxTokens: Int?
 
-        let messages: [Message]
-        let maxTokens: Int?
+    private enum CodingKeys: String, CodingKey {
+        case messages
+        case maxTokens = "max_tokens"
+    }
+}
 
-        private enum CodingKeys: String, CodingKey {
-            case messages
-            case maxTokens = "max_tokens"
-        }
+private struct ChatMessageBody: Decodable {
+    let content: String?
+}
+
+private struct Usage: Encodable {
+    let promptTokens: Int
+    let completionTokens: Int
+    let totalTokens: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case promptTokens = "prompt_tokens"
+        case completionTokens = "completion_tokens"
+        case totalTokens = "total_tokens"
     }
 
-    private struct Usage: Encodable {
-        let promptTokens: Int
-        let completionTokens: Int
-        let totalTokens: Int
-
-        private enum CodingKeys: String, CodingKey {
-            case promptTokens = "prompt_tokens"
-            case completionTokens = "completion_tokens"
-            case totalTokens = "total_tokens"
-        }
-
-        init(prompt: Int, completion: Int) {
-            promptTokens = prompt
-            completionTokens = completion
-            totalTokens = prompt + completion
-        }
+    init(prompt: Int, completion: Int) {
+        promptTokens = prompt
+        completionTokens = completion
+        totalTokens = prompt + completion
     }
+}
 
-    private struct CompletionPayload: Encodable {
-        struct Choice: Encodable {
-            let index: Int
-            let text: String
-            let finishReason: String
+private struct CompletionChoice: Encodable {
+    let index: Int
+    let text: String
+    let finishReason: String
 
-            private enum CodingKeys: String, CodingKey {
-                case index
-                case text
-                case finishReason = "finish_reason"
-            }
-        }
-
-        let id: String
-        let object: String
-        let created = 0
-        let model: String
-        let choices: [Choice]
-        let usage: Usage
+    private enum CodingKeys: String, CodingKey {
+        case index
+        case text
+        case finishReason = "finish_reason"
     }
+}
 
-    private struct ChatPayload: Encodable {
-        struct Message: Encodable {
-            let role: String
-            let content: String
-        }
+private struct CompletionPayload: Encodable {
+    let id: String
+    let object: String
+    let created = 0
+    let model: String
+    let choices: [CompletionChoice]
+    let usage: Usage
+}
 
-        struct Choice: Encodable {
-            let index: Int
-            let message: Message
-            let finishReason: String
+private struct ChatMessage: Encodable {
+    let role: String
+    let content: String
+}
 
-            private enum CodingKeys: String, CodingKey {
-                case index
-                case message
-                case finishReason = "finish_reason"
-            }
-        }
+private struct ChatChoice: Encodable {
+    let index: Int
+    let message: ChatMessage
+    let finishReason: String
 
-        let id: String
-        let object: String
-        let created = 0
-        let model: String
-        let choices: [Choice]
-        let usage: Usage
+    private enum CodingKeys: String, CodingKey {
+        case index
+        case message
+        case finishReason = "finish_reason"
     }
+}
+
+private struct ChatPayload: Encodable {
+    let id: String
+    let object: String
+    let created = 0
+    let model: String
+    let choices: [ChatChoice]
+    let usage: Usage
 }

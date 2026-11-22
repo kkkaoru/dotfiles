@@ -1,12 +1,13 @@
 import Foundation
 
-/// Greedy completions repeat constantly — a redrawn block, a scrolled screen, a resumed session — so
-/// the server answers a repeat from memory instead of decoding it again. `scripts/plamo-mlx-server.py`
-/// does the same on disk; this keeps it in RAM, where a hit costs a dictionary lookup.
+/// Greedy completions repeat constantly — a redrawn block, a scrolled screen, a resumed
+/// session — so the server answers a repeat from memory instead of decoding it again.
+/// `scripts/plamo-mlx-server.py` does the same on disk; this keeps it in RAM, where a hit costs a
+/// dictionary lookup.
 ///
-/// Every request the router serves is greedy, so the prompt, the token cap and the stop list are the
-/// whole key. The oldest entry is dropped past `capacity`, which bounds the memory a cache of short
-/// translations can take.
+/// Every request the router serves is greedy, so the prompt, the token cap and the stop list are
+/// the whole key. The oldest entry is dropped past `capacity`, which bounds the memory a cache of
+/// short translations can take.
 public actor CachingProvider: CompletionProviding {
     private struct Key: Hashable {
         let prompt: String
