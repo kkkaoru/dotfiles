@@ -46,7 +46,9 @@ public final class PlamoModel {
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw PlamoError.missingModelFile("model.safetensors")
         }
-        return try PlamoModel.make(config: config, arrays: loadArrays(url: url))
+        let arrays = try loadArrays(url: url)
+        Timing.mark("reload.arrays")
+        return try PlamoModel.make(config: config, arrays: arrays)
     }
 
     /// Builds the model from named arrays: the checkpoint loader and the tests' tiny fixtures

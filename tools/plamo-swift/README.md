@@ -85,7 +85,7 @@ fixed part and the per-token part separate:
 | first completion in a fresh process | 0.372 s |
 | resident / physical footprint while serving | 558 / 631 MB |
 | resident / physical footprint in the lukewarm state | 78 / 58 MB |
-| first request after the lukewarm release | 0.203 s |
+| first request after the lukewarm release | 0.061 s median (0.060–0.097 s of four) |
 | peak physical footprint during a long prefill | 1052 MB |
 | compressed | 0 B |
 
@@ -126,11 +126,23 @@ Measured transitions (M5 Pro, release build; a fresh process per column, from `s
 | cold → ready | spawn, dyld, MLX init, tokenizer decode, weight read, listener | 0.063 s |
 | cold → warm | the above, then the warm-up's first eval compiles the Metal kernels | 0.216 s to the first completion |
 | warm → lukewarm | `--lukewarm-seconds` idle (default 60) plus one idle-check tick (≤5 s), then the weights and the Metal buffer cache are dropped | the release is a `nil` and `Memory.clearCache()`; the state is entered within one tick of the window |
-| lukewarm → warm | the weights are read again; no spawn, no tokenizer decode, no kernel compile | 0.203 s to the first completion |
+| lukewarm → warm | `loadArrays` re-creates lazy views over the file; the first eval materializes the 478 MB; no spawn, no tokenizer decode, no kernel compile | 0.061 s median to the first completion (0.060–0.097 s of four, one 0.45 s outlier) |
 
-The reload costs the same wall time as a cold start, because the 478 MB weight read dominates both and
-the compile the lukewarm state saves is already hidden behind the warm-up. What lukewarm buys is the
-memory: 60 MB held instead of 631 MB, for hours, with no restart to get back to full speed.
+The reload is not a weight read. MLX's safetensors loader returns lazy arrays over a pread thread
+pool, so `loadArrays` parses the header and builds views without touching the tensors: `reload.begin`
+→ `reload.arrays` is 0.8–1.2 ms, and `lukewarm.reload` adds 0.2–0.4 ms of model construction. The cost
+lands on the first eval that materializes the 478 MB: the first prefill after a reload is
+25.0–25.6 ms against 8.4–9.4 ms for the next request in the same process — about 16 ms at ~30 GB/s —
+and the whole reload request is 0.060–0.097 s against 0.042–0.061 s warm. What lukewarm buys is the
+memory: 60 MB held instead of 631 MB, for hours; the reload still lands ahead of a cold start because
+the process, the tokenizer and the compiled kernels are already there.
+
+A Metal API does not shorten that 16 ms. `MTLIOCommandQueue` would read the same page-cached file no
+faster than the pread pool, and it cannot skip the upload the 16 ms is spent on; keeping the weights
+in an `MTLBuffer` the first eval copies from, or in a purgeable buffer that outlives the release,
+would put the 478 MB back into the idle footprint — the one thing the state exists to avoid. The
+loader itself has 1.5 ms in it, and the rest is a memory-system-bound upload, so nothing was changed
+for this path.
 
 ### How the lukewarm state works
 
@@ -143,7 +155,9 @@ The state is entered by the watcher `serve` already runs for `--idle-seconds`: t
 releases the weights once per idle stretch, after `--lukewarm-seconds` (default 60, `0` disables) with
 no request. `--idle-seconds 0` never exits, and both translate mods pass `--idle-seconds 14400`, so a
 session's server holds the lukewarm state instead of paying a spawn and a reload per idle gap.
-`PLAMO_TIMING=1` logs `lukewarm.begin`, `lukewarm` and `lukewarm.reload` with their durations.
+`PLAMO_TIMING=1` logs `lukewarm.begin`, `lukewarm`, `reload.begin`, `reload.arrays` and
+`lukewarm.reload` with their durations, which is what separates the loader's 1.5 ms from the first
+eval's 16 ms.
 
 `scripts/measure-lukewarm.py` (port 18558, so a live server keeps serving) measures the states. Every
 prompt carries a nonce: a repeated prompt is answered from the completion cache in about a

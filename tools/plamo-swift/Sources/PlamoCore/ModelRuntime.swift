@@ -61,6 +61,7 @@ public actor ModelRuntime: CompletionProviding {
     /// is the first thing that touches the arrays and there is nothing left to warm.
     private func current() throws -> PlamoModel {
         if let model { return model }
+        Timing.mark("reload.begin")
         let reloaded = try PlamoModel.load(directory: modelDirectory)
         model = reloaded
         Timing.mark("lukewarm.reload")
