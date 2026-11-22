@@ -8,8 +8,8 @@ power-state fault on the link between Apple's ACIO firmware and the hub.
 |---|---|
 | Status | open — mitigated, not fixed |
 | First seen | 2026-11-17 11:35 JST |
-| Last seen | 2026-11-21 23:20 JST |
-| Panics recorded | 8, all `assert_id=2548` |
+| Last seen | 2026-11-22 01:57 JST |
+| Panics recorded | 9, all `assert_id=2548` |
 | Pi session | `01a1fcbf-4047-7717-a54d-ff135dcda229` |
 
 Resume the investigation session with:
@@ -62,6 +62,7 @@ fiddly: `IOThunderboltSwitchIntelJHL9580::overrideSupportedCLxStates - Gen4 disa
 | 2026-11-21 14:07 | 2548 |
 | 2026-11-21 15:13 | 2548 |
 | 2026-11-21 23:20 | 2548 |
+| 2026-11-22 01:57 | 2548 |
 
 ## Considered and not supported
 
@@ -76,13 +77,30 @@ taken out of the chain for a controlled period, and has not been tried on anothe
 
 ## Mitigations applied
 
-`./scripts/tb-panic-mitigation.sh [status|apply|revert]`:
+`./scripts/tb-panic-mitigation.sh [status|apply|revert|power|power-revert]`:
 
 - `pmset -a powermode 0` — High Power Mode off, removing power margin from the link.
 - Thunderbolt Bridge network service disabled — removes an idle IP-over-Thunderbolt service.
   Thunderbolt tunnelling (USB, DisplayPort, PCIe) is unaffected.
+- `power` — `standby`, `autopoweroff`, `hibernatemode`, `womp`, `powernap` and `tcpkeepalive`
+  all 0, so the Mac neither enters deep standby/hibernation nor wakes for network access.
 
-Neither is a proven fix. Current state: `powermode 0`, `Thunderbolt Bridge` disabled.
+Neither of the first two is a proven fix. **The 2026-11-22 01:57 panic happened with both of
+those active** (`powermode 0` set at 23:43, bridge disabled), so they do not prevent it — the
+firmware assert survives the power-margin and idle-network changes.
+
+The power tier targets the one dimension still under control: the deep-sleep transitions that
+drive ACIO power states. Five of the nine panics fell between 23:00 and 03:20, the idle window
+where the Mac enters standby, and the hub's `JHL9580` controller is documented churning power
+states while idle with no downstream devices. Cost: no hibernate, no wake for network access and
+no Power Nap; normal display sleep and Thunderbolt tunnelling are unchanged.
+
+Current state: `powermode 0`, `Thunderbolt Bridge` disabled, power tier **not** applied yet —
+run `./scripts/tb-panic-mitigation.sh power` (asks for an admin password) to test it.
+
+After the 01:57 reboot `tb-watch.log` recorded `hub=no` for the first hour, then `hub=yes` again
+at `ROM 98`, `speed=2,8`, `width=1,2`: the hub was out of the chain for that hour and the machine
+stayed up, which is consistent with the correlation but is not a controlled test.
 
 ## Evidence collection
 
@@ -118,16 +136,18 @@ macOS update is the other half.
 
 ## Next steps
 
-1. Read `tb-watch.log` after two or three days: is `hub=` stable, and does it flap on its own?
-2. Decide the controlled test: hub out of the chain for a day, or the hub on another Mac.
-3. Open the OWC case with the panic files, `ROM 98` / `EEPROM 2`, and the idle-power-state report.
-4. Retest after the next macOS update and check whether `AppleCIOFirmwareV2` moved past
+1. Apply the power tier and watch `tb-watch.log` for a week: does the panic interval lengthen?
+   Revert with `power-revert` if a wake-on-LAN or hibernate behaviour is missed.
+2. Read `tb-watch.log` after two or three days: is `hub=` stable, and does it flap on its own?
+3. Decide the controlled test: hub out of the chain for a day, or the hub on another Mac.
+4. Open the OWC case with the panic files, `ROM 98` / `EEPROM 2`, and the idle-power-state report.
+5. Retest after the next macOS update and check whether `AppleCIOFirmwareV2` moved past
    `761.40.2~1487`.
 
 ## Artifacts
 
 - Panic files: `/Library/Logs/DiagnosticReports/panic-full-*.panic` (not in Git)
-- Raw dumps from the first investigation: `tmp/panic-report.txt`, `tmp/panic-report2.txt`
-  (`tmp/` is gitignored)
+- Raw dumps from the first investigation: `tmp/panic-report.txt`, `tmp/panic-report2.txt`,
+  `tmp/panic-report3.txt` (`tmp/` is gitignored)
 - Scripts: `scripts/tb-panic-mitigation.sh`, `scripts/tb-watch.sh`
 - Log: `~/Library/Logs/tb-watch.log`
