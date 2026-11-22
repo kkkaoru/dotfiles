@@ -60,6 +60,9 @@
   svg .title { fill: var(--fg); font-size: 13px; font-weight: 600; }
   svg .note { fill: var(--muted); font-size: 11.5px; }
   svg .rail { stroke: var(--line); stroke-width: 1.5; }
+  svg .edge-manual { stroke: var(--accent); stroke-width: 1.3; fill: none; opacity: .55; stroke-dasharray: 6 5; }
+  svg .node-mute { fill: none; stroke: var(--line); stroke-width: 1.2; stroke-dasharray: 4 4; }
+  svg .legend { fill: var(--muted); font-size: 11.5px; }
 
   .note-p { color: var(--muted); font-size: .9rem; }
   .tag { display: inline-block; font-size: .75rem; padding: .05rem .4rem; border: 1px solid var(--line); border-radius: 1rem; color: var(--muted); }
@@ -254,6 +257,240 @@ edge  = from + relation + to [+ note]
   <li>関係の解釈。足すだけで、閉包・循環検出・順序付けはしない。<code>show</code> は 1 ホップだけ。</li>
   <li>上の 8 ツール以外の呼び出し。ファイルやドキュメントの関係は今までどおり <code>link</code> で書く。</li>
 </ul>
+
+<h2>グラフの型とユースケース</h2>
+
+<p>同じ語彙で、形の違うグラフが書ける。どれも「ノード + 向きのあるエッジ」だけで、専用の図式は無い。</p>
+
+<h3>ハブ — 1 セッションが何を持っているか</h3>
+
+<figure>
+<svg viewBox="0 0 900 360" role="img" aria-label="1 セッションを中心にしたハブのグラフ">
+  <defs>
+    <marker id="head3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="arrow-head" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+
+  <rect class="node-hi" x="20" y="150" width="200" height="56" rx="9"/>
+  <text class="id" x="34" y="176">session:a1b2c3d4</text>
+  <text class="lbl" x="34" y="194">作業中のセッション</text>
+
+  <line class="edge" x1="222" y1="164" x2="410" y2="44" marker-end="url(#head3)"/>
+  <line class="edge" x1="222" y1="174" x2="410" y2="110" marker-end="url(#head3)"/>
+  <line class="edge" x1="222" y1="184" x2="410" y2="176" marker-end="url(#head3)"/>
+  <line class="edge" x1="222" y1="196" x2="410" y2="240" marker-end="url(#head3)"/>
+
+  <text class="lbl" x="238" y="88">pursued</text>
+  <text class="lbl" x="238" y="128">looped</text>
+  <text class="lbl" x="238" y="170">ran</text>
+  <text class="lbl" x="238" y="226">planned</text>
+
+  <rect class="node" x="410" y="20" width="230" height="44" rx="8"/>
+  <text class="id" x="424" y="48">goal:relations</text>
+
+  <rect class="node" x="410" y="86" width="230" height="44" rx="8"/>
+  <text class="id" x="424" y="114">loop:01a1fcbf</text>
+
+  <rect class="node" x="410" y="152" width="230" height="44" rx="8"/>
+  <text class="id" x="424" y="180">tmux:pi-tmux-1</text>
+
+  <rect class="node" x="410" y="218" width="230" height="44" rx="8"/>
+  <text class="id" x="424" y="246">timeline:tree-2</text>
+
+  <rect class="node" x="720" y="218" width="160" height="40" rx="8"/>
+  <text class="id" x="734" y="244">task:t1</text>
+
+  <rect class="node" x="720" y="272" width="160" height="40" rx="8"/>
+  <text class="id" x="734" y="298">task:t2</text>
+
+  <line class="edge" x1="640" y1="238" x2="712" y2="238" marker-end="url(#head3)"/>
+  <line class="edge" x1="640" y1="246" x2="712" y2="292" marker-end="url(#head3)"/>
+  <text class="lbl" x="646" y="230">contains</text>
+</svg>
+<figcaption>4 本の自動エッジが 1 つの <code>session</code> から出て、<code>timeline</code> がさらにタスクを抱える。ゴールが完了すれば、逆向きの <code>goal —completed→ session</code> がもう 1 本増える。</figcaption>
+</figure>
+
+<h3>運用の一周 — 自動と手動の境目</h3>
+
+<figure>
+<svg viewBox="0 0 960 300" role="img" aria-label="セッションからジョブ、成果物への流れ">
+  <defs>
+    <marker id="head4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="arrow-head" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+
+  <rect class="node-hi" x="20" y="120" width="210" height="54" rx="9"/>
+  <text class="id" x="34" y="146">session:a1b2c3d4</text>
+  <text class="lbl" x="34" y="164">作業中のセッション</text>
+
+  <rect class="node" x="400" y="30" width="210" height="44" rx="8"/>
+  <text class="id" x="414" y="58">goal:relations</text>
+
+  <rect class="node" x="400" y="180" width="210" height="44" rx="8"/>
+  <text class="id" x="414" y="208">tmux:pi-tmux-1</text>
+
+  <rect class="node" x="730" y="180" width="210" height="44" rx="8"/>
+  <text class="id" x="744" y="208">doc:docs/relations.md</text>
+
+  <line class="edge" x1="232" y1="136" x2="392" y2="56" marker-end="url(#head4)"/>
+  <text class="lbl" x="250" y="100">pursued</text>
+
+  <line class="edge" x1="232" y1="158" x2="392" y2="200" marker-end="url(#head4)"/>
+  <text class="lbl" x="252" y="196">ran</text>
+
+  <line class="edge-manual" x1="612" y1="202" x2="722" y2="202" marker-end="url(#head4)"/>
+  <text class="lbl" x="614" y="192">produced</text>
+
+  <line class="edge" x1="400" y1="74" x2="232" y2="132" marker-end="url(#head4)"/>
+  <text class="lbl" x="316" y="88">completed</text>
+
+  <line class="edge" x1="40" y1="256" x2="90" y2="256"/>
+  <text class="legend" x="100" y="260">自動で記録される</text>
+  <line class="edge-manual" x1="250" y1="256" x2="300" y2="256"/>
+  <text class="legend" x="310" y="260">手で link する（成果物の関係は推測しない）</text>
+</svg>
+<figcaption>ツールが知っている関係（狙った、走らせた、完了した）は自動。ジョブが何を生んだかはツールには分からないので、<code>relations link</code> で 1 本だけ足す。</figcaption>
+</figure>
+
+<h3>タスクツリー — 入れ子と順序</h3>
+
+<figure>
+<svg viewBox="0 0 900 300" role="img" aria-label="タイムラインのタスクツリー">
+  <defs>
+    <marker id="head5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="arrow-head" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+
+  <rect class="node" x="20" y="116" width="200" height="48" rx="8"/>
+  <text class="id" x="34" y="145">timeline:tree-2</text>
+
+  <rect class="node" x="310" y="30" width="180" height="40" rx="8"/>
+  <text class="id" x="324" y="55">task:t1</text>
+  <rect class="node" x="310" y="116" width="180" height="40" rx="8"/>
+  <text class="id" x="324" y="141">task:t2</text>
+  <rect class="node" x="310" y="202" width="180" height="40" rx="8"/>
+  <text class="id" x="324" y="227">task:t3</text>
+
+  <rect class="node" x="570" y="30" width="200" height="40" rx="8"/>
+  <text class="id" x="584" y="55">task:t1.1</text>
+
+  <line class="edge" x1="222" y1="132" x2="302" y2="52" marker-end="url(#head5)"/>
+  <line class="edge" x1="222" y1="140" x2="302" y2="136" marker-end="url(#head5)"/>
+  <line class="edge" x1="222" y1="148" x2="302" y2="220" marker-end="url(#head5)"/>
+  <text class="lbl" x="238" y="86">contains</text>
+  <text class="lbl" x="238" y="132">contains</text>
+  <text class="lbl" x="238" y="206">contains</text>
+
+  <line class="edge" x1="490" y1="50" x2="562" y2="50" marker-end="url(#head5)"/>
+  <text class="lbl" x="494" y="42">contains</text>
+
+  <line class="edge-manual" x1="310" y1="120" x2="310" y2="76" marker-end="url(#head5)"/>
+  <text class="lbl" x="266" y="104">blocked-by</text>
+</svg>
+<figcaption><code>add</code> は <code>contains</code> を親に 1 本引くだけ。タスク同士の順序（<code>blocked-by</code>）はツールの領分ではないので、必要なら手で引く。</figcaption>
+</figure>
+
+<h3>共有ノード — 複数のセッションが同じ物を指す</h3>
+
+<figure>
+<svg viewBox="0 0 900 300" role="img" aria-label="2 つのセッションが同じ文書を指す">
+  <defs>
+    <marker id="head6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="arrow-head" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+
+  <rect class="node-hi" x="20" y="40" width="200" height="48" rx="8"/>
+  <text class="id" x="34" y="69">session:a1b2c3d4</text>
+
+  <rect class="node-hi" x="680" y="40" width="200" height="48" rx="8"/>
+  <text class="id" x="694" y="69">session:e5f6a7b8</text>
+
+  <rect class="node" x="330" y="104" width="240" height="48" rx="8"/>
+  <text class="id" x="344" y="133">doc:docs/panic-acio0.md</text>
+
+  <rect class="node" x="330" y="210" width="240" height="48" rx="8"/>
+  <text class="id" x="344" y="239">file:tmp/panic-report.txt</text>
+
+  <line class="edge" x1="222" y1="76" x2="322" y2="118" marker-end="url(#head6)"/>
+  <text class="lbl" x="238" y="92">produced</text>
+
+  <line class="edge" x1="678" y1="76" x2="578" y2="118" marker-end="url(#head6)"/>
+  <text class="lbl" x="600" y="92">produced</text>
+
+  <line class="edge-manual" x1="450" y1="152" x2="450" y2="202" marker-end="url(#head6)"/>
+  <text class="lbl" x="458" y="182">evidenced-by</text>
+</svg>
+<figcaption>ノードは id で共有される。2 つのセッションが同じ <code>doc</code> を指せば、<code>show</code> は両方のエッジを返す。セッションをまたぐのはエッジではなく、同じ id。</figcaption>
+</figure>
+
+<h3>書かない場合 — エッジ 0 本</h3>
+
+<figure>
+<svg viewBox="0 0 900 200" role="img" aria-label="記録されない 3 つの例">
+  <rect class="node-mute" x="20" y="46" width="260" height="56" rx="8"/>
+  <text class="id" x="34" y="72">tmux_exec（起動失敗）</text>
+  <text class="lbl" x="34" y="90">セッション名が無い</text>
+
+  <rect class="node-mute" x="320" y="46" width="260" height="56" rx="8"/>
+  <text class="id" x="334" y="72">get_goal（ゴールなし）</text>
+  <text class="lbl" x="334" y="90">id が無い</text>
+
+  <rect class="node-mute" x="620" y="46" width="260" height="56" rx="8"/>
+  <text class="id" x="634" y="72">bash / read / edit</text>
+  <text class="lbl" x="634" y="90">対象外のツール</text>
+
+  <text class="note" x="20" y="140">どれもエッジ 0 本。推測してノードを作るより、何も書かない方が良い — グラフは「起きたこと」だけを含む。</text>
+  <text class="note" x="20" y="164">空のグラフは <tspan class="id">no relations</tspan> と答える。</text>
+</svg>
+<figcaption>自動記録は事実だけを足す。失敗した起動、見つからなかったゴール、対象外のツールは、それぞれ何も残さない。</figcaption>
+</figure>
+
+<h3>読み方 — show は 1 ホップ</h3>
+
+<figure>
+<svg viewBox="0 0 900 260" role="img" aria-label="show が返す 1 ホップの近傍">
+  <defs>
+    <marker id="head7" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path class="arrow-head" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+
+  <rect class="node-hi" x="340" y="100" width="220" height="54" rx="9"/>
+  <text class="id" x="354" y="126">session:a1b2c3d4</text>
+  <text class="lbl" x="354" y="144">show の対象</text>
+
+  <rect class="node" x="20" y="40" width="220" height="44" rx="8"/>
+  <text class="id" x="34" y="68">goal:relations</text>
+
+  <rect class="node" x="20" y="176" width="220" height="44" rx="8"/>
+  <text class="id" x="34" y="204">timeline:tree-2</text>
+
+  <rect class="node" x="620" y="40" width="220" height="44" rx="8"/>
+  <text class="id" x="634" y="68">tmux:pi-tmux-1</text>
+
+  <rect class="node" x="620" y="176" width="220" height="44" rx="8"/>
+  <text class="id" x="634" y="204">doc:docs/relations.md</text>
+
+  <line class="edge" x1="242" y1="66" x2="332" y2="112" marker-end="url(#head7)"/>
+  <text class="lbl" x="252" y="84">pursued</text>
+
+  <line class="edge" x1="242" y1="194" x2="332" y2="146" marker-end="url(#head7)"/>
+  <text class="lbl" x="252" y="184">planned</text>
+
+  <line class="edge" x1="562" y1="112" x2="612" y2="68" marker-end="url(#head7)"/>
+  <text class="lbl" x="556" y="104">ran</text>
+
+  <line class="edge" x1="562" y1="146" x2="612" y2="192" marker-end="url(#head7)"/>
+  <text class="lbl" x="556" y="168">produced</text>
+
+  <text class="note" x="20" y="246">tmux が生んだ doc は 2 ホップ目。show はそれを描かない — 必要ならそのノードを show する。</text>
+</svg>
+<figcaption>入ってくるエッジは <code>&lt;- relation from</code>、出ていくエッジは <code>relation -&gt;</code> として並ぶ。閉包は無い。</figcaption>
+</figure>
 
 <h2>書き込みの流れ</h2>
 
