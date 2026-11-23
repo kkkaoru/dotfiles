@@ -126,68 +126,76 @@ Measured transitions (M5 Pro, release build; a fresh process per column, from `s
 | cold → ready | spawn, dyld, MLX init, tokenizer decode, weight read, listener | 0.063 s |
 | cold → warm | the above, then the warm-up's first eval compiles the Metal kernels | 0.216 s to the first completion |
 | warm → lukewarm | `--lukewarm-seconds` idle (default 60) plus one idle-check tick (≤5 s), then the weights and the Metal buffer cache are dropped | the release is a `nil` and `Memory.clearCache()`; the state is entered within one tick of the window |
-| lukewarm → warm | `loadArrays` re-creates lazy views over the file; the first eval materializes the 478 MB; no spawn, no tokenizer decode, no kernel compile | 0.061 s median to the first completion (0.060–0.097 s of four, one 0.45 s outlier) |
+| lukewarm → warm | `mmap` of the packed cache, then every tensor adopted as a no-copy Metal buffer over those pages; no spawn, no tokenizer decode, no kernel compile, no read | 5.29 ms to the reload, 0.048 s to the first completion |
 
-The reload is not a weight read. MLX's safetensors loader returns lazy arrays over a pread thread
-pool, so `loadArrays` parses the header and builds views without touching the tensors: `reload.begin`
-→ `reload.arrays` is 0.8–1.2 ms, and `lukewarm.reload` adds 0.2–0.4 ms of model construction. The cost
-lands on the first eval that materializes the 478 MB (501 MB on disk): the first prefill after a
-reload is 25.0–25.6 ms against 8.4–9.4 ms for the next request in the same process, and the whole
-reload request is 0.060–0.097 s against 0.042–0.061 s warm. What lukewarm buys is the memory: 60 MB
-held instead of 631 MB, for hours; the reload still lands ahead of a cold start because the process,
-the tokenizer and the compiled kernels are already there.
+The reload no longer reads the weights, and it does not allocate them either. `plamo-swift pack
+--model <dir>` writes `model.packed` beside the checkpoint once (479.2 MB in 0.31 s): the same
+tensors, each starting on its own page boundary, with the checkpoint's size and modification time in
+`__metadata__`, so a replaced model is repacked rather than adopted stale. `Packed.load` maps that
+file read-only and adopts each slot with `MLXArray(rawPointer:)`, which hands Metal the pointer
+without a copy: the weights *are* the page cache. The system can reclaim them under pressure, and the
+process never owns a 478 MB anonymous region. The mapping is unmapped by its own `deinit`, i.e. when
+the last adopted array dies, because MLX can still hold a Metal buffer over those pages after the
+model itself is released.
 
-Measured in isolation (`PLAMO_LOAD_BENCH=1 swift test --filter LoadBenchTests`), that ~16 ms is a
-`loadArrays` of 2.96–3.81 ms for the header parse and the array construction plus an `eval` of
-10.3–10.9 ms for the 501 MB. The eval is the read, and it is already at its floor: MLX's pool is
-`new ThreadPool{4}` in `mlx/io/load.cpp`, and four threads read these page-cached bytes in 10.7 ms
-(46.9 GB/s), so there is no inefficiency in the loader to remove.
-
-A loader of our own was then written and measured instead of assumed: safetensors header parse, one
-page-aligned arena, a parallel read, then `MLXArray(rawPointer:)` adoption (because
-`newBufferWithBytesNoCopy` accepts only page-aligned pointers). It is slower than the path it would
-replace, in every variant tried:
+Measured on the same page-cached 501 MB (`PLAMO_LOAD_BENCH=1 swift test --filter LoadBenchTests`):
 
 | read of the same 501 MB, page-cached | best of 3 |
 |---|---|
-| `loadArrays` + `eval`, MLX's 4-thread pool | 11.4–11.7 ms (45 GB/s) |
-| own loader, `pread`, 4 threads | 19.0 ms (26.4 GB/s) |
-| own loader, `pread`, 8 / 14 threads | 25.5 / 25.0 ms |
-| own loader, `mmap` + `memcpy`, 4 / 8 / 14 | 27.8 / 31.9 / 32.4 ms |
+| `loadArrays` (parse 2.91 ms) + `eval` (11.13 ms) | 14.05 ms |
+| packed cache: `mmap` + adopt 2.43 ms, `eval` 0.07 ms | 2.50 ms |
+| raw `pread`, 14 threads (no adoption) | 7.34 ms (68.3 GB/s) |
 
-The 7.3 ms a raw 14-thread read suggested does not survive the copy: those bytes have to land in
-memory the loader owns, and writing them faults in ~30 600 fresh pages, which costs more than the
-wider read saves — more threads make it worse, not better. Rejected; the loader is not in the tree.
+The eval is free because there is nothing left to materialize: the tensors are the mapping. That is
+also why more threads win nothing here — a faster copy of bytes that no longer need copying is not a
+speed-up. On a spare port the reload is `reload.begin` → `lukewarm.reload` in 5.29 ms against
+0.060–0.097 s for the `loadArrays` path, and the lukewarm footprint is unchanged at 58 MB phys
+(78 MB rss), because file-backed pages are not the process's own memory.
 
-Two findings from the attempt are worth keeping. A freed 479 MB malloc region stays resident as an
+A loader that reads the checkpoint itself was tried first and rejected: safetensors header parse, one
+page-aligned arena, a parallel `pread`, then `MLXArray(rawPointer:)` adoption. It measured 19.0 ms at
+best (26.4 GB/s) against `loadArrays`' 11.4–11.7 ms, and more threads made it worse (25.5 ms at 8,
+25.0 ms at 14), because the bytes have to land in memory the loader owns and writing them faults in
+~30 600 fresh pages. The packed cache wins by never doing that copy at all.
+
+Two findings from that attempt are worth keeping. A freed 479 MB malloc region stays resident as an
 empty large-allocator region (measured 497 MB empty but still dirty, and `malloc_zone_pressure_relief`
 does not return it), where `munmap` returns the pages at once — so a design that owns the weights'
-memory must map it, not malloc it, and the retained-`MTLBuffer` idea below inherits that. And a
-`deinit` runs before Swift releases a class's stored properties, so freeing an arena from a `deinit`
-unmaps bytes the model's arrays still point at; the release has to come after the last array is gone.
+memory must map it, not malloc it. And a `deinit` runs before Swift releases a class's stored
+properties, so freeing an arena from the model's `deinit` unmaps bytes its arrays still point at; the
+packed mapping is therefore owned by the arrays' finalizers, not by the model.
 
-A Metal API does not shorten it either. `MTLIOCommandQueue` would read the same page-cached file no
-faster than the pread pool, and it cannot skip the upload the read is. Keeping the weights across the
-release would skip it: MLX adopts a foreign pointer without copying — `array(void*, …)` calls
-`MetalAllocator::make_buffer`, which wraps the pointer with `newBufferWithBytesNoCopy` — so a retained
-478 MB `MTLBuffer` can be re-adopted as the model's weights with no read and no upload. That is a
-residency trade, not a speed-up: 478 MB held for hours, purgeable only under memory pressure, which is
-exactly when the next request needs it back, to save ~13 ms once per idle gap.
+Keeping the weights resident across the release would skip the read too — MLX adopts a foreign pointer
+without copying, so a retained 478 MB `MTLBuffer` can be re-adopted with no read and no upload — but
+that is a residency trade, not a speed-up: 478 MB held for hours, purgeable only under memory
+pressure, which is exactly when the next request needs it back, to save ~14 ms once per idle gap. The
+packed cache takes the same win and keeps the 58 MB idle footprint.
 
 ### How the lukewarm state works
 
 `ModelRuntime` keeps the model as an optional. `releaseWeights()` sets it to `nil` and calls
 `Memory.clearCache()`, which returns the weights and the Metal buffer cache to the system; the next
 request's `current()` loads the directory again. The tokenizer, the completion cache and the compiled
-kernels stay, so the reload is a weight read and nothing else.
+kernels stay, so the reload is an `mmap` of the packed cache and nothing else — and with no packed
+cache, MLX's own loader reads the checkpoint as before.
+
+`plamo-swift pack --model <dir>` writes that cache once per model (idempotent: a matching size and
+mtime stamp in `__metadata__` means no rewrite). Until it has run, the reload falls back to
+`loadArrays`; a checkpoint that changes is repacked on the next `pack` rather than adopted stale.
+
+| first request after the lukewarm release | 0.048 s (packed cache) |
+
+Run it once after a model download, e.g. `plamo-swift pack --model ~/.local/share/plamo-translate/
+plamo-3-translate-0.8b-mlx-4bit`.
 
 The state is entered by the watcher `serve` already runs for `--idle-seconds`: the same tick now also
 releases the weights once per idle stretch, after `--lukewarm-seconds` (default 60, `0` disables) with
 no request. `--idle-seconds 0` never exits, and both translate mods pass `--idle-seconds 14400`, so a
 session's server holds the lukewarm state instead of paying a spawn and a reload per idle gap.
-`PLAMO_TIMING=1` logs `lukewarm.begin`, `lukewarm`, `reload.begin`, `reload.arrays` and
-`lukewarm.reload` with their durations, and `LoadBenchTests` (gated on `PLAMO_LOAD_BENCH`, needs the
-checkpoint) separates the loader's ~3 ms from the read's 10.3–10.9 ms.
+`PLAMO_TIMING=1` logs `lukewarm.begin`, `lukewarm`, `reload.begin`, `reload.packed` (or
+`reload.arrays` when there is no cache) and `lukewarm.reload` with their durations, and
+`LoadBenchTests` (gated on `PLAMO_LOAD_BENCH`, needs the checkpoint) compares the packed adoption with
+`loadArrays`.
 
 `scripts/measure-lukewarm.py` (port 18558, so a live server keeps serving) measures the states. Every
 prompt carries a nonce: a repeated prompt is answered from the completion cache in about a
