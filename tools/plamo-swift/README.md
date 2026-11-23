@@ -71,6 +71,11 @@ side compiles its Metal kernels during load, which is why its launch number is l
 32-token requests stop at EOS after a few tokens, so that row times a short completion, not 32
 decodes; the per-token numbers below are taken from `usage.completion_tokens`.
 
+`scripts/compare-with-python.py` measures both servers side by side — spawn to `/v1/models`, first
+completion, five steady completions, and the completion after an idle gap, with the footprint at each
+state. Its output, and why the after-idle row is not a loss for the Swift side, are in
+[docs/plamo-translate-swift-vs-python.md](../../docs/plamo-translate-swift-vs-python.md).
+
 ## Where the time goes
 
 Release build, M5 Pro, macOS 27.2.1, MLX Swift 0.33.0, same prompt at `max_tokens` 1 and 64 so the
