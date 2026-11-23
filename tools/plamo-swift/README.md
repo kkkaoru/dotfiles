@@ -131,20 +131,30 @@ Measured transitions (M5 Pro, release build; a fresh process per column, from `s
 The reload is not a weight read. MLX's safetensors loader returns lazy arrays over a pread thread
 pool, so `loadArrays` parses the header and builds views without touching the tensors: `reload.begin`
 → `reload.arrays` is 0.8–1.2 ms, and `lukewarm.reload` adds 0.2–0.4 ms of model construction. The cost
-lands on the first eval that materializes the 478 MB: the first prefill after a reload is
-25.0–25.6 ms against 8.4–9.4 ms for the next request in the same process — about 16 ms at ~30 GB/s —
-and the whole reload request is 0.060–0.097 s against 0.042–0.061 s warm. What lukewarm buys is the
-memory: 60 MB held instead of 631 MB, for hours; the reload still lands ahead of a cold start because
-the process, the tokenizer and the compiled kernels are already there.
+lands on the first eval that materializes the 478 MB (501 MB on disk): the first prefill after a
+reload is 25.0–25.6 ms against 8.4–9.4 ms for the next request in the same process, and the whole
+reload request is 0.060–0.097 s against 0.042–0.061 s warm. What lukewarm buys is the memory: 60 MB
+held instead of 631 MB, for hours; the reload still lands ahead of a cold start because the process,
+the tokenizer and the compiled kernels are already there.
 
-A Metal API does not shorten that 16 ms. `MTLIOCommandQueue` would read the same page-cached file no
-faster than the pread pool, and it cannot skip the upload the 16 ms is spent on. Keeping the weights
-across the release would skip it: MLX adopts a foreign pointer without copying — `array(void*, …)`
-calls `MetalAllocator::make_buffer`, which wraps the pointer with `newBufferWithBytesNoCopy` — so a
-retained 478 MB `MTLBuffer` can be re-adopted as the model's weights with no read and no upload.
-That is a residency trade, not a speed-up: 478 MB held for hours, purgeable only under memory
-pressure, which is exactly when the next request needs it back, to save ~16 ms once per idle gap.
-The loader itself has 1.5 ms in it, so nothing was changed for this path.
+Measured in isolation (`PLAMO_LOAD_BENCH=1 swift test --filter LoadBenchTests`), that ~16 ms is a
+`loadArrays` of 2.96–3.81 ms for the header parse and the array construction plus an `eval` of
+10.3–10.9 ms for the 501 MB. The eval is the read, and it is already at its floor: MLX's pool is
+`new ThreadPool{4}` in `mlx/io/load.cpp`, and four threads read these page-cached bytes in 10.7 ms
+(46.9 GB/s), so there is no inefficiency in the loader to remove. More threads would help only a
+little — 8 read the same file in 8.1 ms (61.9 GB/s), 14 in 7.3 ms (68.4 GB/s) — so a loader of our
+own (safetensors header parse, page-aligned arena, one parallel pread, then `MLXArray(rawPointer:)`
+zero-copy adoption, because `newBufferWithBytesNoCopy` needs page-aligned pointers) would save at most
+~5 ms of a ~61 ms reload request. Not taken: a format parser and unsafe-pointer lifetimes are too
+much machinery for 8% of a reload that happens once per idle gap.
+
+A Metal API does not shorten it either. `MTLIOCommandQueue` would read the same page-cached file no
+faster than the pread pool, and it cannot skip the upload the read is. Keeping the weights across the
+release would skip it: MLX adopts a foreign pointer without copying — `array(void*, …)` calls
+`MetalAllocator::make_buffer`, which wraps the pointer with `newBufferWithBytesNoCopy` — so a retained
+478 MB `MTLBuffer` can be re-adopted as the model's weights with no read and no upload. That is a
+residency trade, not a speed-up: 478 MB held for hours, purgeable only under memory pressure, which is
+exactly when the next request needs it back, to save ~13 ms once per idle gap.
 
 ### How the lukewarm state works
 
@@ -158,8 +168,8 @@ releases the weights once per idle stretch, after `--lukewarm-seconds` (default 
 no request. `--idle-seconds 0` never exits, and both translate mods pass `--idle-seconds 14400`, so a
 session's server holds the lukewarm state instead of paying a spawn and a reload per idle gap.
 `PLAMO_TIMING=1` logs `lukewarm.begin`, `lukewarm`, `reload.begin`, `reload.arrays` and
-`lukewarm.reload` with their durations, which is what separates the loader's 1.5 ms from the first
-eval's 16 ms.
+`lukewarm.reload` with their durations, and `LoadBenchTests` (gated on `PLAMO_LOAD_BENCH`, needs the
+checkpoint) separates the loader's ~3 ms from the read's 10.3–10.9 ms.
 
 `scripts/measure-lukewarm.py` (port 18558, so a live server keeps serving) measures the states. Every
 prompt carries a nonce: a repeated prompt is answered from the completion cache in about a
