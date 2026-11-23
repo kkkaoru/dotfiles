@@ -26,7 +26,8 @@ integrations. These instructions apply to agents working here, including pi and 
 - `./scripts/setup-plamo-translate.sh` — Set up PLaMo 3 Translate 0.8B for `tools/claude-plamo-translate`
   and `tools/pi-plamo-translate`
   (run once per machine; the model is not in Git): mlx-lm + MLX 4-bit on macOS, llama.cpp's Vulkan
-  build + the official GGUF on Linux and Windows (Git Bash).
+  build + the official GGUF on Linux and Windows (Git Bash). Which server a macOS version can run,
+  and the steps for 15, 14, 13 and older or an Intel Mac: `docs/plamo-translate-macos-versions.md`.
 - `./scripts/plamo-swift-service.sh install|uninstall|status|reload` — Run `plamo-swift serve` at login as
   `com.kkkaoru.plamo-swift` (RunAtLoad, KeepAlive, `--idle-seconds 0`) so both translate mods find a
   warm server instead of spawning one. After a minute idle it holds the lukewarm state, ~60 MB.

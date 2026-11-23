@@ -39,6 +39,9 @@ The model is set up once per machine (it is not in Git):
 ./scripts/setup-plamo-translate.sh
 ```
 
+Other macOS versions — 15, 14, 13 and older, and Intel Macs — with the floors that decide which
+server runs: [docs/plamo-translate-macos-versions.md](../../docs/plamo-translate-macos-versions.md).
+
 On a Mac that downloads `kkk4oru/plamo-3-translate-0.8b-mlx-4bit-fast`, an all-4-bit conversion of the
 model: it reads 478 MB per decode step where PFN's own MLX-4bit release reads about 0.98 GB, so it is
 roughly twice as fast, at a small accuracy cost. `scripts/bench-plamo-translate.py --port 18555`

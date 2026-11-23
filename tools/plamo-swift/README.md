@@ -5,6 +5,9 @@ same OpenAI-compatible endpoints as the Python `mlx_lm.server` the translate mod
 replaces a ~1 GB Python process with a ~0.55 GB Swift one and cuts launch and first-token latency by
 an order of magnitude, at equal steady-state speed and equal output.
 
+Which server a machine can run, and the setup steps for a macOS version other than this one, are in
+[docs/plamo-translate-macos-versions.md](../../docs/plamo-translate-macos-versions.md).
+
 ## What it is
 
 - `Sources/PlamoCore/Tokenizer.swift` — replays PLaMo 3's Unigram trie; `scripts/dump-tokenizer.py`

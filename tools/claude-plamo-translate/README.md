@@ -43,6 +43,9 @@ them.
    ./scripts/setup-plamo-translate.sh   # Windows: run it in Git Bash
    ```
 
+   Other macOS versions — 15, 14, 13 and older, and Intel Macs — and which server each one gets:
+   [docs/plamo-translate-macos-versions.md](../../docs/plamo-translate-macos-versions.md).
+
    - macOS: mlx-lm via uv; the model is downloaded from
      `kkk4oru/plamo-3-translate-0.8b-mlx-4bit-fast` into `~/.local/share/plamo-translate` and
      converted locally only if that download fails. It is an all-4-bit conversion: 478 MB read per
