@@ -47,6 +47,27 @@ private func tinyDirectory(_ name: String) throws -> URL {
     #expect(!produced.contains(where: { model.config.eosTokenId.contains($0) }))
 }
 
+@Test func generateDropsTheRestOfAChunkAtAStopToken() throws {
+    let model = try PlamoModel.load(directory: try tinyDirectory("model-generate-stop"))
+    // A chunk carries two steps, so the second is already built when the first turns out to be a
+    // stop token: the reply must end before it, not include it.
+    let first = try model.logits(ids: [2, 3]).argMax(axis: -1).item(Int32.self)
+    model.resetCache()
+    let produced = try model.generate(prompt: [2, 3], maxTokens: 4, stopIDs: [first])
+    #expect(produced.isEmpty)
+}
+
+@Test func aTokenArrayProducesTheSameLogitsAsTheIDsForm() throws {
+    let model = try PlamoModel.load(directory: try tinyDirectory("model-decode"))
+    let fromIDs = try model.logits(ids: [5])
+    MLX.eval(fromIDs)
+    model.resetCache()
+    let fromArray = try model.logits(token: MLXArray([Int32(5)]))
+    MLX.eval(fromArray)
+    #expect(fromIDs.shape == fromArray.shape)
+    #expect(allClose(fromIDs, fromArray).item(Bool.self))
+}
+
 @Test func reportsAnEmptyPromptAndAMissingTensor() throws {
     let model = try PlamoModel.load(directory: try tinyDirectory("model-errors"))
     #expect(throws: PlamoError.self) { try model.logits(ids: []) }
