@@ -187,3 +187,46 @@ curl -s http://127.0.0.1:18555/v1/models                # 200 when serving
 Latency must be measured with **distinct prompts**: the server caches identical completions and
 answers a repeat in 0.7 ms. The figures in section 2 come from serving two builds on separate ports
 and alternating ten distinct translation prompts, 60 requests per build.
+
+## 7. Bugs found in a line-by-line pass
+
+Every file under `Sources/PlamoCore` and `Sources/plamo-swift` was read for defects that cost
+latency, memory or answer quality. Three were real; each has a test that fails on the code before it.
+
+| defect | what it did | fix |
+|---|---|---|
+| a completion cut at `max_tokens` mid-character became a 400 | the byte-fallback tokens carry one or two bytes of a three-byte character, `String(bytes:encoding:)` returned nil, and `decode` threw `invalidRequest`, so the client got an error instead of the partial translation it had already paid to decode | `Tokenizer.truncatedTail` drops an incomplete *trailing* sequence the way Python's `errors="ignore"` does; a byte that cannot start a sequence still throws |
+| `max_tokens` had no upper bound | `generate` reserves one entry per token before decoding and the decode holds the one actor that serves every request, so `max_tokens: 100000000` reserved 400 MB up front and then ran for hours | `Router.maximumMaxTokens = 4_096`: a larger body value is a 400, and a larger `--max-tokens` default is clamped |
+| stop markers cut at the first *listed* match, not the earliest one in the text | the loop broke at the first marker that appeared anywhere, so `["<|plamo:tag|>", "<|plamo:bos|>"]` kept text that followed an earlier `<|plamo:tag|>` | `StopMarker.truncate` cuts at the earliest occurrence |
+
+Measured for the first: on the installed server, `max_tokens` 1–8 against a Japanese answer all
+returned 200, because every character in that answer is one vocabulary token — the cut lands on a
+token boundary. The byte-fallback case is the one that broke, and the unit test builds it directly:
+`<0xE3><0x81>` (two of あ's three bytes) decodes to the empty string where the old code threw.
+
+The second is arithmetic on measured constants: 4 bytes per reserved entry × 100 000 000 tokens =
+400 MB, and 100 M tokens at the measured 2.7 ms per step is about 75 hours of the serving actor.
+
+Suspects examined and left alone, with the reason:
+
+- **Idle release racing a request start.** `enterLukewarmIfIdle` checks `busy` and then awaits the
+  release on the model actor; a request that starts inside that await can still lose the weights
+  after it finishes. The window is one actor hop wide and the cost is the 0.37 s reload, so the fix
+  would add shared state for a rare stall.
+- **`CachingProvider` growth.** 512 entries of short translations, oldest dropped: bounded.
+- **Request body size.** Capped at 4 MB before the JSON is read.
+- **Packed mapping lifetime.** Each adopted array holds the `Mapping`, so the pages go when the last
+  array does; unmapping earlier would be a use-after-free.
+- **Per-request cache reset.** `generate` resets before the prefill, so no KV state crosses requests.
+
+Verified after the fixes: `bash scripts/check.sh` exits 0 with 115 tests and 97.70% coverage, the
+release build (`-warnings-as-errors`) is what the agent serves (`2922dc38`), `/v1/models` answers
+200, the standard ja→en prompt still returns `Reusing caches avoids recalculating the same prompt.`,
+`max_tokens: 100000000` is a 400 (`invalid_request_error: max_tokens 100000000`), and the eight
+`max_tokens` 1–8 probes return exactly the strings the previous binary returned.
+
+One trap found while verifying: `scripts/check.sh` builds **debug**, while
+`./scripts/plamo-swift-service.sh reload` installs `.build/release/plamo-swift`. The first reload
+after a passing gate therefore served the previous release binary — the oversized-cap probe reached
+the old code and the server spent the next seconds decoding towards 100 M tokens before it was
+restarted. Build release before reloading, or the gate's green says nothing about what is serving.
