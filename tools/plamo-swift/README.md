@@ -29,7 +29,8 @@ Which server a machine can run, and the setup steps for a macOS version other th
 
 `scripts/check-parity.py <model> .build/release/plamo-swift <tokenizer blob>` compares greedy output
 with `mlx_lm.generate` on a fixed prompt set (ja→en, en→ja, a long English sentence, code, mixed
-Japanese/English). All five match token for token:
+Japanese/English). Four of five match token for token; `mixed` differs on one near-tie word
+(`memory` where `mlx_lm` says `Memory`), which the build from before the chained decode produces too:
 
 ```
 ok   ja->en: "Hello, world."
