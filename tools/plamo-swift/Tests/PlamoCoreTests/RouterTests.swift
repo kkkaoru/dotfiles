@@ -138,3 +138,36 @@ private let stub = StubProvider()
             method: "POST", path: "/v1/completions", body: Data(#"{"prompt":"hi"}"#.utf8)))
     #expect(response.body.contains(#"a \"quoted\" reason"#))
 }
+
+private struct CountingStub: TokenCounting {
+    func countTokens(_ text: String) async -> Int { text.count + 1 }
+}
+
+@Test func countsPromptTokensForEachText() async {
+    // A client splits a long document with these counts instead of guessing from characters.
+    let router = Router(provider: stub, counting: CountingStub(), windowSize: 1_024)
+    let response = await router.respond(
+        to: HTTPRequest(
+            method: "POST", path: "/v1/tokenize", body: Data(#"{"texts":["ab",""]}"#.utf8)))
+    #expect(response.status == "200 OK")
+    #expect(response.body.contains(#""tokens":[3,1]"#))
+    #expect(response.body.contains(#""window":1024"#))
+    #expect(response.body.contains(#""max_tokens":4096"#))
+}
+
+@Test func rejectsAnInvalidTokenizeBody() async {
+    let router = Router(provider: stub, counting: CountingStub())
+    let response = await router.respond(
+        to: HTTPRequest(
+            method: "POST", path: "/v1/tokenize", body: Data(#"{"text":"hi"}"#.utf8)))
+    #expect(response.status == "400 Bad Request")
+    #expect(response.body.contains("invalid JSON body"))
+}
+
+@Test func reportsAMissingTokenizer() async {
+    // The Python and llama.cpp fallbacks have no tokenizer endpoint; a client must fall back.
+    let response = await Router(provider: stub).respond(
+        to: HTTPRequest(
+            method: "POST", path: "/v1/tokenize", body: Data(#"{"texts":["hi"]}"#.utf8)))
+    #expect(response.status == "501 Not Implemented")
+}

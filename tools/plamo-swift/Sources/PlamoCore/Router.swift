@@ -9,16 +9,28 @@ public struct Router: Sendable {
     /// `max_tokens: 100000000` would both allocate 400 MB up front and hold the server for hours.
     /// 4096 is past any answer this model produces inside its 2048-token window.
     public static let maximumMaxTokens = 4_096
+    /// The model's sliding window: 14 of its 16 layers see only this many keys, so a prompt past it
+    /// is read by the two full-attention layers alone. Clients split longer text.
+    public static let defaultWindowSize = 2_048
     public static let modelsJSON =
         #"{"object":"list","data":[{"id":"plamo-3-translate","object":"model","created":0,"#
         + #""owned_by":"local"}]}"#
 
     private let provider: any CompletionProviding
+    private let counting: (any TokenCounting)?
     private let defaultMaxTokens: Int
+    private let windowSize: Int
 
-    public init(provider: any CompletionProviding, defaultMaxTokens: Int = 64) {
+    public init(
+        provider: any CompletionProviding,
+        counting: (any TokenCounting)? = nil,
+        defaultMaxTokens: Int = 64,
+        windowSize: Int = Router.defaultWindowSize
+    ) {
         self.provider = provider
+        self.counting = counting
         self.defaultMaxTokens = defaultMaxTokens
+        self.windowSize = windowSize
     }
 
     public func respond(to request: HTTPRequest) async -> HTTPResponse {
@@ -29,6 +41,8 @@ public struct Router: Sendable {
             return await completion(request)
         case ("POST", "/v1/chat/completions"):
             return await chat(request)
+        case ("POST", "/v1/tokenize"):
+            return await tokenize(request)
         default:
             return Router.error(status: "404 Not Found", message: "not found")
         }
@@ -57,6 +71,27 @@ public struct Router: Sendable {
             choices: [.init(index: 0, text: completion.text, finishReason: "stop")],
             usage: .init(prompt: completion.promptTokens, completion: completion.tokens))
         return Router.encode(payload)
+    }
+
+    /// Exact prompt-token counts, so a client can split a document at sentence boundaries before
+    /// a request overflows the window. The counts are what `complete` would prefill for that text.
+    private func tokenize(_ request: HTTPRequest) async -> HTTPResponse {
+        guard let counting else {
+            return Router.error(status: "501 Not Implemented", message: "tokenizer unavailable")
+        }
+        let body: TokenizeBody
+        do {
+            body = try JSONDecoder().decode(TokenizeBody.self, from: request.body)
+        } catch {
+            return Router.error(status: "400 Bad Request", message: "invalid JSON body")
+        }
+        var tokens = [Int]()
+        tokens.reserveCapacity(body.texts.count)
+        for text in body.texts {
+            tokens.append(await counting.countTokens(text))
+        }
+        return Router.encode(
+            TokenizePayload(tokens: tokens, window: windowSize, maxTokens: Router.maximumMaxTokens))
     }
 
     private func chat(_ request: HTTPRequest) async -> HTTPResponse {
@@ -123,6 +158,22 @@ public struct Router: Sendable {
 }
 
 // MARK: - Bodies
+
+private struct TokenizeBody: Decodable {
+    let texts: [String]
+}
+
+private struct TokenizePayload: Encodable {
+    let tokens: [Int]
+    let window: Int
+    let maxTokens: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case tokens
+        case window
+        case maxTokens = "max_tokens"
+    }
+}
 
 private struct CompletionBody: Decodable {
     let prompt: String?

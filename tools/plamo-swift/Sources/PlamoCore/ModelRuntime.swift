@@ -28,7 +28,7 @@ public struct StageTrace: Sendable {
 
 /// The model and its tokenizer, owned by one actor that runs on its own serial queue: a decode step
 /// blocks that queue instead of a cooperative-pool thread, and only one decode runs at a time.
-public actor ModelRuntime: CompletionProviding {
+public actor ModelRuntime: CompletionProviding, TokenCounting {
     private let modelDirectory: URL
     private let tokenizer: PlamoTokenizer
     /// Small enough to keep while the weights are gone: the router reads the shape in every state.
@@ -175,6 +175,11 @@ public actor ModelRuntime: CompletionProviding {
 
     public func encode(_ text: String) -> [Int32] {
         tokenizer.promptIDs(text, bos: config.bosTokenId)
+    }
+
+    /// What `complete` would count as prompt tokens for the same text, without touching the model.
+    public func countTokens(_ text: String) -> Int {
+        encode(text).count
     }
 
     public func decode(_ ids: [Int32]) throws -> String {

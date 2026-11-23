@@ -127,7 +127,8 @@ internal func run(_ invocation: Invocation) async throws {
         let server = PlamoServer(
             // Repeats are the common case: the mods re-translate a redrawn or scrolled screen.
             router: Router(
-                provider: CachingProvider(inner: runtime), defaultMaxTokens: invocation.maxTokens),
+                provider: CachingProvider(inner: runtime), counting: runtime,
+                defaultMaxTokens: invocation.maxTokens, windowSize: await runtime.windowSize),
             configuration: .init(
                 port: invocation.port,
                 socketPath: invocation.socketPath,
