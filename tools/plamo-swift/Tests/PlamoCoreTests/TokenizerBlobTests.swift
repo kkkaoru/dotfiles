@@ -82,6 +82,15 @@ private func load(_ blob: Data, meta metaData: Data? = nil) throws -> PlamoToken
     #expect(throws: PlamoError.self) { try tokenizer.decode([0]) }
 }
 
+@Test func decodeKeepsThePrefixOfACharacterCutByTheTokenCap() throws {
+    // あ is E3 81 82; a completion that reaches `max_tokens` mid-character ends after two of the
+    // three bytes, which is not UTF-8 on its own. Python's tokenizer drops the tail; so does this.
+    let tokenizer = try load(
+        blob(tokens: [Data("<0xE3>".utf8), Data("<0x81>".utf8), Data("<0x82>".utf8)]))
+    #expect(try tokenizer.decode([0, 1, 2]) == "あ")
+    #expect(try tokenizer.decode([0, 1]).isEmpty)
+}
+
 @Test func decodeDropsTheBoundaryToken() throws {
     let tokenizer = try load(blob(tokens: [Data("a".utf8)]))
     let text = try tokenizer.decode([1_000, 0])

@@ -142,10 +142,35 @@ public final class PlamoTokenizer {
                 bytes.append(contentsOf: Array(token.utf8))
             }
         }
-        guard let text = String(bytes: bytes, encoding: .utf8) else {
-            throw PlamoError.invalidRequest(reason: "token bytes are not UTF-8")
+        if let text = String(bytes: bytes, encoding: .utf8) { return text }
+        // A completion cut at `max_tokens` can end mid-character: the byte-fallback tokens then
+        // carry the first one or two bytes of a three-byte character and nothing more. Python's
+        // tokenizer decodes those with `errors="ignore"`, so dropping the truncated tail keeps the
+        // partial translation instead of turning the whole request into a 400. Only a tail that is
+        // an incomplete sequence goes: a byte that cannot start one is still corruption.
+        if let tail = Self.truncatedTail(bytes),
+            let text = String(bytes: bytes.dropLast(tail), encoding: .utf8)
+        {
+            return text
         }
-        return text
+        throw PlamoError.invalidRequest(reason: "token bytes are not UTF-8")
+    }
+
+    /// The byte count of an incomplete UTF-8 sequence at the end of `bytes`, or nil when the tail
+    /// is not a truncation of one (a byte that cannot start a sequence, or one already complete).
+    private static func truncatedTail(_ bytes: [UInt8]) -> Int? {
+        var index = bytes.count - 1
+        while index >= 0, bytes[index] & 0xC0 == 0x80 { index -= 1 }
+        guard index >= 0 else { return nil }
+        let expected: Int
+        switch bytes[index] {
+        case 0xC2...0xDF: expected = 2
+        case 0xE0...0xEF: expected = 3
+        case 0xF0...0xF4: expected = 4
+        default: return nil
+        }
+        let present = bytes.count - index
+        return present < expected ? present : nil
     }
 
     private func substitute(_ pattern: NSRegularExpression, in text: String) -> String {

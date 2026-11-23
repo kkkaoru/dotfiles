@@ -34,3 +34,20 @@ public struct CompletionRequest: Sendable, Equatable {
 public protocol CompletionProviding: Sendable {
     func complete(_ request: CompletionRequest) async throws -> Completion
 }
+
+/// Cuts a completion at its earliest stop marker. The order of the list must not decide the cut:
+/// a client sends `["<|plamo:tag|>", "<|plamo:bos|>"]` meaning whichever appears first in the text,
+/// and the old loop broke at the first marker that matched anywhere, keeping text after an earlier
+/// one that was listed later.
+public enum StopMarker {
+    /// The text before the earliest marker, or the whole text when no marker appears.
+    public static func truncate(_ text: String, at markers: [String]) -> String {
+        var end = text.endIndex
+        for marker in markers where !marker.isEmpty {
+            if let range = text.range(of: marker), range.lowerBound < end {
+                end = range.lowerBound
+            }
+        }
+        return String(text[..<end])
+    }
+}

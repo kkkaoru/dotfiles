@@ -38,6 +38,26 @@ private let stub = StubProvider()
     #expect(response.body.contains("max_tokens 0"))
 }
 
+@Test func rejectsATokenCapAboveTheLimit() async {
+    // `generate` reserves one entry per token before decoding on the actor that serves every
+    // request, so an unbounded cap is 400 MB of reservation and hours of decode.
+    let response = await Router(provider: stub).respond(
+        to: HTTPRequest(
+            method: "POST", path: "/v1/completions",
+            body: Data(#"{"prompt":"hi","max_tokens":100000000}"#.utf8)))
+    #expect(response.status == "400 Bad Request")
+    #expect(response.body.contains("max_tokens 100000000"))
+}
+
+@Test func clampsADefaultTokenCapToTheLimit() async {
+    let recorder = Recorder()
+    let router = Router(provider: StubProvider(recorder: recorder), defaultMaxTokens: 1_000_000)
+    _ = await router.respond(
+        to: HTTPRequest(
+            method: "POST", path: "/v1/completions", body: Data(#"{"prompt":"hi"}"#.utf8)))
+    #expect(await recorder.requests.last?.maxTokens == Router.maximumMaxTokens)
+}
+
 @Test func reportsAProviderFailureAsA500() async {
     var provider = StubProvider()
     provider.failure = PlamoError.invalidRequest(reason: "bad")

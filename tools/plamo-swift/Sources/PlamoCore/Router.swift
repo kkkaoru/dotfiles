@@ -4,6 +4,11 @@ import Foundation
 /// `POST /v1/chat/completions`. Pure request-to-response mapping, so every status code is a test.
 public struct Router: Sendable {
     public static let modelID = "plamo-3-translate"
+    /// The largest completion a request may ask for. `generate` reserves one entry per token before
+    /// decoding and the decode runs on the one actor that serves every request, so a body with
+    /// `max_tokens: 100000000` would both allocate 400 MB up front and hold the server for hours.
+    /// 4096 is past any answer this model produces inside its 2048-token window.
+    public static let maximumMaxTokens = 4_096
     public static let modelsJSON =
         #"{"object":"list","data":[{"id":"plamo-3-translate","object":"model","created":0,"#
         + #""owned_by":"local"}]}"#
@@ -84,8 +89,8 @@ public struct Router: Sendable {
     }
 
     private static func maxTokens(_ requested: Int?, default fallback: Int) throws -> Int {
-        guard let requested else { return fallback }
-        guard requested > 0 else {
+        guard let requested else { return min(fallback, Router.maximumMaxTokens) }
+        guard requested > 0, requested <= Router.maximumMaxTokens else {
             throw PlamoError.invalidRequest(reason: "max_tokens \(requested)")
         }
         return requested

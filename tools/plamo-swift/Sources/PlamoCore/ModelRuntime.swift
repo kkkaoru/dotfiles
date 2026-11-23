@@ -167,12 +167,7 @@ public actor ModelRuntime: CompletionProviding {
             stopIDs: Set(config.eosTokenId))
         Timing.mark("req.generated")
         var text = try tokenizer.decode(produced)
-        for marker in request.stop where !marker.isEmpty {
-            if let range = text.range(of: marker) {
-                text = String(text[..<range.lowerBound])
-                break
-            }
-        }
+        text = StopMarker.truncate(text, at: request.stop)
         return Completion(
             text: text, promptTokens: promptIDs.count, tokens: produced.count,
             seconds: Date().timeIntervalSince(started))
