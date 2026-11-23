@@ -1,6 +1,7 @@
 // This TypeScript file is executed with Bun.
 import { newestFirst } from "../../claude-plamo-translate/hooks/queue.ts";
 import { plamoPrompt } from "../../claude-plamo-translate/hooks/translate.ts";
+import { plan, type Post } from "./chunk.ts";
 import { isRecord } from "./settings.ts";
 
 const HOST = "http://127.0.0.1";
@@ -255,18 +256,19 @@ async function waitReady(deps: ServerDeps, port: number, deadline: number): Prom
   return waitReady(deps, port, deadline);
 }
 
-async function complete(
+async function request(
   deps: ServerDeps,
   port: number,
   text: string,
   lang: string,
+  cap: number,
 ): Promise<string | null> {
   const response = await call(deps, port, "/v1/completions", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       prompt: plamoPrompt(text, lang),
-      max_tokens: maxTokens(text),
+      max_tokens: cap,
       temperature: TEMPERATURE,
       stop: STOP,
     }),
@@ -276,6 +278,34 @@ async function complete(
   }
   const body = await response.json();
   return completionText(body);
+}
+
+/** A document longer than the window: each chunk fits, and the answers rejoin in order. */
+async function complete(
+  deps: ServerDeps,
+  port: number,
+  text: string,
+  lang: string,
+): Promise<string | null> {
+  const post: Post = (path, body) =>
+    call(deps, port, path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  const planned = await plan(post, text, lang, MAX_TOKENS);
+  if (planned === null) {
+    return request(deps, port, text, lang, maxTokens(text));
+  }
+  const parts: string[] = [];
+  for (const chunk of planned.chunks) {
+    // oxlint-disable-next-line no-await-in-loop -- the answers rejoin in the document's order
+    const part = await request(deps, port, chunk.text, lang, chunk.maxTokens);
+    if (part !== null) {
+      parts.push(part);
+    }
+  }
+  return parts.join(planned.join);
 }
 
 function launch(deps: ServerDeps, spec: SpawnSpec): void {
