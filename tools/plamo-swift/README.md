@@ -126,7 +126,7 @@ Measured transitions (M5 Pro, release build; a fresh process per column, from `s
 | cold → ready | spawn, dyld, MLX init, tokenizer decode, weight read, listener | 0.063 s |
 | cold → warm | the above, then the warm-up's first eval compiles the Metal kernels | 0.216 s to the first completion |
 | warm → lukewarm | `--lukewarm-seconds` idle (default 60) plus one idle-check tick (≤5 s), then the weights and the Metal buffer cache are dropped | the release is a `nil` and `Memory.clearCache()`; the state is entered within one tick of the window |
-| lukewarm → warm | `mmap` of the packed cache, then every tensor adopted as a no-copy Metal buffer over those pages; no spawn, no tokenizer decode, no kernel compile, no read | 5.29 ms to the reload, 0.048 s to the first completion |
+| lukewarm → warm | `mmap` of the packed cache, then every tensor adopted as a no-copy Metal buffer over those pages; no spawn, no tokenizer decode, no kernel compile, no read | 2.50–5.29 ms to the reload, 0.05–0.08 s to the first completion |
 
 The reload no longer reads the weights, and it does not allocate them either. `plamo-swift pack
 --model <dir>` writes `model.packed` beside the checkpoint once (479.2 MB in 0.31 s): the same
@@ -148,9 +148,17 @@ Measured on the same page-cached 501 MB (`PLAMO_LOAD_BENCH=1 swift test --filter
 
 The eval is free because there is nothing left to materialize: the tensors are the mapping. That is
 also why more threads win nothing here — a faster copy of bytes that no longer need copying is not a
-speed-up. On a spare port the reload is `reload.begin` → `lukewarm.reload` in 5.29 ms against
-0.060–0.097 s for the `loadArrays` path, and the lukewarm footprint is unchanged at 58 MB phys
-(78 MB rss), because file-backed pages are not the process's own memory.
+speed-up. On a spare port the reload is `reload.begin` → `lukewarm.reload` in 2.50–5.29 ms against
+0.060–0.097 s for the `loadArrays` path, and the lukewarm footprint is unchanged at 57–59 MB phys
+(78 MB rss), because file-backed pages are not the process's own memory. A cold start adopts the
+same cache (`reload.packed` at 33.0 ms, `listening` at 34.6 ms from process start), so it too skips
+the 11.5 ms of copy that `loadArrays` plus `eval` cost.
+
+The installed service picks this up through `./scripts/plamo-swift-service.sh reload`: it packs the
+cache, installs the release build into a fresh inode and re-registers the launchd agent. That takes
+0.49 s end to end, and a `/v1/models` probe every 20 ms saw a single refusal in it — `bootout` plus
+`bootstrap`, because a `kickstart -k` waits out the plist's `ThrottleInterval 10` (10.6 s measured).
+Nothing writes into the file the old process mapped, so the swap cannot break a running image.
 
 A loader that reads the checkpoint itself was tried first and rejected: safetensors header parse, one
 page-aligned arena, a parallel `pread`, then `MLXArray(rawPointer:)` adoption. It measured 19.0 ms at

@@ -27,9 +27,12 @@ integrations. These instructions apply to agents working here, including pi and 
   and `tools/pi-plamo-translate`
   (run once per machine; the model is not in Git): mlx-lm + MLX 4-bit on macOS, llama.cpp's Vulkan
   build + the official GGUF on Linux and Windows (Git Bash).
-- `./scripts/plamo-swift-service.sh install|uninstall|status` — Run `plamo-swift serve` at login as
+- `./scripts/plamo-swift-service.sh install|uninstall|status|reload` — Run `plamo-swift serve` at login as
   `com.kkkaoru.plamo-swift` (RunAtLoad, KeepAlive, `--idle-seconds 0`) so both translate mods find a
   warm server instead of spawning one. After a minute idle it holds the lukewarm state, ~60 MB.
+  `reload` packs `model.packed`, installs the release build into a fresh inode over the serving binary
+  and re-registers the agent (`bootout` + `bootstrap`, since `kickstart -k` waits out
+  `ThrottleInterval 10`): 0.49 s, one refused probe.
 - `./scripts/setup-herdr-app.sh` — After `./create-symlinks.sh`, set up Herdr.app: build the font
   `settings.json` names (if missing) and switch the open window to the `main-emoji` layout.
 - `./scripts/build-udev-gothic-light.sh [Light|ExtraLight|Thin]` — Build UDEV Gothic <weight> 35NFLG
@@ -84,6 +87,10 @@ integrations. These instructions apply to agents working here, including pi and 
   to `~/Library/Logs/tb-watch.log`; `install` starts a 5-minute launchd agent
   `com.kkkaoru.tb-watch` at background priority (~0.1 s of CPU per run). Evidence only: it cannot
   prevent the `ACIO0` assert.
+- `./scripts/discord-no-autolaunch.sh` — Quit Discord when macOS reopens it at login. Discord is not
+  a login item; loginwindow's TAL snapshot reopens the apps that were running at the last logout, so
+  the launchd agent `com.kkkaoru.discord-no-autolaunch` (`RunAtLoad`) quits a Discord younger than
+  120 s, which also drops it from the next snapshot.
 - `./init-ssh.sh` — Initialize SSH configuration.
 - `./scripts/cf-remote-access.sh <label> [--agent]` — Publish one machine's SSH server as
   `<label>.kkk4oru.com` through a remotely managed Cloudflare Tunnel plus an Access application
