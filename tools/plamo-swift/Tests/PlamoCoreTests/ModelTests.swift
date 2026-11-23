@@ -47,6 +47,27 @@ private func tinyDirectory(_ name: String) throws -> URL {
     #expect(!produced.contains(where: { model.config.eosTokenId.contains($0) }))
 }
 
+@Test func steppingPastTheWindowMatchesOnePrefill() throws {
+    let model = try PlamoModel.load(directory: try tinyDirectory("model-cache-trim"))
+    // Five tokens against a window of three: the cache drops its first two keys, and a key keeps
+    // the rotation it was written with, so stepping through the tokens must land exactly where one
+    // pass over all five lands.
+    let whole = try model.logits(ids: [2, 3, 4, 5, 6])
+    MLX.eval(whole)
+    model.resetCache()
+    var logits = try model.logits(ids: [2, 3, 4])
+    MLX.eval(logits)
+    for id in [Int32(5), 6] {
+        logits = try model.logits(token: MLXArray([id]))
+        MLX.eval(logits)
+    }
+    // The two paths reduce in a different order, so the float32 logits differ by ~0.009; the trim
+    // that ran before this fix moved them by 4.05, which is still 80x outside this tolerance.
+    #expect(allClose(whole, logits, rtol: 1e-2, atol: 1e-2).item(Bool.self))
+    #expect(
+        whole.argMax(axis: -1).item(Int32.self) == logits.argMax(axis: -1).item(Int32.self))
+}
+
 @Test func generateDropsTheRestOfAChunkAtAStopToken() throws {
     let model = try PlamoModel.load(directory: try tinyDirectory("model-generate-stop"))
     // A chunk carries two steps, so the second is already built when the first turns out to be a

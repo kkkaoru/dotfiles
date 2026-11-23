@@ -121,6 +121,8 @@ proportional 2×.
 | one mask table per attention kind, built once per pass, instead of one per layer (16 identical `[queries][keys]` allocations) | 500-token prefill: 3.02 ms build, 2.35 ms of it masks | 0.68–0.79 ms build, 0.29–0.32 ms masks |
 | `F_RDADVISE` over the 478 MB safetensors before the tokenizer decode, so the read starts early and runs on the disk queue | load 0.088 s (0.031 weights) | 0.052–0.061 s (0.020–0.030 weights) |
 | per-step graph build | 0.33 ms | 0.24–0.31 ms |
+| a decode step rotates only the token it appends, not every cached key in every layer | 721-token decode 3.00/2.89/2.97 ms | 2.66/2.77/2.79 ms; end to end 53.8 → 52.6 ms median |
+| a prefill longer than the window keeps every key for the pass and trims after SDPA, so early query rows are no longer clamped onto the oldest surviving key | 5-token prefill vs stepped decode: 4.045 logit error | 0.0086 (float32 reduction order) |
 | the warm-up runs the 18-token translation template instead of one token, so the first request finds the prefill shapes and masks already built | first completion 28.6 ms (median of 20 fresh processes) | 24.4 ms |
 | the listener starts before the warm-up, so `/v1/models` answers while the first forward pass runs | ready 0.696 s (warm-up finished first) | ready 0.067 s, first completion 0.372 s |
 | the lukewarm state drops the weights and the Metal cache after `--lukewarm-seconds` idle | 631 MB phys while serving, held until the process exits | 60 MB phys; the next request reads the weights again in 0.373 s, steady decode unchanged |

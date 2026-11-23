@@ -189,8 +189,8 @@ public final class PlamoModel {
         return lmHead.matmul(last)
     }
 
-    /// The masks a prefill needs. Full attention sees every cached key; a sliding layer holds at
-    /// most `windowSize`, so the whole pass needs at most these two tables.
+    /// The masks a prefill needs. Both cover every key the pass attends to: a sliding layer keeps
+    /// its whole cache until the pass ends, so the window is the mask's job, not the cache's.
     private func prefillMasks(queries: Int, start: Int) throws -> MaskPair {
         guard queries > 1 else { return (nil, nil) }
         let dtype = embedTokens.activationDType
@@ -203,7 +203,7 @@ public final class PlamoModel {
         }
         return (
             try table(keys: total, window: nil),
-            try table(keys: min(total, config.windowSize), window: config.windowSize)
+            try table(keys: total, window: config.windowSize)
         )
     }
 
@@ -230,35 +230,42 @@ public final class PlamoModel {
         q = norm(q, layer.qNorm)
         k = norm(k, layer.kNorm)
 
+        // Rotate the new tokens before they join the cache. A cached key keeps the rotation it was
+        // written with, so a decode step touches one token per layer instead of re-rotating every
+        // cached key in every layer on every step; `mlx_lm` rotates with `offset` before
+        // `update_and_fetch` for the same reason, and a trimmed sliding cache keeps the rotation
+        // its surviving tokens already carry, which is the same value re-rotating them would give.
+        let (cos, sin) = try layer.rotary.cosSin(positions: positions)
+        q = rotate(q, cos: cos, sin: sin)
+        k = rotate(k, cos: cos, sin: sin)
+
         if let cache = caches[index] {
             k = concatenated([cache.keys, k], axis: 2)
             v = concatenated([cache.values, v], axis: 2)
         }
-        if !layer.fullAttention, k.dim(2) > config.windowSize {
+        // A decode step trims before attention: its one query must not see the key that just left
+        // the window, and it carries no mask to exclude it. A prefill keeps every key for the pass
+        // — the mask gives each query its own window — and trims afterwards. Trimming first left
+        // the early query rows attending to the oldest surviving key, which for a prompt longer
+        // than `windowSize` is a token in their future.
+        let trimsAfter = length > 1
+        if !trimsAfter, !layer.fullAttention, k.dim(2) > config.windowSize {
             let keep = k.dim(2) - config.windowSize
             k = k[0..., 0..., keep..., 0...]
             v = v[0..., 0..., keep..., 0...]
         }
-        caches[index] = Cache(keys: k, values: v)
-
-        // Cached keys keep their own positions; after a window trim they are the tail of the range
-        // that ends at the query's position, which is the local coordinate system the model was
-        // trained with.
-        guard let queryEnd = positions.last else {
-            throw PlamoError.invalidRequest(reason: "rope positions")
-        }
-        let keyCount = k.dim(2)
-        let keyPositions = ((queryEnd - keyCount + 1)...queryEnd).map { $0 }
-        let (qCos, qSin) = try layer.rotary.cosSin(positions: positions)
-        let (kCos, kSin) = try layer.rotary.cosSin(positions: keyPositions)
-        q = rotate(q, cos: qCos, sin: qSin)
-        k = rotate(k, cos: kCos, sin: kSin)
 
         // One query token attends to every cached key, and a trimmed sliding cache holds at most
         // `windowSize` of them, so only a multi-token prefill needs a mask — and that one is built
         // once for the whole pass.
         var out = MLXFast.scaledDotProductAttention(
             queries: q, keys: k, values: v, scale: 1 / Float(headDim).squareRoot(), mask: mask)
+        if trimsAfter, !layer.fullAttention, k.dim(2) > config.windowSize {
+            let keep = k.dim(2) - config.windowSize
+            k = k[0..., 0..., keep..., 0...]
+            v = v[0..., 0..., keep..., 0...]
+        }
+        caches[index] = Cache(keys: k, values: v)
         out = out.transposed(0, 2, 1, 3).reshaped([1, length, qDim])
         return layer.oProj.matmul(out)
     }

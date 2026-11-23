@@ -58,6 +58,36 @@ half of a chunk must not leak the second half into the reply) and
 `aTokenArrayProducesTheSameLogitsAsTheIDsForm` (the array entry point is the same pass as the ids
 form).
 
+**RoPE on the new tokens only.** `attention` rotated every key in the cache on every decode step:
+at 721 tokens that is 721 keys × 16 layers of rotation per token, for a cache whose older entries had
+already been rotated when they were written. Each key now keeps the rotation it was written with, and
+a step rotates only the tokens it is about to append (`mlx_lm` does the same: it rotates with
+`offset` before `update_and_fetch`). Below the window the output is unchanged by construction, which
+the stage norms confirm: a 720-token prompt produces bit-identical `L15` norms and top logits in the
+old and new builds.
+
+| decode step | before | after | rounds |
+|---|---|---|---|
+| at 145 cached tokens | 2.73 / 2.60 ms | 2.61 / 2.55 ms | 2 |
+| at 721 cached tokens | 3.00 / 2.89 / 2.97 ms | 2.66 / 2.77 / 2.79 ms | 3 |
+| end to end, 60 distinct prompts | 53.8 ms median, 63.3 mean | **52.6 ms median, 56.7 mean** | 6 × 10 prompts, alternating |
+
+The gain grows with the cache, as it must: the pass it removes is proportional to the keys already
+cached. All 60 end-to-end answers were byte-identical.
+
+**A prefill past the sliding window was wrong.** With a prompt longer than 2048 tokens, `prefill`
+trimmed the cache to the window *before* attention, while `q` still held every row. `Mask.causal`
+clamps a query's upper bound to the keys it has, so the first rows were clamped onto the oldest
+surviving key — a token in their own future. Prefill now keeps every key for the pass, the sliding
+mask spans all keys with the window applied per query, and the trim happens after SDPA. A decode
+step still trims first because it carries no mask.
+
+New test `steppingPastTheWindowMatchesOnePrefill` compares a five-token prefill against a three-token
+prefill plus two decode steps: `4.0450563` of logit error before the fix, `0.008568` after (float32
+reduction order), so it asserts `allClose` at `1e-2` — still 80× tighter than the bug — plus an
+identical argmax. On the real model the two builds agree bit for bit at 720 tokens and diverge at
+2160 tokens (`L15.mixer` norm 86.2 before against 52.7 after), which is exactly where the bug was.
+
 Output is unchanged. `scripts/check-parity.py` matches `mlx_lm` on four of its five prompts and
 differs on `mixed` by one word — `memory` against Python's `Memory`. Rebuilt from `HEAD` without
 this change, the same prompt also says `memory`, so the difference is a greedy near-tie between the
@@ -76,7 +106,7 @@ and now states the actual result.
 | KV preallocation instead of per-step concatenation | avoid the copy | 0.142 ms preallocated vs 0.132 ms concatenated at 512 tokens; 32 KB copied at 64 tokens | the concatenation is already cheaper; the cost is launch overhead |
 | 2-bit `lm_head` only | 92.9 MB → 51.6 MB per step | 0.369 ms vs 0.497 ms (1.35×) on that matvec, 139.9 GB/s because unpacking eats part of the saving | ~5% of a step for a quality risk on the output distribution |
 | 2-bit whole model (earlier test) | halve the bytes | 1.27× against a 2× ceiling | needs a 2-bit checkpoint and a re-baselined `scripts/check-parity.py` |
-| masks | avoid a rebuild per step | read the code: built once per prefill in `attention` | nothing to fix |
+| masks | avoid a rebuild per step | built once per prefill in `attention` — but the cache was trimmed before attention, so the mask clamped early query rows onto their own future | rebuild avoided, trim order **fixed** (section 2) |
 | background QoS (`taskpolicy -b`, the low-level-OS lever) | yield CPU and I/O to foreground work | 0.0827 s vs 0.0493 s per completion (30 requests each, 3 alternating rounds) — **1.68× slower** | the agent keeps default scheduling; decode is GPU-bound, so deprioritising it delays every step |
 | completion cache | skip identical work | an identical repeat request is answered in 0.7 ms | already present; it also means latency must be measured with distinct prompts |
 
