@@ -85,7 +85,8 @@
     "./packages/executor-skills",
     "npm:@ogulcancelik/pi-herdr",
     "git:github.com/DietrichGebert/ponytail",
-    "npm:pi-apple-fm"
+    "npm:pi-apple-fm",
+    "npm:pi-chrome"
   ],
   "extensionChangelogVersions": {
     "{\"source\":\"npm:pi-ollama-cloud\",\"scope\":\"user\"}": "0.13.1",
