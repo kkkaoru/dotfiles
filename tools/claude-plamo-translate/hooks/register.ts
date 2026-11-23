@@ -157,6 +157,10 @@ async function waitReady(engine: EngineInterface, port: number, deadline: number
   return waitReady(engine, port, deadline)
 }
 
+// Four hours idle before the process exits: a minute into that idle it drops to the lukewarm state
+// (60 MB), so holding it is cheaper than the spawn and reload the next request would pay.
+const SWIFT_IDLE_SECONDS = 14_400
+
 const swiftArgv = (home: string, port: number): string[] => [
   `${home}/${SWIFT_SERVER}`,
   'serve',
@@ -164,6 +168,8 @@ const swiftArgv = (home: string, port: number): string[] => [
   `${home}/${MLX_MODEL}`,
   '--port',
   String(port),
+  '--idle-seconds',
+  String(SWIFT_IDLE_SECONDS),
 ]
 
 const mlxArgv = (home: string, port: number): string[] => [

@@ -104,6 +104,11 @@ function transport(deps: ServerDeps): string | undefined {
 
 // The Swift port of the same weights: 0.55 GB resident instead of 1 GB and 0.15 s to ready.
 // The setup script installs it; the Python server stays the fallback.
+//
+// Four hours before the idle exit: after a minute of idle the process drops to the lukewarm state.
+// At 60 MB, that costs far less than the spawn and reload the next request would pay.
+const SWIFT_IDLE_SECONDS = 14_400;
+
 function swiftSpec(home: string, port: number, command: string): SpawnSpec {
   return {
     command,
@@ -115,6 +120,8 @@ function swiftSpec(home: string, port: number, command: string): SpawnSpec {
       String(port),
       "--socket",
       socketPathOf(home),
+      "--idle-seconds",
+      String(SWIFT_IDLE_SECONDS),
     ],
   };
 }

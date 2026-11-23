@@ -30,6 +30,8 @@ test("the Swift server is preferred when its binary exists", () => {
       "18555",
       "--socket",
       "/Users/x/.local/share/plamo-swift/plamo.sock",
+      "--idle-seconds",
+      "14400",
     ],
   });
 });
