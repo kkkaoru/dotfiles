@@ -141,12 +141,30 @@ Measured in isolation (`PLAMO_LOAD_BENCH=1 swift test --filter LoadBenchTests`),
 `loadArrays` of 2.96–3.81 ms for the header parse and the array construction plus an `eval` of
 10.3–10.9 ms for the 501 MB. The eval is the read, and it is already at its floor: MLX's pool is
 `new ThreadPool{4}` in `mlx/io/load.cpp`, and four threads read these page-cached bytes in 10.7 ms
-(46.9 GB/s), so there is no inefficiency in the loader to remove. More threads would help only a
-little — 8 read the same file in 8.1 ms (61.9 GB/s), 14 in 7.3 ms (68.4 GB/s) — so a loader of our
-own (safetensors header parse, page-aligned arena, one parallel pread, then `MLXArray(rawPointer:)`
-zero-copy adoption, because `newBufferWithBytesNoCopy` needs page-aligned pointers) would save at most
-~5 ms of a ~61 ms reload request. Not taken: a format parser and unsafe-pointer lifetimes are too
-much machinery for 8% of a reload that happens once per idle gap.
+(46.9 GB/s), so there is no inefficiency in the loader to remove.
+
+A loader of our own was then written and measured instead of assumed: safetensors header parse, one
+page-aligned arena, a parallel read, then `MLXArray(rawPointer:)` adoption (because
+`newBufferWithBytesNoCopy` accepts only page-aligned pointers). It is slower than the path it would
+replace, in every variant tried:
+
+| read of the same 501 MB, page-cached | best of 3 |
+|---|---|
+| `loadArrays` + `eval`, MLX's 4-thread pool | 11.4–11.7 ms (45 GB/s) |
+| own loader, `pread`, 4 threads | 19.0 ms (26.4 GB/s) |
+| own loader, `pread`, 8 / 14 threads | 25.5 / 25.0 ms |
+| own loader, `mmap` + `memcpy`, 4 / 8 / 14 | 27.8 / 31.9 / 32.4 ms |
+
+The 7.3 ms a raw 14-thread read suggested does not survive the copy: those bytes have to land in
+memory the loader owns, and writing them faults in ~30 600 fresh pages, which costs more than the
+wider read saves — more threads make it worse, not better. Rejected; the loader is not in the tree.
+
+Two findings from the attempt are worth keeping. A freed 479 MB malloc region stays resident as an
+empty large-allocator region (measured 497 MB empty but still dirty, and `malloc_zone_pressure_relief`
+does not return it), where `munmap` returns the pages at once — so a design that owns the weights'
+memory must map it, not malloc it, and the retained-`MTLBuffer` idea below inherits that. And a
+`deinit` runs before Swift releases a class's stored properties, so freeing an arena from a `deinit`
+unmaps bytes the model's arrays still point at; the release has to come after the last array is gone.
 
 A Metal API does not shorten it either. `MTLIOCommandQueue` would read the same page-cached file no
 faster than the pread pool, and it cannot skip the upload the read is. Keeping the weights across the
