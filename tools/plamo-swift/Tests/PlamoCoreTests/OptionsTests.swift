@@ -114,6 +114,6 @@ func rejectsBadNumbers(_ arguments: [String]) {
 @Test func commandNamesMatchTheBinary() {
     #expect(
         Command.allCases.map(\.rawValue) == [
-            "tokenize", "load", "generate", "serve", "debug", "bench",
+            "tokenize", "load", "generate", "serve", "debug", "bench", "pack",
         ])
 }

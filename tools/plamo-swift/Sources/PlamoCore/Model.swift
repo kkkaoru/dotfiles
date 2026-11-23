@@ -38,13 +38,22 @@ public final class PlamoModel {
     private let lmHead: Quant
     private var caches: [Cache?]
     private var seen = 0
+    /// The packed cache these weights were adopted from, so its pages can be returned once they are
+    /// no longer pointed into.
+    public let mapping: Packed.Mapping?
 
-    /// Loads `config.json` and `model.safetensors` from `directory`.
+    /// Loads `config.json` and `model.safetensors` from `directory`. A packed cache beside the
+    /// checkpoint is adopted without copying; otherwise MLX's own loader reads the checkpoint.
     public static func load(directory: URL) throws -> PlamoModel {
         let config = try PlamoConfig.load(directory: directory)
         let url = directory.appendingPathComponent("model.safetensors")
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw PlamoError.missingModelFile("model.safetensors")
+        }
+        if let packed = Packed.loadCurrent(checkpoint: url) {
+            Timing.mark("reload.packed")
+            return try PlamoModel.make(
+                config: config, arrays: packed.arrays, mapping: packed.mapping)
         }
         let arrays = try loadArrays(url: url)
         Timing.mark("reload.arrays")
@@ -53,7 +62,9 @@ public final class PlamoModel {
 
     /// Builds the model from named arrays: the checkpoint loader and the tests' tiny fixtures
     /// differ only in where the arrays come from. A missing tensor is reported by name.
-    public static func make(config: PlamoConfig, arrays: [String: MLXArray]) throws -> PlamoModel {
+    public static func make(
+        config: PlamoConfig, arrays: [String: MLXArray], mapping: Packed.Mapping? = nil
+    ) throws -> PlamoModel {
         try config.validate()
         func array(_ name: String) throws -> MLXArray {
             guard let value = arrays[name] else { throw PlamoError.missingModelFile(name) }
@@ -100,13 +111,17 @@ public final class PlamoModel {
             layers: layers,
             embedTokens: embedTokens,
             finalNorm: try shifted("model.norm.weight", 1, dtype),
-            lmHead: try Quant(arrays: arrays, prefix: "lm_head"))
+            lmHead: try Quant(arrays: arrays, prefix: "lm_head"),
+            mapping: mapping)
     }
 
     private init(
-        config: PlamoConfig, layers: [Layer], embedTokens: Quant, finalNorm: MLXArray, lmHead: Quant
+        config: PlamoConfig, layers: [Layer], embedTokens: Quant, finalNorm: MLXArray,
+        lmHead: Quant,
+        mapping: Packed.Mapping?
     ) {
         self.config = config
+        self.mapping = mapping
         self.layers = layers
         self.embedTokens = embedTokens
         self.finalNorm = finalNorm

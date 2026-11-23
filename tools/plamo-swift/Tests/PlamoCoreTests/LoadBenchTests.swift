@@ -47,6 +47,26 @@ final class LoadBenchTests: XCTestCase {
                     format: "raw  %2d threads: %.2f ms  %.1f GB/s", threads, best * 1_000,
                     Double(size) / best / 1e9))
         }
+
+        // The packed cache: `mmap` plus adoption, so the only remaining work is the eval that
+        // faults the pages in.
+        let packedURL = Packed.path(beside: url)
+        guard FileManager.default.fileExists(atPath: packedURL.path) else {
+            print("packed: no cache at \(packedURL.path); run `plamo-swift pack` first")
+            return
+        }
+        for run in 1...3 {
+            let t0 = Date()
+            let loaded = try Packed.load(url: packedURL)
+            let t1 = Date()
+            eval(Array(loaded.arrays.values))
+            let t2 = Date()
+            print(
+                String(
+                    format: "packed run %d: map+adopt %.2f ms, eval %.2f ms, total %.2f ms", run,
+                    t1.timeIntervalSince(t0) * 1_000, t2.timeIntervalSince(t1) * 1_000,
+                    t2.timeIntervalSince(t0) * 1_000))
+        }
     }
 
     /// Reads the whole file with `threads` concurrent preads, the way a custom loader would.

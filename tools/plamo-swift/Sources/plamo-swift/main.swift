@@ -17,6 +17,18 @@ internal func loadReport(loaded: Double, warm: Double) -> String {
         format: "load %.3f s (tokenizer+weights %.3f, warm-up %.3f)", loaded + warm, loaded, warm)
 }
 
+/// The `pack` command: the page-aligned cache the reload adopts from, written once per model.
+internal func packReport(_ invocation: Invocation) throws -> String {
+    let checkpoint = invocation.modelDirectory.appendingPathComponent("model.safetensors")
+    let started = Date()
+    let target = try Packed.ensure(checkpoint: checkpoint)
+    let attributes = try? FileManager.default.attributesOfItem(atPath: target.path)
+    let bytes = (attributes?[.size] as? NSNumber)?.intValue ?? 0
+    return String(
+        format: "packed %@ (%.1f MB) in %.2f s", target.lastPathComponent,
+        Double(bytes) / 1_048_576, Date().timeIntervalSince(started))
+}
+
 /// The `debug` command: the same per-stage numbers the Python server prints for one prompt.
 internal func debugReport(_ runtime: ModelRuntime, prompt: String) async throws {
     let result = try await runtime.stages(prompt: prompt)
@@ -75,6 +87,9 @@ internal func run(_ invocation: Invocation) async throws {
         let loaded = Date().timeIntervalSince(started)
         let warm = try await runtime.warmUp()
         print(loadReport(loaded: loaded, warm: warm))
+
+    case .pack:
+        print(try packReport(invocation))
 
     case .debug:
         let runtime = try makeRuntime(invocation)

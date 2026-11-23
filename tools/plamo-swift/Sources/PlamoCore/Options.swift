@@ -8,6 +8,7 @@ public enum Command: String, CaseIterable, Sendable {
     case serve
     case debug
     case bench
+    case pack
 }
 
 /// A fully validated command line: every value is already the type the caller needs, so nothing
