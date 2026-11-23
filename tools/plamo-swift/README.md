@@ -107,6 +107,12 @@ as the bound: at 722 tokens that copy is ~45 MB per step, under 10% of the 3 ms.
 opposite shape — 0.047 ms/token marginal but ~8.6 ms fixed per forward pass — so a short translation
 is dominated by graph construction and kernel launches, not by its tokens.
 
+`docs/plamo-swift-speed-methods.md` takes the published speed-up methods — speculative and
+prompt-lookup decoding, sub-4-bit weights, kernel fusion, KV-cache and batching work — and measures
+what each would actually be worth here: prompt-lookup can draft none of a translation's tokens,
+`mx.compile` fusion is slower on a weight-streaming step, and 2-bit weights measure 1.27× and not the
+proportional 2×.
+
 ### What was changed for these numbers
 
 | change | before | after |
