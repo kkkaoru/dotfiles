@@ -267,3 +267,6 @@ tools/claudex-agent-adapter/grok-acp-mock.jsonl
 .codex/tui-thread-reference-capabilities/
 # Age-encrypted secrets only; a decrypted copy must never be committed.
 secrets/*.json
+
+# Runtime output such as panic captures; configuration only lives elsewhere.
+logs/
