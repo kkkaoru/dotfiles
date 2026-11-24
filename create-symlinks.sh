@@ -276,6 +276,8 @@ link_path "${DOTPATH}/scripts/ensure-bonsai-mac.sh" "${HOME}/.local/bin/ensure-b
 link_path "${DOTPATH}/scripts/bonsai-serve.sh" "${HOME}/.local/bin/bonsai-serve"
 link_path "${DOTPATH}/scripts/bonsai-stop.sh" "${HOME}/.local/bin/bonsai-stop"
 link_path "${DOTPATH}/scripts/bonsai-idle-stop.sh" "${HOME}/.local/bin/bonsai-idle-stop"
+link_path "${DOTPATH}/scripts/inkling-mini.sh" "${HOME}/.local/bin/inkling-mini"
+link_path "${DOTPATH}/scripts/setup-inkling-mini.sh" "${HOME}/.local/bin/setup-inkling-mini"
 link_path "${DOTPATH}/scripts/pi" "${HOME}/.local/bin/pi"
 link_path "${DOTPATH}/tools/dsh-workspace/src/cli.ts" "${HOME}/.local/bin/dsh-workspace"
 if [ -x "${DOTPATH}/scripts/omlx-idle-stop.sh" ]; then
