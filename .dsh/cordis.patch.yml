@@ -8,3 +8,14 @@
   # The headless bundle disables the on-machine credential store; re-enable it so
   # `dsh headless` resolves the same stored keys as the Desktop and Web profiles.
   disabled: false
+
+- insert:
+    - id: mcp-codegraph
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: codegraph
+        transport: stdio
+        command: codegraph
+        args:
+          - serve
+          - --mcp

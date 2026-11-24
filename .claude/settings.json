@@ -5,7 +5,9 @@
     "DISABLE_AUTOUPDATER": "1"
   },
   "permissions": {
-    "allow": [],
+    "allow": [
+      "mcp__codegraph__*"
+    ],
     "deny": [
       "Bash(terraform apply:*)",
       "Bash(* terraform apply*)",
@@ -37,6 +39,16 @@
             "type": "command",
             "command": "exec \"$HOME/.claude/hooks/deny-terraform-apply.sh\"",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codegraph prompt-hook"
           }
         ]
       }
