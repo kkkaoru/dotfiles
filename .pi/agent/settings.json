@@ -94,5 +94,5 @@
     "{\"source\":\"npm:pi-chrome\",\"scope\":\"user\"}": "0.15.57",
     "{\"source\":\"npm:pi-apple-fm\",\"scope\":\"user\"}": "0.1.1"
   },
-  "hideThinkingBlock": true
+  "hideThinkingBlock": false
 }
