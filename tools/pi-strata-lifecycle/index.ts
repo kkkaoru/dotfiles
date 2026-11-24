@@ -62,6 +62,7 @@ const AWAKE_SCRIPT = path.join(BIN, "strata-awake");
 
 const ENSURE_BY_PROVIDER: Readonly<Record<string, string>> = {
   "bonsai-mac": "ensure-bonsai-mac",
+  "inkling-mini": "inkling-mini",
   strata: "strata-local",
   "strata-mac": "ensure-strata-mac",
   "strata-win": "ensure-strata-win",

@@ -86,6 +86,7 @@ describe("ensureScriptFor", () => {
     expect(ensureScriptFor("strata-mac")).toBe(path.join(BIN, "ensure-strata-mac"));
     expect(ensureScriptFor("strata-win")).toBe(path.join(BIN, "ensure-strata-win"));
     expect(ensureScriptFor("bonsai-mac")).toBe(path.join(BIN, "ensure-bonsai-mac"));
+    expect(ensureScriptFor("inkling-mini")).toBe(path.join(BIN, "inkling-mini"));
   });
 
   it("ignores other providers and a missing provider", () => {
