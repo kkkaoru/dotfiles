@@ -37,6 +37,11 @@ silently changed by moving directories.
 installer defaults do not understand this split: review updates and route domain
 skills to storage rather than recreating globally active copies.
 
+CodeGraph guidance lives only in `skills/codegraph/SKILL.md`, linked into each
+agent's skills directory. `codegraph install` writes its own marker-fenced section
+into every agent's instruction file (`CLAUDE.md`, `AGENTS.md`, `QWEN.md`, ...);
+delete those again after an install or upgrade so the skill stays the only copy.
+
 `create-symlinks.sh` installs the top-level link. It refuses an existing real
 `~/.agents` directory: back it up and merge its contents first, preserving managed
 skill directories rather than replacing them with self-referential symlinks.
