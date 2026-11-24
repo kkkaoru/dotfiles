@@ -70,6 +70,21 @@ integrations. These instructions apply to agents working here, including pi and 
   service token. Local `bonsai` starts oMLX only when that provider is selected
   (`tools/pi-omlx-lifecycle-extension`); the model is unpinned and unloads after 10 idle minutes.
   `bonsai-serve.sh` is the retired mlx_vlm server and is not used by pi.
+- `./scripts/setup-inkling-mini.sh` — Install what Inkling 2 Mini needs, once per machine: the
+  standalone llama.cpp build `~/.local/opt/llama-inkling-mini` (unslothai `b12649-mix-c7059d6`, the
+  first builds with looped-layer support, per-expert NVFP4 scales and Metal NVFP4 kernels; Homebrew's
+  llama.cpp cannot load this architecture) and the GGUF set in `~/Models/Inkling-2-Mini-GGUF`
+  (UD-Q4_K_XL 17.6 GB, `mmproj-F16`, the 0.5 GB DSpark drafter, ~18 GB in total). `--link <dir>` moves
+  an existing download there and leaves a symlink.
+- `./scripts/inkling-mini.sh start|stop|status|logs|idle-stop|install-idle|uninstall-idle` — Serve
+  Inkling 2 Mini (26B MoE, 5.4B active, native NVFP4) on `127.0.0.1:8082` from that build, with
+  `--ctx-size`/`-np 1` as the memory knobs and DSpark speculative decoding. Nothing starts it in
+  advance: `tools/pi-strata-lifecycle` runs `start` when an `inkling-mini` model is selected and
+  before each request, and the launchd agent `com.kkkaoru.inkling-mini-idle-stop` (every 2 min) stops
+  it after `INKLING_IDLE_MINUTES` (default 10) with no request and no client, so the ~18 GB leaves RAM.
+  `start` also unloads any model Ollama still holds resident. Other Macs reach it as
+  `https://inkling-mini.kkk4oru.com` (`./scripts/cf-expose-http.sh inkling-mini 8082 ssh-my-mac`) via
+  the `inkling-mini-mac` provider, with the same `pi-strata` service token as the other endpoints.
 - `./scripts/cf-expose-http.sh <label> <port> [tunnel]` — Add `https://<label>.kkk4oru.com` to an
   existing tunnel's ingress, with an Access application that only the `pi-strata` service token
   and the owner's email may pass. Use it instead of opening a port to serve a new model endpoint.
