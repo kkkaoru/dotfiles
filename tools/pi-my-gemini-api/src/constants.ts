@@ -13,5 +13,8 @@ export const INSTALL_HINT = `Install ${CLI_NAME} (${CLI_REPO}) or set GEMINI_API
 /** The CLI's own default model, used until `models list` reports the account's catalog. */
 export const DEFAULT_MODEL = "gemini-4-hydrogen";
 
+/** pi requires a baseUrl once a provider declares models; the CLI owns the real endpoint. */
+export const DEFAULT_ENDPOINT = "https://generativelanguage.googleapis.com";
+
 /** A stuck child process must not hang the agent loop. */
 export const CLI_TIMEOUT_MS = 600_000;

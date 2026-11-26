@@ -6,10 +6,11 @@ import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-codin
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import piMyAntigravity from "../index.ts";
-import { DEFAULT_MODEL, PROVIDER_ID, PROVIDER_NAME } from "../src/constants.ts";
+import { DEFAULT_ENDPOINT, DEFAULT_MODEL, PROVIDER_ID, PROVIDER_NAME } from "../src/constants.ts";
 
 interface Registered {
   name?: string;
+  baseUrl?: string;
   api?: string;
   apiKey?: string;
   streamSimple?: unknown;
@@ -72,6 +73,7 @@ describe("piMyGeminiApi", () => {
     expect(captured.id).toBe(PROVIDER_ID);
     expect(captured.config.name).toBe(PROVIDER_NAME);
     expect(captured.config.api).toBe("my-gemini-api");
+    expect(captured.config.baseUrl).toBe(DEFAULT_ENDPOINT);
     expect(captured.config.streamSimple).toBeTypeOf("function");
     expect(ids(captured.config.models ?? [])).toEqual([DEFAULT_MODEL]);
   });

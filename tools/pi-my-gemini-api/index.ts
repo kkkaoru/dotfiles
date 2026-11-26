@@ -2,7 +2,7 @@
 import type { ExtensionAPI, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 
 import { findCli, runCli } from "./src/cli.ts";
-import { API_ID, PROVIDER_ID, PROVIDER_NAME } from "./src/constants.ts";
+import { API_ID, DEFAULT_ENDPOINT, PROVIDER_ID, PROVIDER_NAME } from "./src/constants.ts";
 import { parseJson } from "./src/json.ts";
 import { mergeDiscovered, parseModelList, staticModels } from "./src/models.ts";
 import { streamAntigravity } from "./src/stream.ts";
@@ -26,6 +26,7 @@ export default function piMyGeminiApi(pi: ExtensionAPI): void {
   const apiKey = process.env["GEMINI_API_KEY"];
   pi.registerProvider(PROVIDER_ID, {
     name: PROVIDER_NAME,
+    baseUrl: DEFAULT_ENDPOINT,
     api: API_ID,
     ...(apiKey ? { apiKey } : {}),
     streamSimple: streamAntigravity,
