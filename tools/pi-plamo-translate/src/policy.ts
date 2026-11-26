@@ -19,9 +19,11 @@ export const RESUME_LINE_BUDGET = 120;
 // Two lines per request, so 128 requests is the most one text may ever cost.
 // Anything longer is a transcript dump, not prose the user is waiting to read.
 export const LINE_LIMIT = 256;
+// Thinking is drawn only when the user expands it, so translating it costs nothing while hidden.
 export const DISPLAY_TYPES = [
   "user",
   "assistant",
+  "assistant-thinking",
   "summary",
 ] satisfies readonly MarkdownMessageType[];
 

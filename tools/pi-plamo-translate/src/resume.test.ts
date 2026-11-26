@@ -79,8 +79,13 @@ test("a session that opens with history translates about three screens of it", (
   expect(box.pending.has("Turn 10 line 1")).toBe(true);
 
   expect(displayOf(box, "Live reply", shown)).toBe("Live reply");
-  // A live reply is scheduled when it ends, never by drawing it.
-  expect(box.pending.has("Live reply")).toBe(false);
+  // A live message carries no id, so drawing it is what schedules it.
+  // That is the only path an expanded thinking block has: message_end carries text blocks alone.
+  expect(box.pending.has("Live reply")).toBe(true);
+  expect(displayOf(box, "Streaming reply", { ...shown, isStreaming: true })).toBe(
+    "Streaming reply",
+  );
+  expect(box.pending.has("Streaming reply")).toBe(false);
 });
 
 test("a long persisted entry stays untranslated", () => {

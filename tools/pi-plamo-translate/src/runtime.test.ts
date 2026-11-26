@@ -196,7 +196,7 @@ test("a dropped connection is retried once", async () => {
   expect(box.warned).toBe(false);
 });
 
-test("a reply is translated when it ends, and drawing shows that translation", async () => {
+test("a finished reply is translated, and drawing shows that translation", async () => {
   const box = runtime(async (text) => `JA:${text}`);
   expect(
     displayOf(box, "Add a tab", {
@@ -205,11 +205,11 @@ test("a reply is translated when it ends, and drawing shows that translation", a
       availableWidth: 40,
     }),
   ).toBe("Add a tab");
-  // Drawing alone asks for nothing, however often it runs.
-  expect(displayOf(box, "Add a tab", shown)).toBe("Add a tab");
+  // A streaming draw asks for nothing: every token would be a new text.
   expect(box.pending.size).toBe(0);
-
-  scheduleReply(box, { content: [{ type: "text", text: "Add a tab" }], role: "assistant" });
+  // A finished live block is drawn once, so drawing it is what schedules it.
+  expect(displayOf(box, "Add a tab", shown)).toBe("Add a tab");
+  expect(box.pending.size).toBe(1);
   await box.pending.get("Add a tab");
   expect(displayOf(box, "Add a tab", shown)).toBe("JA:Add a tab");
 });

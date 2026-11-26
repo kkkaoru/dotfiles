@@ -301,10 +301,11 @@ export function displayOf(
   if (ready !== undefined) {
     return ready;
   }
-  // Drawing never starts a translation: one redraw of a long transcript would ask for thousands.
+  // A redraw of the transcript never starts a translation: it would ask for thousands.
+  // Only a live message is drawn without an id, so drawing it is reading it.
+  // That is the one path an expanded thinking block has: message_end carries text blocks alone.
   if (
-    context.messageId === undefined ||
-    !runtime.resumedIds.has(context.messageId) ||
+    (context.messageId !== undefined && !runtime.resumedIds.has(context.messageId)) ||
     tooLong(markdown)
   ) {
     return markdown;

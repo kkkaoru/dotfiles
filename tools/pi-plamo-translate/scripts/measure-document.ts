@@ -1,9 +1,14 @@
+/* oxlint-disable capitalized-comments, no-await-in-loop, no-console, no-undef, prefer-destructuring, typescript/dot-notation, typescript/no-unnecessary-type-assertion, unicorn/no-process-exit */
 // Measures the chunked path against a real document longer than the model's window.
 //
 //   bun run scripts/measure-document.ts [sentences]
 //
 // Prints the single-shot request and, when the server can count tokens, the planned chunks with
 // the prompt tokens each one preflights. The server must be answering on PLAMO_PORT (18555).
+//
+// A measurement script: printing its numbers is the point, the requests are measured one at a
+// time so each latency belongs to its own chunk, and it runs under Bun, which supplies the globals
+// this package's Node-free lint config does not declare.
 
 import { plamoPrompt } from "../../claude-plamo-translate/hooks/translate.ts";
 import { plan, tokenCounts, type Post } from "../src/chunk.ts";
