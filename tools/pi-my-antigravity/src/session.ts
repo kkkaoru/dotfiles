@@ -25,6 +25,12 @@ export interface EnvelopeInput {
   isNonGemini: boolean;
   /** `model` field of the catalog entry, e.g. `MODEL_PLACEHOLDER_M526`. */
   modelEnum?: string;
+  /**
+   * How many times this same turn was already sent. The backend answers a reused `request_id` with
+   * an empty candidate instead of the turn, so a retry needs an id of its own — a suffix, not the
+   * next index, which the following turn will use.
+   */
+  attempt?: number;
 }
 
 export interface Envelope {
@@ -165,9 +171,10 @@ export function sessionEnvelope(input: EnvelopeInput): Envelope {
   const { trajectoryId, sessionId } = resolveIdentity(seed);
   const step = Math.max(1, input.step);
 
+  const requestId = `${trajectoryId}-${index}${input.attempt ? `-r${input.attempt}` : ""}`;
   const labels: Record<string, string> = {
     last_step_index: String(Math.max(0, step - 1)),
-    request_id: `${trajectoryId}-${index}`,
+    request_id: requestId,
     trajectory_id: trajectoryId,
     used_claude: String(input.isClaude),
     used_claude_conservative: String(input.isClaude),
@@ -182,7 +189,7 @@ export function sessionEnvelope(input: EnvelopeInput): Envelope {
 
   return {
     trajectoryId,
-    requestId: `${trajectoryId}-${index}`,
+    requestId,
     sessionId,
     labels,
   };

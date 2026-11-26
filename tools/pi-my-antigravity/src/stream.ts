@@ -102,6 +102,8 @@ export interface BuildGenerateBodyOptions {
   modelEnum?: string;
   /** Pre-resolved runtime id to avoid recomputing it in `runStream`. */
   runtimeModel?: string;
+  /** Retry counter: a reused `request_id` is answered with an empty candidate. */
+  attempt?: number;
 }
 
 export interface StreamToolCall {
@@ -115,6 +117,7 @@ export interface StreamUsage {
   input?: number;
   output?: number;
   reasoning?: number;
+  cacheRead?: number;
 }
 
 export interface StreamChunk {
@@ -207,6 +210,7 @@ const USAGE_FIELDS: ReadonlyArray<readonly [string, keyof StreamUsage]> = [
   ["promptTokenCount", "input"],
   ["candidatesTokenCount", "output"],
   ["thoughtsTokenCount", "reasoning"],
+  ["cachedContentTokenCount", "cacheRead"],
 ];
 
 const randomId = (): string => crypto.randomUUID();
@@ -253,10 +257,43 @@ const textOf = (message: { content: string | Array<TextContent | ImageContent> }
         block.type === "image" ? imagePart(block) : { text: block.text },
       );
 
+/**
+ * Gemini reads `items` as one schema and rejects a draft-04 tuple — `items: [a, b]`, which pi's
+ * `timeline` tool declares for its `done` pair — with "schema at properties.done.items must be a
+ * boolean or an object". A tuple's entries share one type in every pi tool, so that type stands in;
+ * `minItems` and `maxItems` still pin the pair.
+ */
+const tupleItems = (entries: readonly unknown[]): Record<string, unknown> => {
+  const types = new Set(entries.map((entry) => (isRecord(entry) ? entry["type"] : undefined)));
+  const [type] = types;
+  return types.size === 1 && typeof type === "string" ? { type } : {};
+};
+
+const rewriteItems = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((entry) => rewriteItems(entry));
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, entry]) => [
+      key,
+      key === "items" && Array.isArray(entry) ? tupleItems(entry) : rewriteItems(entry),
+    ]),
+  );
+};
+
+/** A tool schema Gemini accepts: the same document with every tuple `items` made a single schema. */
+export function geminiSchema(parameters: object): object {
+  const schema = rewriteItems(parameters);
+  return isRecord(schema) ? schema : parameters;
+}
+
 const toFunctionDeclaration = (tool: Tool): FunctionDeclaration => ({
   name: tool.name,
   description: tool.description,
-  parametersJsonSchema: tool.parameters,
+  parametersJsonSchema: geminiSchema(tool.parameters),
 });
 
 const sameToolList = (left: readonly Tool[] | undefined, right: readonly Tool[]): boolean =>
@@ -503,6 +540,7 @@ export function buildGenerateBody(options: BuildGenerateBodyOptions): GenerateBo
     isClaude: options.publicModelId.startsWith("claude-"),
     isNonGemini: !options.publicModelId.startsWith("gemini-"),
     ...(options.modelEnum ? { modelEnum: options.modelEnum } : {}),
+    ...(options.attempt ? { attempt: options.attempt } : {}),
   });
   const tools = toolDeclarations(options.tools);
   return {
@@ -762,7 +800,12 @@ const sendGenerateRequest = (
 ): Promise<WireResponse> => sendAttempt(0, token, stringifyJson(body), signal, send, "");
 
 function applyUsage(usage: StreamUsage, message: AssistantMessage): void {
-  message.usage.input = usage.input ?? message.usage.input;
+  const cached = usage.cacheRead ?? message.usage.cacheRead;
+  // Gemini counts cached prompt tokens inside promptTokenCount; pi keeps them in cacheRead, and a
+  // cache-hit report of zero would otherwise make pi warn that the provider dropped the prefix.
+  message.usage.input =
+    usage.input === undefined ? message.usage.input : Math.max(0, usage.input - cached);
+  message.usage.cacheRead = cached;
   message.usage.output = usage.output ?? message.usage.output;
   if (usage.reasoning !== undefined) {
     message.usage.reasoning = usage.reasoning;
@@ -932,19 +975,22 @@ async function runStream(
   const runtimeModel = runtimeModelId(model.id, options.reasoning);
   const modelEnum = modelEnumFor(runtimeModel);
   const transcript = replayTranscript(context.messages);
-  const body = buildGenerateBody({
-    project: auth.projectId ?? CONSUMER_PROJECT,
-    publicModelId: model.id,
-    level: options.reasoning,
-    runtimeModel,
-    systemPrompt: transcript.systemPrompt,
-    messages: context.messages,
-    tools: transcript.tools,
-    maxTokens: options.maxTokens,
-    modelMaxTokens: model.maxTokens || DEFAULT_MAX_TOKENS,
-    ...(options.sessionId ? { sessionId: options.sessionId } : {}),
-    ...(modelEnum ? { modelEnum } : {}),
-  });
+  const buildBody = (attempt: number): GenerateBody =>
+    buildGenerateBody({
+      project: auth.projectId ?? CONSUMER_PROJECT,
+      publicModelId: model.id,
+      level: options.reasoning,
+      runtimeModel,
+      systemPrompt: transcript.systemPrompt,
+      messages: context.messages,
+      tools: transcript.tools,
+      maxTokens: options.maxTokens,
+      modelMaxTokens: model.maxTokens || DEFAULT_MAX_TOKENS,
+      ...(options.sessionId ? { sessionId: options.sessionId } : {}),
+      ...(modelEnum ? { modelEnum } : {}),
+      ...(attempt ? { attempt } : {}),
+    });
+  const body = buildBody(0);
 
   emit({ type: "start", partial: message });
   const emitState: StreamEmitState = {
@@ -958,8 +1004,9 @@ async function runStream(
   const response = await sendGenerateRequest(auth.token, body, options.signal, send);
   await readStream(response, (chunk) => applyChunk(chunk, message, emitState, emit));
   if (!hasUsableOutput(emitState) && !options.signal?.aborted) {
-    // Transient empty SSE response (0 output tokens, no parts): retry once on the same request.
-    const retryResponse = await sendGenerateRequest(auth.token, body, options.signal, send);
+    // An empty SSE response means the backend has nothing for this `request_id` — it reuses the
+    // turn it already answered, so the retry has to carry the next id instead of the same body.
+    const retryResponse = await sendGenerateRequest(auth.token, buildBody(1), options.signal, send);
     await readStream(retryResponse, (chunk) => applyChunk(chunk, message, emitState, emit));
   }
   if (!hasUsableOutput(emitState)) {

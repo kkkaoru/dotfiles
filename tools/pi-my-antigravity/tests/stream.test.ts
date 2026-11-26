@@ -84,6 +84,49 @@ it("builds request with system prompt as leading user turn and never systemInstr
   expect(body.request.labels["model_enum"]).toBe("MODEL_PLACEHOLDER_M526");
 });
 
+const TIMELINE_TOOL = {
+  name: "timeline",
+  description: "Record the plan",
+  parameters: {
+    type: "object",
+    properties: {
+      done: {
+        type: "array",
+        additionalItems: false,
+        items: [{ type: "number", minimum: 0 }],
+        minItems: 2,
+        maxItems: 2,
+      },
+    },
+  },
+} as unknown as Tool;
+
+it("sends a tuple items as one schema, which the backend accepts", () => {
+  const body = buildGenerateBody({
+    project: "aicode-consumers",
+    publicModelId: "gemini-4-hydrogen",
+    level: "low",
+    systemPrompt: undefined,
+    messages: contextWith("").messages,
+    tools: [TIMELINE_TOOL],
+    maxTokens: undefined,
+    modelMaxTokens: 65536,
+  });
+
+  expect(body.request.tools?.[0]?.functionDeclarations[0]?.parametersJsonSchema).toStrictEqual({
+    type: "object",
+    properties: {
+      done: {
+        type: "array",
+        additionalItems: false,
+        items: { type: "number" },
+        minItems: 2,
+        maxItems: 2,
+      },
+    },
+  });
+});
+
 it("declares tools via parametersJsonSchema and replays images, assistant calls, and tool results", () => {
   const body = buildGenerateBody({
     project: "aicode-consumers",
@@ -510,6 +553,35 @@ it("parses SSE chunks and auth values", () => {
   expect(() => parseAuthValue("{}")).toThrow(/missing an access token/);
 });
 
+it("reports cached prompt tokens as cacheRead, not as fresh input", async () => {
+  const events: AssistantMessageEvent[] = [];
+  const stream = streamAntigravity(TEST_MODEL, contextWith("sys"), {
+    apiKey: JSON.stringify({ token: "tok", projectId: "proj" }),
+    send: async () =>
+      sseResponse(200, [
+        {
+          response: {
+            candidates: [{ content: { parts: [{ text: "ok" }] } }],
+            usageMetadata: {
+              promptTokenCount: 43134,
+              cachedContentTokenCount: 43000,
+              candidatesTokenCount: 5,
+              totalTokenCount: 43139,
+            },
+          },
+        },
+      ]),
+  });
+  for await (const event of stream) {
+    events.push(event);
+  }
+  const done = events.at(-1);
+  expect(done?.type).toBe("done");
+  if (done?.type === "done") {
+    expect(done.message.usage).toMatchObject({ input: 134, cacheRead: 43000, output: 5 });
+  }
+});
+
 it("streams thinking, text, and tool calls through pi events", async () => {
   rememberModelEnums([{ id: "gemini-4-hydrogen-medium", modelEnum: "MODEL_PLACEHOLDER_M526" }]);
   const events: AssistantMessageEvent[] = [];
@@ -705,10 +777,12 @@ it("retries empty streams once and errors if still empty", async () => {
   // Transient empty response followed by a normal response succeeds on retry.
   const recoveredEvents: AssistantMessageEvent[] = [];
   const recoverAttempts = { count: 0 };
+  const requestIds: string[] = [];
   for await (const event of streamAntigravity(TEST_MODEL, contextWith(""), {
     apiKey: "tok",
-    send: async () => {
+    send: async (request) => {
       recoverAttempts.count += 1;
+      requestIds.push(JSON.parse(request.body).request.labels.request_id);
       return recoverAttempts.count === 1
         ? sseResponse(200, [{ response: {} }])
         : sseResponse(200, [
@@ -723,6 +797,8 @@ it("retries empty streams once and errors if still empty", async () => {
     recoveredEvents.push(event);
   }
   expect(recoverAttempts.count).toBe(2);
+  // A reused request id is answered with the empty turn it already has, so the retry moves on.
+  expect(requestIds[1]).not.toBe(requestIds[0]);
   expect(recoveredEvents.at(-1)?.type).toBe("done");
 });
 
