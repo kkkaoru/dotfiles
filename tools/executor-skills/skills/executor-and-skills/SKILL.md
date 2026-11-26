@@ -1,4 +1,5 @@
 ---
+
 name: executor-and-skills
 description: Use for prior agent history (ctx), MCP/API integrations, Apple Pro apps (Motion, Compressor, Final Cut Pro, Logic Pro, MainStage), browser tools, Cloudflare, MotherDuck, GPUI and web performance. Load guidance and discover execution tools through Executor on demand.
 ---
@@ -63,21 +64,21 @@ Search, describe only the chosen tool, then call its exact schema-valid path.
 Do not guess namespaces or print every schema. Keep outputs bounded. Use
 `tmux_exec` for network calls and uncertain-duration work.
 
-| Task | Integration |
-|---|---|
-| Prior coding-agent sessions and decisions | `ctx` |
-| Cloudflare docs / Agents SDK docs | `cloudflare-docs` / `cloudflare-agents` |
+| Task                                                                     | Integration                                                                   |
+| ------------------------------------------------------------------------ | ----------------------------------------------------------------------------- |
+| Prior coding-agent sessions and decisions                                | `ctx`                                                                         |
+| Cloudflare docs / Agents SDK docs                                        | `cloudflare-docs` / `cloudflare-agents`                                       |
 | DNS, Workers, R2, D1, KV, Zero Trust and other Cloudflare API operations | `cloudflare-api` (nested Code Mode: discover its search/execute schema first) |
-| Storage/AI/compute bindings | `cloudflare-bindings` |
-| Workers build/deploy diagnostics | `cloudflare-builds` |
-| Workers logs/metrics | `cloudflare-observability` |
-| Remote browser, screenshots, Markdown | `cloudflare-browser` |
-| Cloudflare analytics | `cloudflare-graphql` |
-| SQL, database exploration, Dive | `motherduck` |
-| Library documentation | `context7` |
-| Local Chrome / performance | `chrome-devtools` |
-| Apple Pro apps: native Swift CLI/XML/MIDI/OSC integration | `apple-pro-apps` |
-| Apple Pro apps: UI-only fallback using existing Peekaboo | `apple-pro-apps-ui` |
+| Storage/AI/compute bindings                                              | `cloudflare-bindings`                                                         |
+| Workers build/deploy diagnostics                                         | `cloudflare-builds`                                                           |
+| Workers logs/metrics                                                     | `cloudflare-observability`                                                    |
+| Remote browser, screenshots, Markdown                                    | `cloudflare-browser`                                                          |
+| Cloudflare analytics                                                     | `cloudflare-graphql`                                                          |
+| SQL, database exploration, Dive                                          | `motherduck`                                                                  |
+| Library documentation                                                    | `context7`                                                                    |
+| Local Chrome / performance                                               | `chrome-devtools`                                                             |
+| Apple Pro apps: native Swift CLI/XML/MIDI/OSC integration                | `apple-pro-apps`                                                              |
+| Apple Pro apps: UI-only fallback using existing Peekaboo                 | `apple-pro-apps-ui`                                                           |
 
 For Apple Pro apps, load `apple-pro-apps` and the matching app skill first. Prefer
 native machine interfaces; discover `app_capabilities` for actual installed editions

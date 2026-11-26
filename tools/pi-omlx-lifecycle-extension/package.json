@@ -13,14 +13,14 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "1.0.4",
-    "@types/node": "24.10.1",
-    "@vitest/coverage-v8": "4.1.11",
+    "@earendil-works/pi-coding-agent": "1.6.1",
+    "@types/node": "26.6.11",
+    "@vitest/coverage-v8": "5.1.2",
     "oxfmt": "0.63.0",
     "oxlint": "1.78.0",
     "oxlint-tsgolint": "7.0.2001",
     "typescript": "5.9.3",
-    "vitest": "4.1.11"
+    "vitest": "5.1.2"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "^0.84.2 || ^1.0.4"

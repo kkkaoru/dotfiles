@@ -4,8 +4,8 @@ A pi custom provider (`claude-sdk`) that runs Claude through the official
 [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk/typescript) with the local Claude
 Code login. Pi keeps its own agent loop: the model sees pi's tools and pi executes every call.
 
-**Billing (verified 2026-10-21):** requests carrying pi's system prompt are billed as *extra
-usage*, not plan usage. The API classifies them by content (a single line of pi's prompt is
+**Billing (verified 2026-10-21):** requests carrying pi's system prompt are billed as _extra
+usage_, not plan usage. The API classifies them by content (a single line of pi's prompt is
 enough); the same SDK call with a plain prompt uses plan usage. With no extra-usage balance the
 API answers `400 You're out of extra usage`. Earlier plan-usage results were an artifact of
 testing inside a Claude Code shell, whose `CLAUDE_CODE_*` identity leaked into the child; the

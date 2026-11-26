@@ -13,6 +13,7 @@ Run `pi mcp list` to verify connectivity and `/reload` (or start a new session) 
 activate the config and updated router. Other clients' `.mcp.json` is unchanged.
 
 Implementation plan:
+
 1. Discover explicitly configured, local skill roots; deduplicate by ID.
 2. Search bounded name/description metadata; load instructions only on request.
 3. Read references only inside the selected skill's canonical directory.

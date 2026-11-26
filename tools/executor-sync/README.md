@@ -25,17 +25,17 @@ Gitの設定変更だけでは同期先を変更したり、有効化したり�
 
 ## R2の定義
 
-| 項目 | 値 |
-|---|---|
-| バケット | `executor-config-sync`（非公開、Standard、default jurisdiction） |
-| 最新設定 | `v1/personal/latest.age` |
-| 履歴 | `v1/personal/history/<UTC日時>-<device UUID>-<revision UUID>.age` |
-| 履歴保持 | `r2-lifecycle.json` のルールで30日 |
-| 最新設定の期限 | なし |
-| 認証 | Executor管理の既存Cloudflare OAuth接続（`cloudflare-api.user.default`） |
-| 通信 | Executor → 公式Cloudflare MCP → R2オブジェクトREST API、HTTPS |
-| 保存形式 | age暗号文をbase64化し、共有HMAC-SHA256で認証したJSON |
-| 対象情報・鍵 | macOS Keychain、service `dotfiles.executor-sync` / account `profile-v2` |
+| 項目           | 値                                                                      |
+| -------------- | ----------------------------------------------------------------------- |
+| バケット       | `executor-config-sync`（非公開、Standard、default jurisdiction）        |
+| 最新設定       | `v1/personal/latest.age`                                                |
+| 履歴           | `v1/personal/history/<UTC日時>-<device UUID>-<revision UUID>.age`       |
+| 履歴保持       | `r2-lifecycle.json` のルールで30日                                      |
+| 最新設定の期限 | なし                                                                    |
+| 認証           | Executor管理の既存Cloudflare OAuth接続（`cloudflare-api.user.default`） |
+| 通信           | Executor → 公式Cloudflare MCP → R2オブジェクトREST API、HTTPS           |
+| 保存形式       | age暗号文をbase64化し、共有HMAC-SHA256で認証したJSON                    |
+| 対象情報・鍵   | macOS Keychain、service `dotfiles.executor-sync` / account `profile-v2` |
 
 `r2-lifecycle.json` はCloudflare REST APIの `/accounts/{account_id}/r2/buckets/executor-config-sync/lifecycle`
 に渡す定義です。既存の無関係なルールは上書きせずマージしてください。
