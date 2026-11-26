@@ -136,7 +136,11 @@ reload_server() {
     echo "missing ${built}: run (cd tools/plamo-swift && swift build -c release)" >&2
     exit 1
   fi
-  install -m 755 "$built" "${BIN}.new"
+  install -m 755 "$built" "${BIN}.new" 2>/dev/null || {
+    # A first install has neither the directory nor the binary the agent will run.
+    mkdir -p "$(dirname "$BIN")" "$STATE_DIR"
+    install -m 755 "$built" "${BIN}.new"
+  }
   mv -f "${BIN}.new" "$BIN"
   cp -R "$(dirname "$built")/mlx-swift_Cmlx.bundle" "$(dirname "$BIN")/" 2>/dev/null || true
   "$BIN" pack --model "$MODEL" \
