@@ -40,6 +40,9 @@
 !.config/herdr-app/mods/tabs-clock
 .config/herdr-app/mods/tabs-clock/gpui-kit.d.ts
 .config/herdr-app/mods/tabs-clock/jsconfig.json
+!.config/herdr-app/mods/pane-branch
+.config/herdr-app/mods/pane-branch/gpui-kit.d.ts
+.config/herdr-app/mods/pane-branch/jsconfig.json
 !.config/herdr-app/layouts
 .config/herdr-app/layouts/*
 !.config/herdr-app/layouts/main-emoji.json
