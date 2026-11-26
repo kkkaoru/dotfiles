@@ -197,7 +197,7 @@ describe("Pi assistant event mapping", () => {
     expect(map({ type: "toolcall_end", contentIndex: 0, toolCall, partial })).toMatchObject({
       arguments: {
         command: "gh run watch 123",
-        description: "08-25 23:14 | gh run watch 123",
+        description: "23:14 | gh run watch 123",
         run_in_background: true,
       },
     });
@@ -207,7 +207,7 @@ describe("Pi assistant event mapping", () => {
           {
             arguments: {
               command: "gh run watch 123",
-              description: "08-25 23:14 | gh run watch 123",
+              description: "23:14 | gh run watch 123",
               run_in_background: true,
             },
           },
