@@ -3,7 +3,7 @@
 # macOS keychain so every Mac of yours can decrypt it without copying a file.
 #   ./scripts/secrets.sh keygen            create the identity (if missing), store it, print its key
 #   ./scripts/secrets.sh encrypt <name>    read JSON on stdin, write secrets/<name>.age
-#   ./scripts/secrets.sh decrypt <name>    print the JSON; cached SECRETS_CACHE_SECONDS (3600)
+#   ./scripts/secrets.sh decrypt <name>    print the JSON; kept until secrets/<name>.age changes
 #   ./scripts/secrets.sh identity          report where the identity is read from
 # The identity comes from AGE_IDENTITY (a path), else the macOS keychain (AGE_KEYCHAIN_SERVICE),
 # else 1Password (AGE_OP_REF), else ~/.config/age/keys.txt. The keychain is read before 1Password
@@ -16,10 +16,12 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIR="${ROOT}/secrets"
 RECIPIENTS="${DIR}/recipients.txt"
 IDENTITY_FILE="${AGE_IDENTITY:-${HOME}/.config/age/keys.txt}"
-# Every decrypt that reaches 1Password asks for an authorization, so the answer is kept for a while:
-# a poller such as scripts/gateway-cost.sh runs every five minutes and would ask each time.
+# Every decrypt that reaches 1Password asks for an authorization, so the answer is kept until the
+# encrypted file changes: a poller such as scripts/gateway-cost.sh runs every five minutes and would
+# otherwise ask again as soon as a timer expired. SECRETS_CACHE_SECONDS opts into an expiry, for a
+# secret that rotates.
 CACHE_DIR="${XDG_CACHE_HOME:-${HOME}/.cache}/dotfiles-secrets"
-CACHE_SECONDS="${SECRETS_CACHE_SECONDS:-3600}"
+CACHE_SECONDS="${SECRETS_CACHE_SECONDS:-0}"
 KEYCHAIN_SERVICE="${AGE_KEYCHAIN_SERVICE:-dotfiles-age-identity}"
 OP_REF="${AGE_OP_REF:-op://Personal/dotfiles-age-identity/notesPlain}"
 OP_VAULT="${AGE_OP_VAULT:-Personal}"
@@ -127,7 +129,8 @@ case "${1:-}" in
     [ -f "${DIR}/${name}.age" ] || { echo "missing: ${DIR}/${name}.age" >&2; exit 1; }
     cache="${CACHE_DIR}/${name}.json"
     if [ -f "${cache}" ] && [ ! "${DIR}/${name}.age" -nt "${cache}" ] &&
-      [ -z "$(find "${cache}" -mmin "+$((CACHE_SECONDS / 60))" 2>/dev/null)" ]; then
+      { [ "${CACHE_SECONDS}" -eq 0 ] ||
+        [ -z "$(find "${cache}" -mmin "+$((CACHE_SECONDS / 60))" 2>/dev/null)" ]; }; then
       cat "${cache}"
       exit 0
     fi
