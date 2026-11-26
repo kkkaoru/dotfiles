@@ -1,0 +1,43 @@
+{
+  "name": "@kkkaoru/pi-my-gemini-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Gemini API provider for Pi Coding Agent that runs the official gemini-api CLI",
+  "keywords": [
+    "antigravity",
+    "gemini",
+    "pi-extension",
+    "pi-package"
+  ],
+  "type": "module",
+  "scripts": {
+    "check": "bun run format:check && bun run lint && bun run typecheck && bun run test:coverage",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "lint": "oxlint --type-aware --type-check .",
+    "smoke": "bun run check",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.6.1",
+    "@earendil-works/pi-coding-agent": "1.6.1",
+    "@types/node": "26.6.11",
+    "@vitest/coverage-v8": "5.1.2",
+    "oxfmt": "0.63.0",
+    "oxlint": "1.78.0",
+    "oxlint-tsgolint": "7.0.2001",
+    "typescript": "6.0.3",
+    "vitest": "5.1.2"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": ">=1.5.0",
+    "@earendil-works/pi-coding-agent": ">=1.5.0"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

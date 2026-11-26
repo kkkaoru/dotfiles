@@ -1,12 +1,13 @@
 # Third-party notices
 
-`pi-my-antigravity` contains no third-party source code. It runs the official CLI
-and translates between it and Pi:
+`pi-my-antigravity` is an independent, unofficial integration. It contains no
+third-party source code; the wire format was derived from these references:
 
-- **gemini-api-cli** by Google — <https://github.com/google-gemini/gemini-api-cli>,
-  installed separately and never vendored. Its `generate --body` /
-  `models list` commands and its Interactions API request and response models
-  (`gemini-api generate --schema`) define what this provider sends and reads.
-- **pi-antigravity** by Rahul Arya (MIT) — the earlier Pi provider, kept in Git
-  history as the reference for how a Pi provider maps a transcript onto Google's
-  tool-call shapes. No code copied.
+- **Antigravity CLI (`agy`) 1.5.9** by Google — the installed official client. Its
+  endpoints, User-Agent fingerprint, OAuth scopes, public OAuth application and
+  model catalog define what this provider sends. Not redistributed here.
+- **google-antigravity (antigravity-sdk-python)** by Google — Apache-2.0. Used to
+  understand agent configuration and Vertex/API-key modes; no code copied.
+- **pi-antigravity** by Rahul Arya (MIT) — the existing Pi provider used to compare
+  behaviour and to identify the `429 RESOURCE_EXHAUSTED` interaction with
+  `request.systemInstruction` (upstream issue #137). No code copied.

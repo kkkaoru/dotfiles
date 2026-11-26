@@ -1,0 +1,20 @@
+{
+  "ignorePatterns": ["coverage", "node_modules"],
+  "rules": {
+    "complexity": ["error", 10],
+    "curly": ["error", "all"],
+    "max-depth": ["error", 3],
+    "no-nested-ternary": "error"
+  },
+  "overrides": [
+    {
+      "files": ["src/**/*.ts"],
+      "rules": {
+        "typescript/consistent-type-assertions": ["error", { "assertionStyle": "never" }]
+      }
+    }
+  ],
+  "categories": {
+    "perf": "error"
+  }
+}

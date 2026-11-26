@@ -74,6 +74,7 @@
     "./packages/pi-effort-manager",
     "./packages/pi-plamo-translate",
     "./packages/pi-my-antigravity",
+    "./packages/pi-my-gemini-api",
     "./packages/pi-my-clinepass-provider",
     "npm:pi-ollama-cloud",
     "./packages/pi-my-cursor-provider",

@@ -1,57 +1,85 @@
 # pi-my-antigravity
 
-Antigravity provider for Pi that runs the official
-[`gemini-api` CLI](https://github.com/google-gemini/gemini-api-cli) instead of
-speaking the Cloud Code Assist wire itself. One child process per completion:
+Antigravity (Google Cloud Code Assist) provider for Pi, built to behave like the
+installed official CLI (`agy` 1.5.9) instead of approximating it. It uses the
+subscription OAuth credential — no Gemini API key — and speaks the same
+`v1internal` endpoints with the same agent envelope.
 
 ```
-gemini-api generate --body <interaction JSON> --stream=false --output-format json
-```
-
-The CLI owns credentials, model ids, the endpoint and the request shape; this
-package owns the translation between pi's transcript and the Interactions API
-(`POST /v1beta/interactions`).
-
-```
+/login my-antigravity        # Google sign-in (PKCE, loopback callback on :51123)
 /model my-antigravity/gemini-4-hydrogen
 ```
 
-## Requirements
-
-- `gemini-api` on `PATH`, at `~/.local/bin/gemini-api`, or named by
-  `GEMINI_API_CLI`. Install it with
-  `curl -fsSL https://raw.githubusercontent.com/google-gemini/gemini-api-cli/main/scripts/install.sh | bash`.
-- Credentials for the CLI: `gemini-api configure` (stored config, OS keychain) or
-  `GEMINI_API_KEY`. Pi passes `GEMINI_API_KEY` through when it is set and
-  otherwise lets the CLI resolve its own credential.
-
-A missing CLI is reported in the turn that needs it, not at load time, so the
-provider stays harmless on a machine without the binary.
-
 ## What it sends
 
-| Piece       | Value                                                                                        |
-| ----------- | -------------------------------------------------------------------------------------------- |
-| Prompt      | pi's replayed system messages, as the leading `user_input` step                              |
-| Tools       | `{type: "function", name, description, parameters}` from the active pi tool set              |
-| User turn   | `user_input` with `text` and `image` (`mime_type`, base64 `data`) content blocks             |
-| Assistant   | `model_output` with `text` and `function_call` (`id`, `name`, `arguments`) steps             |
-| Tool result | `function_result` with `call_id`, `name`, `result`, and `is_error` when the tool failed      |
-| Usage       | `usage.input_tokens` / `cached_tokens` / `output_tokens`, cached tokens moved to `cacheRead` |
+| Piece              | Value                                                                                                                                                                                                                                                  | Why                                                                                                   |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------- |
+| Host               | `https://daily-cloudcode-pa.googleapis.com`                                                                                                                                                                                                            | `agy` talks to the daily host first; production is the fallback                                       |
+| Transport          | HTTP/2 (`ALPN: h2`), Go TLS 1.2 cipher/sigalg order, Go SETTINGS (`16 KiB` frame / `4 MiB` window), 1 pooled session per origin                                                                                                                        | `agy` is a Go binary; `fetch` picks Node/Bun ciphers, header order and compression                    |
+| Headers            | `authorization`, `content-type`, `accept` (`text/event-stream` or `application/json`), `accept-encoding: gzip`, `user-agent`, `content-length`                                                                                                         | fixed Go-client header set and order                                                                  |
+| User-Agent         | `antigravity/cli/<version> (aidev_client; os_type=<go-os>; arch=<go-arch>; purpose=agent; auth_method=consumer)`                                                                                                                                       | reads installed `agy --version` (fallback `1.5.9`); the backend rejects stale fingerprints            |
+| Startup APIs       | `loadCodeAssist`, `fetchUserInfo`, `fetchAvailableModels`                                                                                                                                                                                              | mirrors `agy` startup calls and populates `model_enum`                                                |
+| Model id           | runtime id, e.g. `gemini-4-hydrogen-medium`                                                                                                                                                                                                            | that is what `agy models` prints; the thinking level is a tier suffix                                 |
+| Session & Envelope | deterministic `trajectory_id` / `sessionId` (from pi `sessionId` or opening user turn), `requestId: <trajectory>-<index>`, `last_step_index`, `last_execution_id` (when `index > 0`), `model_enum`, `requestType: "agent"`, `userAgent: "antigravity"` | preserves one CLI trajectory across turns and resumed pi sessions while letting pi own the transcript |
+| Thinking           | `generationConfig.thinkingConfig{includeThoughts,thinkingBudget}`                                                                                                                                                                                      | mirrors `agy --effort`                                                                                |
+| Tools              | `functionDeclarations[].parametersJsonSchema`                                                                                                                                                                                                          | JSON Schema is accepted; the legacy `parameters` field rejects `anyOf`/`const` in pi's tool schemas   |
 
-Non-streamed: the CLI is asked for one JSON interaction, which is then replayed
-to pi as `start` → `thinking_*` / `text_*` / `toolcall_*` → `done` events, so pi
-sees the same event stream it gets from a streaming provider.
+### Deliberate deviation: the system prompt travels as the first user turn
+
+`agy` puts its prompt in `request.systemInstruction`. The backend answers that
+field with a generic `429 RESOURCE_EXHAUSTED` ("This model is unavailable right
+now") when the text comes from a third-party harness — the same text in
+`contents` is accepted (upstream: Rahularya01/pi-antigravity#137, still open in
+0.14.0). This provider therefore sends no `systemInstruction` at all: the prompt
+becomes the leading `user` turn, which is why a request here differs from the
+CLI's own body in exactly one field placement. `tests/stream.test.ts` asserts the
+field stays absent.
+
+### Tool calls
+
+`gemini-4-*` rejects replayed `functionCall` parts that lost their
+`thoughtSignature`, so the signature streamed back with the call is stored on the
+pi `ToolCall` and echoed on the next turn.
+
+## Authentication
+
+- `/login my-antigravity` runs Google OAuth PKCE using
+  `MY_ANTIGRAVITY_CLIENT_ID` and `MY_ANTIGRAVITY_CLIENT_SECRET` (or
+  `ANTIGRAVITY_CLIENT_ID` / `ANTIGRAVITY_CLIENT_SECRET`); no client id or secret
+  is hardcoded in source files. When those environment variables are unset, the
+  provider automatically extracts them from the installed `agy` binary and
+  populates `MY_ANTIGRAVITY_CLIENT_ID` / `MY_ANTIGRAVITY_CLIENT_SECRET`.
+- Scopes: `aicode`, `cloud-platform`, `userinfo.*`, `cclog`,
+  `experimentsandconfigs` — the set `agy` requests.
+- Credentials land in pi's auth store (`~/.pi/agent/auth.json`, provider
+  `my-antigravity`) and are refreshed by pi; `projectId` is filled from
+  `loadCodeAssist`, defaulting to `aicode-consumers`.
+- Overrides: `MY_ANTIGRAVITY_USER_AGENT` (client fingerprint), `MY_ANTIGRAVITY_PROJECT_ID`.
 
 ## Models
 
-`gemini-4-hydrogen` is the static entry. `refreshModels` asks
-`gemini-api models list --output-format json` and merges whatever the account
-reports; a failure or an empty answer keeps the static catalog. The per-token
-price is zero because the CLI bills through the account, not per request.
+`src/families.ts` carries the `agy models` list as a static baseline (Gemini 4
+Hydrogen/Argon, Gemini 3.8 Flash, Claude Opus/Sonnet 5.5, GPT-OSS 120B,
+Orchestrator). `refreshModels` calls `fetchAvailableModels` — the endpoint behind
+`agy models` — and appends runtime families this account additionally exposes, so
+newly enabled models appear without a package release. `/my-antigravity.models`
+prints the live list.
 
 ## Checks
 
+```sh
+bun run check     # oxfmt --check + oxlint + tsc --noEmit + vitest --coverage (offline; no network, no model calls)
 ```
-bun run check   # oxfmt, oxlint (type-aware), tsc, vitest with 95% coverage
-```
+
+`git diff --check` must stay clean. Nothing here writes credentials; the tests use
+fixtures only.
+
+## Known limits
+
+- Not an official Google product; it uses the same public client and endpoints as
+  the installed CLI, so a backend change can require a version bump in
+  `src/constants.ts` (`CLI_VERSION`, `USER_AGENT`).
+- Only chat/streaming is implemented — no image generation, web-fetch or search
+  side tools from the CLI.
+- The system-prompt placement is a workaround for a backend blocklist; if Google
+  starts inspecting `contents` too, this package needs revisiting.

@@ -2,7 +2,7 @@
   "name": "@kkkaoru/pi-my-antigravity",
   "version": "0.1.0",
   "private": true,
-  "description": "Antigravity provider for Pi Coding Agent that runs the official gemini-api CLI",
+  "description": "Antigravity (subscription) provider for Pi Coding Agent, modeled on the official agy CLI wire format",
   "keywords": [
     "antigravity",
     "gemini",
