@@ -1,65 +1,63 @@
-// This file runs with bun.
-import { expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import {
-  levelMap,
-  mergeDiscovered,
-  runtimeModelId,
-  staticModels,
-  thinkingBudget,
-} from "../src/models.ts";
+import { DEFAULT_MODEL } from "../src/constants.ts";
+import { mergeDiscovered, modelConfig, parseModelList, staticModels } from "../src/models.ts";
 
-it("maps a public id and pi thinking level to the CLI runtime id", () => {
-  expect(runtimeModelId("gemini-4-hydrogen", "medium")).toBe("gemini-4-hydrogen-medium");
-  expect(runtimeModelId("gemini-4-hydrogen", "xhigh")).toBe("gemini-4-hydrogen-xhigh");
-  expect(runtimeModelId("gemini-3.8-flash", "low")).toBe("gemini-3.8-flash-low");
-  expect(runtimeModelId("claude-sonnet-5-5", "high")).toBe("claude-sonnet-5-5-high");
-  expect(runtimeModelId("gpt-oss-120b", undefined)).toBe("gpt-oss-120b-medium");
-  expect(runtimeModelId("gemini-pro-orchestrator", "high")).toBe("gemini-pro-orchestrator-g1-pro");
-  expect(runtimeModelId("claude-opus-5-5", "xhigh")).toBe("claude-opus-5-5-high");
-  expect(runtimeModelId("gemini-9-unknown", "medium")).toBe("gemini-9-unknown");
+describe("modelConfig", () => {
+  it("describes a free, reasoning, text-and-image model", () => {
+    expect(modelConfig("gemini-4-hydrogen")).toMatchObject({
+      id: "gemini-4-hydrogen",
+      name: "gemini-4-hydrogen",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
+      contextWindow: expect.any(Number),
+      maxTokens: expect.any(Number),
+    });
+  });
 });
 
-it("grows thinkingBudget with the requested level", () => {
-  expect(thinkingBudget("minimal")).toBe(1024);
-  expect(thinkingBudget("low")).toBe(4096);
-  expect(thinkingBudget("medium")).toBe(8192);
-  expect(thinkingBudget("high")).toBe(16384);
-  expect(thinkingBudget("xhigh")).toBe(24576);
-  expect(thinkingBudget("max")).toBe(24576);
-  expect(thinkingBudget(undefined)).toBe(4096);
+describe("staticModels", () => {
+  it("offers the CLI default model", () => {
+    expect(staticModels().map((model) => model.id)).toEqual([DEFAULT_MODEL]);
+  });
 });
 
-it("exposes static catalog and merges newly discovered families", () => {
-  const staticIds = staticModels().map((model) => model.id);
-  expect(staticIds).toStrictEqual([
-    "gemini-4-hydrogen",
-    "gemini-4-argon",
-    "gemini-3.8-flash",
-    "claude-opus-5-5",
-    "claude-sonnet-5-5",
-    "gpt-oss-120b",
-    "gemini-pro-orchestrator",
-  ]);
-  expect(levelMap.fourTier.xhigh).toBe("xhigh");
-  expect(levelMap.mediumOnly.low).toBeNull();
-  expect(mergeDiscovered([]).length).toBe(7);
+describe("mergeDiscovered", () => {
+  it("keeps the static model first and adds new ids once", () => {
+    const merged = mergeDiscovered(["gemini-extra", "gemini-extra", DEFAULT_MODEL, ""]);
+    expect(merged.map((model) => model.id)).toEqual([DEFAULT_MODEL, "gemini-extra"]);
+  });
+});
 
-  const mergedIds = mergeDiscovered([
-    { id: "gemini-4-hydrogen-medium" },
-    { id: "gemini-5-nebula-high", displayName: "Gemini 5 Nebula (High)" },
-    { id: "gemini-5-nebula-low" },
-    { id: "gemini-6-custom" },
-  ]).map((model) => model.id);
-  expect(mergedIds).toStrictEqual([
-    "gemini-4-hydrogen",
-    "gemini-4-argon",
-    "gemini-3.8-flash",
-    "claude-opus-5-5",
-    "claude-sonnet-5-5",
-    "gpt-oss-120b",
-    "gemini-pro-orchestrator",
-    "gemini-5-nebula",
-    "gemini-6-custom",
-  ]);
+describe("parseModelList", () => {
+  it("reads a plain array of ids", () => {
+    expect(parseModelList(["gemini-a", "gemini-b"])).toEqual(["gemini-a", "gemini-b"]);
+  });
+
+  it("reads a models array and strips the models/ prefix", () => {
+    expect(parseModelList({ models: [{ name: "models/gemini-a" }, { id: "gemini-b" }] })).toEqual([
+      "gemini-a",
+      "gemini-b",
+    ]);
+  });
+
+  it("reads a data array", () => {
+    expect(parseModelList({ data: [{ model: "gemini-c" }] })).toEqual(["gemini-c"]);
+  });
+
+  it("drops entries it cannot identify", () => {
+    expect(parseModelList({ items: [{}, { id: 3 }, { id: "gemini-d" }] })).toEqual(["gemini-d"]);
+  });
+
+  it("returns nothing for an unknown shape", () => {
+    expect(parseModelList({ nope: true })).toEqual([]);
+    expect(parseModelList("gemini-a")).toEqual([]);
+  });
+});
+
+describe("parseModelList entries", () => {
+  it("drops a non-string, non-record entry", () => {
+    expect(parseModelList([3, "gemini-e"])).toEqual(["gemini-e"]);
+  });
 });
