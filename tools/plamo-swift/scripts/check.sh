@@ -17,7 +17,9 @@ echo '== build (warnings are errors)'
 swift build -Xswiftc -warnings-as-errors
 
 echo '== test'
-swift test -Xswiftc -warnings-as-errors --enable-code-coverage
+# Serialized: a parallel run deadlocks once the compile tests fork protoc and coremlc, and the
+# whole suite takes 4.5 s either way.
+swift test --no-parallel -Xswiftc -warnings-as-errors --enable-code-coverage
 
 echo '== coverage'
 python3 scripts/coverage-gate.py "$(swift test --show-codecov-path)"
