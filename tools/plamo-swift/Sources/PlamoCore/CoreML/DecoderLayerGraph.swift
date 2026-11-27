@@ -24,6 +24,14 @@ public struct RoPETables {
     public let negOne: String
 }
 
+/// The two attention inputs that are not weights: the query scale and the cache-row mask.
+public struct AttentionInputs {
+    /// The query scale, `[1]`.
+    public let scale: String
+    /// The cache-row mask, `[1, 1, cacheLength]`.
+    public let mask: String
+}
+
 /// The key and value caches this step reads and writes, as graph input and output.
 public struct LayerCache {
     /// The key cache, `[1, kvHeads, cacheLength, headDim]`.
@@ -165,6 +173,8 @@ public struct DecoderLayerGraph {
         let x = MILText.Tensor("x", [1, 1, hidden])
         let rope = RoPETables(cos: "cos", sin: "sin", negOne: "neg_one")
         let scale = "attn_scale"
+        let mask = "mask"
+        let scalars = AttentionInputs(scale: scale, mask: mask)
         let cache = LayerCache(keys: "k_cache", values: "v_cache")
         for weight in weightInputs {
             program.addInput(MILText.Tensor(weight.input, weight.shape))
@@ -174,6 +184,9 @@ public struct DecoderLayerGraph {
             x, MILText.Tensor(rope.cos, [1, 1, 1, headDim]),
             MILText.Tensor(rope.sin, [1, 1, 1, headDim]), MILText.Tensor(rope.negOne, [1]),
             MILText.Tensor(scale, [1]),
+            // Zero for a cache row that holds a real token, a large negative value for a row the
+            // window has not reached yet: without it the first tokens attend over empty rows.
+            MILText.Tensor(mask, [1, 1, cacheLength]),
             MILText.Tensor(cache.keys, [1, kvHeads, cacheLength, headDim]),
             MILText.Tensor(cache.values, [1, kvHeads, cacheLength, headDim]),
         ] {
@@ -187,7 +200,7 @@ public struct DecoderLayerGraph {
             program: &program, name: "pre_mixer", x: x2, weight: weights.input.preMixerNorm,
             into: MILText.Tensor("pre_mixer_out", [1, hidden]))
         let attended = attention(
-            program: &program, x: pre, rope: rope, scale: scale, cache: cache)
+            program: &program, x: pre, rope: rope, scalars: scalars, cache: cache)
 
         let residual = MILText.Tensor("residual", [1, hidden])
         program.add(x2.name, attended.mixed.name, into: residual)
@@ -243,7 +256,7 @@ public struct DecoderLayerGraph {
     }
 
     private func attention(
-        program: inout MILText, x: MILText.Tensor, rope: RoPETables, scale: String,
+        program: inout MILText, x: MILText.Tensor, rope: RoPETables, scalars: AttentionInputs,
         cache: LayerCache
     ) -> Attended {
         let qkv = MILText.Tensor("qkv", [1, qDim + 2 * kvDim])
@@ -271,7 +284,7 @@ public struct DecoderLayerGraph {
         let kRotated = rotate(program: &program, x: kNormed, name: "k_rot", rope: rope)
 
         let kept = appendToCache(program: &program, k: kRotated, v: v, cache: cache)
-        let mixed = attend(program: &program, q: qRotated, cache: kept, scale: scale)
+        let mixed = attend(program: &program, q: qRotated, cache: kept, scalars: scalars)
         return Attended(
             mixed: mixed,
             keys: MILText.Tensor(kept.keys, [1, kvHeads, cacheLength, headDim]),
@@ -304,7 +317,7 @@ public struct DecoderLayerGraph {
     /// head across its group, which is what GQA means. The batch is rank 3, not 4: a rank-4 matmul
     /// fails the plan builder with error -14.
     private func attend(
-        program: inout MILText, q: MILText.Tensor, cache: LayerCache, scale: String
+        program: inout MILText, q: MILText.Tensor, cache: LayerCache, scalars: AttentionInputs
     ) -> MILText.Tensor {
         let groupSize = heads / kvHeads
         let keysT = MILText.Tensor("keys_t", [1, kvHeads, headDim, cacheLength])
@@ -316,9 +329,11 @@ public struct DecoderLayerGraph {
         let scores = MILText.Tensor("scores", [kvHeads, groupSize, cacheLength])
         program.matmul(qG.name, keysG.name, into: scores)
         let scaledScores = MILText.Tensor("scores_scaled", scores.shape)
-        program.multiply(scores.name, scale, into: scaledScores)
+        program.multiply(scores.name, scalars.scale, into: scaledScores)
+        let maskedScores = MILText.Tensor("scores_masked", scores.shape)
+        program.add(scaledScores.name, scalars.mask, into: maskedScores)
         let probs = MILText.Tensor("probs", scores.shape)
-        program.softmax(scaledScores.name, into: probs, axis: -1)
+        program.softmax(maskedScores.name, into: probs, axis: -1)
         let valuesG = MILText.Tensor("values_g", [kvHeads, cacheLength, headDim])
         program.reshape(cache.values, into: valuesG, shape: valuesG.shape)
         let attendedG = MILText.Tensor("attended_g", [kvHeads, groupSize, headDim])

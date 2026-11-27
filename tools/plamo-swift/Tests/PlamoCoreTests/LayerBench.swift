@@ -92,6 +92,8 @@ struct LayerBench {
         inputs["sin"] = try benchArray([Float](repeating: 0, count: 128), shape: [1, 1, 1, 128])
         inputs["neg_one"] = try benchArray([-1], shape: [1])
         inputs["attn_scale"] = try benchArray([1 / Float(128).squareRoot()], shape: [1])
+        inputs["mask"] = try benchArray(
+            [Float](repeating: 0, count: cacheLength), shape: [1, 1, cacheLength])
         inputs["k_cache"] = try random([1, 8, cacheLength, 128], scale: 0.1)
         inputs["v_cache"] = try random([1, 8, cacheLength, 128], scale: 0.1)
         for weight in graph.weightInputs {
@@ -135,6 +137,8 @@ struct LayerBench {
         inputs["sin"] = try benchArray([Float](repeating: 0, count: 128), shape: [1, 1, 1, 128])
         inputs["neg_one"] = try benchArray([-1], shape: [1])
         inputs["attn_scale"] = try benchArray([1 / Float(128).squareRoot()], shape: [1])
+        inputs["mask"] = try benchArray(
+            [Float](repeating: 0, count: cacheLength), shape: [1, 1, cacheLength])
         inputs["k_cache"] = try random([1, 8, cacheLength, 128], scale: 0.1)
         inputs["v_cache"] = try random([1, 8, cacheLength, 128], scale: 0.1)
         note("x ok")
