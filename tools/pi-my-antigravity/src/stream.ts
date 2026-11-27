@@ -672,9 +672,31 @@ const initialMessage = (model: Model<Api>): AssistantMessage => ({
   timestamp: Date.now(),
 });
 
+/** The API's own words: a 403 is not a stale login and must not be reported as one. */
+function apiErrorText(body: string): string {
+  const parsed = tryParseJson(body);
+  const error = isRecord(parsed) ? parsed["error"] : undefined;
+  if (!isRecord(error)) {
+    return body.slice(0, MAX_ERROR_SLICE);
+  }
+  const details = Array.isArray(error["details"]) ? error["details"] : [];
+  const detail: JsonObject = details.find(isRecord) ?? {};
+  const metadata = isRecord(detail["metadata"]) ? detail["metadata"] : {};
+  const appeal = nonEmptyString(metadata["appeal_url"]);
+  const parts = [
+    nonEmptyString(error["message"]),
+    nonEmptyString(detail["reason"]),
+    appeal ? `appeal: ${appeal}` : undefined,
+  ].filter((part): part is string => part !== undefined);
+  return parts.length > 0 ? parts.join(" · ") : body.slice(0, MAX_ERROR_SLICE);
+}
+
 function friendlyError(status: number, body: string): string {
-  if (status === HTTP_UNAUTHORIZED || status === HTTP_FORBIDDEN) {
-    return `Antigravity rejected the credential (${status}). Run /login my-antigravity again.`;
+  if (status === HTTP_UNAUTHORIZED) {
+    return `Antigravity rejected the credential (401). Run /login my-antigravity again.`;
+  }
+  if (status === HTTP_FORBIDDEN) {
+    return `Antigravity refused this account (403): ${apiErrorText(body)}`;
   }
   if (status === HTTP_RATE_LIMIT) {
     return `Antigravity rate-limited or blocked this request (429). ${body.slice(0, MAX_RATE_LIMIT_SLICE)}`;

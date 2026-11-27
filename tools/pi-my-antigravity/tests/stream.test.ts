@@ -869,3 +869,74 @@ it("streams large SSE payloads in linear time", async () => {
   const largeMs = await runBatch(10000);
   expect(largeMs / smallMs).toBeLessThan(25);
 });
+
+function jsonResponse(status: number, body: unknown): WireResponse {
+  const payload = JSON.stringify(body);
+  return {
+    status,
+    headers: {},
+    body: (async function* () {
+      yield Buffer.from(payload);
+    })(),
+    text: async () => payload,
+  };
+}
+
+it("reports the API's own reason for a 403 instead of asking to log in again", async () => {
+  const events: AssistantMessageEvent[] = [];
+  for await (const event of streamAntigravity(TEST_MODEL, contextWith("sys"), {
+    apiKey: "tok",
+    send: async () =>
+      jsonResponse(403, {
+        error: {
+          code: 403,
+          message:
+            "This service has been disabled in this account for violation of Terms of Service.",
+          status: "PERMISSION_DENIED",
+          details: [
+            {
+              "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+              reason: "TOS_VIOLATION",
+              metadata: { appeal_url: "https://forms.gle/appeal" },
+            },
+          ],
+        },
+      }),
+  })) {
+    events.push(event);
+  }
+  const failure = events.at(-1);
+  expect(failure?.type).toBe("error");
+  if (failure?.type === "error") {
+    expect(failure.error.errorMessage).toMatch(/403/);
+    expect(failure.error.errorMessage).toMatch(/TOS_VIOLATION/);
+    expect(failure.error.errorMessage).toMatch(/appeal: https:\/\/forms\.gle\/appeal/);
+    expect(failure.error.errorMessage).not.toMatch(/login/i);
+  }
+});
+
+it("falls back to the raw body when a 403 carries no usable error fields", async () => {
+  const cases: { body: unknown; expect: RegExp }[] = [
+    { body: "plain text failure", expect: /plain text failure/ },
+    { body: { error: { code: 403 } }, expect: /"error"/ },
+    { body: { error: { message: "only a message" } }, expect: /only a message/ },
+  ];
+  const results = await Promise.all(
+    cases.map(async ({ body, expect: pattern }) => {
+      const events: AssistantMessageEvent[] = [];
+      for await (const event of streamAntigravity(TEST_MODEL, contextWith("sys"), {
+        apiKey: "tok",
+        send: async () => jsonResponse(403, body),
+      })) {
+        events.push(event);
+      }
+      return { failure: events.at(-1), pattern };
+    }),
+  );
+  results.forEach(({ failure, pattern }) => {
+    expect(failure?.type).toBe("error");
+    if (failure?.type === "error") {
+      expect(failure.error.errorMessage).toMatch(pattern);
+    }
+  });
+});
