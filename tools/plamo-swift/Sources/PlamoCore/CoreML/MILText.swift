@@ -41,6 +41,9 @@ public struct MILText {
         outputs = tensors
     }
 
+    /// How many operations the program has, for bisecting a plan-builder crash.
+    public var opCount: Int { operations.count }
+
     /// Debug aid: keep only the first `count` operations, ending the program at the last one.
     public mutating func truncate(ops count: Int) {
         guard count < operations.count else { return }

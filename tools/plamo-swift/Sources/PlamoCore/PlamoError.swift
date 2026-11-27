@@ -11,6 +11,7 @@ public enum PlamoError: Error, Equatable {
     case unsupportedModelLayout(reason: String)
     case invalidRequest(reason: String)
     case listener(port: UInt16, reason: String)
+    case coreMLTool(tool: String, message: String)
     case connectionClosed
 }
 
@@ -38,6 +39,8 @@ extension PlamoError: CustomStringConvertible {
             return "invalid request: \(reason)"
         case .listener(let port, let reason):
             return "cannot listen on 127.0.0.1:\(port): \(reason)"
+        case .coreMLTool(let tool, let message):
+            return "\(tool) failed: \(message)"
         case .connectionClosed:
             return "connection closed"
         }

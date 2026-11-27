@@ -24,9 +24,27 @@ public struct DecoderLayerGraph {
         public let qNorm: String
         public let kNorm: String
 
+        /// The names the graph uses for those tensors. A dot is not allowed: coremlc writes an
+        /// input name into the MIL text unquoted, and MLModel then fails to parse the model.
+        public let input: Input
+
+        public struct Input: Sendable {
+            public let qkv = "w_qkv"
+            public let output = "w_output"
+            public let gateUp = "w_gate_up"
+            public let down = "w_down"
+            public let preMixerNorm = "w_pre_mixer_norm"
+            public let postMixerNorm = "w_post_mixer_norm"
+            public let preMLPNorm = "w_pre_mlp_norm"
+            public let postMLPNorm = "w_post_mlp_norm"
+            public let qNorm = "w_q_norm"
+            public let kNorm = "w_k_norm"
+        }
+
         public init(
             prefix: String, layer: Int
         ) {
+            input = Input()
             let base = "\(prefix).layers.layers.\(layer)"
             qkv = "\(base).mixer.qkv_proj.weight"
             output = "\(base).mixer.o_proj.weight"
@@ -72,20 +90,8 @@ public struct DecoderLayerGraph {
         let sin = MILText.Tensor("sin", [1, 1, 1, headDim])
         let kCache = MILText.Tensor("k_cache", [1, kvHeads, cacheLength, headDim])
         let vCache = MILText.Tensor("v_cache", [1, kvHeads, cacheLength, headDim])
-        let weightTensors: [(String, [Int])] = [
-            (weights.qkv, [hidden, qDim + 2 * kvDim]),
-            (weights.output, [qDim, hidden]),
-            (weights.gateUp, [hidden, 2 * config.intermediateSize]),
-            (weights.down, [config.intermediateSize, hidden]),
-            (weights.preMixerNorm, [hidden]),
-            (weights.postMixerNorm, [hidden]),
-            (weights.preMLPNorm, [hidden]),
-            (weights.postMLPNorm, [hidden]),
-            (weights.qNorm, [headDim]),
-            (weights.kNorm, [headDim]),
-        ]
-        for (name, shape) in weightTensors {
-            program.addInput(MILText.Tensor(name, shape))
+        for weight in weightInputs {
+            program.addInput(MILText.Tensor(weight.input, weight.shape))
         }
         for tensor in [x, cos, sin, kCache, vCache] {
             program.addInput(tensor)
@@ -94,20 +100,20 @@ public struct DecoderLayerGraph {
         let x2 = MILText.Tensor("x2", [1, hidden])
         program.reshape(x.name, into: x2, shape: [1, hidden])
 
-        let pre = normalized(program: &program, name: "pre_mixer", x: x2, weight: weights.preMixerNorm, into: MILText.Tensor("pre_mixer_out", [1, hidden]))
+        let pre = normalized(program: &program, name: "pre_mixer", x: x2, weight: weights.input.preMixerNorm, into: MILText.Tensor("pre_mixer_out", [1, hidden]))
         let (mixer, keys, values) = attention(
             program: &program, x: pre, cos: cos.name, sin: sin.name, kCache: kCache.name,
             vCache: vCache.name)
 
         let residual = MILText.Tensor("residual", [1, hidden])
         program.add(x2.name, mixer.name, into: residual)
-        let postMixer = normalized(program: &program, name: "post_mixer", x: residual, weight: weights.postMixerNorm, into: MILText.Tensor("post_mixer_out", [1, hidden]))
+        let postMixer = normalized(program: &program, name: "post_mixer", x: residual, weight: weights.input.postMixerNorm, into: MILText.Tensor("post_mixer_out", [1, hidden]))
         let hiddenAfterMixer = MILText.Tensor("hidden_after_mixer", [1, hidden])
         program.add(residual.name, postMixer.name, into: hiddenAfterMixer)
 
-        let preMLP = normalized(program: &program, name: "pre_mlp", x: hiddenAfterMixer, weight: weights.preMLPNorm, into: MILText.Tensor("pre_mlp_out", [1, hidden]))
+        let preMLP = normalized(program: &program, name: "pre_mlp", x: hiddenAfterMixer, weight: weights.input.preMLPNorm, into: MILText.Tensor("pre_mlp_out", [1, hidden]))
         let mlp = mlp(program: &program, x: preMLP)
-        let postMLP = normalized(program: &program, name: "post_mlp", x: mlp, weight: weights.postMLPNorm, into: MILText.Tensor("post_mlp_out", [1, hidden]))
+        let postMLP = normalized(program: &program, name: "post_mlp", x: mlp, weight: weights.input.postMLPNorm, into: MILText.Tensor("post_mlp_out", [1, hidden]))
         let summed = MILText.Tensor("summed", [1, hidden])
         program.add(hiddenAfterMixer.name, postMLP.name, into: summed)
         let y = MILText.Tensor("y", [1, 1, hidden])
@@ -115,6 +121,22 @@ public struct DecoderLayerGraph {
         program.setOutputs([y, keys, values])
         if let ops { program.truncate(ops: ops) }
         return program
+    }
+
+    /// The graph's weight inputs, in the order the checkpoint names them.
+    public var weightInputs: [(input: String, checkpoint: String, shape: [Int])] {
+        [
+            (weights.input.qkv, weights.qkv, [hidden, qDim + 2 * kvDim]),
+            (weights.input.output, weights.output, [qDim, hidden]),
+            (weights.input.gateUp, weights.gateUp, [hidden, 2 * config.intermediateSize]),
+            (weights.input.down, weights.down, [config.intermediateSize, hidden]),
+            (weights.input.preMixerNorm, weights.preMixerNorm, [hidden]),
+            (weights.input.postMixerNorm, weights.postMixerNorm, [hidden]),
+            (weights.input.preMLPNorm, weights.preMLPNorm, [hidden]),
+            (weights.input.postMLPNorm, weights.postMLPNorm, [hidden]),
+            (weights.input.qNorm, weights.qNorm, [headDim]),
+            (weights.input.kNorm, weights.kNorm, [headDim]),
+        ]
     }
 
     /// `x / rms(x) * w`, over the last axis.
@@ -140,7 +162,7 @@ public struct DecoderLayerGraph {
         vCache: String
     ) -> (mixed: MILText.Tensor, keys: MILText.Tensor, values: MILText.Tensor) {
         let qkv = MILText.Tensor("qkv", [1, qDim + 2 * kvDim])
-        program.matmul(x.name, weights.qkv, into: qkv)
+        program.matmul(x.name, weights.input.qkv, into: qkv)
 
         let qFlat = MILText.Tensor("q_flat", [1, 1, qDim])
         program.sliceLast(qkv.name, into: qFlat, begin: [0, 0], size: [1, qDim])
@@ -153,43 +175,44 @@ public struct DecoderLayerGraph {
         let k = heads3(program: &program, flat: kFlat, name: "k", heads: kvHeads)
         let v = heads3(program: &program, flat: vFlat, name: "v", heads: kvHeads)
 
-        let qNormed = normalized(program: &program, name: "q_norm", x: q, weight: weights.qNorm, into: MILText.Tensor("q_norm_out", q.shape))
-        let kNormed = normalized(program: &program, name: "k_norm", x: k, weight: weights.kNorm, into: MILText.Tensor("k_norm_out", k.shape))
+        let qNormed = normalized(program: &program, name: "q_norm", x: q, weight: weights.input.qNorm, into: MILText.Tensor("q_norm_out", q.shape))
+        let kNormed = normalized(program: &program, name: "k_norm", x: k, weight: weights.input.kNorm, into: MILText.Tensor("k_norm_out", k.shape))
 
         let qRotated = rotate(program: &program, x: qNormed, name: "q_rot", cos: cos, sin: sin)
         let kRotated = rotate(program: &program, x: kNormed, name: "k_rot", cos: cos, sin: sin)
 
-        let keys = MILText.Tensor("keys", [1, kvHeads, cacheLength + 1, headDim])
-        program.concat([kCache, kRotated.name], into: keys, axis: 2)
-        let values = MILText.Tensor("values", [1, kvHeads, cacheLength + 1, headDim])
-        program.concat([vCache, v.name], into: values, axis: 2)
-
-        // A sliding layer keeps exactly its window; a full layer keeps its whole context.
-        let trimmed = MILText.Tensor("keys_trimmed", [1, kvHeads, cacheLength, headDim])
-        program.sliceLast(keys.name, into: trimmed, begin: [0, 0, 1, 0], size: [1, kvHeads, cacheLength, headDim])
-        let trimmedValues = MILText.Tensor("values_trimmed", [1, kvHeads, cacheLength, headDim])
-        program.sliceLast(values.name, into: trimmedValues, begin: [0, 0, 1, 0], size: [1, kvHeads, cacheLength, headDim])
+        // The window drops its oldest row before the new one is appended, not after: slicing the
+        // result of a concat crashes the plan builder (SIGBUS), while slicing an input is fine.
+        let keptKeys = MILText.Tensor("keys_kept", [1, kvHeads, cacheLength - 1, headDim])
+        program.sliceLast(kCache, into: keptKeys, begin: [0, 0, 1, 0], size: [1, kvHeads, cacheLength - 1, headDim])
+        let trimmed = MILText.Tensor("keys", [1, kvHeads, cacheLength, headDim])
+        program.concat([keptKeys.name, kRotated.name], into: trimmed, axis: 2)
+        let keptValues = MILText.Tensor("values_kept", [1, kvHeads, cacheLength - 1, headDim])
+        program.sliceLast(vCache, into: keptValues, begin: [0, 0, 1, 0], size: [1, kvHeads, cacheLength - 1, headDim])
+        let trimmedValues = MILText.Tensor("values", [1, kvHeads, cacheLength, headDim])
+        program.concat([keptValues.name, v.name], into: trimmedValues, axis: 2)
 
         // Attention written out: q @ kᵀ, scaled, softmax, then @ v. The dedicated op is newer
         // than the opset coremlc ships, and these four are accepted by every opset. The query has
-        // more heads than the cache, so the group is a dimension of its own: a 5-D matmul shares
-        // one k/v head across its group, which is what GQA means.
+        // more heads than the cache, so the group is a dimension of its own: the batched matmul
+        // shares one k/v head across its group, which is what GQA means. The batch is rank 3, not
+        // 4: a rank-4 matmul fails the plan builder with error -14.
         let groupSize = heads / kvHeads
         let keysT = MILText.Tensor("keys_t", [1, kvHeads, headDim, cacheLength])
         program.transpose(trimmed.name, into: keysT, perm: [0, 1, 3, 2])
-        let keysG = MILText.Tensor("keys_g", [1, kvHeads, 1, headDim, cacheLength])
+        let keysG = MILText.Tensor("keys_g", [kvHeads, headDim, cacheLength])
         program.reshape(keysT.name, into: keysG, shape: keysG.shape)
-        let qG = MILText.Tensor("q_g", [1, kvHeads, groupSize, 1, headDim])
+        let qG = MILText.Tensor("q_g", [kvHeads, groupSize, headDim])
         program.reshape(qRotated.name, into: qG, shape: qG.shape)
-        let scores = MILText.Tensor("scores", [1, kvHeads, groupSize, 1, cacheLength])
+        let scores = MILText.Tensor("scores", [kvHeads, groupSize, cacheLength])
         program.matmul(qG.name, keysG.name, into: scores)
         let scaledScores = MILText.Tensor("scores_scaled", scores.shape)
         program.multiplyScalar(scores.name, into: scaledScores, scale: 1 / Double(headDim).squareRoot())
         let probs = MILText.Tensor("probs", scores.shape)
         program.softmax(scaledScores.name, into: probs, axis: -1)
-        let valuesG = MILText.Tensor("values_g", [1, kvHeads, 1, cacheLength, headDim])
+        let valuesG = MILText.Tensor("values_g", [kvHeads, cacheLength, headDim])
         program.reshape(trimmedValues.name, into: valuesG, shape: valuesG.shape)
-        let attendedG = MILText.Tensor("attended_g", [1, kvHeads, groupSize, 1, headDim])
+        let attendedG = MILText.Tensor("attended_g", [kvHeads, groupSize, headDim])
         program.matmul(probs.name, valuesG.name, into: attendedG)
         let attended = MILText.Tensor("attended", [1, heads, 1, headDim])
         program.reshape(attendedG.name, into: attended, shape: attended.shape)
@@ -202,7 +225,7 @@ public struct DecoderLayerGraph {
         let mixed = MILText.Tensor("mixed", [1, hidden])
         let merged2 = MILText.Tensor("merged2", [1, qDim])
         program.reshape(merged.name, into: merged2, shape: [1, qDim])
-        program.matmul(merged2.name, weights.output, into: mixed)
+        program.matmul(merged2.name, weights.input.output, into: mixed)
         return (mixed, trimmed, trimmedValues)
     }
 
@@ -238,7 +261,7 @@ public struct DecoderLayerGraph {
     private func mlp(program: inout MILText, x: MILText.Tensor) -> MILText.Tensor {
         let intermediate = config.intermediateSize
         let gateUp = MILText.Tensor("gate_up", [1, 2 * intermediate])
-        program.matmul(x.name, weights.gateUp, into: gateUp)
+        program.matmul(x.name, weights.input.gateUp, into: gateUp)
         let gate = MILText.Tensor("gate", [1, intermediate])
         program.sliceLast(gateUp.name, into: gate, begin: [0, 0], size: [1, intermediate])
         let up = MILText.Tensor("up", [1, intermediate])
@@ -250,7 +273,7 @@ public struct DecoderLayerGraph {
         let product = MILText.Tensor("product", [1, intermediate])
         program.multiply(gated.name, up.name, into: product)
         let out = MILText.Tensor("mlp_out", [1, hidden])
-        program.matmul(product.name, weights.down, into: out)
+        program.matmul(product.name, weights.input.down, into: out)
         return out
     }
 }
