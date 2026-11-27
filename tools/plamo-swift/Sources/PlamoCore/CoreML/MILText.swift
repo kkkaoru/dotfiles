@@ -68,11 +68,17 @@ public struct MILText {
     }
 
     /// `y = x @ w`, with both transposes spelled out as the validator requires.
-    public mutating func matmul(_ x: String, _ w: String, into y: Tensor) {
+    ///
+    /// `transposeY` is how a checkpoint's `[out, in]` weight is multiplied as `x @ w`: transposing
+    /// it in the graph costs nothing, while materializing a transposed copy in Swift took 11 s per
+    /// weight, because MLX has to gather every element instead of copying bytes.
+    public mutating func matmul(
+        _ x: String, _ w: String, into y: Tensor, transposeY: Bool = false
+    ) {
         emit(
             type: "matmul",
             inputs: [("x", binding(x)), ("y", binding(w))],
-            extraInputs: [("transpose_x", bool(false)), ("transpose_y", bool(false))],
+            extraInputs: [("transpose_x", bool(false)), ("transpose_y", bool(transposeY))],
             output: y
         )
     }

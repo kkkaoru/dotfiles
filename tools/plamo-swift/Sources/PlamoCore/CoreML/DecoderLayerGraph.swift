@@ -142,15 +142,15 @@ public struct DecoderLayerGraph {
         [
             WeightInput(
                 input: weights.input.qkv, checkpoint: weights.qkv,
-                shape: [hidden, qDim + 2 * kvDim]),
+                shape: [qDim + 2 * kvDim, hidden]),
             WeightInput(
-                input: weights.input.output, checkpoint: weights.output, shape: [qDim, hidden]),
+                input: weights.input.output, checkpoint: weights.output, shape: [hidden, qDim]),
             WeightInput(
                 input: weights.input.gateUp, checkpoint: weights.gateUp,
-                shape: [hidden, 2 * config.intermediateSize]),
+                shape: [2 * config.intermediateSize, hidden]),
             WeightInput(
                 input: weights.input.down, checkpoint: weights.down,
-                shape: [config.intermediateSize, hidden]),
+                shape: [hidden, config.intermediateSize]),
             WeightInput(
                 input: weights.input.preMixerNorm, checkpoint: weights.preMixerNorm,
                 shape: [hidden]),
@@ -260,7 +260,7 @@ public struct DecoderLayerGraph {
         cache: LayerCache
     ) -> Attended {
         let qkv = MILText.Tensor("qkv", [1, qDim + 2 * kvDim])
-        program.matmul(x.name, weights.input.qkv, into: qkv)
+        program.matmul(x.name, weights.input.qkv, into: qkv, transposeY: true)
 
         let qFlat = MILText.Tensor("q_flat", [1, 1, qDim])
         program.sliceLast(qkv.name, into: qFlat, begin: [0, 0], size: [1, qDim])
@@ -349,7 +349,7 @@ public struct DecoderLayerGraph {
         let mixed = MILText.Tensor("mixed", [1, hidden])
         let merged2 = MILText.Tensor("merged2", [1, qDim])
         program.reshape(merged.name, into: merged2, shape: [1, qDim])
-        program.matmul(merged2.name, weights.input.output, into: mixed)
+        program.matmul(merged2.name, weights.input.output, into: mixed, transposeY: true)
         return mixed
     }
 
@@ -390,7 +390,7 @@ public struct DecoderLayerGraph {
     private func mlp(program: inout MILText, x: MILText.Tensor) -> MILText.Tensor {
         let intermediate = config.intermediateSize
         let gateUp = MILText.Tensor("gate_up", [1, 2 * intermediate])
-        program.matmul(x.name, weights.input.gateUp, into: gateUp)
+        program.matmul(x.name, weights.input.gateUp, into: gateUp, transposeY: true)
         let gate = MILText.Tensor("gate", [1, intermediate])
         program.sliceLast(gateUp.name, into: gate, begin: [0, 0], size: [1, intermediate])
         let up = MILText.Tensor("up", [1, intermediate])
@@ -403,7 +403,7 @@ public struct DecoderLayerGraph {
         let product = MILText.Tensor("product", [1, intermediate])
         program.multiply(gated.name, up.name, into: product)
         let out = MILText.Tensor("mlp_out", [1, hidden])
-        program.matmul(product.name, weights.input.down, into: out)
+        program.matmul(product.name, weights.input.down, into: out, transposeY: true)
         return out
     }
 }
