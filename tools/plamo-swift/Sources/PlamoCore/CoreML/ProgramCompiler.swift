@@ -61,24 +61,28 @@ public struct ProgramCompiler: Sendable {
 
         let data = work.appendingPathComponent("model.mlpackage/Data/com.apple.CoreML")
         try FileManager.default.createDirectory(at: data, withIntermediateDirectories: true)
-        try FileManager.default.moveItem(at: mlmodel, to: data.appendingPathComponent("model.mlmodel"))
-        try Data(Self.manifest.utf8).write(to: work.appendingPathComponent("model.mlpackage/Manifest.json"))
+        try FileManager.default.moveItem(
+            at: mlmodel, to: data.appendingPathComponent("model.mlmodel"))
+        try Data(Self.manifest.utf8).write(
+            to: work.appendingPathComponent("model.mlpackage/Manifest.json"))
 
         try run("/usr/bin/xcrun", ["coremlc", "compile", "model.mlpackage", "."], cwd: work)
-        try FileManager.default.moveItem(at: work.appendingPathComponent("model.mlmodelc"), to: built)
+        try FileManager.default.moveItem(
+            at: work.appendingPathComponent("model.mlmodelc"), to: built)
         return built
     }
 
     /// A manifest with one model entry; `coremlc` reads the identifier but only needs it to match.
     private static let manifest = """
         {"fileFormatVersion":"1.0.0","itemInfoEntries":\
-        {"5B1F0C2A-0000-4000-8000-000000000001":{"author":"com.apple.CoreML","description":"plamo",\
+        {"5B1F0C2A-0-4_000-8_000-1":{"author":"com.apple.CoreML","description":"plamo",\
         "name":"model.mlmodel","path":"com.apple.CoreML/model.mlmodel"}},\
-        "rootModelIdentifier":"5B1F0C2A-0000-4000-8000-000000000001"}
+        "rootModelIdentifier":"5B1F0C2A-0-4_000-8_000-1"}
         """
 
     private func run(
-        _ tool: String, _ arguments: [String], input: URL? = nil, output: URL? = nil, cwd: URL? = nil
+        _ tool: String, _ arguments: [String], input: URL? = nil, output: URL? = nil,
+        cwd: URL? = nil
     ) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: tool)
@@ -95,7 +99,7 @@ public struct ProgramCompiler: Sendable {
         let message = errors.fileHandleForReading.readDataToEndOfFile()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
-            let text = String(decoding: message, as: UTF8.self)
+            let text = (String(data: message, encoding: .utf8) ?? "")
                 .split(separator: "\n").suffix(3).joined(separator: "\n")
             throw PlamoError.coreMLTool(
                 tool: (arguments.first == "coremlc" ? "coremlc" : "protoc"), message: text)

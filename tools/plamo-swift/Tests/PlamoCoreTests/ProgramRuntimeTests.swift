@@ -6,9 +6,12 @@ import Testing
 
 @Suite("Program compiler and runtime")
 struct ProgramRuntimeTests {
-    /// A cache inside the temporary directory, so a test never touches the server's own.
+    /// A cache inside the temporary directory, so a test never touches the server's own. It is
+    /// unique per run: a cache left over from an earlier run would make `compile` return early and
+    /// skip `protoc` and `coremlc` entirely, which is the path these tests exist to exercise.
     static func cache() -> URL {
-        FileManager.default.temporaryDirectory.appendingPathComponent("plamo-coreml-tests")
+        FileManager.default.temporaryDirectory.appendingPathComponent(
+            "plamo-coreml-tests-\(ProcessInfo.processInfo.processIdentifier)")
     }
 
     @Test("a compiled program runs, and its values are the ones the graph computes")
@@ -20,7 +23,8 @@ struct ProgramRuntimeTests {
         program.setOutputs([y])
         program.multiply(x.name, x.name, into: y)
 
-        let compiled = try ProgramCompiler(cache: Self.cache()).compile(program.render(), name: "mul")
+        let compiled = try ProgramCompiler(cache: Self.cache()).compile(
+            program.render(), name: "mul")
         #expect(compiled.pathExtension == "mlmodelc")
 
         let runtime = try ProgramRuntime(url: compiled)
@@ -40,11 +44,14 @@ struct ProgramRuntimeTests {
 
         let compiler = ProgramCompiler(cache: Self.cache())
         let first = try compiler.compile(program.render(), name: "twice")
-        let stamp = try FileManager.default.attributesOfItem(atPath: first.path)[.modificationDate] as? Date
+        let stamp =
+            try FileManager.default.attributesOfItem(atPath: first.path)[.modificationDate] as? Date
         let second = try compiler.compile(program.render(), name: "twice")
         // `appendingPathComponent` marks an existing directory with a trailing slash.
         #expect(first.path == second.path)
-        let again = try FileManager.default.attributesOfItem(atPath: second.path)[.modificationDate] as? Date
+        let again =
+            try FileManager.default.attributesOfItem(atPath: second.path)[.modificationDate]
+            as? Date
         #expect(stamp == again)
     }
 

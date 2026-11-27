@@ -44,8 +44,9 @@ struct DecoderLayerGraphTests {
         #expect(text.contains("type: \"sigmoid\""))
         // The graph's inputs are dot-free: coremlc writes them into MIL text unquoted.
         #expect(text.contains("name: \"w_qkv\""))
-        #expect(graph.weightInputs.map(\.checkpoint).contains("model.layers.layers.3.mixer.qkv_proj.weight"))
-        #expect(graph.weightInputs.map(\.checkpoint).contains("model.layers.layers.3.mlp.gate_up_proj.weight"))
+        let checkpoints = graph.weightInputs.map(\.checkpoint)
+        #expect(checkpoints.contains("model.layers.layers.3.mixer.qkv_proj.weight"))
+        #expect(checkpoints.contains("model.layers.layers.3.mlp.gate_up_proj.weight"))
         // The layer must feed back the trimmed caches, not the untrimmed concatenation.
         #expect(text.contains("outputs: \"y\""))
         #expect(text.contains("outputs: \"keys_trimmed\""))

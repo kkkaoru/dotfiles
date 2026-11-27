@@ -7,8 +7,8 @@ import Foundation
 ///
 /// The text is deliberately the wire schema, not a DSL: `Model.mlProgram` is `MILSpec.Program`, so
 /// every value carries its `tensorType` and every `matmul` takes `transpose_x`/`transpose_y` as
-/// `BOOL` inputs (attributes are rejected by the validator). `specificationVersion` must be at least
-/// 7 for `FLOAT16` multi-array features.
+/// `BOOL` inputs (attributes are rejected by the validator). `specificationVersion` must be at
+/// least 7 for `FLOAT16` multi-array features.
 public struct MILText {
     /// One named tensor: the decoder's values are all fp16 tensors of a known rank.
     public struct Tensor: Equatable {
@@ -19,26 +19,42 @@ public struct MILText {
             self.shape = shape
         }
 
-        var typeText: String {
-            let dimensions = shape.map { "dimensions { constant { size: \($0) } }" }.joined(separator: " ")
-            return "tensorType { dataType: FLOAT16 rank: \(shape.count) \(dimensions) }"
+        internal var typeText: String {
+            let dimensions = shape.map { "dimensions { constant { size: \($0) } }" }.joined(
+                separator: " ")
+            return "tensorType { dataType: \(MILText.dataType) rank: \(shape.count) \(dimensions) }"
         }
     }
 
     /// A model input, a constant or an operation output.
     public private(set) var inputs: [Tensor] = []
+    /// Comment lines carried into the rendered model, so the generated text names what it binds.
+    public private(set) var annotations: [String] = []
     private var operations: [String] = []
     private var opOutputs: [Tensor] = []
     private var outputs: [Tensor] = []
 
+    /// The dtype every tensor in every program is written with. `PLAMO_DTYPE=fp32` switches the
+    /// whole graph, which is how the BNNS fp16 crash is being narrowed down.
+    public static let dataType: String =
+        ProcessInfo.processInfo.environment["PLAMO_DTYPE"] == "fp32" ? "FLOAT32" : "FLOAT16"
+
+    /// An empty program: no inputs, no operations, no outputs.
     public init() {}
 
+    /// Binds one more model input, in the order the model declares them.
     public mutating func addInput(_ tensor: Tensor) {
         inputs.append(tensor)
     }
 
+    /// The tensors the model returns.
     public mutating func setOutputs(_ tensors: [Tensor]) {
         outputs = tensors
+    }
+
+    /// Adds a comment line to the rendered model, so the text names what it binds.
+    public mutating func annotate(_ line: String) {
+        annotations.append(line)
     }
 
     /// How many operations the program has, for bisecting a plan-builder crash.
@@ -61,14 +77,17 @@ public struct MILText {
         )
     }
 
+    /// `y = a + b`.
     public mutating func add(_ a: String, _ b: String, into y: Tensor) {
         emit(type: "add", inputs: [("x", binding(a)), ("y", binding(b))], output: y)
     }
 
+    /// `y = a * b`.
     public mutating func multiply(_ a: String, _ b: String, into y: Tensor) {
         emit(type: "mul", inputs: [("x", binding(a)), ("y", binding(b))], output: y)
     }
 
+    /// `y = softmax(x)` along `axis`.
     public mutating func softmax(_ x: String, into y: Tensor, axis: Int) {
         emit(
             type: "softmax",
@@ -82,16 +101,20 @@ public struct MILText {
     public mutating func concat(_ tensors: [String], into y: Tensor, axis: Int) {
         emit(
             type: "concat",
-            inputs: [("values", tensors.map { "arguments { name: \"\($0)\" }" }.joined(separator: " "))],
+            inputs: [
+                ("values", tensors.map { "arguments { name: \"\($0)\" }" }.joined(separator: " "))
+            ],
             extraInputs: [("axis", integer(axis)), ("interleave", bool(false))],
             output: y
         )
     }
 
+    /// `y = a - b`.
     public mutating func subtract(_ a: String, _ b: String, into y: Tensor) {
         emit(type: "sub", inputs: [("x", binding(a)), ("y", binding(b))], output: y)
     }
 
+    /// `y = a / b`.
     public mutating func divide(_ a: String, _ b: String, into y: Tensor) {
         emit(type: "real_div", inputs: [("x", binding(a)), ("y", binding(b))], output: y)
     }
@@ -106,10 +129,13 @@ public struct MILText {
         emit(type: "mul", inputs: [("x", binding(x)), ("y", halfVector(scale))], output: y)
     }
 
+    /// `y = 1 / sqrt(x + epsilon)`.
     public mutating func rsqrt(_ x: String, into y: Tensor, epsilon: Double) {
-        emit(type: "rsqrt", inputs: [("x", binding(x)), ("epsilon", halfScalar(epsilon))], output: y)
+        emit(
+            type: "rsqrt", inputs: [("x", binding(x)), ("epsilon", halfScalar(epsilon))], output: y)
     }
 
+    /// `y = sigmoid(x)`.
     public mutating func sigmoid(_ x: String, into y: Tensor) {
         emit(type: "sigmoid", inputs: [("x", binding(x))], output: y)
     }
@@ -124,18 +150,21 @@ public struct MILText {
         )
     }
 
+    /// `y = x` viewed as `shape`, with no data movement.
     public mutating func reshape(_ x: String, into y: Tensor, shape: [Int]) {
         emit(
             type: "reshape", inputs: [("x", binding(x))], extraInputs: [("shape", ints(shape))],
             output: y)
     }
 
+    /// `y = x` with its axes permuted by `perm`.
     public mutating func transpose(_ x: String, into y: Tensor, perm: [Int]) {
         emit(
             type: "transpose", inputs: [("x", binding(x))], extraInputs: [("perm", ints(perm))],
             output: y)
     }
 
+    /// `y = x[indices]` along `axis`.
     public mutating func gather(_ x: String, indices: String, into y: Tensor, axis: Int) {
         emit(
             type: "gather",
@@ -145,6 +174,7 @@ public struct MILText {
         )
     }
 
+    /// The fused attention op: `y = softmax(q @ kᵀ * scale) @ v`.
     public mutating func scaledDotProductAttention(
         query: String, key: String, value: String, into y: Tensor, scale: Double
     ) {
@@ -169,24 +199,26 @@ public struct MILText {
     /// The whole model, ready for `protoc --encode=CoreML.Specification.Model`.
     public func render(specificationVersion: Int = 7) -> String {
         let featureInputs = inputs.map { tensor in
-            """
-                input {
-                  name: "\(tensor.name)"
-                  type {
-                    multiArrayType { \(tensor.shape.map { "shape: \($0) " }.joined())dataType: FLOAT16 }
-                  }
-                }
-            """
+            let shapeText = tensor.shape.map { "shape: \($0) " }.joined()
+            return """
+                    input {
+                      name: "\(tensor.name)"
+                      type {
+                        multiArrayType { \(shapeText)dataType: FLOAT16 }
+                      }
+                    }
+                """
         }.joined(separator: "\n")
         let featureOutputs = outputs.map { tensor in
-            """
-                output {
-                  name: "\(tensor.name)"
-                  type {
-                    multiArrayType { \(tensor.shape.map { "shape: \($0) " }.joined())dataType: FLOAT16 }
-                  }
-                }
-            """
+            let shapeText = tensor.shape.map { "shape: \($0) " }.joined()
+            return """
+                    output {
+                      name: "\(tensor.name)"
+                      type {
+                        multiArrayType { \(shapeText)dataType: FLOAT16 }
+                      }
+                    }
+                """
         }.joined(separator: "\n")
         let functionInputs = inputs.map { tensor in
             """
@@ -196,6 +228,8 @@ public struct MILText {
                   }
             """
         }.joined(separator: "\n")
+        let outputLines = outputs.map { "outputs: \"\($0.name)\"" }
+            .joined(separator: "\n                      ")
         return """
             specificationVersion: \(specificationVersion)
             description {
@@ -212,7 +246,8 @@ public struct MILText {
                   block_specializations {
                     key: "CoreML7"
                     value {
-                      \(outputs.map { "outputs: \"\($0.name)\"" }.joined(separator: "\n                      "))
+            \(annotations.map { "# \($0)" }.joined(separator: "\n            "))
+                      \(outputLines)
                       \(operations.joined(separator: "\n"))
                     }
                   }
@@ -237,14 +272,16 @@ public struct MILText {
     }
 
     private func ints(_ values: [Int]) -> String {
-        """
-        arguments {
-                          value {
-                            type { tensorType { dataType: INT32 rank: 1 dimensions { constant { size: \(values.count) } } } }
-                            immediateValue { tensor { ints { \(values.map { "values: \($0) " }.joined())} } }
-                          }
-                        }
-        """
+        let shape = "rank: 1 dimensions { constant { size: \(values.count) } }"
+        let list = values.map { "values: \($0) " }.joined()
+        return """
+            arguments {
+                              value {
+                                type { tensorType { dataType: INT32 \(shape) } }
+                                immediateValue { tensor { ints { \(list)} } }
+                              }
+                            }
+            """
     }
 
     /// A fp16 scalar as raw little-endian bytes. The `floats` field carries four bytes per value,
@@ -267,10 +304,11 @@ public struct MILText {
     private func halfVector(_ value: Double) -> String {
         let bits = Float16(Float(value)).bitPattern
         let escaped = String(format: "\\x%02x\\x%02x", bits & 0xff, bits >> 8)
+        let shape = "rank: 1 dimensions { constant { size: 1 } }"
         return """
             arguments {
                               value {
-                                type { tensorType { dataType: FLOAT16 rank: 1 dimensions { constant { size: 1 } } } }
+                                type { tensorType { dataType: FLOAT16 \(shape) } }
                                 immediateValue { tensor { bytes { values: "\(escaped)" } } }
                               }
                             }
