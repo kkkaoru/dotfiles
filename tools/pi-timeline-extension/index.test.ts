@@ -7,6 +7,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import { afterEach, expect, test, vi } from "vitest";
 import timelineExtension from "./index.ts";
 import { start, type Harness } from "./src/harness.ts";
+import { parameters } from "./src/tool.ts";
 import type { Timeline } from "./src/tree.ts";
 import { TranslatedTimeline } from "./src/translate.ts";
 
@@ -451,4 +452,14 @@ test("a narrow window cuts a long row instead of letting it run into the next", 
   expect(painted).toHaveLength(2);
   expect(painted.every((line) => visibleWidth(line) <= 24)).toBe(true);
   expect(painted[1]).toContain("\u2026");
+});
+
+test("the done field declares object items, which xAI's validator requires", () => {
+  const { done } = (
+    parameters as { properties: { done: { items: unknown; minItems?: number; maxItems?: number } } }
+  ).properties;
+  // The xAI validator answers 400 when items is an array (a tuple): "not of types boolean, object".
+  expect(Array.isArray(done.items)).toBe(false);
+  expect(done.items).toEqual({ type: "number", minimum: 0 });
+  expect([done.minItems, done.maxItems]).toEqual([2, 2]);
 });

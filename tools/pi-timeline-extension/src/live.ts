@@ -34,7 +34,12 @@ export function plamoDisplay(read: () => string): TranslatedTimeline | undefined
   if (settings.replyLanguage === OFF) {
     return undefined;
   }
-  return new TranslatedTimeline(settings.replyLanguage, createServer(liveDeps(), settings.port));
+  const server = createServer(liveDeps(), settings.port);
+  // The tree only needs the two calls, and `Server.ensure` takes the warm-up flag itself.
+  return new TranslatedTimeline(settings.replyLanguage, {
+    complete: async (text, lang) => server.complete(text, lang),
+    ensure: async () => server.ensure(false),
+  });
 }
 
 /** The layout pi uses, as its getAgentDir(): the environment variable overrides ~/.pi/agent. */

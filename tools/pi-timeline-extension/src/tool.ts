@@ -22,7 +22,9 @@ const modeSchema = Type.Union([Type.Literal("serial"), Type.Literal("parallel")]
 const priorityLiterals = PRIORITIES.map((priority) => Type.Literal(priority));
 const prioritySchema = Type.Union(priorityLiterals);
 const doneField = Type.Optional(
-  Type.Tuple([Type.Number({ minimum: 0 }), Type.Number({ minimum: 0 })], {
+  Type.Array(Type.Number({ minimum: 0 }), {
+    minItems: 2,
+    maxItems: 2,
     description: "Units finished and units in total, e.g. [1, 3] for a third done",
   }),
 );
@@ -72,17 +74,31 @@ const FIELDS = [
   "weight",
 ] as const;
 
-function patchOf(params: Params): TaskPatch {
-  const { done } = params;
-  if (done !== undefined && (done[1] <= 0 || done[0] < 0 || done[0] > done[1])) {
+/** `done` arrives as a plain array; the tree keeps it a tuple so both numbers stay numbers. */
+function unitsOf(done: readonly number[]): readonly [number, number] {
+  const [finished, total] = done;
+  if (
+    finished === undefined ||
+    total === undefined ||
+    total <= 0 ||
+    finished < 0 ||
+    finished > total
+  ) {
     throw new Error("done needs units finished out of units in total, e.g. [1, 3].");
   }
+  return [finished, total];
+}
+
+function patchOf(params: Params): TaskPatch {
   const patch: Record<string, unknown> = {};
   for (const field of FIELDS) {
     const value = params[field];
-    if (value !== undefined) {
+    if (value !== undefined && field !== "done") {
       patch[field] = value;
     }
+  }
+  if (params.done !== undefined) {
+    patch["done"] = unitsOf(params.done);
   }
   return patch;
 }
