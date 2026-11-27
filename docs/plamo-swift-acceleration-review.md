@@ -110,6 +110,38 @@ and now states the actual result.
 | background QoS (`taskpolicy -b`, the low-level-OS lever) | yield CPU and I/O to foreground work | 0.0827 s vs 0.0493 s per completion (30 requests each, 3 alternating rounds) — **1.68× slower** | the agent keeps default scheduling; decode is GPU-bound, so deprioritising it delays every step |
 | completion cache | skip identical work | an identical repeat request is answered in 0.7 ms | already present; it also means latency must be measured with distinct prompts |
 
+### 3.1 The Neural Engine, measured rather than argued away
+
+The earlier pass rejected CoreML from arithmetic: no 4-bit weight format, and a GPU that already
+streams 479 MB in 2.6 ms. A later question was whether the **Neural Engine** could carry part of the
+step instead, since it sits idle. `scripts/hypothesis-ane.py` answers it with a converted model
+instead of a claim: one block's four matmuls (qkv, o, gate_up, down at the shipped shapes) as a
+CoreML `mlprogram`, weights palettized to 4 bits (CoreML's only four-bit form), timed on each
+compute unit. A step is 16 blocks, so the step column multiplies the block by 16 — and it leaves
+attention out, which understates the Neural Engine.
+
+| engine | block ms | step ms (×16) | steps/s |
+|---|---|---|---|
+| CPU + Neural Engine | 0.763 | 12.21 | 81.9 |
+| CPU + GPU | 4.570 | 73.12 | 13.7 |
+| CPU only | 2.150 | 34.40 | 29.1 |
+
+Against MLX on the GPU (2.56–2.87 ms per step, section 1) the Neural Engine is **4.3–4.8× slower**
+for the same matmuls, and it would still have to run attention and the `lm_head`. The reason is the
+one that decides everything here: 12.5 MB of 4-bit weights in 0.763 ms is 16 GB/s, while the GPU
+sustains 184 GB/s. The Neural Engine is built for a few watts, not for streaming a 479 MB model.
+
+**Splitting the step across both engines does not rescue it.** At 0.763 ms per block on the Neural
+Engine and 0.16 ms on the GPU (2.6 / 16), the balanced split is three layers on the Neural Engine and
+thirteen on the GPU: 2.3 ms against 2.1 ms, i.e. a 12% step saving — and it buys that with a CoreML
+`predict` and an MLX `eval` per step plus a tensor handoff that costs at least the 0.24–0.59 ms of
+graph build the step already pays. Verdict: no Neural Engine path, measured.
+
+Caveat on every number in this subsection: the run happened at load average 13 (an unrelated daemon
+at 95% CPU), where the same binary measured 7.19–11.59 ms per step instead of 2.6. The three rows
+above come from one run and share that load, so their ratio is usable and their absolute values are
+not.
+
 ## 4. Literature review and meta-analysis
 
 The question this pass had to answer with evidence rather than intuition: how large a gain is
@@ -163,12 +195,20 @@ server is at the memory wall, and the only lever left with a published effect is
 - **No 2-bit checkpoint.** It is the one remaining lever with a real effect, but it needs a converted
   model plus a re-baselined `scripts/check-parity.py`; the earlier 1.27× figure came from synthetic
   weights and translation quality at 2 bits is unmeasured.
-- **No CoreML conversion.** Neither CoreML nor MPSGraph has a 4-bit weight format, `coremltools` is
-  not installed, and `plamo3` is not an architecture it converts.
+- **No CoreML or Neural Engine path.** Measured in 3.1: 12.21 ms per step equivalent against 2.6 ms
+  on the GPU, because the Neural Engine reaches 16 GB/s where the GPU reaches 184 GB/s. `plamo3` is
+  also not an architecture CoreML converts, so the step had to be rebuilt from its matmuls.
 - **No speculative decoding.** It needs a second model in the repo and a tuned acceptance rate; with
   a 9-token answer the fixed cost of drafting would eat most of the win.
-- **No batching.** The mods issue one request at a time, and the roofline says the 4-bit advantage
-  ends around 28–39 concurrent rows anyway.
+- **No batched decode.** The ceiling is real and now measured (`scripts/hypothesis-batching.py`): the
+  weights stream once whatever the row count. On the shipped matmul shapes 16 rows cost 1.4–2.5× one
+  row, but the real checkpoint's decode loop — where per-row masks, stop checks and cache trimming
+  also scale with M — costs 4.3–4.5× for 16 rows, i.e. 3.6–3.8× the throughput and 4.3× the latency. It pays
+  only with a queue of four or more, and this workload has one or two requests in flight: the mods
+  issue one at a time, the document splitter sends its chunks in pairs, and interleaving 60 requests
+  already measured 1.4× worse per completion (0.0504 s against 0.0359 s, section 2). Building the
+  per-row stop, trim and cache machinery for a queue that does not exist would be the wrong trade;
+  the measurement is recorded so a future queue can justify it.
 - **No QoS change.** Measured, not assumed: running the same binary under `taskpolicy -b` costs
   1.68× per completion, so the launchd agent keeps default scheduling.
 - **No residency work.** The packed mapping's pages are already reclaimable file cache, which is why
@@ -187,6 +227,15 @@ curl -s http://127.0.0.1:18555/v1/models                # 200 when serving
 Latency must be measured with **distinct prompts**: the server caches identical completions and
 answers a repeat in 0.7 ms. The figures in section 2 come from serving two builds on separate ports
 and alternating ten distinct translation prompts, 60 requests per build.
+
+The two engine questions have their own scripts, because they need runtimes the server does not use:
+
+```sh
+# the Neural Engine (needs coremltools; see the script's docstring for the venv)
+/tmp/ane-venv/bin/python tools/plamo-swift/scripts/hypothesis-ane.py
+# the batched-step ceiling, on MLX's own kernels
+~/.local/share/uv/tools/mlx-lm/bin/python tools/plamo-swift/scripts/hypothesis-batching.py
+```
 
 ## 7. Bugs found in a line-by-line pass
 
