@@ -92,7 +92,7 @@ public struct MILText {
 
     /// `x * k`, for the attention scale.
     public mutating func multiplyScalar(_ x: String, into y: Tensor, scale: Double) {
-        emit(type: "mul", inputs: [("x", binding(x)), ("y", halfScalar(scale))], output: y)
+        emit(type: "mul", inputs: [("x", binding(x)), ("y", halfVector(scale))], output: y)
     }
 
     public mutating func rsqrt(_ x: String, into y: Tensor, epsilon: Double) {
@@ -246,6 +246,20 @@ public struct MILText {
             arguments {
                               value {
                                 type { tensorType { dataType: FLOAT16 rank: 0 } }
+                                immediateValue { tensor { bytes { values: "\(escaped)" } } }
+                              }
+                            }
+            """
+    }
+
+    /// A fp16 one-element vector, for an op that will not broadcast a rank-0 constant.
+    private func halfVector(_ value: Double) -> String {
+        let bits = Float16(Float(value)).bitPattern
+        let escaped = String(format: "\\x%02x\\x%02x", bits & 0xff, bits >> 8)
+        return """
+            arguments {
+                              value {
+                                type { tensorType { dataType: FLOAT16 rank: 1 dimensions { constant { size: 1 } } } }
                                 immediateValue { tensor { bytes { values: "\(escaped)" } } }
                               }
                             }
