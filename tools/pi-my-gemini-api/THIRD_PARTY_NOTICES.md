@@ -1,6 +1,6 @@
 # Third-party notices
 
-`pi-my-antigravity` contains no third-party source code. It runs the official CLI
+`pi-my-gemini-api` contains no third-party source code. It runs the official CLI
 and translates between it and Pi:
 
 - **gemini-api-cli** by Google — <https://github.com/google-gemini/gemini-api-cli>,

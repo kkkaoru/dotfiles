@@ -1,6 +1,5 @@
 // This file runs with bun.
 
-/** Distinct from the subscription provider `my-antigravity`, so both can be selected. */
 export const PROVIDER_ID = "my-gemini-api";
 export const PROVIDER_NAME = "Gemini API (my)";
 export const API_ID = "my-gemini-api";

@@ -1,5 +1,5 @@
 {
-  "lastChangelogVersion": "1.6.0",
+  "lastChangelogVersion": "1.6.1",
   "theme": "dracula",
   "tuiMode": "fullscreen",
   "defaultProvider": "cloudflare-ai-gateway",
@@ -73,7 +73,6 @@
   "packages": [
     "./packages/pi-effort-manager",
     "./packages/pi-plamo-translate",
-    "./packages/pi-my-antigravity",
     "./packages/pi-my-gemini-api",
     "./packages/pi-my-clinepass-provider",
     "npm:pi-ollama-cloud",

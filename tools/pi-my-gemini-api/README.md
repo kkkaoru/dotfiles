@@ -12,9 +12,7 @@ The CLI owns credentials, model ids, the endpoint and the request shape; this
 package owns the translation between pi's transcript and the Interactions API
 (`POST /v1beta/interactions`).
 
-This is the API-key/OAuth path. The subscription provider stays available
-separately as `my-antigravity` (`tools/pi-my-antigravity`), which speaks Cloud
-Code Assist with the `agy` credential.
+This is the API-key/OAuth path.
 
 ```
 /model my-gemini-api/gemini-4-hydrogen

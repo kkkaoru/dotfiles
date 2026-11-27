@@ -144,9 +144,6 @@ integrations. These instructions apply to agents working here, including pi and 
   session, its goal and loop, its tmux jobs, its timeline tree and its files relate, kept beside the
   session file and filled automatically whenever one of those tools runs (`pi-relations-extension`;
   `relations` tool, or `bun cli.ts` from a shell). They are linked by `create-symlinks.sh`.
-- `tools/pi-my-antigravity/` — Subscription-backed Antigravity (Cloud Code Assist) provider that
-  mirrors the official `agy` CLI wire format (`bun run check`). Sends the system prompt as the
-  leading user turn because the backend 429s third-party prompts in `systemInstruction`.
 - `tools/pi-my-gemini-api/` — `my-gemini-api` provider that runs the official `gemini-api` CLI
   (`generate --body … --stream=false`, `models list`) and translates pi's transcript into
   Interactions API steps; the CLI owns the credentials, so this is the API-key/OAuth path rather
