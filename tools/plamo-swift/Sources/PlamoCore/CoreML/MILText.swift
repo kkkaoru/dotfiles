@@ -28,6 +28,7 @@ public struct MILText {
     /// A model input, a constant or an operation output.
     public private(set) var inputs: [Tensor] = []
     private var operations: [String] = []
+    private var opOutputs: [Tensor] = []
     private var outputs: [Tensor] = []
 
     public init() {}
@@ -38,6 +39,13 @@ public struct MILText {
 
     public mutating func setOutputs(_ tensors: [Tensor]) {
         outputs = tensors
+    }
+
+    /// Debug aid: keep only the first `count` operations, ending the program at the last one.
+    public mutating func truncate(ops count: Int) {
+        guard count < operations.count else { return }
+        operations = Array(operations.prefix(count))
+        outputs = [opOutputs[count - 1]]
     }
 
     /// `y = x @ w`, with both transposes spelled out as the validator requires.
@@ -292,6 +300,7 @@ public struct MILText {
         type: String, inputs pairs: [(String, String)], extraInputs: [(String, String)] = [],
         output: Tensor
     ) {
+        opOutputs.append(output)
         let all = pairs + extraInputs
         let rendered = all.map { key, value in
             """

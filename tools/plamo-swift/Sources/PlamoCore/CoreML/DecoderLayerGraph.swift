@@ -62,11 +62,14 @@ public struct DecoderLayerGraph {
     private var half: Int { headDim / 2 }
 
     /// The graph: `x` in, `y` out, with the caches and every weight as inputs.
-    public func render() -> String {
+    public func render() -> String { buildProgram().render() }
+
+    /// The same graph, optionally cut short so a failing operation can be found by bisection.
+    func buildProgram(truncateTo ops: Int? = nil) -> MILText {
         var program = MILText()
         let x = MILText.Tensor("x", [1, 1, hidden])
-        let cos = MILText.Tensor("cos", [1, 1, 1, half])
-        let sin = MILText.Tensor("sin", [1, 1, 1, half])
+        let cos = MILText.Tensor("cos", [1, 1, 1, headDim])
+        let sin = MILText.Tensor("sin", [1, 1, 1, headDim])
         let kCache = MILText.Tensor("k_cache", [1, kvHeads, cacheLength, headDim])
         let vCache = MILText.Tensor("v_cache", [1, kvHeads, cacheLength, headDim])
         let weightTensors: [(String, [Int])] = [
@@ -110,7 +113,8 @@ public struct DecoderLayerGraph {
         let y = MILText.Tensor("y", [1, 1, hidden])
         program.reshape(summed.name, into: y, shape: [1, 1, hidden])
         program.setOutputs([y, keys, values])
-        return program.render()
+        if let ops { program.truncate(ops: ops) }
+        return program
     }
 
     /// `x / rms(x) * w`, over the last axis.
@@ -167,17 +171,28 @@ public struct DecoderLayerGraph {
         program.sliceLast(values.name, into: trimmedValues, begin: [0, 0, 1, 0], size: [1, kvHeads, cacheLength, headDim])
 
         // Attention written out: q @ kᵀ, scaled, softmax, then @ v. The dedicated op is newer
-        // than the opset coremlc ships, and these four are accepted by every opset.
+        // than the opset coremlc ships, and these four are accepted by every opset. The query has
+        // more heads than the cache, so the group is a dimension of its own: a 5-D matmul shares
+        // one k/v head across its group, which is what GQA means.
+        let groupSize = heads / kvHeads
         let keysT = MILText.Tensor("keys_t", [1, kvHeads, headDim, cacheLength])
         program.transpose(trimmed.name, into: keysT, perm: [0, 1, 3, 2])
-        let scores = MILText.Tensor("scores", [1, heads, 1, cacheLength])
-        program.matmul(qRotated.name, keysT.name, into: scores)
-        let scaledScores = MILText.Tensor("scores_scaled", [1, heads, 1, cacheLength])
+        let keysG = MILText.Tensor("keys_g", [1, kvHeads, 1, headDim, cacheLength])
+        program.reshape(keysT.name, into: keysG, shape: keysG.shape)
+        let qG = MILText.Tensor("q_g", [1, kvHeads, groupSize, 1, headDim])
+        program.reshape(qRotated.name, into: qG, shape: qG.shape)
+        let scores = MILText.Tensor("scores", [1, kvHeads, groupSize, 1, cacheLength])
+        program.matmul(qG.name, keysG.name, into: scores)
+        let scaledScores = MILText.Tensor("scores_scaled", scores.shape)
         program.multiplyScalar(scores.name, into: scaledScores, scale: 1 / Double(headDim).squareRoot())
-        let probs = MILText.Tensor("probs", [1, heads, 1, cacheLength])
+        let probs = MILText.Tensor("probs", scores.shape)
         program.softmax(scaledScores.name, into: probs, axis: -1)
+        let valuesG = MILText.Tensor("values_g", [1, kvHeads, 1, cacheLength, headDim])
+        program.reshape(trimmedValues.name, into: valuesG, shape: valuesG.shape)
+        let attendedG = MILText.Tensor("attended_g", [1, kvHeads, groupSize, 1, headDim])
+        program.matmul(probs.name, valuesG.name, into: attendedG)
         let attended = MILText.Tensor("attended", [1, heads, 1, headDim])
-        program.matmul(probs.name, trimmedValues.name, into: attended)
+        program.reshape(attendedG.name, into: attended, shape: attended.shape)
 
         let merged = MILText.Tensor("merged", [1, 1, qDim])
         let transposed = MILText.Tensor("attended_t", [1, 1, heads, headDim])
@@ -208,7 +223,7 @@ public struct DecoderLayerGraph {
         let second = MILText.Tensor("\(name)_second", [1, shape[1], 1, half])
         program.sliceLast(x.name, into: second, begin: [0, 0, 0, half], size: [1, shape[1], 1, half])
         let negated = MILText.Tensor("\(name)_negated", [1, shape[1], 1, half])
-        program.multiply(second.name, second.name, into: negated)
+        program.multiplyScalar(second.name, into: negated, scale: -1)
         let rotated = MILText.Tensor("\(name)_swapped", [1, shape[1], 1, headDim])
         program.concat([negated.name, first.name], into: rotated, axis: 3)
         let scaled = MILText.Tensor("\(name)_scaled", shape)
