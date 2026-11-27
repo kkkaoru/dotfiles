@@ -71,7 +71,7 @@ public struct MILText {
     public mutating func concat(_ tensors: [String], into y: Tensor, axis: Int) {
         emit(
             type: "concat",
-            inputs: [("values", "[\(tensors.map(binding).joined(separator: ", "))]")],
+            inputs: [("values", tensors.map { "arguments { name: \"\($0)\" }" }.joined(separator: " "))],
             extraInputs: [("axis", integer(axis)), ("interleave", bool(false))],
             output: y
         )
@@ -197,9 +197,7 @@ public struct MILText {
                     key: "CoreML5"
                     value {
                       \(outputs.map { "outputs: \"\($0.name)\"" }.joined(separator: "\n                      "))
-                      operations {
-            \(operations.joined(separator: "\n"))
-                      }
+                      \(operations.joined(separator: "\n"))
                     }
                   }
                 }
@@ -270,7 +268,7 @@ public struct MILText {
         }.joined(separator: "\n")
         operations.append(
             """
-                        {
+                        operations {
                           type: "\(type)"
             \(rendered)
                           outputs {

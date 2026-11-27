@@ -55,7 +55,7 @@ struct MILTextTests {
         }
         #expect(text.contains("key: \"axis\""))
         #expect(text.contains("ints { values: -1 }"))
-        #expect(text.contains("[arguments { name: \"h\" }, arguments { name: \"k\" }]"))
+        #expect(text.contains("arguments { name: \"h\" } arguments { name: \"k\" }"))
     }
 
     @Test("the layer primitives emit the ops an RMSNorm and a SwiGLU need")
