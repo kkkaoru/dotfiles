@@ -142,6 +142,30 @@ at 95% CPU), where the same binary measured 7.19–11.59 ms per step instead of 
 above come from one run and share that load, so their ratio is usable and their absolute values are
 not.
 
+**Under GPU contention the ranking flips.** An idle machine is not this Mac's usual state, so the
+same two engines were measured with a GPU-saturating MLX loop running beside them — the way another
+app competes for the GPU:
+
+| engine | idle | with the GPU busy | cost of contention |
+|---|---|---|---|
+| CoreML block, Neural Engine | 0.81 ms | 1.11 ms | 1.37× |
+| MLX decode step, GPU | 15.36 ms | 101.46 ms | 6.6× |
+| served request, MLX GPU path | 181 ms | 716 ms | 4.0× |
+
+The Neural Engine barely notices a busy GPU, so a step's 16 blocks at 1.11 ms (17.8 ms) would beat the
+contended GPU's 101 ms by 5.7× — and 0.81 ms idle (13.0 ms) already beats a contended GPU by 7.8×.
+That is the one regime where the Neural Engine is the right engine, and it is the regime this Mac is
+usually in. It is still not a switch this server can flip: the measurement covers matmuls only, so a
+load-aware ANE path needs the whole decoder in CoreML — attention, the KV cache and its sliding-window
+trim, RoPE, and per-token sampling — and `plamo3` has no CoreML conversion. That is the next step this
+record justifies, not something to bolt onto a matmul experiment.
+
+**The weights are now pinned in physical memory.** `Packed.Mapping` `mlock`s the packed cache when it
+is adopted and `munlock`s it when the last array over those pages dies, so the 479 MB a step streams
+stays in RAM instead of being evicted and read back from disk inside a decode step; the lukewarm state
+drops the mapping, which drops the lock, so an idle server still holds nothing. Best effort by design:
+a refused lock leaves the mapping pageable, exactly as before.
+
 ## 4. Literature review and meta-analysis
 
 The question this pass had to answer with evidence rather than intuition: how large a gain is

@@ -78,6 +78,23 @@ import Testing
         #expect(model.mapping == nil)
     }
 
+    @Test func pinsTheAdoptedPagesInPhysicalMemory() throws {
+        let url = try checkpoint()
+        let packed = try Packed.ensure(checkpoint: url)
+        // A fixture of a few KB is far below any wired-memory limit, so this lock must succeed; a
+        // refused lock would leave the weights pageable, which is the failure this pins down.
+        let first = try Packed.load(url: packed)
+        #expect(first.mapping.locked)
+        // The lock goes with the mapping: a second adoption must lock as well, not inherit a stale
+        // claim on the same address range.
+        let second = try Packed.load(url: packed)
+        #expect(second.mapping.locked)
+        let name = try #require(first.arrays.keys.first)
+        let a = try #require(first.arrays[name])
+        let b = try #require(second.arrays[name])
+        #expect((a .== b).all().item(Bool.self))
+    }
+
     @Test func theModelAdoptsFromThePackedCache() throws {
         let url = try checkpoint()
         _ = try Packed.ensure(checkpoint: url)

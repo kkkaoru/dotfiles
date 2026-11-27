@@ -13,13 +13,23 @@ public enum Packed {
     public final class Mapping {
         internal let base: UnsafeMutableRawPointer
         private let byteCount: Int
+        /// Whether the pages are pinned; `munlock` on a range that was never locked would clear a
+        /// lock another part of the process holds, so the two calls are paired explicitly.
+        internal let locked: Bool
 
         internal init(base: UnsafeMutableRawPointer, byteCount: Int) {
             self.base = base
             self.byteCount = byteCount
+            // The weights are the whole working set of a step: 479 MB read once per token. Pinning
+            // them keeps them in physical memory while the machine is under pressure, where a
+            // pageable mapping would be evicted and read back from disk inside a decode step. The
+            // lukewarm state drops the mapping, which drops the lock, so an idle server holds
+            // nothing. Best effort: a refused lock leaves the mapping pageable, as it was.
+            self.locked = mlock(base, byteCount) == 0
         }
 
         deinit {
+            if locked { munlock(base, byteCount) }
             munmap(base, byteCount)
         }
     }
