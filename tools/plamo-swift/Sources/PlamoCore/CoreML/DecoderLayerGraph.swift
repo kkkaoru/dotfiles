@@ -226,9 +226,13 @@ public struct DecoderLayerGraph {
     ) -> MILText.Tensor {
         let squares = MILText.Tensor("\(name)_squares", x.shape)
         program.multiply(x.name, x.name, into: squares)
-        let mean = MILText.Tensor("\(name)_mean", [1, 1])
+        // `keepDims` keeps every axis, so the reduced shape is the input with the last axis at 1.
+        // Declaring it as [1, 1] instead makes the plan's buffer layout disagree with the op's
+        // real output, and BNNS then writes outside its own buffer.
+        let reducedShape = Array(x.shape.dropLast()) + [1]
+        let mean = MILText.Tensor("\(name)_mean", reducedShape)
         program.reduceMean(squares.name, into: mean, axes: [-1], keepDims: true)
-        let inverse = MILText.Tensor("\(name)_inverse", [1, 1])
+        let inverse = MILText.Tensor("\(name)_inverse", reducedShape)
         program.rsqrt(mean.name, into: inverse, epsilon: Double(config.rmsNormEps))
         let scaled = MILText.Tensor("\(name)_scaled", x.shape)
         program.multiply(x.name, inverse.name, into: scaled)

@@ -53,6 +53,22 @@ struct DecoderLayerGraphTests {
         #expect(text.contains("outputs: \"values_trimmed\""))
     }
 
+    @Test("the head norm's reduce keeps every axis, so the declared shape is the real one")
+    func reducedShape() throws {
+        let graph = DecoderLayerGraph(
+            config: try Self.config(), weights: .init(prefix: "model", layer: 3), cacheLength: 512)
+        // Collapsed, so the assertions do not depend on indentation.
+        let flat = graph.render().split(whereSeparator: \.isWhitespace).joined(separator: " ")
+
+        // q is [1, 16, 1, 128] and `keepDims` averages the last axis only, so the mean is
+        // [1, 16, 1, 1]. Declaring it as [1, 1] made BNNS write outside its own buffer, and the
+        // process died with SIGBUS in BNNSGraphContextExecute_v2.
+        #expect(flat.contains("\"q_norm_mean\" type { tensorType { dataType: FLOAT16 rank: 4"))
+        #expect(flat.contains("\"k_norm_mean\" type { tensorType { dataType: FLOAT16 rank: 4"))
+        // The residual norm's input is flat, [1, 1536], so its mean keeps two axes.
+        #expect(flat.contains("\"pre_mixer_mean\" type { tensorType { dataType: FLOAT16 rank: 2"))
+    }
+
     @Test("every layer of the checkpoint renders, and each names its own weights")
     func allLayers() throws {
         let config = try Self.config()
