@@ -87,16 +87,16 @@ public struct MILText {
 
     /// `x + eps`, for RMSNorm's denominator.
     public mutating func addScalar(_ x: String, into y: Tensor, epsilon: Double) {
-        emit(type: "add", inputs: [("x", binding(x)), ("y", scalar(epsilon))], output: y)
+        emit(type: "add", inputs: [("x", binding(x)), ("y", halfScalar(epsilon))], output: y)
     }
 
     /// `x * k`, for the attention scale.
     public mutating func multiplyScalar(_ x: String, into y: Tensor, scale: Double) {
-        emit(type: "mul", inputs: [("x", binding(x)), ("y", scalar(scale))], output: y)
+        emit(type: "mul", inputs: [("x", binding(x)), ("y", halfScalar(scale))], output: y)
     }
 
-    public mutating func rsqrt(_ x: String, into y: Tensor) {
-        emit(type: "rsqrt", inputs: [("x", binding(x))], output: y)
+    public mutating func rsqrt(_ x: String, into y: Tensor, epsilon: Double) {
+        emit(type: "rsqrt", inputs: [("x", binding(x)), ("epsilon", halfScalar(epsilon))], output: y)
     }
 
     public mutating func sigmoid(_ x: String, into y: Tensor) {
@@ -234,6 +234,22 @@ public struct MILText {
                           }
                         }
         """
+    }
+
+    /// A fp16 scalar as raw little-endian bytes. The `floats` field carries four bytes per value,
+    /// so a FLOAT16 immediate written there is rejected as having the wrong element count; the
+    /// raw bytes form keeps the type and the storage in agreement.
+    private func halfScalar(_ value: Double) -> String {
+        let bits = Float16(Float(value)).bitPattern
+        let escaped = String(format: "\\x%02x\\x%02x", bits & 0xff, bits >> 8)
+        return """
+            arguments {
+                              value {
+                                type { tensorType { dataType: FLOAT16 rank: 0 } }
+                                immediateValue { tensor { bytes { values: "\(escaped)" } } }
+                              }
+                            }
+            """
     }
 
     private func scalar(_ value: Double) -> String {

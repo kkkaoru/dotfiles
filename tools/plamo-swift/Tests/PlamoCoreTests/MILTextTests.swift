@@ -66,7 +66,7 @@ struct MILTextTests {
         let mean = MILText.Tensor("mean", [1, 1])
         program.reduceMean("h", into: mean, axes: [-1], keepDims: true)
         let inv = MILText.Tensor("inv", [1, 1])
-        program.rsqrt("mean", into: inv)
+        program.rsqrt("mean", into: inv, epsilon: 1e-06)
         let gate = MILText.Tensor("gate", [1, 1536])
         program.matmul("h", "w", into: gate)
         let activated = MILText.Tensor("activated", [1, 1536])
