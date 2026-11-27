@@ -57,4 +57,41 @@ struct MILTextTests {
         #expect(text.contains("ints { values: -1 }"))
         #expect(text.contains("[arguments { name: \"h\" }, arguments { name: \"k\" }]"))
     }
+
+    @Test("the layer primitives emit the ops an RMSNorm and a SwiGLU need")
+    func layerPrimitives() {
+        var program = MILText()
+        program.addInput(MILText.Tensor("h", [1, 1536]))
+        program.addInput(MILText.Tensor("w", [1536, 1536]))
+        let mean = MILText.Tensor("mean", [1, 1])
+        program.reduceMean("h", into: mean, axes: [-1], keepDims: true)
+        let inv = MILText.Tensor("inv", [1, 1])
+        program.rsqrt("mean", into: inv)
+        let gate = MILText.Tensor("gate", [1, 1536])
+        program.matmul("h", "w", into: gate)
+        let activated = MILText.Tensor("activated", [1, 1536])
+        program.sigmoid("gate", into: activated)
+        let gated = MILText.Tensor("gated", [1, 1536])
+        program.multiply("gate", "activated", into: gated)
+        let shifted = MILText.Tensor("shifted", [1, 1536])
+        program.subtract("gated", "h", into: shifted)
+        let scaled = MILText.Tensor("scaled", [1, 1536])
+        program.divide("shifted", "inv", into: scaled)
+        let shaped = MILText.Tensor("shaped", [1, 1536])
+        program.reshape("scaled", into: shaped, shape: [1, 1536])
+        let moved = MILText.Tensor("moved", [1536, 1])
+        program.transpose("shaped", into: moved, perm: [1, 0])
+        let picked = MILText.Tensor("picked", [1, 1536])
+        program.gather("h", indices: "h", into: picked, axis: 0)
+        program.setOutputs(["picked"])
+        let text = program.render()
+
+        for op in ["reduce_mean", "rsqrt", "sigmoid", "real_div", "sub", "reshape", "transpose", "gather"] {
+            #expect(text.contains("type: \"\(op)\""))
+        }
+        #expect(text.contains("ints { values: -1 }"))
+        #expect(text.contains("ints { values: 1 values: 0 }"))
+        #expect(text.contains("dataType: INT32 rank: 1 dimensions { constant { size: 2 } }"))
+        #expect(text.contains("key: \"keep_dims\""))
+    }
 }

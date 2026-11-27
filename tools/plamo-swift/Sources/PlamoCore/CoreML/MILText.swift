@@ -77,6 +77,53 @@ public struct MILText {
         )
     }
 
+    public mutating func subtract(_ a: String, _ b: String, into y: Tensor) {
+        emit(type: "sub", inputs: [("x", binding(a)), ("y", binding(b))], output: y)
+    }
+
+    public mutating func divide(_ a: String, _ b: String, into y: Tensor) {
+        emit(type: "real_div", inputs: [("x", binding(a)), ("y", binding(b))], output: y)
+    }
+
+    public mutating func rsqrt(_ x: String, into y: Tensor) {
+        emit(type: "rsqrt", inputs: [("x", binding(x))], output: y)
+    }
+
+    public mutating func sigmoid(_ x: String, into y: Tensor) {
+        emit(type: "sigmoid", inputs: [("x", binding(x))], output: y)
+    }
+
+    /// RMSNorm's mean of squares; `axes` is a constant list of the reduced dimensions.
+    public mutating func reduceMean(_ x: String, into y: Tensor, axes: [Int], keepDims: Bool) {
+        emit(
+            type: "reduce_mean",
+            inputs: [("x", binding(x))],
+            extraInputs: [("axes", ints(axes)), ("keep_dims", bool(keepDims))],
+            output: y
+        )
+    }
+
+    public mutating func reshape(_ x: String, into y: Tensor, shape: [Int]) {
+        emit(
+            type: "reshape", inputs: [("x", binding(x))], extraInputs: [("shape", ints(shape))],
+            output: y)
+    }
+
+    public mutating func transpose(_ x: String, into y: Tensor, perm: [Int]) {
+        emit(
+            type: "transpose", inputs: [("x", binding(x))], extraInputs: [("perm", ints(perm))],
+            output: y)
+    }
+
+    public mutating func gather(_ x: String, indices: String, into y: Tensor, axis: Int) {
+        emit(
+            type: "gather",
+            inputs: [("x", binding(x)), ("indices", binding(indices))],
+            extraInputs: [("axis", integer(axis))],
+            output: y
+        )
+    }
+
     /// The whole model, ready for `protoc --encode=CoreML.Specification.Model`.
     public func render(specificationVersion: Int = 7) -> String {
         let featureInputs = inputs.map { tensor in
@@ -146,6 +193,17 @@ public struct MILText {
                           value {
                             type { tensorType { dataType: BOOL } }
                             immediateValue { tensor { bools { values: \(value) } } }
+                          }
+                        }
+        """
+    }
+
+    private func ints(_ values: [Int]) -> String {
+        """
+        arguments {
+                          value {
+                            type { tensorType { dataType: INT32 rank: 1 dimensions { constant { size: \(values.count) } } } }
+                            immediateValue { tensor { ints { \(values.map { "values: \($0) " }.joined())} } }
                           }
                         }
         """
