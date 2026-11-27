@@ -39,7 +39,6 @@ fi
 command -v jq >/dev/null
 bun="$(command -v bun)"
 bunx="$(command -v bunx)"
-ctx="$(command -v ctx)"
 "$executor" --version
 mkdir -p "$HOME/.local/bin" "$HOME/.pi/agent/packages"
 if [[ ! -e "$HOME/.pi/agent/packages/executor-skills" && ! -L "$HOME/.pi/agent/packages/executor-skills" ]]; then
@@ -104,9 +103,6 @@ register() {
 }
 
 register "$(jq -nc --arg command "$bun" --arg entry "$repo/tools/executor-skills/cli.mjs" --arg global "$HOME/.agents/skills" --arg pi "$HOME/.pi/agent/skills" --arg project "$repo/.agents/skills" --arg storage "$HOME/.agents/skills-stroage" '{transport:"stdio",slug:"local-skills",name:"Local Agent Skills (read-only)",command:$command,args:[$entry,$global,$pi,$project,$storage]}')" none
-
-# These are executable integrations, separate from the read-only skill catalog.
-register "$(jq -nc --arg command "$ctx" '{transport:"stdio",slug:"ctx",name:"ctx Local Agent History",command:$command,args:["mcp","serve"]}')" none
 
 while IFS= read -r payload; do
   register "$payload" none
