@@ -28,7 +28,7 @@ public struct MILText {
     /// A model input, a constant or an operation output.
     public private(set) var inputs: [Tensor] = []
     private var operations: [String] = []
-    private var outputs: [String] = []
+    private var outputs: [Tensor] = []
 
     public init() {}
 
@@ -36,8 +36,8 @@ public struct MILText {
         inputs.append(tensor)
     }
 
-    public mutating func setOutputs(_ names: [String]) {
-        outputs = names
+    public mutating func setOutputs(_ tensors: [Tensor]) {
+        outputs = tensors
     }
 
     /// `y = x @ w`, with both transposes spelled out as the validator requires.
@@ -85,6 +85,11 @@ public struct MILText {
         emit(type: "real_div", inputs: [("x", binding(a)), ("y", binding(b))], output: y)
     }
 
+    /// `x + eps`, for RMSNorm's denominator.
+    public mutating func addScalar(_ x: String, into y: Tensor, epsilon: Double) {
+        emit(type: "add", inputs: [("x", binding(x)), ("y", scalar(epsilon))], output: y)
+    }
+
     public mutating func rsqrt(_ x: String, into y: Tensor) {
         emit(type: "rsqrt", inputs: [("x", binding(x))], output: y)
     }
@@ -124,6 +129,27 @@ public struct MILText {
         )
     }
 
+    public mutating func scaledDotProductAttention(
+        query: String, key: String, value: String, into y: Tensor, scale: Double
+    ) {
+        emit(
+            type: "scaled_dot_product_attention",
+            inputs: [("query", binding(query)), ("key", binding(key)), ("value", binding(value))],
+            extraInputs: [("scale", scalar(scale))],
+            output: y
+        )
+    }
+
+    /// Keeps the last `size` elements of each axis, which is how a sliding window trims its cache.
+    public mutating func sliceLast(_ x: String, into y: Tensor, begin: [Int], size: [Int]) {
+        emit(
+            type: "slice_by_size",
+            inputs: [("x", binding(x))],
+            extraInputs: [("begin", ints(begin)), ("size", ints(size))],
+            output: y
+        )
+    }
+
     /// The whole model, ready for `protoc --encode=CoreML.Specification.Model`.
     public func render(specificationVersion: Int = 7) -> String {
         let featureInputs = inputs.map { tensor in
@@ -136,9 +162,7 @@ public struct MILText {
                 }
             """
         }.joined(separator: "\n")
-        let featureOutputs = outputs.compactMap { name in
-            inputs.first { $0.name == name }
-        }.map { tensor in
+        let featureOutputs = outputs.map { tensor in
             """
                 output {
                   name: "\(tensor.name)"
@@ -172,7 +196,7 @@ public struct MILText {
                   block_specializations {
                     key: "CoreML5"
                     value {
-                      outputs: "\(outputs.first ?? "")"
+                      \(outputs.map { "outputs: \"\($0.name)\"" }.joined(separator: "\n                      "))
                       operations {
             \(operations.joined(separator: "\n"))
                       }
@@ -204,6 +228,17 @@ public struct MILText {
                           value {
                             type { tensorType { dataType: INT32 rank: 1 dimensions { constant { size: \(values.count) } } } }
                             immediateValue { tensor { ints { \(values.map { "values: \($0) " }.joined())} } }
+                          }
+                        }
+        """
+    }
+
+    private func scalar(_ value: Double) -> String {
+        """
+        arguments {
+                          value {
+                            type { tensorType { dataType: FLOAT16 rank: 0 } }
+                            immediateValue { tensor { floats { values: \(value) } } }
                           }
                         }
         """

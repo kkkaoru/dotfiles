@@ -16,7 +16,7 @@ struct MILTextTests {
         program.addInput(x)
         program.addInput(w)
         program.matmul("x", "w", into: y)
-        program.setOutputs(["y"])
+        program.setOutputs([y])
         let text = program.render()
 
         #expect(text.hasPrefix("specificationVersion: 7\n"))
@@ -47,7 +47,7 @@ struct MILTextTests {
         program.add("joined", "joined", into: total)
         let scaled = MILText.Tensor("scaled", [1, 3072])
         program.multiply("total", "total", into: scaled)
-        program.setOutputs(["scaled"])
+        program.setOutputs([scaled])
         let text = program.render()
 
         for op in ["matmul", "softmax", "concat", "add", "mul"] {
@@ -83,7 +83,7 @@ struct MILTextTests {
         program.transpose("shaped", into: moved, perm: [1, 0])
         let picked = MILText.Tensor("picked", [1, 1536])
         program.gather("h", indices: "h", into: picked, axis: 0)
-        program.setOutputs(["picked"])
+        program.setOutputs([picked])
         let text = program.render()
 
         for op in ["reduce_mean", "rsqrt", "sigmoid", "real_div", "sub", "reshape", "transpose", "gather"] {
