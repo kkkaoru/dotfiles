@@ -90,6 +90,11 @@ public struct MILText {
         emit(type: "add", inputs: [("x", binding(x)), ("y", scalar(epsilon))], output: y)
     }
 
+    /// `x * k`, for the attention scale.
+    public mutating func multiplyScalar(_ x: String, into y: Tensor, scale: Double) {
+        emit(type: "mul", inputs: [("x", binding(x)), ("y", scalar(scale))], output: y)
+    }
+
     public mutating func rsqrt(_ x: String, into y: Tensor) {
         emit(type: "rsqrt", inputs: [("x", binding(x))], output: y)
     }
@@ -192,9 +197,9 @@ public struct MILText {
                 key: "main"
                 value {
             \(functionInputs)
-                  opset: "CoreML5"
+                  opset: "CoreML7"
                   block_specializations {
-                    key: "CoreML5"
+                    key: "CoreML7"
                     value {
                       \(outputs.map { "outputs: \"\($0.name)\"" }.joined(separator: "\n                      "))
                       \(operations.joined(separator: "\n"))
@@ -235,7 +240,7 @@ public struct MILText {
         """
         arguments {
                           value {
-                            type { tensorType { dataType: FLOAT16 rank: 0 } }
+                            type { tensorType { dataType: FLOAT32 rank: 0 } }
                             immediateValue { tensor { floats { values: \(value) } } }
                           }
                         }

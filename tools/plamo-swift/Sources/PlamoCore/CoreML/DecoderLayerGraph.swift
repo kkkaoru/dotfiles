@@ -168,10 +168,18 @@ public struct DecoderLayerGraph {
         let trimmedValues = MILText.Tensor("values_trimmed", [1, kvHeads, cacheLength, headDim])
         program.sliceLast(values.name, into: trimmedValues, begin: [0, 0, 1, 0], size: [1, kvHeads, cacheLength, headDim])
 
+        // Attention written out: q @ kᵀ, scaled, softmax, then @ v. The dedicated op is newer
+        // than the opset coremlc ships, and these four are accepted by every opset.
+        let keysT = MILText.Tensor("keys_t", [1, kvHeads, headDim, cacheLength])
+        program.transpose(trimmed.name, into: keysT, perm: [0, 1, 3, 2])
+        let scores = MILText.Tensor("scores", [1, heads, 1, cacheLength])
+        program.matmul(qRotated.name, keysT.name, into: scores)
+        let scaledScores = MILText.Tensor("scores_scaled", [1, heads, 1, cacheLength])
+        program.multiplyScalar(scores.name, into: scaledScores, scale: 1 / Double(headDim).squareRoot())
+        let probs = MILText.Tensor("probs", [1, heads, 1, cacheLength])
+        program.softmax(scaledScores.name, into: probs, axis: -1)
         let attended = MILText.Tensor("attended", [1, heads, 1, headDim])
-        program.scaledDotProductAttention(
-            query: qRotated.name, key: trimmed.name, value: trimmedValues.name, into: attended,
-            scale: 1 / Double(headDim).squareRoot())
+        program.matmul(probs.name, trimmedValues.name, into: attended)
 
         let merged = MILText.Tensor("merged", [1, 1, qDim])
         let transposed = MILText.Tensor("attended_t", [1, 1, heads, headDim])

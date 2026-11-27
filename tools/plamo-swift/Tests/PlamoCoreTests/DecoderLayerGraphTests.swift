@@ -39,7 +39,7 @@ struct DecoderLayerGraphTests {
         #expect(text.contains("name: \"k_cache\""))
         #expect(text.contains("name: \"v_cache\""))
         #expect(text.contains("type: \"slice_by_size\""))
-        #expect(text.contains("type: \"scaled_dot_product_attention\""))
+        #expect(text.contains("type: \"softmax\""))
         #expect(text.contains("type: \"rsqrt\""))
         #expect(text.contains("type: \"sigmoid\""))
         #expect(text.contains("model.layers.layers.3.mixer.qkv_proj.weight"))
